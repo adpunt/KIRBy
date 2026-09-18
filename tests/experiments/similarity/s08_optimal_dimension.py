@@ -27,19 +27,19 @@ dataset — feature selection and SAC scoring shared every sample, the same leak
 the prediction arm already avoids. SAC is now ALSO measured under CV: for each
 budget (hybrid) and each rep (single-rep baseline) we rebuild the hybrid on the
 TRAIN fold and score SAC on the HELD-OUT fold (`sac_fold_scores`), then feed
-those per-fold scores to the shared `honest_rescore` helper, which re-picks the
+those per-fold scores to the shared `fold_reselection` helper, which re-picks the
 best budget/rep per held-out fold from the OTHER folds. The honest result is in
-`results['sac_honest']` and the reader-ready block is `results['honest_rescore']`
+`results['sac_reselected']` and the reader-ready block is `results['fold_reselection']`
 (keyed by a pseudo-model 'sac'; lower_is_better=False because SAC is
 higher-is-better regardless of the dataset's prediction metric). The old
 full-data `best_sac_budget` / Pareto fields are kept unchanged for back-compat
 but are the optimistic version. The prediction arm is unchanged.
 
 Added 2026-08-26. No existing key changes value:
-- `budgets[b]['sac_fold_scores_unweighted']`, `results['sac_honest_unweighted']`
-  and `results['honest_rescore_unweighted']`: the hybrid held-out SAC recomputed
+- `budgets[b]['sac_fold_scores_unweighted']`, `results['sac_reselected_unweighted']`
+  and `results['fold_reselection_unweighted']`: the hybrid held-out SAC recomputed
   WITHOUT importance weights. The single-rep baselines are scored unweighted, so
-  this arm differs from them in feature selection only. `results['sac_honest']`
+  this arm differs from them in feature selection only. `results['sac_reselected']`
   keeps the weighted hybrid arm against those same unweighted baselines, i.e. it
   differs in feature selection AND weighting at once.
   `results['sac_weighting_effect']` carries, per budget, the mean of each arm's
@@ -87,7 +87,7 @@ New keys, no existing key changes value:
   `pool_subset`, and `pool_by_objective` (every eligible family's own best:
   tier, aug condition, score and metric name).
 - `results['hybrid_families_used']`: the families that won at least one budget.
-- `'_hybrid_family_by_candidate'` on both `honest_rescore` blocks, mapping each
+- `'_hybrid_family_by_candidate'` on both `fold_reselection` blocks, mapping each
   candidate name to its family.
 The two families' stored scores are in different units — a prediction-built
 search stores the dataset's own metric, a similarity-built one stores a
@@ -111,7 +111,7 @@ from experiments._shared import (
     get_fitted_hybrid, get_fitted_pool_hybrid, flatten_fold_weights,
     estimate_intrinsic_dim_mle, make_cv_splitter,
     get_domain_metric, get_model_factories,
-    build_fold_hybrid, extract_top3_base_reps, honest_rescore,
+    build_fold_hybrid, extract_top3_base_reps, fold_reselection,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
 )
 from experiments.similarity.similarity_helpers import (
@@ -791,7 +791,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # so it is optimistic in exactly the way the prediction arm avoids. Here we
     # instead reuse the per-fold HELD-OUT SAC collected per budget (hybrid
     # candidates) and per rep (single-rep baselines) and hand them to the shared
-    # honest_rescore helper, which for each held-out fold re-picks the budget/rep
+    # fold_reselection helper, which for each held-out fold re-picks the budget/rep
     # that was best on the OTHER folds and reads its held-out SAC. SAC is
     # higher-is-better regardless of the dataset's prediction metric, so
     # lower_is_better is hard-coded False for this arm (NOT get_domain_metric's
@@ -816,11 +816,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for b, v in results['hybrid_family_by_budget'].items()
     }
     # Reader-ready block in the shared json_convention so analysis code can call
-    # honest_rescore(block['candidates_by_model'], block['baselines_by_model'],
+    # fold_reselection(block['candidates_by_model'], block['baselines_by_model'],
     # block['lower_is_better']) directly. NOTE: for s08 this block carries the
     # unsupervised SAC statistic (higher=better), not a prediction metric; the
     # '_arm' marker and lower_is_better=False make that explicit.
-    results['honest_rescore'] = {
+    results['fold_reselection'] = {
         'lower_is_better': False,
         # Every fold counts. The candidates here are the arms this file built itself,
         # not a search's recipe list, so no fold filtered them.
@@ -851,7 +851,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if 'error' not in results['budgets'][b]
         and results['budgets'][b].get('sac_fold_scores_unweighted')
     ]}
-    results['honest_rescore_unweighted'] = {
+    results['fold_reselection_unweighted'] = {
         'lower_is_better': False,
         # Every fold counts. The candidates here are the arms this file built itself,
         # not a search's recipe list, so no fold filtered them.
@@ -885,38 +885,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         # Each budget's hybrid was rebuilt per fold, but the recipe at that
         # budget came from the pool search over every row.
-        _sac_hr = honest_rescore(sac_candidates, sac_baselines,
+        _sac_hr = fold_reselection(sac_candidates, sac_baselines,
                                  lower_is_better=False,
                                  recipe_selection='whole_dataset')
-        results['sac_honest'] = _sac_hr.get('sac', {})
-        _sh = results['sac_honest']
+        results['sac_reselected'] = _sac_hr.get('sac', {})
+        _sh = results['sac_reselected']
         if _sh:
             print(f"\n  Honest CV SAC (held-out) "
                   f"[hybrid weighted vs baselines unweighted]: "
-                  f"hybrid={_sh.get('hybrid_honest', float('nan')):.4f}, "
-                  f"best single={_sh.get('best_single_honest', float('nan')):.4f}, "
+                  f"hybrid={_sh.get('hybrid_reselected', float('nan')):.4f}, "
+                  f"best single={_sh.get('best_single_reselected', float('nan')):.4f}, "
                   f"delta={_sh.get('delta', float('nan')):+.4f}"
                   + ("  [SINGLE-FOLD: optimistic, NOT honest]"
                      if _sh.get('single_fold') else ""))
     except Exception as e:
         print(f"  Honest CV SAC failed: {e}")
-        results['sac_honest'] = {'error': str(e)}
+        results['sac_reselected'] = {'error': str(e)}
     try:
-        _sac_hr_u = honest_rescore(sac_candidates_unw, sac_baselines,
+        _sac_hr_u = fold_reselection(sac_candidates_unw, sac_baselines,
                                    lower_is_better=False,
                                    recipe_selection='whole_dataset')
-        results['sac_honest_unweighted'] = _sac_hr_u.get('sac', {})
-        _shu = results['sac_honest_unweighted']
+        results['sac_reselected_unweighted'] = _sac_hr_u.get('sac', {})
+        _shu = results['sac_reselected_unweighted']
         if _shu:
             print(f"  Honest CV SAC (held-out) [both arms unweighted]: "
-                  f"hybrid={_shu.get('hybrid_honest', float('nan')):.4f}, "
-                  f"best single={_shu.get('best_single_honest', float('nan')):.4f}, "
+                  f"hybrid={_shu.get('hybrid_reselected', float('nan')):.4f}, "
+                  f"best single={_shu.get('best_single_reselected', float('nan')):.4f}, "
                   f"delta={_shu.get('delta', float('nan')):+.4f}"
                   + ("  [SINGLE-FOLD: optimistic, NOT honest]"
                      if _shu.get('single_fold') else ""))
     except Exception as e:
         print(f"  Honest CV SAC (unweighted) failed: {e}")
-        results['sac_honest_unweighted'] = {'error': str(e)}
+        results['sac_reselected_unweighted'] = {'error': str(e)}
 
     return results
 

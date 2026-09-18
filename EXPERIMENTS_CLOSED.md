@@ -185,7 +185,7 @@ until re-read.
 
 ## opig_cgr_comparison
 - **Fixed** (6b37acd) — delta_by_model subtracted two RMSEs that both came from a hybrid selected on all rows and re-scored on those same folds, with unequal pool sizes.
-  Both sides now read honest_comparison['hybrid_honest'], the leave-one-fold-out re-score, and the printed table gained two LOFO rows above the Delta at :796-806.
+  Both sides now read reselected_comparison['hybrid_reselected'], the leave-one-fold-out re-score, and the printed table gained two LOFO rows above the Delta at :796-806.
 
 ## opig_graphinity_ddg
 - **Fixed** (1e74b25) — The PDB overlap filter never ran, because load_dataset dropped the complex identifiers, so FoldX rows sharing a complex with the SKEMPI test set stayed in training.
@@ -199,9 +199,9 @@ until re-read.
 
 ## opig_kingsmith_component_splits
 - **Fixed** (6b37acd) — The reported delta was the largest R2 over 14 representations x 5 models minus the largest over 5 hybrid models, both maxima taken on the folds that produced them.
-  _paired_hybrid_delta hands the hybrid's per-fold scores and every base representation's per-fold scores to honest_rescore. On each held-out component the base representation is re-picked from the other components' scores only, and the subtraction is fold-index paired.
+  _paired_hybrid_delta hands the hybrid's per-fold scores and every base representation's per-fold scores to fold_reselection. On each held-out component the base representation is re-picked from the other components' scores only, and the subtraction is fold-index paired.
 - **Fixed** (6b37acd) — A fold whose find_best_hybrid raised was dropped from the hybrid arm while the baselines still averaged over all folds, and the two means were then subtracted.
-  _pad_fold writes NaN for every model on any path that abandons a fold, and evaluate_rep does the same for a failed base fit at lines 322-324. honest_rescore then only pairs folds where both arms have a score and reports n_paired_folds, printed in the Folds column.
+  _pad_fold writes NaN for every model on any path that abandons a fold, and evaluate_rep does the same for a failed base fit at lines 322-324. fold_reselection then only pairs folds where both arms have a score and reports n_paired_folds, printed in the Folds column.
 - **Fixed** (6b37acd) — _summarize_scores emitted mean, std and a fold count only, so no paired delta could be recomputed from the saved file.
   r2_per_fold and rmse_per_fold are now written per representation and per model. spearman_per_fold is not, so a per-component Spearman comparison still cannot be rebuilt from the file.
 
@@ -211,9 +211,9 @@ until re-read.
 
 ## opig_trastuzumab_enrichment
 - **Fixed** (6b37acd) — hybrid_search.rf_cv_auc was the winning recipe's mean over the folds that chose it, presented in the comment and the printed line as the honest hybrid number, and it was the only hybrid number the experiment produced.
-  Renamed search_best_cv_auc, kept as a search diagnostic with a note saying what it is. The reported hybrid number is now honest_result, a leave-one-fold-out re-score against the same baseline representations, computed at line 373 and printed at 549-566.
+  Renamed search_best_cv_auc, kept as a search diagnostic with a note saying what it is. The reported hybrid number is now reselection_result, a leave-one-fold-out re-score against the same baseline representations, computed at line 373 and printed at 549-566.
 - **Fixed** (6b37acd) — The returned dict had no hybrid entry and no per-fold scores anywhere, so the hybrid question could not be answered from the saved file.
-  The file now carries honest_rescore (the per-fold scores for every searched recipe and every baseline representation, per model) and honest_comparison (the computed leave-one-fold-out delta). The hybrid number is AUROC, not enrichment, so question 3 as the docstring states it - does a hybrid beat the best single representation at binder enrichment - is still unanswered.
+  The file now carries fold_reselection (the per-fold scores for every searched recipe and every baseline representation, per model) and reselected_comparison (the computed leave-one-fold-out delta). The hybrid number is AUROC, not enrichment, so question 3 as the docstring states it - does a hybrid beat the best single representation at binder enrichment - is still unanswered.
 
 ## ranker_experiment
 - **Fixed** (4d16dbb) — Feature selection saw the labels of every molecule, then the selected space was scored by a GroupKFold five-nearest-neighbour prediction over those same molecules; the activity-target arms were graded on folds whose labels chose their own features and the structural arms were not.
@@ -305,7 +305,7 @@ until re-read.
 - **Fixed** (47e4b9e) — An undefined read-across Spearman was recorded as 0.0; it is now NaN, with defined flags and per-fold defined lists.
   heldout_readacross returns NaN, agg at lines 206-212 averages through _nanrank.nanmean, and the summary table at lines 244-248 prints how many folds each mean was taken over.
 
-## winning_recipe_honest
+## winning_recipe_reselected
 - **Fixed** (4d16dbb) — The 50/50 split is a permutation of the 8000 pairs, not of the molecules, so the selection has seen every molecule it is scored on.
   sel_idx, sco_idx = scaffold_halves(groups, seed=SPLIT_SEED) splits the molecules by whole Bemis-Murcko scaffold group (_heldout.py:41-60), and pairs_within (_heldout.py:63-71) keeps a cached pair only when both endpoints land on the same side. Straddling pairs are dropped and counted at :94.
 - **Fixed** (4d16dbb) — make_D is imported unchanged, so the z-score mean and standard deviation still come from all molecules.

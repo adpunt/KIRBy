@@ -272,8 +272,8 @@ def summarise_cell(result):
                 'delta_mean_of_folds': d,
                 'n_paired_folds': n_paired,
                 'per_fold_delta': per_fold,
-                'hybrid_honest_mean': _f(b.get('honest_mean')),
-                'hybrid_honest_std': _f(b.get('honest_std')),
+                'hybrid_reselected_mean': _f(b.get('reselected_mean')),
+                'hybrid_reselected_std': _f(b.get('reselected_std')),
             }
 
     for side_key, per_model in (getattr(result, 'by_model_budget_side', None)
@@ -300,7 +300,7 @@ def best_budget_table(cell):
     """
     table = {}
     for model, per_budget in (cell.get('by_model_budget') or {}).items():
-        rows = [(int(b), v['delta_mean_of_folds'], v.get('hybrid_honest_std'))
+        rows = [(int(b), v['delta_mean_of_folds'], v.get('hybrid_reselected_std'))
                 for b, v in per_budget.items()
                 if v.get('delta_mean_of_folds') is not None]
         if not rows:

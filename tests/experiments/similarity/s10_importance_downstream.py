@@ -65,7 +65,7 @@ from experiments._shared import (
     get_best_search_for_downstream, get_fold_pool_recipes,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, FULL_BUDGETS,
     flatten_fold_weights,
-    honest_rescore, build_honest_rescore_input,
+    fold_reselection, build_fold_reselection_input,
 )
 from kirby.find_best_hybrid import nested_cv_outer_folds
 
@@ -241,6 +241,10 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10, is_self=False):
 
     y_neighbors = y_train[indices]  # (n_query, k)
     mean_y = np.mean(y_neighbors, axis=1)
+    # Reviewed 2026-09-18: this std is a q-RASAR engineered feature fed to the
+    # downstream model (see column_stack below), not a reported confidence
+    # number -- the small-n uncertainty-display question doesn't apply to it.
+    # No change requested.
     std_y = np.std(y_neighbors, axis=1)
     min_dist = dists[:, 0]
     mean_dist = np.mean(dists, axis=1)
@@ -248,15 +252,15 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10, is_self=False):
     return np.column_stack([mean_y, std_y, min_dist, mean_dist])
 
 
-def _honest_best_k_within_arm(knn_task, lower_is_better):
+def _reselected_best_k_within_arm(knn_task, lower_is_better):
     """Held-out best-k re-score of the weighted-vs-unweighted kNN comparison.
 
     The stored kNN result selects its best k on the SAME folds it scores on
     (s10:210 and _print_summary) -> selection-optimistic. Using the per-fold
     scores now persisted by _run_weighted_knn, this re-picks the winning k on
-    LEFT-OUT folds via the shared honest_rescore arithmetic: the WEIGHTED arm's
+    LEFT-OUT folds via the shared fold_reselection arithmetic: the WEIGHTED arm's
     k-variants are the 'candidates' and the UNWEIGHTED arm's are the 'baselines',
-    so honest_rescore's `delta` is the honest weighted-minus-unweighted gap
+    so fold_reselection's `delta` is the honest weighted-minus-unweighted gap
     (direction-corrected, + == weighted better). Keyed per rep, plus 'hybrid'.
 
     This is a LOCAL adapter, not a redesign: the shared helper's hybrid-vs-
@@ -276,7 +280,7 @@ def _honest_best_k_within_arm(knn_task, lower_is_better):
                 kk: v.get('unweighted_folds', [])
                 for kk, v in kdict.items() if isinstance(v, dict)
             }
-        return honest_rescore(cands, base, lower_is_better)
+        return fold_reselection(cands, base, lower_is_better)
 
     out = {}
     per_rep = knn_task.get('per_rep') or {}
@@ -455,7 +459,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
             results['hybrid_by_budget'][bkey] = by_k
 
         # 'hybrid' stays the arm built at each fold's own recipe width, so the
-        # summary and the within-arm honest re-score below read the same block
+        # summary and the within-arm per-fold reselection below read the same block
         # they always did. The other eight widths sit beside it.
         results['hybrid'] = results['hybrid_by_budget'].get('recipe', {})
         results['hybrid_budgets'] = [_budget_key(b) for b in budgets]
@@ -1127,7 +1131,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The whole-dataset pool read. It no longer decides what the hybrid arms
     # are built from — the per-fold read below does that — and supplies three
     # things: the SearchResult whose per-fold scores become the stored
-    # honest_rescore block, the top-3 base representations, and which search
+    # fold_reselection block, the top-3 base representations, and which search
     # family the pool's whole-dataset winner came from. Its outcome is recorded
     # rather than swallowed.
     whole_dataset_status = 'ok'
@@ -1185,7 +1189,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     except Exception as e:
         whole_dataset_status = f'error: {type(e).__name__}: {e}'
         print(f"  Whole-dataset pool read failed: {e}")
-        print("  The stored honest_rescore block and the top-3 base "
+        print("  The stored fold_reselection block and the top-3 base "
               "representations are absent; the per-fold read below still runs.")
         top3 = None
 
@@ -1453,16 +1457,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # -------------------------------------------------------------------------
     # HONEST (selection-corrected) RE-SCORES. Both blocks are kept OUT of the
     # _orient_deltas loop below: their 'delta' fields are ALREADY direction-
-    # corrected by honest_rescore, so re-orienting would double-negate them.
+    # corrected by fold_reselection, so re-orienting would double-negate them.
     # -------------------------------------------------------------------------
     # (1) Standard contract block: per-fold scores for BOTH arms of the pooled
     #     hybrid search (all hybrid candidate recipes + baseline single reps),
-    #     straight from the SearchResult, so a reader can call honest_rescore()
+    #     straight from the SearchResult, so a reader can call fold_reselection()
     #     without re-running the search. Empty / old-cache searches yield empty
     #     dicts (the helper tolerates them). Only present when a search was got.
     if search is not None:
         try:
-            results['honest_rescore'] = build_honest_rescore_input(search)
+            results['fold_reselection'] = build_fold_reselection_input(search)
             # 2026-09-12, owner's decision: "s10's pool subset includes
             # similarity hybrids". These fold scores are the winning search's
             # own, so they are in that search's metric — the dataset's metric
@@ -1470,12 +1474,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # held-out molecule's activity and what its five nearest
             # neighbours predict under objective='similarity'. Named here so
             # they are not read against the per-fold scores this file computes.
-            results['honest_rescore_family'] = (
+            results['fold_reselection_family'] = (
                 pool_meta['objective'] if pool_meta is not None else None)
-            results['honest_rescore_metric'] = (
+            results['fold_reselection_metric'] = (
                 pool_meta['metric_name'] if pool_meta is not None else None)
         except Exception as e:
-            results['honest_rescore_error'] = f'{type(e).__name__}: {e}'
+            results['fold_reselection_error'] = f'{type(e).__name__}: {e}'
 
     # (2) Within-file weighted-vs-unweighted kNN: the stored best k is picked on
     #     the SAME folds it scores on (s10:210 + _print_summary). Re-pick the
@@ -1483,8 +1487,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #     per-fold scores just persisted (weighted arm = candidates, unweighted
     #     arm = baselines; delta + == weighted better).
     if isinstance(results.get('weighted_knn'), dict):
-        results['honest_within_arm'] = {
-            'weighted_knn': _honest_best_k_within_arm(
+        results['reselected_within_arm'] = {
+            'weighted_knn': _reselected_best_k_within_arm(
                 results['weighted_knn'], lower_is_better)
         }
 

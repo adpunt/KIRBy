@@ -71,7 +71,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
     INTERNAL_EVALUATORS, FULL_BUDGETS, extract_top3_base_reps,
     _cache_rep, _fitted_to_feature_info,
-    honest_rescore, build_honest_rescore_input,
+    fold_reselection, build_fold_reselection_input,
     hr_exclude_folds,
 )
 
@@ -409,23 +409,23 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     # means — both arms carry selection optimism. The block below persists the
     # RAW per-fold scores already computed inside the search for BOTH arms
     # (every hybrid candidate recipe + every baseline rep, keyed per model),
-    # using the contract key names so the reader can call honest_rescore() to
+    # using the contract key names so the reader can call fold_reselection() to
     # re-pick the winner on the OTHER folds and read the held-out fold. No model
     # fitting happens here — pure plumbing of the search's own per-fold data.
-    honest_block = (build_honest_rescore_input(search)
+    reselection_block = (build_fold_reselection_input(search)
                     if search is not None else None)
     hr = None
-    if honest_block is not None:
+    if reselection_block is not None:
         # Log the honest per-model verdict for visibility (arithmetic only).
-        hr = honest_rescore(honest_block['candidates_by_model'],
-                            honest_block['baselines_by_model'],
-                            honest_block['lower_is_better'],
-                            metric_name=honest_block.get('metric_name'),
-                            exclude_folds=hr_exclude_folds(honest_block))
+        hr = fold_reselection(reselection_block['candidates_by_model'],
+                            reselection_block['baselines_by_model'],
+                            reselection_block['lower_is_better'],
+                            metric_name=reselection_block.get('metric_name'),
+                            exclude_folds=hr_exclude_folds(reselection_block))
         for mn, r in sorted(hr.items()):
             flag = ' [single-fold: optimistic]' if r['single_fold'] else ''
-            print(f"    honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "
-                  f"best_single={r['best_single_honest']:.4f}  "
+            print(f"    honest × {mn:8s}  hybrid={r['hybrid_reselected']:.4f}  "
+                  f"best_single={r['best_single_reselected']:.4f}  "
                   f"delta={r['delta']:+.4f}{flag}")
 
     return {
@@ -441,11 +441,11 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         },
         # Per-fold scores for BOTH arms under the standard contract keys. One
         # block per pool (this file runs two searches per dataset), nested where
-        # each pool's search lives; a reader loads it and calls honest_rescore.
-        'honest_rescore': honest_block,
+        # each pool's search lives; a reader loads it and calls fold_reselection.
+        'fold_reselection': reselection_block,
         # The computed leave-one-fold-out numbers for this pool. The CGR delta
         # is taken from here, not from hybrid_eval.
-        'honest_comparison': hr,
+        'reselected_comparison': hr,
     }
 
 
@@ -667,13 +667,13 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
     delta_by_model = {}
     if ('smiles_only' in hybrid_comparison
             and 'smiles_plus_cgr' in hybrid_comparison):
-        so = hybrid_comparison['smiles_only'].get('honest_comparison') or {}
-        sc = hybrid_comparison['smiles_plus_cgr'].get('honest_comparison') or {}
+        so = hybrid_comparison['smiles_only'].get('reselected_comparison') or {}
+        sc = hybrid_comparison['smiles_plus_cgr'].get('reselected_comparison') or {}
         for model_name in so:
             if model_name not in sc:
                 continue
-            so_rmse = so[model_name].get('hybrid_honest', float('nan'))
-            sc_rmse = sc[model_name].get('hybrid_honest', float('nan'))
+            so_rmse = so[model_name].get('hybrid_reselected', float('nan'))
+            sc_rmse = sc[model_name].get('hybrid_reselected', float('nan'))
             if np.isnan(so_rmse) or np.isnan(sc_rmse):
                 continue
             delta = sc_rmse - so_rmse  # negative = CGR helped
@@ -681,8 +681,8 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
             delta_by_model[model_name] = {
                 'rmse_delta': float(delta),
                 'pct_change': float(pct),
-                'smiles_only_hybrid_honest': float(so_rmse),
-                'smiles_plus_cgr_hybrid_honest': float(sc_rmse),
+                'smiles_only_hybrid_reselected': float(so_rmse),
+                'smiles_plus_cgr_hybrid_reselected': float(sc_rmse),
                 'n_folds_used': int(min(so[model_name].get('n_folds_used', 0),
                                         sc[model_name].get('n_folds_used', 0))),
             }
@@ -788,20 +788,20 @@ def print_analysis(all_results):
             # between them.
             delta = ds.get('delta_by_model', {})
             if delta:
-                honest_models = sorted(delta)
+                reselected_models = sorted(delta)
                 print(f"\n  {'Pool (LOFO)':19s}  ", end='')
-                for mn in honest_models:
+                for mn in reselected_models:
                     print(f"  {mn:>10s}", end='')
                 print()
                 for pool_key, label in [
-                        ('smiles_only_hybrid_honest', 'SMILES-only'),
-                        ('smiles_plus_cgr_hybrid_honest', 'SMILES+CGR')]:
+                        ('smiles_only_hybrid_reselected', 'SMILES-only'),
+                        ('smiles_plus_cgr_hybrid_reselected', 'SMILES+CGR')]:
                     print(f"  {label:19s}  ", end='')
-                    for mn in honest_models:
+                    for mn in reselected_models:
                         print(f"  {delta[mn][pool_key]:>10.2f}", end='')
                     print()
                 print(f"  {'Delta':19s}  ", end='')
-                for mn in honest_models:
+                for mn in reselected_models:
                     print(f"  {delta[mn]['rmse_delta']:>+10.2f}", end='')
                 print("   (negative = CGR helped)")
 

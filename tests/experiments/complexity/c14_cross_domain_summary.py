@@ -58,7 +58,7 @@ def _evaluate_task(task_name, rep_preset, config):
     Returns dict with:
         task, domain, metric_name, lower_is_better,
         best_single_rep, best_single_score, best_single_fold_scores,
-        hybrid_score, hybrid_fold_scores, honest_best_single_score,
+        hybrid_score, hybrid_fold_scores, reselected_best_single_score,
         delta, pct_improvement, n_reps, n_samples
 
     `delta` is delta_mean_of_folds from nested_cv_evaluate: each outer fold's
@@ -299,10 +299,10 @@ def _evaluate_task(task_name, rep_preset, config):
     # delta_mean_of_folds is the paired quantity: the fold-by-fold difference,
     # averaged. Do NOT subtract the two means instead — they diverge as soon as
     # either arm drops a fold.
-    honest_best_single = ncv_best.get('best_single_mean')
-    if honest_best_single is None:
-        honest_best_single = float('nan')
-    honest_best_single_fold_scores = list(
+    reselected_best_single = ncv_best.get('best_single_mean')
+    if reselected_best_single is None:
+        reselected_best_single = float('nan')
+    reselected_best_single_fold_scores = list(
         ncv_best.get('best_single_fold_scores') or [])
     delta = ncv_best.get('delta_mean_of_folds')
     if delta is None:
@@ -312,10 +312,10 @@ def _evaluate_task(task_name, rep_preset, config):
     # pct improvement against the held-out single-representation score. Floor
     # the denominator so near-zero baselines (e.g. MCC ~ 0.02 on hard genomic
     # tasks) don't inflate pct to hundreds of percent for tiny improvements.
-    if np.isnan(honest_best_single) or np.isnan(delta):
+    if np.isnan(reselected_best_single) or np.isnan(delta):
         pct = float('nan')
     else:
-        pct = delta / max(abs(honest_best_single), 0.05) * 100
+        pct = delta / max(abs(reselected_best_single), 0.05) * 100
 
     # The same-fold single-representation numbers from section 1 stay under
     # their own keys; they are a maximum taken on the folds they are read on,
@@ -332,7 +332,7 @@ def _evaluate_task(task_name, rep_preset, config):
         pct_cf = delta_cf / _denom_cf * 100
 
     print(f"    Hybrid (held out): {hybrid_score:.4f} vs best single "
-          f"{honest_best_single:.4f}  "
+          f"{reselected_best_single:.4f}  "
           f"(delta_mean_of_folds={delta:+.4f}, {pct:+.1f}%, "
           f"{'WIN' if hybrid_wins else 'LOSS'}, model={best_model_name})")
 
@@ -377,9 +377,9 @@ def _evaluate_task(task_name, rep_preset, config):
         'hybrid_model': best_model_name,
         # The single-representation arm of the delta, also scored on outer
         # folds, with its winner picked on each fold's training rows.
-        'honest_best_single_score': honest_best_single,
-        'honest_best_single_fold_scores': honest_best_single_fold_scores,
-        'honest_best_single_reps_per_fold': ncv_best.get('best_single_reps_per_fold'),
+        'reselected_best_single_score': reselected_best_single,
+        'reselected_best_single_fold_scores': reselected_best_single_fold_scores,
+        'reselected_best_single_reps_per_fold': ncv_best.get('best_single_reps_per_fold'),
         'n_paired_outer_folds': ncv_best.get('n_paired_folds'),
         'per_fold_delta': ncv_best.get('per_fold_delta'),
         # How much the inner search's own mean exceeded the outer-fold score:
@@ -662,7 +662,7 @@ def run(tasks, rep_preset, config, output_dir):
           f"{'BestSingle':>10} {'Hybrid':>10} {'Delta':>10} {'%Imp':>8}")
     print(f"  {'-'*30} {'-'*10} {'-'*8} {'-'*10} {'-'*10} {'-'*10} {'-'*8}")
     for r in task_results:
-        _bs = r.get('honest_best_single_score')
+        _bs = r.get('reselected_best_single_score')
         _bs_txt = f"{_bs:.4f}" if _bs is not None and not np.isnan(_bs) else 'n/a'
         print(f"  {r['task']:<30} {r['domain']:<10} {r['metric_name']:<8} "
               f"{_bs_txt:>10} {r['hybrid_score']:>10.4f} "

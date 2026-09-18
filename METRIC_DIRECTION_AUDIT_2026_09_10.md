@@ -126,7 +126,7 @@ comes out first, so it is not print-only. No dispatched run passes an objective 
 this was latent rather than live.
 
 **`tests/experiments/opig_humanness.py:369` and `:461`, and
-`tests/experiments/opig_graphinity_ddg.py:641`** — three reads of a stored honest-rescore
+`tests/experiments/opig_graphinity_ddg.py:641`** — three reads of a stored fold-reselection
 block that took `block.get('lower_is_better', False)`. `hr_direction` exists for exactly
 this and refuses to guess; the saved path in these files had been converted to it and the
 console paths had not. All three now call it.
@@ -245,7 +245,7 @@ Worth recording, so none of it is re-derived.
 
 **The selection path is direction-correct throughout.** `_run_search`'s pruning, the
 mid-flight tail drops, the end-of-fold-0 strategy prune, `_aggregate_results`,
-`get_best_for_downstream`, `get_best_search_for_downstream`'s pool sort, `honest_rescore`
+`get_best_for_downstream`, `get_best_search_for_downstream`'s pool sort, `fold_reselection`
 and `_hr_lofo_score` all branch on the direction they are given, and they are given the
 right one.
 

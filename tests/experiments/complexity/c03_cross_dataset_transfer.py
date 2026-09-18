@@ -46,7 +46,7 @@ from experiments._shared import (
     compute_dataset_complexity, get_domain_metric,
     find_best_hybrid, create_hybrid, apply_feature_selection,
     get_best_for_downstream, get_best_search_for_downstream,
-    build_honest_rescore_input, honest_rescore, hr_exclude_folds,
+    build_fold_reselection_input, fold_reselection, hr_exclude_folds,
     top_base_reps, top_hybrids,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
 )
@@ -220,11 +220,11 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
             # representations go through the identical rule, so both sides pay
             # the same tax for being a maximum. Pure arithmetic on per-fold
             # scores the search already stored — no fits.
-            honest_by_model = {}
+            reselected_by_model = {}
             for _mname, (_search_m, _) in searches_by_model.items():
                 try:
-                    _blk = build_honest_rescore_input(_search_m)
-                    _hr = honest_rescore(
+                    _blk = build_fold_reselection_input(_search_m)
+                    _hr = fold_reselection(
                         _blk.get('candidates_by_model', {}),
                         _blk.get('baselines_by_model', {}),
                         _blk.get('lower_is_better'),
@@ -235,7 +235,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                     continue
                 if _mname not in _hr:
                     continue
-                honest_by_model[_mname] = _hr[_mname]
+                reselected_by_model[_mname] = _hr[_mname]
                 _d = _hr[_mname].get('delta_mean_of_folds')
                 if _d is None or not np.isfinite(_d):
                     print(f"    {_mname:<10} per-fold re-pick: no fold scored "
@@ -397,7 +397,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 # Hybrid minus best single representation with the recipe and
                 # the representation both re-picked on the other folds, one
                 # entry per downstream model. Read 'delta_mean_of_folds'.
-                'honest_by_model': honest_by_model,
+                'reselected_by_model': reselected_by_model,
                 'search_source_model': ref_model,
                 # Which recipe each held-out fold's novel-model score was
                 # built from, and whether that fold got its own re-pick.

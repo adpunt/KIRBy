@@ -1415,7 +1415,7 @@ def get_fold_best_search(reps, labels, groups, *, train_idx, fold_i,
 # Restored 2026-08-24: dropped from _shared as collateral in e921e22 (a
 # 'remove ridge' commit); recovered verbatim from d471d37, the last commit
 # that had it (paired per-fold deltas + hard metric-direction guards).
-# ~30 experiments import honest_rescore / build_honest_rescore_input here.
+# ~30 experiments import fold_reselection / build_fold_reselection_input here.
 # =============================================================================
 
 
@@ -1444,10 +1444,10 @@ def _hr_lofo_score(items, lower_is_better, exclude_folds=()):
             list on fold 0's scores.
 
     Returns:
-        (honest_score, winners_per_fold, n_folds_used, single_fold_flag,
+        (reselected_score, winners_per_fold, n_folds_used, single_fold_flag,
          per_fold)
 
-        honest_score: mean over held-out folds of the LOFO-selected item's
+        reselected_score: mean over held-out folds of the LOFO-selected item's
             held-out score; NaN if the arm is empty or nothing scorable.
         winners_per_fold: name selected for each held-out fold (skips folds
             where no item has usable other-fold data, so may be shorter than F).
@@ -1526,14 +1526,14 @@ def _hr_lofo_score(items, lower_is_better, exclude_folds=()):
 
 
 def hr_exclude_folds(block):
-    """Fold indices a stored honest_rescore block says to drop from both arms.
+    """Fold indices a stored fold_reselection block says to drop from both arms.
 
     A search that filters its own candidate list on fold 0 — every default
     schedule with more than three allocation methods does, and the cluster
     submitters run a schedule that also drops half of each allocation/importance
     pair at three checkpoints — leaves fold 0's hybrid score picked from the
     recipes fold 0 kept. The single representations pass through no such filter.
-    build_honest_rescore_input writes [0] into the block in that case.
+    build_fold_reselection_input writes [0] into the block in that case.
 
     A block written before this key existed carries neither 'exclude_folds' nor
     'fold0_pruned'. That reads as [0], not []: the searches those blocks came
@@ -1550,7 +1550,7 @@ def hr_exclude_folds(block):
 
 
 def hr_direction(block):
-    """Resolve lower_is_better from a stored honest_rescore block — no silent default.
+    """Resolve lower_is_better from a stored fold_reselection block — no silent default.
 
     The historic sign bug came from readers doing bool(block.get('lower_is_better')),
     which turns a MISSING key into False = "higher is better" and silently inverts
@@ -1564,7 +1564,7 @@ def hr_direction(block):
     from kirby.find_best_hybrid import BUILTIN_METRICS
 
     if not isinstance(block, dict):
-        raise TypeError(f"honest_rescore block must be a dict, got {type(block).__name__}")
+        raise TypeError(f"fold_reselection block must be a dict, got {type(block).__name__}")
 
     metric = block.get('metric_name')
     stored = block.get('lower_is_better')
@@ -1581,7 +1581,7 @@ def hr_direction(block):
 
     if stored is None:
         raise ValueError(
-            "honest_rescore block has neither 'metric_name' nor 'lower_is_better'. "
+            "fold_reselection block has neither 'metric_name' nor 'lower_is_better'. "
             "Refusing to default to higher-is-better: that silently inverts the "
             "delta sign on rmse/mae. Persist the direction.")
     return bool(stored)
@@ -1591,7 +1591,7 @@ def object_direction(obj, what='object'):
     """Direction of the scores `obj` carries — metric name first, then the flag.
 
     Same contract as hr_direction, for a SearchResult or a Blueprint instead of a
-    stored honest-rescore block: the metric NAME is authoritative when it is one
+    stored fold-reselection block: the metric NAME is authoritative when it is one
     of BUILTIN_METRICS, the stored flag is used only when it is not, and a thing
     carrying neither raises rather than defaulting to higher-is-better. A default
     of False is not a direction — it is a guess that happens to be right on 46 of
@@ -1612,10 +1612,10 @@ def object_direction(obj, what='object'):
     return bool(stored)
 
 
-def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
+def fold_reselection(candidates_by_model, baselines_by_model, lower_is_better,
                    metric_name=None, exclude_folds=None,
                    recipe_selection=None):
-    """Leave-one-fold-out honest re-score of hybrid vs best-single-rep.
+    """Leave-one-fold-out per-fold reselection of hybrid vs best-single-rep.
 
     Pure arithmetic on per-fold scores already computed — NO model fitting, NO
     I/O. Applies the identical held-out-fold tax to BOTH arms.
@@ -1633,7 +1633,7 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
             the hybrid arm's fold-0 score is then measured over the recipes
             fold 0 helped keep, while the single representations were never
             filtered, so the two arms would not be paying the same tax.
-            build_honest_rescore_input writes this into the persisted block as
+            build_fold_reselection_input writes this into the persisted block as
             'exclude_folds'; read it back with hr_exclude_folds(block) and pass
             it here. Both arms drop the same folds, so the comparison stays
             paired.
@@ -1648,8 +1648,8 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
 
     Returns:
         {model: {
-            'hybrid_honest':          float (NaN if no candidates),
-            'best_single_honest':     float (NaN if no baselines),
+            'hybrid_reselected':          float (NaN if no candidates),
+            'best_single_reselected':     float (NaN if no baselines),
             'delta':                  float, difference of the two means above,
                                       direction-corrected so + means the hybrid
                                       is better (NaN if either side NaN),
@@ -1739,8 +1739,8 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
             paired.append(d)
 
         out[model] = {
-            'hybrid_honest': h_score,
-            'best_single_honest': b_score,
+            'hybrid_reselected': h_score,
+            'best_single_reselected': b_score,
             'delta': delta,
             # Fold-index-aligned; None = that arm produced no held-out score.
             'hybrid_fold_scores': h_folds,
@@ -1759,16 +1759,16 @@ def honest_rescore(candidates_by_model, baselines_by_model, lower_is_better,
     return out
 
 
-def build_honest_rescore_input(search, *, skip_secondary=True):
-    """Build the standard honest_rescore JSON block from a SearchResult.
+def build_fold_reselection_input(search, *, skip_secondary=True):
+    """Build the standard fold_reselection JSON block from a SearchResult.
 
     Groups hybrid candidates from search.all_results by model (each carries its
     own per-fold 'fold_scores'), and reads per-fold baseline scores from
     search.baseline_fold_scores (additive field; empty on old cache files).
     Only models actually present are included — the model set is never assumed.
 
-    Returns a dict with the exact keys honest_rescore() expects, ready to
-    json.dump under the top-level "honest_rescore" key:
+    Returns a dict with the exact keys fold_reselection() expects, ready to
+    json.dump under the top-level "fold_reselection" key:
 
         {"metric_name": str,
          "lower_is_better": bool,
@@ -6136,7 +6136,7 @@ def get_fold_pool_recipes(
             if m is None:
                 continue
             # 'recipe' is the swept configuration alone, the same label
-            # build_honest_rescore_input writes. 'name' adds the family and the
+            # build_fold_reselection_input writes. 'name' adds the family and the
             # condition, because the same recipe appears under several of them
             # and they are different feature sets.
             _recipe = "{}|{}|b{}|{}|s{}".format(

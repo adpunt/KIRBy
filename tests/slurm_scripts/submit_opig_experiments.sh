@@ -1,12 +1,13 @@
 #!/bin/bash
 #
-# Submit all 6 OPIG-derived experiments to SLURM.
+# Submit the OPIG-derived experiments to SLURM.
 #
 # Usage:
 #   bash tests/slurm_scripts/submit_opig_experiments.sh          # all 6
 #   bash tests/slurm_scripts/submit_opig_experiments.sh humanness # single
 #   bash tests/slurm_scripts/submit_opig_experiments.sh antibody  # Ab group (humanness + tz + ginkgo + cdr)
 #   bash tests/slurm_scripts/submit_opig_experiments.sh molecular # Mol group (graphinity + qsar)
+#   bash tests/slurm_scripts/submit_opig_experiments.sh shared_vectors  # the census only
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -74,5 +75,21 @@ if [[ "$FILTER" == "all" || "$FILTER" == "molecular" || "$FILTER" == "blueprint"
         "python tests/experiments/opig_blueprint_transfer.py ${PM} --source logd --target herg_ki --mode full"
 fi
 
+# --- How many molecules share a feature vector (2026-09-16) ---
+# The census only. It reads the saved matrices and counts; it fits no model, so
+# it belongs in this batch like any other single job.
+#
+# ⛔ ITS COMPANION IS NOT HERE. opig_shared_vectors_remedy.py is 948 million
+# model fits per dataset at --speed full, which is an array across three stages,
+# not a --wrap. It has its own submitter:
+#     bash tests/slurm_scripts/submit_opig_shared_vectors.sh {census|spread|sweep}
+if [[ "$FILTER" == "all" || "$FILTER" == "shared_vectors" ]]; then
+    submit shared_vectors_census 64G 04:00:00 short \
+        "python tests/experiments/opig_shared_vectors_census.py --check-freshness 200"
+fi
+
 echo ""
 echo "Results will be in tests/results/comparisons/opig_*.json"
+echo ""
+echo "NOT submitted by this script: opig_shared_vectors_remedy.py — too large for"
+echo "a --wrap job. See tests/slurm_scripts/submit_opig_shared_vectors.sh"

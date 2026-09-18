@@ -433,7 +433,7 @@ brainstorm. Cross-mapped:
 | C.20 | Soft routing via gating network | NOT IMPLEMENTED | "low-hanging" :77 |
 | C.21 | Per-time-bin routing | NOT IMPLEMENTED | absent |
 | C.22 | Cohort-specific specialists | partial via subgroup_routed | not in suggestions |
-| D.23 | Mid-alpha Coxnet | `refuse_honest.py` | `[x] :30` |
+| D.23 | Mid-alpha Coxnet | `refuse_reselection.py` | `[x] :30` |
 | D.24 | Strong L2 stack | NOT IMPLEMENTED | absent |
 | D.25 | Conformal prediction | NOT IMPLEMENTED | absent |
 | D.26 | Isotonic calibration | `refuse_isotonic.py` | top pick :69 |
@@ -443,7 +443,7 @@ brainstorm. Cross-mapped:
 | E.30 | Pseudo-labelling | NOT IMPLEMENTED | absent |
 | E.31 | Multi-seed K-fold | **NOT IMPLEMENTED** | top pick :68 |
 | F.33 | repeated K-fold | NOT IMPLEMENTED | `[ ] :33` |
-| F.34 | nested CV | refuse_honest | `[x] :29` |
+| F.34 | nested CV | refuse_reselection | `[x] :29` |
 | F.35 | Group-K-fold | NOT IMPLEMENTED | `[ ] :36` |
 | F.36 | Hold-out fusion-test | partial (refuse_holdout) | `[ ] :34` |
 | G.39 | Distillation | NOT IMPLEMENTED | "low-hanging" :77 |
@@ -496,7 +496,7 @@ Important: the *top picks* list (lines 67-71) is supposed to be the curated
   diagnostic.
 
 ### 6.5 Methodology validation
-- `[x] HONEST OOF C (nested 5-fold for any learned weights)` — refuse_honest.py
+- `[x] HONEST OOF C (nested 5-fold for any learned weights)` — refuse_reselection.py
   done.
 - `[ ] Bootstrap CI on variant OOF` — undone (top of §6.1).
 - `[ ] Hold-out fusion-test set (true holdout)` — partial.

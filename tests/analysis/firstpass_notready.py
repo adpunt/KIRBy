@@ -209,8 +209,8 @@ def safe(fn):
 
 
 # ============================================================ honest LOFO helper
-# Experiments now persist a per-model, per-fold "honest_rescore" block (shape in
-# tests/experiments/_shared.honest_rescore). Reading that block and calling the
+# Experiments now persist a per-model, per-fold "fold_reselection" block (shape in
+# tests/experiments/_shared.fold_reselection). Reading that block and calling the
 # shared helper replaces the old read-time SELECTION (argmax over models / reps /
 # grid cells) with a leave-one-fold-out re-score that taxes the hybrid arm AND
 # the best-single arm identically: per held-out fold the winner is re-picked on
@@ -218,12 +218,12 @@ def safe(fn):
 # a JSON predates the block, every reader falls back to its historical view
 # rather than crashing. sys.path was already extended by _load_directions().
 try:
-    from experiments._shared import (honest_rescore as _honest_rescore,
+    from experiments._shared import (fold_reselection as _fold_reselection,
                                      hr_direction as _hr_direction,
                                      hr_exclude_folds as _hr_exclude,
-                                     build_honest_rescore_input as _build_hr)  # noqa: F401
+                                     build_fold_reselection_input as _build_hr)  # noqa: F401
 except Exception:
-    _honest_rescore = None
+    _fold_reselection = None
     _hr_direction = None
     _build_hr = None
     # A file too old to carry the key reads as fold-0 pruned; see
@@ -233,11 +233,11 @@ except Exception:
             return [int(f) for f in (block.get('exclude_folds') or [])]
         return [0]
 
-def _honest_block(d, *keys):
-    """Fetch a persisted honest_rescore block by key, at top level or nested
+def _reselection_block(d, *keys):
+    """Fetch a persisted fold_reselection block by key, at top level or nested
     under 'results' (s10 and friends wrap their payload). Default key
-    'honest_rescore'. Returns the block dict or None."""
-    keys = keys or ("honest_rescore",)
+    'fold_reselection'. Returns the block dict or None."""
+    keys = keys or ("fold_reselection",)
     inner = d.get("results") if isinstance(d, dict) else None
     for src in (d, inner if isinstance(inner, dict) else None):
         if not isinstance(src, dict):
@@ -248,10 +248,10 @@ def _honest_block(d, *keys):
                 return b
     return None
 
-def _run_honest(block):
-    """Call the shared honest_rescore on a stored block. Returns {model: {...}}
+def _run_reselection(block):
+    """Call the shared fold_reselection on a stored block. Returns {model: {...}}
     or None when the helper is unavailable or the block is unusable (old file)."""
-    if _honest_rescore is None or not isinstance(block, dict):
+    if _fold_reselection is None or not isinstance(block, dict):
         return None
     cbm = block.get("candidates_by_model")
     bbm = block.get("baselines_by_model")
@@ -271,7 +271,7 @@ def _run_honest(block):
         return None
 
     try:
-        res = _honest_rescore(cbm or {}, bbm or {}, lower,
+        res = _fold_reselection(cbm or {}, bbm or {}, lower,
                               metric_name=block.get("metric_name"),
                               # Fold 0 filtered the recipe list of any search
                               # that produced this block, so its held-out term
@@ -287,8 +287,8 @@ def _opt(r):
     NOT a held-out honest number (flag it as optimistic)."""
     return " OPTIMISTIC(1fold)" if isinstance(r, dict) and r.get("single_fold") else ""
 
-def _honest_single(res, model=None):
-    """Pull one entry from an honest_rescore result (for single-pseudo-model
+def _reselected_single(res, model=None):
+    """Pull one entry from an fold_reselection result (for single-pseudo-model
     axes like SAC/kNN/kmeans). Prefers `model`, else the first sorted key."""
     if not isinstance(res, dict) or not res:
         return None
@@ -296,7 +296,7 @@ def _honest_single(res, model=None):
         return res[model]
     return res[sorted(res)[0]]
 
-def _print_honest_models(res, indent="    "):
+def _print_reselected_models(res, indent="    "):
     """Print per-model honest rows (best single vs hybrid, held-out) under the
     already-printed dataset name. Returns the list of finite deltas so the caller
     can roll them into win/tie/loss counts. + = hybrid better (direction already
@@ -304,7 +304,7 @@ def _print_honest_models(res, indent="    "):
     deltas = []
     for m in sorted(res):
         r = res[m]
-        bs = r.get("best_single_honest"); hyb = r.get("hybrid_honest")
+        bs = r.get("best_single_reselected"); hyb = r.get("hybrid_reselected")
         dl = r.get("delta")
         if _fin(dl):
             deltas.append(dl)
@@ -318,7 +318,7 @@ def _print_honest_models(res, indent="    "):
 
 # ============================================================ C02 — core claim
 # The honest first-pass view: per model, hybrid vs that model's best single rep on
-# the SAME model, per dataset. When the c02 file carries an honest_rescore block
+# the SAME model, per dataset. When the c02 file carries an fold_reselection block
 # the winner is re-picked per held-out fold (same tax both arms); the old cross-
 # model BEST-ANY argmax and top-3 baseline-combo cherry-pick are DROPPED.
 
@@ -338,7 +338,7 @@ def _c02_path(ds):
     return max(hits, key=rank)
 
 def _c02_legacy_models(d, ds):
-    """Fallback for pre-honest_rescore c02 files: per-model same-fold hybrid vs
+    """Fallback for pre-fold_reselection c02 files: per-model same-fold hybrid vs
     that model's OWN best single rep. No cross-model argmax, no top-3 combo
     cherry-pick (both dropped). Returns [(model, single, hybrid, delta)]."""
     base = d.get("baselines", {}) if isinstance(d.get("baselines"), dict) else {}
@@ -380,13 +380,13 @@ def read_c02():
         d = load(path)
         if "_error" in d:
             print(f"  {str(ds)[:23]:<24}  (error: {str(d.get('_error'))[:40]})"); continue
-        res = _run_honest(_honest_block(d))
+        res = _run_reselection(_reselection_block(d))
         if res:
             print(f"  {str(ds)[:23]:<24}")
-            for dl in _print_honest_models(res):
+            for dl in _print_reselected_models(res):
                 domwtl[domain(ds)].append(dl)
             continue
-        # ---- fallback: pre-honest_rescore file (same-fold per-model view) ----
+        # ---- fallback: pre-fold_reselection file (same-fold per-model view) ----
         rows = _c02_legacy_models(d, ds)
         if not any(r[0] for r in rows):
             print(f"  {str(ds)[:23]:<24}  --  no baselines/best_by_model"); continue
@@ -404,7 +404,7 @@ def read_c02():
         print(f"  [{dom}] per-model honest: +{w} hybrid-better  ={t} tie  -{l} worse "
               f"({len(dd)} model-cases)")
     if n_legacy:
-        print(f"  ({n_legacy} dataset(s) had no honest_rescore block — legacy same-fold "
+        print(f"  ({n_legacy} dataset(s) had no fold_reselection block — legacy same-fold "
               f"view shown, optimistic.)")
 
 
@@ -415,7 +415,7 @@ def read_c05():
     if not files:
         print("  (no c05 files)"); return
     print("  Per model (no deployed-model pick): Δ = hybrid − best single per n,")
-    print("  direction-corrected (+ = hybrid better). honest_rescore_by_n gives the")
+    print("  direction-corrected (+ = hybrid better). fold_reselection_by_n gives the")
     print("  held-out Δ (winner re-picked per fold), averaged across seeds; older files")
     print("  fall back to the stored same-fold curves. Δ at smallest & largest n.\n")
     print(f"  {'dataset':<24}{'model':<9}{'n_small':>8}{'Δsmall':>9}"
@@ -427,8 +427,8 @@ def read_c05():
         d = load(path)
         if "_error" in d or d.get("skipped"):
             continue
-        hrbn = d.get("honest_rescore_by_n")
-        if _honest_rescore is not None and isinstance(hrbn, dict) and hrbn:
+        hrbn = d.get("fold_reselection_by_n")
+        if _fold_reselection is not None and isinstance(hrbn, dict) and hrbn:
             # model -> {n: mean held-out delta over seeds}
             per_model = defaultdict(dict)
             for nkey, blocks in hrbn.items():
@@ -440,7 +440,7 @@ def read_c05():
                     continue
                 acc = defaultdict(list)
                 for blk in blocks:
-                    res = _run_honest(blk)
+                    res = _run_reselection(blk)
                     if not res:
                         continue
                     for m, r in res.items():
@@ -540,7 +540,7 @@ def read_c11():
                 cur = pca_by_model[m]
                 if cur is None or (s < cur if lo else s > cur):
                     pca_by_model[m] = s
-        res = _run_honest(_honest_block(d))
+        res = _run_reselection(_reselection_block(d))
         if res:
             for m in sorted(res):
                 r = res[m]
@@ -549,8 +549,8 @@ def read_c11():
                     all_deltas.append(dl)
                 v = "--" if not _fin(dl) else ("WIN" if dl > TIE else
                                                ("LOSS" if dl < -TIE else "tie"))
-                rows.append((ds, m, r.get("best_single_honest"), pca_by_model.get(m),
-                             r.get("hybrid_honest"), dl, _c11_recipe(d),
+                rows.append((ds, m, r.get("best_single_reselected"), pca_by_model.get(m),
+                             r.get("hybrid_reselected"), dl, _c11_recipe(d),
                              v + _opt(r)))
             continue
         # ---- fallback: per-model same-fold (no deployed-model argmax) ----
@@ -723,26 +723,26 @@ def read_c10():
         print("  (no c10 files)"); return
     print("  auc_norm = direction-normalized robustness (HIGHER = more robust, any "
           "metric).")
-    print("  Prefers a per-model held-out honest_rescore block when present; else the")
+    print("  Prefers a per-model held-out fold_reselection block when present; else the")
     print("  stored auc_norm robustness summary (single RF model; auc_norm is an over-")
-    print("  sigma aggregate, so no per-fold honest re-score exists for this arm).\n")
+    print("  sigma aggregate, so no per-fold per-fold reselection exists for this arm).\n")
     print(f"  {'dataset':<24}{'rep_auc':>9}{'hyb_auc':>9}{'Δ':>9}  more robust?")
     print("  " + "-" * 66)
     rows = []
-    n_honest = 0
+    n_reselected = 0
     for ds, path in files:
         d = load(path)
         if d.get("skipped"):
             print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('reason')})"); continue
         if d.get("error"):                     # e.g. noiseInject not installed — say why, don't drop
             print(f"  {str(ds)[:23]:<24}  (skipped: {d.get('error')})"); continue
-        # Forward-compat: if c10 ever writes a per-model honest_rescore block,
+        # Forward-compat: if c10 ever writes a per-model fold_reselection block,
         # report it per model rather than the read-time cross-cell auc_norm max.
-        res = _run_honest(_honest_block(d))
+        res = _run_reselection(_reselection_block(d))
         if res:
-            n_honest += 1
+            n_reselected += 1
             print(f"  {str(ds)[:23]:<24}")
-            for dl in _print_honest_models(res):
+            for dl in _print_reselected_models(res):
                 rows.append((ds, None, None, dl))
             continue
         ir = d.get("individual_reps", {}); hy = d.get("hybrids", {})
@@ -772,7 +772,7 @@ def read_c10():
     w, t, l = wtl([r[3] for r in rows])
     print("  " + "-" * 66)
     print(f"  hybrid more robust: +{w}  ~{t}  -{l}  ({len(rows)} cases"
-          + (f", {n_honest} honest" if n_honest else "") + ")")
+          + (f", {n_reselected} honest" if n_reselected else "") + ")")
 
 
 # ============================================================ C12 — modality
@@ -793,10 +793,10 @@ def read_c12():
         d = load(path)
         if "_error" in d:
             continue
-        res = _run_honest(_honest_block(d))
+        res = _run_reselection(_reselection_block(d))
         print(f"  {str(ds)[:60]}:")
         if res:
-            for dl in _print_honest_models(res):
+            for dl in _print_reselected_models(res):
                 if dl > TIE:
                     wins += 1
                 elif dl < -TIE:
@@ -940,12 +940,12 @@ def read_c07():
         if "_error" in d or not parts:
             continue
         for pn, pv in parts.items():
-            eh = _run_honest(_honest_block(pv.get("easy") or {}))
-            hh = _run_honest(_honest_block(pv.get("hard") or {}))
+            eh = _run_reselection(_reselection_block(pv.get("easy") or {}))
+            hh = _run_reselection(_reselection_block(pv.get("hard") or {}))
             if eh or hh:
                 for m in sorted(set(eh or {}) | set(hh or {})):
-                    es = (eh.get(m, {}) if eh else {}).get("hybrid_honest")
-                    hs = (hh.get(m, {}) if hh else {}).get("hybrid_honest")
+                    es = (eh.get(m, {}) if eh else {}).get("hybrid_reselected")
+                    hs = (hh.get(m, {}) if hh else {}).get("hybrid_reselected")
                     print(f"  {str(ds)[:19]:<20}{str(pn)[:15]:<16}{str(m)[:9]:<10}"
                           f"{f7(es,8)}{f7(hs,8)}  {pv.get('config_differs')}")
             else:
@@ -1229,7 +1229,7 @@ def read_s02():
     files = ds_files("s02_hybrid_similarity")
     if not files:
         print("  (no s02 files)"); return
-    print("  SAC higher = better. Prefers the held-out CV honest_rescore block (single")
+    print("  SAC higher = better. Prefers the held-out CV fold_reselection block (single")
     print("  kNN pseudo-model; winner re-picked per fold, same tax both arms); older")
     print("  files fall back to the stored whole-data best_sac. lift = hybrid − best rep.\n")
     print(f"  {'dataset':<26}{'best indiv rep':<18}{'indiv':>8}{'hybrid':>8}{'lift':>8}  win")
@@ -1239,12 +1239,12 @@ def read_s02():
         d = load(path)
         if "_error" in d:
             continue
-        r = _honest_single(_run_honest(_honest_block(d)))
+        r = _reselected_single(_run_reselection(_reselection_block(d)))
         if r:
             bw = r.get("baseline_winners_per_fold") or []
             iname = (bw[0] + _opt(r)) if bw else ("(held-out)" + _opt(r))
-            rows.append((ds, iname, r.get("best_single_honest"),
-                         r.get("hybrid_honest"), r.get("delta")))
+            rows.append((ds, iname, r.get("best_single_reselected"),
+                         r.get("hybrid_reselected"), r.get("delta")))
             continue
         # ---- fallback: pre-honest whole-data SAC ----
         cands = []
@@ -1304,7 +1304,7 @@ def read_s04():
     if not files:
         print("  (no s04 files)"); return
     print("  Non-molecular / no-ecfp4 datasets are skipped by design. Prefers the")
-    print("  held-out honest_rescore block: per model (knn hybrid recipes; rf baseline-")
+    print("  held-out fold_reselection block: per model (knn hybrid recipes; rf baseline-")
     print("  only -> NaN Δ) held-out hybrid vs best single rep on the overall metric.")
     print("  Older files fall back to the stored whole-data cliff score.\n")
     print(f"  {'dataset / model':<26}{'single':>10}{'hybrid':>10}{'Δ':>9}  verdict")
@@ -1314,10 +1314,10 @@ def read_s04():
         if d.get("skipped") or "error" in d:
             print(f"  {str(ds)[:25]:<26}{('skip: '+str(d.get('reason') or d.get('error')))[:25]:<26}")
             continue
-        res = _run_honest(_honest_block(d))
+        res = _run_reselection(_reselection_block(d))
         if res:
             print(f"  {str(ds)[:25]:<26}")
-            _print_honest_models(res)
+            _print_reselected_models(res)
             continue
         # ---- fallback: pre-honest whole-data cliff score (single best rep) ----
         hy = (d.get("hybrid") or {}).get("unweighted", {})
@@ -1338,7 +1338,7 @@ def read_s05():
     files = ds_files("s05_knn_prediction")
     if not files:
         print("  (no s05 files)"); return
-    print("  Uses honest_rescore_result.knn.delta_mean_of_folds: for each held-out")
+    print("  Uses fold_reselection_result.knn.delta_mean_of_folds: for each held-out")
     print("  fold both arms are re-picked on the OTHER folds, so neither the hybrid")
     print("  cell nor the baseline representation is chosen on the fold it scores.")
     print("  summary.fixed_ref is NOT used: its baseline is the best representation")
@@ -1351,12 +1351,12 @@ def read_s05():
         d = load(path)
         if "_error" in d:
             continue
-        hr = (d.get("honest_rescore_result") or {}).get("knn") or {}
+        hr = (d.get("fold_reselection_result") or {}).get("knn") or {}
         delta = hr.get("delta_mean_of_folds")
         if not _fin(delta):
             continue
-        rows.append((ds, hr.get("best_single_honest"),
-                     hr.get("hybrid_honest"), delta))
+        rows.append((ds, hr.get("best_single_reselected"),
+                     hr.get("hybrid_reselected"), delta))
     for dom, rr in by_domain(rows):
         print(f"  --- {dom} ---")
         for ds, br, hk, dl in rr:
@@ -1409,10 +1409,10 @@ def read_s08():
         differ = pareto.get("optima_differ")
         if d.get("insufficient_budgets"):
             differ = f"{differ} (untrustworthy)"
-        # Held-out honest SAC: prefer the stored sac_honest, else re-run the block.
-        sac = d.get("sac_honest") if isinstance(d.get("sac_honest"), dict) else None
+        # Held-out honest SAC: prefer the stored sac_reselected, else re-run the block.
+        sac = d.get("sac_reselected") if isinstance(d.get("sac_reselected"), dict) else None
         if not sac or "delta" not in sac:
-            sac = _honest_single(_run_honest(_honest_block(d)), model="sac")
+            sac = _reselected_single(_run_reselection(_reselection_block(d)), model="sac")
         sdelta = sac.get("delta") if isinstance(sac, dict) else None
         stag = _opt(sac) if isinstance(sac, dict) else ""
         print(f"  {str(ds)[:25]:<26}{iw(opt.get('best_rf_budget'),12)}"
@@ -1445,7 +1445,7 @@ def read_s10():
     files = ds_files("s10_importance_downstream")
     if not files:
         print("  (no s10 files)"); return
-    print("  Prefers the pooled held-out honest_rescore block: per DISTANCE-pool model")
+    print("  Prefers the pooled held-out fold_reselection block: per DISTANCE-pool model")
     print("  (winner re-picked per fold), held-out hybrid vs best single rep — no single-")
     print("  best-rep / single-best-model collapse. Older files fall back to the stored")
     print("  kNN / GP / SVR / qRASAR weighting deltas.\n")
@@ -1453,10 +1453,10 @@ def read_s10():
     print("  " + "-" * 62)
     for ds, path in files:
         d = load(path)
-        res_h = _run_honest(_honest_block(d))
+        res_h = _run_reselection(_reselection_block(d))
         if res_h:
             print(f"  {str(ds)[:23]:<24}")
-            _print_honest_models(res_h)
+            _print_reselected_models(res_h)
             continue
         # ---- fallback: pre-honest weighted-vs-unweighted deltas per arm ----
         res = d.get("results", d)
@@ -1512,12 +1512,12 @@ def read_s12():
         if d.get("skipped"):
             print(f"  {str(ds)[:25]:<26}{('skip: '+str(d.get('reason')))[:19]:<20}"); continue
         # Prefer the stored per-model honest result; else re-run the block.
-        res = d.get("hybrid_cliff_delta_honest")
+        res = d.get("hybrid_cliff_delta_reselected")
         if not (isinstance(res, dict) and res and all(isinstance(v, dict) for v in res.values())):
-            res = _run_honest(_honest_block(d))
+            res = _run_reselection(_reselection_block(d))
         if res:
             print(f"  {str(ds)[:25]:<26}")
-            _print_honest_models(res)
+            _print_reselected_models(res)
             continue
         # ---- fallback: pre-honest raw per-model cliff delta (report ALL) ----
         hcd = d.get("hybrid_cliff_delta", {})
@@ -1538,7 +1538,7 @@ def read_s13():
     files = ds_files("s13_clustering_retrieval")
     if not files:
         print("  (no s13 files)"); return
-    print("  Held-out honest re-score of both axes (winner re-picked per fold, same tax")
+    print("  Held-out per-fold reselection of both axes (winner re-picked per fold, same tax")
     print("  both arms): clustering coherence (kmeans, higher better), retrieval Δy (knn,")
     print("  lower better). Both Δ direction-corrected so + = hybrid better. Older files")
     print("  fall back to the stored win booleans.\n")
@@ -1547,8 +1547,8 @@ def read_s13():
     cw = rw = tot = 0
     for ds, path in files:
         d = load(path)
-        rc = _honest_single(_run_honest(_honest_block(d, "honest_rescore_clustering")))
-        rr = _honest_single(_run_honest(_honest_block(d, "honest_rescore_retrieval")))
+        rc = _reselected_single(_run_reselection(_reselection_block(d, "fold_reselection_clustering")))
+        rr = _reselected_single(_run_reselection(_reselection_block(d, "fold_reselection_retrieval")))
         if rc or rr:
             tot += 1
             cd = rc.get("delta") if isinstance(rc, dict) else None
@@ -1687,7 +1687,7 @@ def read_n07():
     files = ds_files("n07_remediation")
     if not files:
         print("  (no n07 files)"); return
-    print("  Prefers the held-out honest_rescore block: per downstream model, held-out")
+    print("  Prefers the held-out fold_reselection block: per downstream model, held-out")
     print("  hybrid vs best single rep (winner re-picked per fold, same tax both arms),")
     print("  + = hybrid better. No post-hoc max over the model×strategy grid. Older files")
     print("  fall back to per-model recovery% (median & range across strategies, no max).\n")
@@ -1697,10 +1697,10 @@ def read_n07():
         d = load(path)
         if "error" in d and "summary" not in d:
             print(f"  {str(ds)[:21]:<22}  (stub: {d.get('error')})"); continue
-        res = _run_honest(_honest_block(d))
+        res = _run_reselection(_reselection_block(d))
         if res:
             print(f"  {str(ds)[:23]:<24}")
-            _print_honest_models(res)
+            _print_reselected_models(res)
             continue
         # ---- fallback: per-model recovery% median/range (NO max-cell argmax) ----
         s = d.get("summary", {})
@@ -1850,7 +1850,7 @@ def _run():
     print("\nRULES: no metric averages as a headline; win/tie/loss COUNTS + median/range")
     print("for spreads; core-claim readers report PER MODEL (no read-time argmax over")
     print("models/reps/grid cells), hybrid vs best single rep on the SAME model; when the")
-    print("experiment persists an honest_rescore block the winner is re-picked per held-")
+    print("experiment persists an fold_reselection block the winner is re-picked per held-")
     print("out fold and the SAME tax hits both arms (OPTIMISTIC(1fold) = only one fold, not")
     print("honest); older files fall back to the stored same-fold view. Δ direction-")
     print("corrected (+ = hybrid better); tie band |Δ|<=%.2f." % TIE)

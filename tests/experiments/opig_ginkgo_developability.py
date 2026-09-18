@@ -65,7 +65,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
     extract_top3_base_reps, resolve_pruning_kwargs,
     FULL_BUDGETS, INTERNAL_EVALUATORS,
-    honest_rescore, hr_direction, hr_exclude_folds,
+    fold_reselection, hr_direction, hr_exclude_folds,
 )
 
 # =============================================================================
@@ -196,7 +196,7 @@ def evaluate_rep_reg(X, labels, groups, prebuilt_splits, model,
     {metric: {mean, std}}. When ``return_fold_scores`` is True, returns
     ``(result, fold_spearman)`` where ``fold_spearman`` is the per-fold primary
     metric (Spearman rho) in split order — the per-fold baseline scores the
-    honest_rescore helper re-selects over. Higher rho is always better, so the
+    fold_reselection helper re-selects over. Higher rho is always better, so the
     honest block's ``lower_is_better`` is False regardless of property polarity.
     """
     mean_m, std_m, fold_preds = _evaluate_rep(
@@ -282,7 +282,7 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
 
     Returns (rep_results, dim_estimate, top3_first_fold, fold_spearman_by_model)
     where fold_spearman_by_model = {model: [per_fold_held_out_rho, ...]} feeds
-    the honest_rescore candidate arm. Returns (None, 0, None, {}) if every fold
+    the fold_reselection candidate arm. Returns (None, 0, None, {}) if every fold
     failed.
     """
     from kirby.find_best_hybrid import find_best_hybrid
@@ -556,8 +556,8 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
                   f"rho={res['spearman']['mean']:.4f}  "
                   f"R2={res['r2']['mean']:.4f}  ***")
 
-    # ===== honest_rescore block (CONTRACT shape) =====
-    # One candidate per model (the per-fold-rebuilt hybrid); honest_rescore's
+    # ===== fold_reselection block (CONTRACT shape) =====
+    # One candidate per model (the per-fold-rebuilt hybrid); fold_reselection's
     # leave-one-fold-out then averages its held-out scores for the hybrid arm
     # and re-selects the best baseline rep per held-out fold for the base arm.
     # Spearman rho is higher-is-better regardless of property polarity, so
@@ -568,7 +568,7 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
             candidates_by_model[model_name] = [
                 {'name': 'kirby_hybrid', 'fold_scores': list(fs)}]
 
-    honest_block = {
+    reselection_block = {
         # Both arms' fold scores are Spearman rho (evaluate_rep_reg's
         # fold_spearman and _evaluate_hybrid_per_fold's per-fold rho), whatever
         # metric the search itself ran under. Naming it lets hr_direction check
@@ -588,22 +588,22 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
     # maximum over five models on the hybrid side against a maximum over ten
     # representations and five models on the baseline side. Pure arithmetic on
     # per-fold scores already computed — no model fits.
-    honest_comparison = honest_rescore(
+    reselected_comparison = fold_reselection(
         candidates_by_model,
         baselines_by_model,
-        hr_direction(honest_block),
-        metric_name=honest_block.get('metric_name'),
-        exclude_folds=hr_exclude_folds(honest_block),
+        hr_direction(reselection_block),
+        metric_name=reselection_block.get('metric_name'),
+        exclude_folds=hr_exclude_folds(reselection_block),
     )
 
     return {
         'n_samples': n,
         'property': data.get('property_name', prop_name),
         'results': results,
-        # Per-property honest_rescore block (per-fold scores for BOTH arms).
-        # A reader feeds this straight to experiments._shared.honest_rescore.
-        'honest_rescore': honest_block,
-        'honest_comparison': honest_comparison,
+        # Per-property fold_reselection block (per-fold scores for BOTH arms).
+        # A reader feeds this straight to experiments._shared.fold_reselection.
+        'fold_reselection': reselection_block,
+        'reselected_comparison': reselected_comparison,
     }
 
 
@@ -666,7 +666,7 @@ def print_analysis(all_results):
     print(f"\n  Hybrid wins: {hybrid_wins}/{total} properties")
 
 
-def print_honest_analysis(all_results):
+def print_reselection_analysis(all_results):
     """Per-model, held-out hybrid-versus-best-single table, one block per property.
 
     The Delta in print_analysis above takes a maximum over five models on the
@@ -686,13 +686,13 @@ def print_honest_analysis(all_results):
         ds = all_results.get(prop_name)
         if not ds:
             continue
-        res = ds.get('honest_comparison')
+        res = ds.get('reselected_comparison')
         if res is None:
-            block = ds.get('honest_rescore')
+            block = ds.get('fold_reselection')
             if not block:
-                print(f"\n  {prop_name}: no honest_rescore block")
+                print(f"\n  {prop_name}: no fold_reselection block")
                 continue
-            res = honest_rescore(
+            res = fold_reselection(
                 block.get('candidates_by_model', {}),
                 block.get('baselines_by_model', {}),
                 hr_direction(block),
@@ -700,15 +700,15 @@ def print_honest_analysis(all_results):
                 exclude_folds=hr_exclude_folds(block),
             )
         if not res:
-            print(f"\n  {prop_name}: honest_rescore produced no models")
+            print(f"\n  {prop_name}: fold_reselection produced no models")
             continue
         print(f"\n  {prop_name}:")
         print(f"    {'Model':>8s} {'Hybrid':>10s} {'BestSingle':>11s} "
               f"{'Delta':>9s} {'Folds':>6s}")
         for model_name in sorted(res):
             r = res[model_name]
-            h = r['hybrid_honest']
-            b = r['best_single_honest']
+            h = r['hybrid_reselected']
+            b = r['best_single_reselected']
             d = r['delta_mean_of_folds']
             hs = f"{h:.4f}" if not np.isnan(h) else "—"
             bs = f"{b:.4f}" if not np.isnan(b) else "—"
@@ -793,7 +793,7 @@ def main():
         print_analysis(all_results)
         # Per-model held-out table — the leak-free counterpart to the
         # max-over-models Delta in the table above.
-        print_honest_analysis(all_results)
+        print_reselection_analysis(all_results)
     if skipped:
         print(f"\n  {len(skipped)} of {len(properties)} properties skipped "
               f"for want of an approved rep pool: {sorted(skipped)}")

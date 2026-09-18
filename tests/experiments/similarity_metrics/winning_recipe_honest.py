@@ -21,7 +21,7 @@ cached pair survives only when BOTH its endpoints land on one side:
                 which splits these pairs again and keeps the column set that
                 scores best on the half it did not fit -- the version of the
                 procedure whose gain survives on pairs it never saw.
-  SCORE half    struct_honest is measured here, on the pairs with both endpoints
+  SCORE half    struct_reselected is measured here, on the pairs with both endpoints
                 here, over the distance submatrix cut to these rows.
 
 struct_select, the number on the select half, is kept beside it so the size of
@@ -126,7 +126,7 @@ def run(dataset):
                     read_rho_all=float(rho_all),
                     read_rho_all_defined=is_defined(rho_all),
                     struct_select=struct_on(D[sel_cut], Is, Js, Ms),  # in-sample
-                    struct_honest=struct_on(D[sco_cut], Ic, Jc, Mc))  # HELD-OUT
+                    struct_reselected=struct_on(D[sco_cut], Ic, Jc, Mc))  # HELD-OUT
 
     rows = [score('count_tanimoto[BASELINE]', simeval.dist_tanimoto(coarse)),
             score('ecfp4:tanimoto[field]', simeval.dist_tanimoto(p['ecfp4']))]
@@ -138,12 +138,12 @@ def run(dataset):
     base = rows[0]
     print(f'  {"space":42s} {"read":>8} {"struct_SELECT":>13} {"struct_HELDOUT":>14}')
     for r in rows:
-        print(f'  {r["name"]:42s} {r["read_rho"]:>8.4f} {r["struct_select"]:>13.4f} {r["struct_honest"]:>14.4f}')
+        print(f'  {r["name"]:42s} {r["read_rho"]:>8.4f} {r["struct_select"]:>13.4f} {r["struct_reselected"]:>14.4f}')
     if shape_ok:
         w = rows[-1]
         print(f'  WINNING vs baseline: d_read={w["read_rho"]-base["read_rho"]:+.4f}  '
               f'd_struct(in-sample)={w["struct_select"]-base["struct_select"]:+.4f}  '
-              f'd_struct(HELD-OUT,real)={w["struct_honest"]-base["struct_honest"]:+.4f}')
+              f'd_struct(HELD-OUT,real)={w["struct_reselected"]-base["struct_reselected"]:+.4f}')
     print(f'  elapsed {time.time()-t0:.1f}s', flush=True)
     return dict(dataset=dataset, n=int(n), rows=rows,
                 desc_kept=int(trace['n_kept']), desc_total=int(trace['n_total']),
@@ -160,5 +160,5 @@ if __name__ == '__main__':
     out = {}
     for ds in (sys.argv[1:] or ['herg_ki', 'logd', 'adme_solubility']):
         out[ds] = run(ds)
-    json.dump(out, open(os.path.join(HERE, 'winning_recipe_honest.json'), 'w'), indent=1)
-    print('\nwrote winning_recipe_honest.json')
+    json.dump(out, open(os.path.join(HERE, 'winning_recipe_reselected.json'), 'w'), indent=1)
+    print('\nwrote winning_recipe_reselected.json')

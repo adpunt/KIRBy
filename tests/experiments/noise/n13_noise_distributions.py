@@ -68,7 +68,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     DOWNSTREAM_MODELS_NOISE,
     get_precomputed_search, get_best_search_for_downstream, extract_top3_base_reps,
-    build_fold_hybrid, honest_rescore, build_honest_rescore_input,
+    build_fold_hybrid, fold_reselection, build_fold_reselection_input,
     hr_exclude_folds,
 )
 from kirby.find_best_hybrid import OBJECTIVE_SIMILARITY
@@ -169,7 +169,7 @@ UNWEIGHTED_TRACK_B_MODELS = set(UNWEIGHTED_TRACK_B_SEED)
 def _bp_sig(bp):
     """Stable recipe id for a blueprint.
 
-    Doubles as (a) the honest_rescore candidate 'name' (per-fold winner label)
+    Doubles as (a) the fold_reselection candidate 'name' (per-fold winner label)
     and (b) the de-dup key so identical per-model blueprints only trigger one
     (expensive) create_hybrid build per fold.
     """
@@ -482,7 +482,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # every place n13 picks a hybrid out of the pool offers the
     # similarity-built searches, not only the prediction-built ones. Which
     # family each model's recipe came from is recorded in
-    # results['honest_hybrid_objective_by_model'].
+    # results['reselected_hybrid_objective_by_model'].
     bp_by_model = {}
     aug_by_model = {}
     objective_by_model = {}
@@ -578,7 +578,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for _o, _d in _by_objective.items()}),
         # Family of the per-model matched recipe used by the honest per-fold
         # arm below, one entry per downstream model.
-        'honest_hybrid_objective_by_model': dict(objective_by_model),
+        'reselected_hybrid_objective_by_model': dict(objective_by_model),
         'per_noise_type': {},
     }
 
@@ -669,8 +669,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # sigma=0.3 when present, else the first computed cell). The full per-
     # (noise_type, strength) set is also kept nested. See the assignment after
     # the main loop.
-    canonical_honest = None
-    canonical_honest_key = None
+    canonical_reselected = None
+    canonical_reselected_key = None
     # A sensitivity study has no single "the" condition, so the canonical slice is
     # Gaussian at one unit of real error for this dataset -- 0.54 log units on
     # herg_ki, 0.35 on caco2, half the label SD where nothing is published.
@@ -699,11 +699,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # empty unless the condition is one with a corrupted subset.
             detection_acc = {}
 
-            # Honest per-fold arms for the shared honest_rescore helper:
-            #   honest_base_folds[model][fold] = [per-seed base-rep scores]
-            #   honest_hyb_folds[model][fold]  = [per-seed matched-hybrid scores]
+            # Honest per-fold arms for the shared fold_reselection helper:
+            #   reselected_base_folds[model][fold] = [per-seed base-rep scores]
+            #   reselected_hyb_folds[model][fold]  = [per-seed matched-hybrid scores]
             # Each fold entry is averaged over NOISE_SEEDS below, then laid out
-            # fold-aligned so honest_rescore can leave-one-fold-out re-select
+            # fold-aligned so fold_reselection can leave-one-fold-out re-select
             # each arm's winner WITHOUT the held-out fold (the arithmetic
             # embodiment of the n09 nested-selection template). We do NOT run a
             # per-fold find_best_hybrid inner search here: that would multiply
@@ -711,9 +711,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # and bust the 7-day wall; the LOFO re-selection over the cached
             # matched-blueprint candidates gives the held-out-fold-free
             # selection instead.
-            honest_base_folds = {mn: {} for mn in model_factories}
-            honest_hyb_folds = {mn: {} for mn in model_factories}
-            honest_hyb_name = {}  # model -> its blueprint signature (candidate name)
+            reselected_base_folds = {mn: {} for mn in model_factories}
+            reselected_hyb_folds = {mn: {} for mn in model_factories}
+            reselected_hyb_name = {}  # model -> its blueprint signature (candidate name)
 
             for fi, fd in enumerate(fold_data):
                 for noise_seed in NOISE_SEEDS:
@@ -740,9 +740,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             _sc_base = float(metric_fn(
                                 fd['y_val'], m.predict(fd['X_eval_val_s'])))
                             noisy_baseline_by_model[mname].append(_sc_base)
-                            # Per-fold base-rep arm for honest_rescore (reuses
+                            # Per-fold base-rep arm for fold_reselection (reuses
                             # this same fit — no extra training cost).
-                            honest_base_folds[mname].setdefault(fi, []).append(_sc_base)
+                            reselected_base_folds[mname].setdefault(fi, []).append(_sc_base)
                         except Exception:
                             pass
 
@@ -806,7 +806,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # ── Honest hybrid arm: train each model PLAINLY (no LNL,
                     # no sample weights) on its MATCHED hybrid space, built from
                     # that model's blueprint on the NOISY labels. This is the
-                    # hybrid candidate the honest_rescore helper compares against
+                    # hybrid candidate the fold_reselection helper compares against
                     # the base-rep baseline arm. Identical blueprints across
                     # models share one create_hybrid build via _hyb_space_cache.
                     _hyb_space_cache = {}  # bp_sig -> (X_tr_s, X_va_s) or None
@@ -821,7 +821,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # per-fold score block.
                         _obj_m = objective_by_model.get(mname)
                         _sig = f"{_obj_m}|{_bp_sig(_bp_m)}"
-                        honest_hyb_name[mname] = _sig
+                        reselected_hyb_name[mname] = _sig
                         if _sig not in _hyb_space_cache:
                             try:
                                 _augc_m = aug_by_model.get(mname, 'uncapped')
@@ -864,7 +864,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         try:
                             m = mfactory()
                             m.fit(_Xh_tr_s, y_noisy)
-                            honest_hyb_folds[mname].setdefault(fi, []).append(
+                            reselected_hyb_folds[mname].setdefault(fi, []).append(
                                 float(metric_fn(fd['y_val'], m.predict(_Xh_va_s))))
                         except Exception:
                             pass
@@ -1062,14 +1062,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # ── Per-fold scores for this (noise_type, strength) ──
             # Fold-aligned per-arm scores (mean over NOISE_SEEDS within each
             # fold; np.nan for folds a model failed on), in the shape the shared
-            # honest_rescore helper consumes.
+            # fold_reselection helper consumes.
             #
-            # This is NOT a re-selection. honest_rescore's job is to re-pick
+            # This is NOT a re-selection. fold_reselection's job is to re-pick
             # each side's winner from the folds other than the held-out one, and
             # it needs a list of recipes to pick from. n13 gives it ONE hybrid
             # recipe per model and ONE base representation, so there is nothing
             # to re-pick and the arithmetic returns those same two numbers. The
-            # key used to be called 'honest_rescore', which promised the
+            # key used to be called 'fold_reselection', which promised the
             # re-selection; it is now named for what it holds.
             #
             # That one recipe per model came from the clean-label search pool
@@ -1080,8 +1080,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             hr_candidates = {}
             hr_baselines = {}
             for mn in model_factories:
-                base_map = honest_base_folds.get(mn, {})
-                hyb_map = honest_hyb_folds.get(mn, {})
+                base_map = reselected_base_folds.get(mn, {})
+                hyb_map = reselected_hyb_folds.get(mn, {})
                 if any(base_map.get(fi) for fi in range(n_folds)):
                     hr_baselines[mn] = {base_rep_name: [
                         float(np.mean(base_map[fi]))
@@ -1089,13 +1089,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         for fi in range(n_folds)]}
                 if any(hyb_map.get(fi) for fi in range(n_folds)):
                     hr_candidates[mn] = [{
-                        'name': honest_hyb_name.get(mn, 'hybrid'),
+                        'name': reselected_hyb_name.get(mn, 'hybrid'),
                         'fold_scores': [
                             float(np.mean(hyb_map[fi]))
                             if hyb_map.get(fi) else float('nan')
                             for fi in range(n_folds)],
                     }]
-            honest_block = {
+            reselection_block = {
                 'lower_is_better': lower_is_better,
                 # Every fold counts. The candidates here are the arms this file built itself,
                 # not a search's recipe list, so no fold filtered them.
@@ -1111,15 +1111,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'reselection': 'none_single_recipe_per_model',
                 'recipe_source': 'clean_label_search_pool',
             }
-            strength_result['per_fold_scores_single_recipe'] = honest_block
+            strength_result['per_fold_scores_single_recipe'] = reselection_block
 
             # Stash the canonical top-level slice (moderate gaussian noise) so a
             # reader can json.load(...)['per_fold_scores_single_recipe'] directly.
             _is_canonical = (noise_type == 'gaussian'
                              and abs(strength - _canonical_level) < 1e-9)
-            if _is_canonical or canonical_honest is None:
-                canonical_honest = honest_block
-                canonical_honest_key = f'{noise_type}:{strength_key}'
+            if _is_canonical or canonical_reselected is None:
+                canonical_reselected = reselection_block
+                canonical_reselected_key = f'{noise_type}:{strength_key}'
 
             if detection_acc:
                 strength_result['detection'] = {
@@ -1158,27 +1158,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # computed cell). The full per-(noise_type, strength) set is preserved under
     # per_noise_type[*]['per_strength'][*]['per_fold_scores_single_recipe'].
     #
-    # Deliberately NOT written under the key 'honest_rescore': that name says
+    # Deliberately NOT written under the key 'fold_reselection': that name says
     # the winning recipe was re-picked without the fold it is scored on, and
     # here there is only one recipe per model to pick. The delta printed below
     # is one hybrid recipe against one base representation, fold for fold.
-    if canonical_honest is not None:
-        results['per_fold_scores_single_recipe'] = convert_numpy(canonical_honest)
-        results['per_fold_scores_condition'] = canonical_honest_key
+    if canonical_reselected is not None:
+        results['per_fold_scores_single_recipe'] = convert_numpy(canonical_reselected)
+        results['per_fold_scores_condition'] = canonical_reselected_key
         # Sanity log via the shared helper (pure arithmetic, no model fitting).
         try:
-            _hr = honest_rescore(canonical_honest['candidates_by_model'],
-                                 canonical_honest['baselines_by_model'],
+            _hr = fold_reselection(canonical_reselected['candidates_by_model'],
+                                 canonical_reselected['baselines_by_model'],
                                  lower_is_better,
-                                 exclude_folds=hr_exclude_folds(canonical_honest))
+                                 exclude_folds=hr_exclude_folds(canonical_reselected))
             print(f"\n  === PER-FOLD SCORES, ONE RECIPE PER MODEL "
-                  f"({canonical_honest_key}) ===")
+                  f"({canonical_reselected_key}) ===")
             print("  No re-selection: one hybrid recipe and one base "
                   "representation, so the leave-one-fold-out re-pick is a "
                   "no-op.")
             for _mn, _r in _hr.items():
-                print(f"    {_mn}: hybrid={_r['hybrid_honest']:.4f} "
-                      f"base={_r['best_single_honest']:.4f} "
+                print(f"    {_mn}: hybrid={_r['hybrid_reselected']:.4f} "
+                      f"base={_r['best_single_reselected']:.4f} "
                       f"delta={_r['delta']:+.4f} single_fold={_r['single_fold']}")
         except Exception as _exc:
             print(f"  per-fold score summary skipped ({_exc})")

@@ -73,7 +73,7 @@ from experiments._shared import (add_distance_metric_arg,
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
-    honest_rescore, build_honest_rescore_input,
+    fold_reselection, build_fold_reselection_input,
     hr_exclude_folds, hr_direction,
 )
 
@@ -293,13 +293,13 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     # carries PER-FOLD scores for every candidate hybrid recipe AND every single
     # baseline rep, per downstream model, with each hybrid built PER FOLD (no
     # full-data selection leak). We hand those straight to
-    # build_honest_rescore_input() to produce the standard "honest_rescore" JSON
+    # build_fold_reselection_input() to produce the standard "fold_reselection" JSON
     # block (contract json_convention). A reader feeds that block into
-    # honest_rescore(), which re-selects the winner per held-out fold (same tax
+    # fold_reselection(), which re-selects the winner per held-out fold (same tax
     # on both arms) and reports a per-model, held-out hybrid-vs-best-single delta.
     # The shared helper fits this experiment exactly (classification, primary
     # metric = auc), so NO local re-score helper is needed here.
-    honest_block = None
+    reselection_block = None
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -325,10 +325,10 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             top3 = extract_top3_base_reps(search)
             if top3:
                 print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-            # Per-model, held-out honest re-score input (both arms carry per-fold
+            # Per-model, held-out per-fold reselection input (both arms carry per-fold
             # scores). Model set is derived by the helper from what the search
             # actually evaluated, so gates are respected automatically.
-            honest_block = build_honest_rescore_input(search)
+            reselection_block = build_fold_reselection_input(search)
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -367,22 +367,22 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     }
     # Additive: the honest, per-model, held-out comparison block (contract
     # json_convention). Absent only when the hybrid search was unavailable.
-    if honest_block is not None:
-        out['honest_rescore'] = honest_block
+    if reselection_block is not None:
+        out['fold_reselection'] = reselection_block
         # Also store the COMPUTED comparison, not just its inputs. Before
         # 2026-09-04 the per-model hybrid-vs-best-single numbers were printed
         # and then thrown away, so the only hybrid rows in this file's JSON
         # were the leaked ones. A reader now gets the held-out numbers without
-        # re-running honest_rescore.
-        out['honest_comparison'] = honest_rescore(
-            honest_block.get('candidates_by_model', {}),
-            honest_block.get('baselines_by_model', {}),
+        # re-running fold_reselection.
+        out['reselected_comparison'] = fold_reselection(
+            reselection_block.get('candidates_by_model', {}),
+            reselection_block.get('baselines_by_model', {}),
             # hr_direction, not a defaulted False: a block with neither a
             # metric name nor a stored flag is unscoreable, and guessing
             # higher-is-better inverts every rmse delta. Fixed 2026-09-10.
-            hr_direction(honest_block),
-            metric_name=honest_block.get('metric_name'),
-            exclude_folds=hr_exclude_folds(honest_block),
+            hr_direction(reselection_block),
+            metric_name=reselection_block.get('metric_name'),
+            exclude_folds=hr_exclude_folds(reselection_block),
         )
     return out
 
@@ -465,16 +465,16 @@ def print_analysis(dataset_name, ds_results):
     # recipe / baseline rep) is re-picked per held-out fold from the OTHER folds'
     # mean, and the identical held-out tax is applied to both arms.
     # -------------------------------------------------------------------------
-    honest_block = ds_results.get('honest_rescore')
-    if honest_block:
-        res = honest_rescore(
-            honest_block.get('candidates_by_model', {}),
-            honest_block.get('baselines_by_model', {}),
+    reselection_block = ds_results.get('fold_reselection')
+    if reselection_block:
+        res = fold_reselection(
+            reselection_block.get('candidates_by_model', {}),
+            reselection_block.get('baselines_by_model', {}),
             # The console path was the one left on a defaulted False when the
             # saved path above was corrected. Fixed 2026-09-10.
-            hr_direction(honest_block),
-            metric_name=honest_block.get('metric_name'),
-            exclude_folds=hr_exclude_folds(honest_block),
+            hr_direction(reselection_block),
+            metric_name=reselection_block.get('metric_name'),
+            exclude_folds=hr_exclude_folds(reselection_block),
         )
         print(f"\n  Honest per-model comparison (leave-one-fold-out, held-out "
               f"selection; primary metric = auc):")
@@ -486,8 +486,8 @@ def print_analysis(dataset_name, ds_results):
         print(f"    {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
         for model_name in sorted(res.keys()):
             r = res[model_name]
-            h = r['hybrid_honest']
-            b = r['best_single_honest']
+            h = r['hybrid_reselected']
+            b = r['best_single_reselected']
             # delta_mean_of_folds, not delta: 'delta' subtracts the two arms'
             # MEAN scores, which equals the paired quantity only when both arms
             # scored the same fold set (_shared.py:1552-1568). The paired

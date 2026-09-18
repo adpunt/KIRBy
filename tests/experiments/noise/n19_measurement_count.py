@@ -187,6 +187,12 @@ def measurement_stats(labels, replicate_groups):
     spread grows with how many times a molecule was measured whatever its real
     disagreement, so a quiet molecule measured six times outranks a noisy one
     measured twice. Everything downstream of this ranks or divides by it.
+
+    Reviewed 2026-09-18 alongside n17's identical floor-of-2 question: no
+    change requested here. `var_all` at k=2 feeds `weights_for`'s sample weights and
+    `shrink_toward`'s label shrinkage directly, so it moves what gets fit, not
+    just what gets reported -- that was the point of checking it, and the
+    decision was to leave it as-is.
     """
     labels = np.asarray(labels, dtype=np.float64)
     groups = np.asarray(replicate_groups)

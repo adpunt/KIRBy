@@ -24,7 +24,7 @@ from experiments._shared import (
     extract_top3_base_reps,
     INTERNAL_EVALUATORS,
     get_best_search_for_downstream, build_fold_hybrid, cv_split,
-    build_honest_rescore_input, honest_rescore,
+    build_fold_reselection_input, fold_reselection,
     hr_exclude_folds,
 )
 from sklearn.preprocessing import StandardScaler
@@ -88,12 +88,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # sample size. For each sample size we store one block PER
                 # subsampling seed (subsamples differ across seeds, so their
                 # per-fold scores must not be merged into one candidate list).
-                # Each block is exactly what build_honest_rescore_input returns
+                # Each block is exactly what build_fold_reselection_input returns
                 # (candidates_by_model + baselines_by_model + lower_is_better),
-                # so a reader can feed each straight to honest_rescore. Purely
+                # so a reader can feed each straight to fold_reselection. Purely
                 # additive: the mean-based 'hybrid'/'best_single' arrays are
                 # UNCHANGED.
-                'honest_rescore_by_n': {},
+                'fold_reselection_by_n': {},
                 # The sample-efficiency curve to read. At each sample size,
                 # each held-out fold's hybrid recipe and single representation
                 # are picked on the other folds only, so both sides pay the
@@ -101,15 +101,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # arrays below are each a maximum taken on the folds they are
                 # then reported on, over ~600 recipes against ~10
                 # representations, so their difference runs high.
-                'honest_curve': {}}
+                'reselected_curve': {}}
 
     # Initialize per-model result structure
     for model_name in model_names:
         results['models'][model_name] = {
             'hybrid': [], 'best_single': [],
             # Leave-one-fold-out arrays, aligned with sample_sizes. Read these.
-            'hybrid_honest': [], 'best_single_honest': [],
-            'honest_delta_mean_of_folds': [],
+            'hybrid_reselected': [], 'best_single_reselected': [],
+            'reselected_delta_mean_of_folds': [],
             'best_configs': [],
             # Second pass: the all-rows-selected blueprint applied at each n.
             'hybrid_all_rows_bp': [],
@@ -156,8 +156,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Second pass: the all-rows-selected blueprint, features re-selected
         # on the subsample. The recipe itself still came from every label.
         hybrid_fd_by_model = {m: [] for m in model_names}
-        # One CONTRACT-shape honest_rescore block per seed at this sample size.
-        honest_blocks_this_n = []
+        # One CONTRACT-shape fold_reselection block per seed at this sample size.
+        reselection_blocks_this_n = []
 
         last_search = None
         full_augs = data.get('augmentations')
@@ -241,10 +241,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # only from what the search actually evaluated, so model
                 # gating is preserved automatically.
                 try:
-                    honest_blocks_this_n.append(
-                        build_honest_rescore_input(search))
+                    reselection_blocks_this_n.append(
+                        build_fold_reselection_input(search))
                 except Exception as _he:
-                    print(f"    seed={seed}: honest_rescore build failed - {_he}")
+                    print(f"    seed={seed}: fold_reselection build failed - {_he}")
                 for model_name in model_names:
                     if model_name in search.best_by_model:
                         mbest = search.best_by_model[model_name]
@@ -353,36 +353,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 except Exception:
                     pass
 
-        if honest_blocks_this_n:
-            results['honest_rescore_by_n'][str(n_sub)] = honest_blocks_this_n
+        if reselection_blocks_this_n:
+            results['fold_reselection_by_n'][str(n_sub)] = reselection_blocks_this_n
 
         # Leave-one-fold-out re-pick at this sample size, per seed, then
         # averaged over seeds. Pure arithmetic on per-fold scores that already
         # exist, so it costs no fits. Subsamples differ between seeds, so each
         # seed's block is rescored on its own and only the resulting numbers
         # are averaged.
-        honest_by_model_this_n = {m: {'h': [], 's': [], 'd': []}
+        reselected_by_model_this_n = {m: {'h': [], 's': [], 'd': []}
                                   for m in model_names}
-        for _blk in honest_blocks_this_n:
+        for _blk in reselection_blocks_this_n:
             try:
-                _hr = honest_rescore(
+                _hr = fold_reselection(
                     _blk.get('candidates_by_model', {}),
                     _blk.get('baselines_by_model', {}),
                     _blk.get('lower_is_better'),
                     metric_name=_blk.get('metric_name'),
                     exclude_folds=hr_exclude_folds(_blk))
             except Exception as _e:
-                print(f"    honest rescore unavailable at n={n_sub}: {_e}")
+                print(f"    per-fold reselection unavailable at n={n_sub}: {_e}")
                 continue
             for _m, _v in _hr.items():
-                if _m not in honest_by_model_this_n:
-                    honest_by_model_this_n[_m] = {'h': [], 's': [], 'd': []}
-                for _k, _f in (('h', 'hybrid_honest'),
-                               ('s', 'best_single_honest'),
+                if _m not in reselected_by_model_this_n:
+                    reselected_by_model_this_n[_m] = {'h': [], 's': [], 'd': []}
+                for _k, _f in (('h', 'hybrid_reselected'),
+                               ('s', 'best_single_reselected'),
                                ('d', 'delta_mean_of_folds')):
                     _val = _v.get(_f)
                     if _val is not None and not np.isnan(_val):
-                        honest_by_model_this_n[_m][_k].append(float(_val))
+                        reselected_by_model_this_n[_m][_k].append(float(_val))
 
         if last_search is not None:
             top3 = extract_top3_base_reps(last_search)
@@ -402,10 +402,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             results['models'][model_name]['best_single'].append(s)
             results['models'][model_name]['best_configs'].append(
                 configs_by_model[model_name] if configs_by_model[model_name] else None)
-            _hb = honest_by_model_this_n.get(model_name, {'h': [], 's': [], 'd': []})
-            for _k, _field in (('h', 'hybrid_honest'),
-                               ('s', 'best_single_honest'),
-                               ('d', 'honest_delta_mean_of_folds')):
+            _hb = reselected_by_model_this_n.get(model_name, {'h': [], 's': [], 'd': []})
+            for _k, _field in (('h', 'hybrid_reselected'),
+                               ('s', 'best_single_reselected'),
+                               ('d', 'reselected_delta_mean_of_folds')):
                 results['models'][model_name][_field].append(
                     float(np.mean(_hb[_k])) if _hb[_k] else float('nan'))
             results['models'][model_name]['hybrid_all_rows_bp'].append(h_fd)
@@ -413,7 +413,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 all_rows_meta.get(model_name))
 
             delta = (s - h if lower_is_better else h - s) if not (np.isnan(h) or np.isnan(s)) else float('nan')
-            hd = results['models'][model_name]['honest_delta_mean_of_folds'][-1]
+            hd = results['models'][model_name]['reselected_delta_mean_of_folds'][-1]
             print(f"    {model_name}: hybrid={h:.4f}, hybrid_all_rows_bp={h_fd:.4f}, "
                   f"best_single={s:.4f}, same-fold delta={delta:+.4f}, "
                   f"leave-one-fold-out delta={hd:+.4f}")
@@ -430,12 +430,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             h_arr = np.array([model_result['hybrid'][i] for i in valid])
             model_result['hybrid_fit'] = fit_learning_curve(
                 n_arr, h_arr, lower_is_better=lower_is_better)
-        valid_h = [i for i, h in enumerate(model_result['hybrid_honest'])
+        valid_h = [i for i, h in enumerate(model_result['hybrid_reselected'])
                    if not np.isnan(h)]
         if len(valid_h) >= 3:
             n_arr = np.array([sample_sizes[i] for i in valid_h])
-            h_arr = np.array([model_result['hybrid_honest'][i] for i in valid_h])
-            model_result['hybrid_honest_fit'] = fit_learning_curve(
+            h_arr = np.array([model_result['hybrid_reselected'][i] for i in valid_h])
+            model_result['hybrid_reselected_fit'] = fit_learning_curve(
                 n_arr, h_arr, lower_is_better=lower_is_better)
 
     # Summary table. Each model gets its same-fold pair and the
@@ -456,7 +456,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             h = results['models'][m]['hybrid'][i]
             s = results['models'][m]['best_single'][i]
             d = (s - h if lower_is_better else h - s) if not (np.isnan(h) or np.isnan(s)) else float('nan')
-            hd = results['models'][m]['honest_delta_mean_of_folds'][i]
+            hd = results['models'][m]['reselected_delta_mean_of_folds'][i]
             row += f"  {h:>10.4f} {s:>10.4f} {d:>+8.4f} {hd:>+8.4f}"
         print(row)
 

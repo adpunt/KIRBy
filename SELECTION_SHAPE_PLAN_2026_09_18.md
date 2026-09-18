@@ -42,7 +42,7 @@ over 5 downstream models where there are 5 today. Baseline scores are rounded to
 decimals at `find_best_hybrid.py`:5525, so exact ties exist; today a tie is broken by
 representation build order and `top_base_reps` breaks it by representation name. Where a
 tie flips the rank-2 representation, the per-model top-rep-dim score at :400-405 and
-`honest_delta_by_condition` for that condition both move. `importance_wins` at :452-455
+`reselected_delta_by_condition` for that condition both move. `importance_wins` at :452-455
 counts 5 winners over 5 downstream models today and would count 10.
 
 **c03** -- `c03_cross_dataset_transfer.py`:151 takes 1 hybrid per downstream model through
@@ -69,8 +69,8 @@ hybrid per downstream model. Kept additive, `delta_budget` and `config_differs` 
 :453-457 do not move, because they read the cross-model winner at :296-306.
 
 **c11** -- `c11_ensemble_vs_hybrid.py`:708 hands every base representation's per-fold
-scores to `honest_rescore` as the baseline arm. Restricting that arm to 2 base
-representations makes `best_single_honest` equal or worse on every held-out fold, never
+scores to `fold_reselection` as the baseline arm. Restricting that arm to 2 base
+representations makes `best_single_reselected` equal or worse on every held-out fold, never
 better. `hybrid_minus_single` and `hybrid_minus_single_mean_of_folds` at :1226 and :1233
 therefore grow without the hybrid improving. That is the arm c11 exists to test the hybrid
 against. c11's own base scores come from its own fits under its own scaling at :305-319,
@@ -133,7 +133,7 @@ delta moves upward.
 **s04** -- `s04_activity_cliffs.py`:57 sets `_N_POOL_HYBRIDS = 3`, giving 6 hybrid arms
 over 2 search families, and :560-562 scores rank 1 of the base ranking only. At 2 per
 family the arms fall from 6 to 4, so 2 of the arm rows and 2 lines of the cliff table at
-:907-913 disappear. Every hybrid arm is a candidate in `honest_candidates` at :727-734, so
+:907-913 disappear. Every hybrid arm is a candidate in `reselection_candidates` at :727-734, so
 removing the rank-3 arms lowers or leaves equal the hybrid side of the held-out cliff
 delta. Adding a rank-2 base representation raises or leaves equal the best-single side.
 Both push the reported hybrid-minus-single cliff delta downward. This file holds no
@@ -145,7 +145,7 @@ over 6 downstream models; :94 sets `N_HYBRIDS_PER_FAMILY = 3`, giving 6 hybrid a
 fold for knn. `summary.reference_by_model` grows from 6 rows to 12 and `delta_by_model`
 emits 2 deltas per downstream model. The rank-1 numbers stay. Cutting hybrids from 3 ranks
 per family to 2 lowers or leaves `summary.posthoc_max.delta_vs_best_rep`, because it is a
-maximum over the cells. `honest_rescore_result.knn.delta` loses candidate cells and can
+maximum over the cells. `fold_reselection_result.knn.delta` loses candidate cells and can
 move either way; s09 pools that number across datasets and runs a signed-rank test on it.
 
 **s06** -- `s06_applicability_domain.py`:233 keeps 1 comparator base representation,
@@ -185,7 +185,7 @@ over 10. The directed delta rises or stays, with no hybrid having changed. The t
 ranked in the dataset's own metric over all rows, while s12 scores on cliff rows only.
 
 **c10** -- `c10_noise_robustness.py`:370-374 gives every representation an entry and keeps
-1 hybrid per cell, re-picked per fold by `honest_rescore`; :308 passes `models=['rf']`, so
+1 hybrid per cell, re-picked per fold by `fold_reselection`; :308 passes `models=['rf']`, so
 rf is the only downstream model present. The summary table at :798-825 would print 2 rows
 per downstream model instead of one row per representation. Every hybrid auc_norm moves
 unless the call passes `rule='other_folds', held_out_fold=0`, because a whole-dataset top
@@ -306,7 +306,7 @@ at :698-707.
 each of 5 downstream models, and :307 ranks 3 by rf for printing only. The table falls
 from 50 rows to 10 base rows and gains 10 hybrid rows. `best_roc` at :465-467 is a maximum
 over those rows. Over 10 rows instead of 50 it falls or stays, and the printed comparison
-against the ITsFlexible GNN's 0.82 falls with it. `best_single_honest` at :450 is re-
+against the ITsFlexible GNN's 0.82 falls with it. `best_single_reselected` at :450 is re-
 picked per held-out fold over every representation today; from 2 representations it gets
 worse, which widens the printed delta in the hybrid's favour.
 
@@ -324,22 +324,22 @@ loaded representation, 10 general plus 2 augmentation per property, against each
 downstream models, and :353 trains all 5 on one rf-chosen feature set. `Best indiv` and
 `Delta` at :660-663 change. The maximum on the base side is over 2 representations per
 downstream model instead of 12. `Best indiv` falls or stays and `Delta` rises or stays.
-The count `Hybrid wins: n of 5 properties` at :665 can rise. `hybrid_honest` moves for
+The count `Hybrid wins: n of 5 properties` at :665 can rise. `hybrid_reselected` moves for
 xgboost, svm, dnn and lightgbm on every property once each reads its own feature set.
 
-**opig_graphinity_ddg** -- `opig_graphinity_ddg.py`:469 hands `honest_rescore` every fold-
+**opig_graphinity_ddg** -- `opig_graphinity_ddg.py`:469 hands `fold_reselection` every fold-
 scored hybrid row and every representation, per downstream model. Under the shape
 `candidates_by_model` drops to 2 hybrids per downstream model and `baselines_by_model` to
-2 representations. Then `hybrid_honest`, `best_single_honest`, `delta_mean_of_folds`,
+2 representations. Then `hybrid_reselected`, `best_single_reselected`, `delta_mean_of_folds`,
 `n_paired_folds` and both winners-per-fold lists move on every downstream model row. The
 `Best rep` column at :568-583 is taken over 2 representations instead of 9, so the gap to
 the structure-based EGNN at :600-610 grows or stays. The transfer_foldx condition has no
 SearchResult at all and cannot take the shape without a new search on the synthetic
 training rows.
 
-**opig_humanness** -- `opig_humanness.py`:331 hands `honest_rescore` every hybrid row and
+**opig_humanness** -- `opig_humanness.py`:331 hands `fold_reselection` every hybrid row and
 all 11 representations per downstream model. Under the shape that becomes 2 hybrids and 2
-representations per downstream model, so `hybrid_honest`, `best_single_honest` and
+representations per downstream model, so `hybrid_reselected`, `best_single_reselected` and
 `delta_mean_of_folds` move on every row of the table printed at :489-503. `Best individual
 rep` at :437-442 becomes a maximum over 2 representations per downstream model instead of
 11, so it falls or stays. Each of the 8 deltas against published humanness methods at
@@ -373,7 +373,7 @@ enrichment at the top 1 percent. It is taken over up to 13 representations by 5 
 models, 65 numbers. Over at most 10 numbers it can only fall or stay. It will usually
 fall, because the top 2 are chosen by the search's AUC baselines while the table reports
 enrichment. The comparison table at :861-877 shrinks from up to 65 base rows to at most
-10. The AUROC half of `honest_comparison` can take a second hybrid as arithmetic; the
+10. The AUROC half of `reselected_comparison` can take a second hybrid as arithmetic; the
 enrichment half needs a second fitted recipe per fold.
 
 **fed02** -- `fed02_rep_diversity_silos.py`:78-119 ranks the 5 silo representations. It

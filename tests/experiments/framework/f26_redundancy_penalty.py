@@ -316,8 +316,8 @@ def summarise_arm(result):
                 'n_paired_folds': n_paired,
                 'per_fold_delta': per_fold,
                 'per_fold_delta_std': _fold_spread(per_fold),
-                'hybrid_honest_mean': (None if not np.isfinite(b['honest_mean'])
-                                       else float(b['honest_mean'])),
+                'hybrid_reselected_mean': (None if not np.isfinite(b['reselected_mean'])
+                                       else float(b['reselected_mean'])),
             }
     return out
 

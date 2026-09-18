@@ -39,7 +39,7 @@ from experiments._shared import (
     cv_split, get_domain_metric,
     build_fold_hybrid,
     get_best_search_for_downstream,
-    honest_rescore,
+    fold_reselection,
     # 2026-09-12, owner's decision: c16 asks the pool for 'ridge' for the Ridge
     # family, 'svm' for SVR and 'rf' for RandomForest. RIDGE_MODELS is the named
     # model list that puts 'ridge' into the search — the same shape as
@@ -60,7 +60,7 @@ from kirby.find_best_hybrid import _resolve_models, DEFAULT_MODELS
 # to be read as variants[len(variants) // 2], a position. LogReg's six C values
 # run 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, so position 3 is C=10.0 while the
 # stated default is C=1.0 — every classification run read its default-
-# regularisation column, its l2_equivalence hybrid_gap and its honest-rescore
+# regularisation column, its l2_equivalence hybrid_gap and its fold-reselection
 # hybrid arm at ten times the intended penalty. Ridge's six alphas happen to
 # put 1.0 at the same position, which is why the expression looked right.
 _FAMILY_DEFAULT_PARAM = {
@@ -174,7 +174,7 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
     fold_scores is the list of per-fold VALIDATION scores (same values that are
     averaged into `score`). It is threaded out so the honest leave-one-fold-out
     re-score can re-pick the winning budget / regularization per held-out fold
-    (see the honest_rescore block built in run()). Empty list when no fold ran.
+    (see the fold_reselection block built in run()). Empty list when no fold ran.
     """
     sample_X = next(iter(reps.values()))
     val_scores = []
@@ -460,13 +460,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #                   (best_simple_hybrid = max over budgets < full);
     #   baseline arm  = the tuned regularization sweep at the full-dim budget
     #                   (best_tuned_full = max over reg).
-    # Persisting per-fold scores for BOTH lets a reader call honest_rescore()
+    # Persisting per-fold scores for BOTH lets a reader call fold_reselection()
     # and get a selection-optimism-corrected simple-hybrid vs tuned-full delta,
     # re-picking the winning budget / reg per held-out fold instead of on the
     # same folds it is scored on. Per-family structure is preserved (family name
-    # is the model key). See experiments._shared.honest_rescore.
-    honest_candidates = {}  # {family: [{"name": <budget id>, "fold_scores": [...]}, ...]}
-    honest_baselines = {}   # {family: {<reg id>: [fold_scores], ...}}
+    # is the model key). See experiments._shared.fold_reselection.
+    reselection_candidates = {}  # {family: [{"name": <budget id>, "fold_scores": [...]}, ...]}
+    reselected_baselines = {}   # {family: {<reg id>: [fold_scores], ...}}
 
     for fam_name, variants in families.items():
         print(f"\n  --- {fam_name} ({len(variants)} regularization levels × {len(budgets)} budgets) ---")
@@ -492,7 +492,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # c09:623 and c33. Fixed 2026-09-10 (metric-direction audit).
                     'gap': ((val_score - train_score) if lower_is_better
                             else (train_score - val_score)),
-                    # Per-fold validation scores kept for the honest re-score
+                    # Per-fold validation scores kept for the per-fold reselection
                     # (leave-one-fold-out budget / reg selection). Additive.
                     'fold_scores': list(fold_scores),
                 }
@@ -597,7 +597,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             fam_result['l2_equivalence'] = convert_numpy(l2_equivalence)
 
-        # --- Honest re-score inputs for this family (per-fold, both arms) ---
+        # --- Per-fold reselection inputs for this family (per-fold, both arms) ---
         # Hybrid arm: simple-hybrid budgets (b < full) at default regularization.
         _hybrid_default = _default_param_value(fam_name, variants)
         _cand_list = []
@@ -606,13 +606,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             _fs = heatmap[b].get(str(_hybrid_default), {}).get('fold_scores', [])
             _cand_list.append({'name': f'b{b}', 'fold_scores': list(_fs)})
-        honest_candidates[fam_name] = _cand_list
+        reselection_candidates[fam_name] = _cand_list
         # Baseline arm: tuned regularization settings at the full-dim budget.
         _base_map = {}
         for _, pval, _f in variants:
             _fs = heatmap[full_dim_budget].get(str(pval), {}).get('fold_scores', [])
             _base_map[f'{param_name}={pval}'] = list(_fs)
-        honest_baselines[fam_name] = _base_map
+        reselected_baselines[fam_name] = _base_map
 
         results['families'][fam_name] = fam_result
         print(f"    Sensitivity: {', '.join(f'b={b}:{s:.4f}' for b, s in sensitivity.items())}")
@@ -620,19 +620,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             winner = 'simple_hybrid' if comparison['hybrid_wins'] else 'tuned_full_dim'
             print(f"    Winner on the folds that picked it: {winner}")
 
-    # Standard honest_rescore block (exact CONTRACT key names). Keys of
+    # Standard fold_reselection block (exact CONTRACT key names). Keys of
     # candidates_by_model / baselines_by_model are the FAMILY names (each family
     # is one "model" for the re-score). A reader loads this block and calls
-    # experiments._shared.honest_rescore(candidates_by_model, baselines_by_model,
+    # experiments._shared.fold_reselection(candidates_by_model, baselines_by_model,
     # lower_is_better) to get the selection-optimism-corrected delta per family.
-    results['honest_rescore'] = {
+    results['fold_reselection'] = {
         'metric_name': metric_name,
         'lower_is_better': lower_is_better,
         # Every fold counts. The candidates here are the arms this file built itself,
         # not a search's recipe list, so no fold filtered them.
         'exclude_folds': [],
-        'candidates_by_model': honest_candidates,
-        'baselines_by_model': honest_baselines,
+        'candidates_by_model': reselection_candidates,
+        'baselines_by_model': reselected_baselines,
     }
 
     # Compute it here rather than leaving it to whoever reads the file. Each
@@ -641,26 +641,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # for being a maximum. It costs no fits — the per-fold scores already
     # exist. hybrid_wins in each family's comparison block is the same-fold
     # verdict and is kept unchanged beside it.
-    honest_result = {}
+    reselection_result = {}
     try:
-        honest_result = honest_rescore(honest_candidates, honest_baselines,
+        reselection_result = fold_reselection(reselection_candidates, reselected_baselines,
                                        lower_is_better, metric_name=metric_name)
     except Exception as e:
         print(f"  honest delta unavailable: {e}")
-    results['honest_rescore_result'] = honest_result
+    results['fold_reselection_result'] = reselection_result
 
-    if honest_result:
+    if reselection_result:
         print("\n  Leave-one-fold-out re-score (per family):")
         print(f"    {'Family':<10} {'hybrid':>10} {'tuned_full':>11} "
               f"{'delta':>10}  winner")
-        for fam in sorted(honest_result):
-            r = honest_result[fam]
+        for fam in sorted(reselection_result):
+            r = reselection_result[fam]
             d = r.get('delta_mean_of_folds', float('nan'))
             win = ('simple_hybrid' if d > 0 else 'tuned_full_dim') \
                 if not np.isnan(d) else 'n/a'
             note = ' SINGLE-FOLD (no held-out tax)' if r.get('single_fold') else ''
-            print(f"    {fam:<10} {r['hybrid_honest']:>10.4f} "
-                  f"{r['best_single_honest']:>11.4f} {d:>+10.4f}  {win}{note}")
+            print(f"    {fam:<10} {r['hybrid_reselected']:>10.4f} "
+                  f"{r['best_single_reselected']:>11.4f} {d:>+10.4f}  {win}{note}")
 
     return results
 

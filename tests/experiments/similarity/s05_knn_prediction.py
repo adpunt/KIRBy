@@ -21,7 +21,7 @@ Both subtract the same thing: the reference defined below, which since
 single representation for that model, not one representation alone. Both
 headline deltas subtract the kNN pair, and both carry a delta against every
 other model's pair under 'delta_by_model'. The number to report is
-`honest_rescore_result`'s delta: for each held-out fold it re-picks both arms on
+`fold_reselection_result`'s delta: for each held-out fold it re-picks both arms on
 the OTHER folds, and s09 stores it as knn_delta_heldout.
 
 Until 2026-09-11 both subtracted `best_rep_score` instead — whichever of the ten
@@ -71,7 +71,7 @@ from experiments._shared import (
     save_experiment_results, get_fitted_hybrid, get_best_for_downstream,
     flatten_weights, flatten_fold_weights, make_cv_splitter,
     get_domain_metric, build_fold_hybrid,
-    honest_rescore, get_fold_pool_recipes,
+    fold_reselection, get_fold_pool_recipes,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
     hr_exclude_folds,
 )
@@ -135,7 +135,7 @@ from experiments.similarity._summary_keys import (
 #   prediction in the similarity suite uses (s01, s02, s04, s06, s08 all
 #   pass k=5).
 #
-# The held-out number (honest_rescore_result, s09's knn_delta_heldout) is
+# The held-out number (fold_reselection_result, s09's knn_delta_heldout) is
 # unaffected by any of this — it re-picks both arms on the other folds and
 # never reads the reference.
 REFERENCE_N_NEIGHBOURS = 5
@@ -241,7 +241,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _pool_cache = {}
     _pool_warnings_seen = set()
     # True as soon as any pool member filtered its own candidate list on fold 0.
-    # It decides which folds the honest re-score drops from BOTH arms, below.
+    # It decides which folds the per-fold reselection drops from BOTH arms, below.
     pool_fold0_pruned = None
     results['pool_read'] = {
         'pool_subset': POOL_SUBSET,
@@ -266,7 +266,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         model anything here fits. The reference block reads it once per model
         in DISTANCE_MODELS, for the stored baseline scores of that model alone;
         only the kNN read feeds the run-level pool status and the fold-0
-        pruning flag the honest re-score uses.
+        pruning flag the per-fold reselection uses.
         """
         nonlocal pool_fold0_pruned
         ck = (fold_i, budget, model)
@@ -326,7 +326,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Fold 0's pool, kept only to report which base representations rank best
     # there. Named for the fold it came from: ranked on folds 1..4, not a
     # whole-dataset ranking.
-    # The key name 'search_status' is kept because the honest re-score block at
+    # The key name 'search_status' is kept because the per-fold reselection block at
     # the end of this file reads it; what it now records is the pool read.
     results['search_status'] = {'ok': True}
     pool0 = _fold_pool(0, _base_budget)
@@ -389,7 +389,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # experiment runs its OWN kNN CV (not find_best_hybrid), so we collect the
     # per-fold scores of every hybrid cell (budget x condition x k) and every
     # single-rep baseline cell (rep x k) here, and assemble the standard
-    # honest_rescore block by hand after the loops. Single downstream model by
+    # fold_reselection block by hand after the loops. Single downstream model by
     # design ('knn'), so both arms live under the 'knn' key.
     hybrid_candidates = []  # [{'name': str, 'fold_scores': [...]}]
 
@@ -477,7 +477,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for k in k_values:
                     # Fold-index-aligned: None where this fold produced no
                     # score, so a missing middle fold cannot shift the paired
-                    # comparison the honest re-score makes below.
+                    # comparison the per-fold reselection makes below.
                     fold_scores = [None] * len(folds_b)
 
                     for fold_i, (train_idx, val_idx) in enumerate(folds_b):
@@ -562,7 +562,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                     score_mean = float(np.mean(scored))
                     score_std = float(np.std(scored))
-                    # Honest-rescore arm: keep the raw per-fold scores for this
+                    # Per-fold reselection arm: keep the raw per-fold scores for this
                     # (budget, family, rank, condition, k) cell so held-out-fold
                     # selection can re-pick the winning cell per fold (not the
                     # same-fold argmax).
@@ -623,7 +623,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # separate, deterministic splitter rebuilt identical folds — SIMA-18.)
     folds_baseline = folds_b
 
-    # Honest-rescore baseline arm: per-(rep, k) unweighted kNN per-fold scores.
+    # Per-fold reselection baseline arm: per-(rep, k) unweighted kNN per-fold scores.
     # Keying each (rep, k) as its own baseline cell lets the held-out-fold
     # selection replace BOTH the same-fold best-rep argmax AND the same-fold
     # best-k argmax in one pass. These are "the real baselines" (unweighted).
@@ -729,7 +729,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # importance weighting — so it costs no extra fits and is the same
     # arithmetic, not a second recipe.
     #
-    # It is NOT added to baseline_candidates. The honest re-score already picks
+    # It is NOT added to baseline_candidates. The per-fold reselection already picks
     # a single representation per held-out fold from those cells; a per-fold
     # selection cannot also be one of the cells it selects among.
     print(f"\n  Pool's best single representation per fold "
@@ -1159,10 +1159,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  No hybrid-versus-reference comparison this run ({_why})")
 
     # ── Honest leave-one-fold-out re-score block (selection-optimism fix) ──
-    # build_honest_rescore_input() reads a SearchResult; this experiment runs
+    # build_fold_reselection_input() reads a SearchResult; this experiment runs
     # its own kNN CV, so we assemble the standard block by hand from the
     # per-fold scores collected above (single 'knn' model by design). A reader
-    # loads results['honest_rescore'] and calls the shared honest_rescore(...).
+    # loads results['fold_reselection'] and calls the shared fold_reselection(...).
     #
     # 2026-09-12: the candidates are no longer recipes this file searched for
     # itself. They are the pool's top three hybrids per family, ranked for each
@@ -1179,7 +1179,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # pool_fold0_pruned reads None (a search pickled before the flag existed) as
     # pruned, the same reading hr_exclude_folds takes.
     _exclude = [0] if (pool_fold0_pruned is None or pool_fold0_pruned) else []
-    results['honest_rescore'] = {
+    results['fold_reselection'] = {
         'lower_is_better': bool(lower_is_better),
         'recipe_selection': 'other_folds_of_pool_search',
         'exclude_folds': _exclude,
@@ -1193,7 +1193,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # empty and why, so the block is not read as "no hybrid cell won".
     if not hybrid_candidates:
         _st = results.get('search_status', {})
-        results['honest_rescore_status'] = {
+        results['fold_reselection_status'] = {
             'computed': False,
             'n_hybrid_cells': 0,
             'n_baseline_cells': len(baseline_candidates),
@@ -1204,9 +1204,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              'produced fold scores')),
         }
         print(f"\n  Honest LOFO re-score (knn): not computed "
-              f"({results['honest_rescore_status']['reason']})")
+              f"({results['fold_reselection_status']['reason']})")
     else:
-        results['honest_rescore_status'] = {
+        results['fold_reselection_status'] = {
             'computed': True,
             'n_hybrid_cells': len(hybrid_candidates),
             'n_baseline_cells': len(baseline_candidates),
@@ -1219,24 +1219,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # best-single-rep delta is available inline alongside the optimistic
     # posthoc_max / pre-registered fixed_ref summaries.
     try:
-        hr = honest_rescore(
-            results['honest_rescore']['candidates_by_model'],
-            results['honest_rescore']['baselines_by_model'],
+        hr = fold_reselection(
+            results['fold_reselection']['candidates_by_model'],
+            results['fold_reselection']['baselines_by_model'],
             bool(lower_is_better),
-            exclude_folds=hr_exclude_folds(results['honest_rescore']),
+            exclude_folds=hr_exclude_folds(results['fold_reselection']),
             # 2026-09-12: carried onto every model entry so a reader is told
             # what chose the recipe — the pool search's other folds.
-            recipe_selection=results['honest_rescore']['recipe_selection'])
-        results['honest_rescore_result'] = hr
+            recipe_selection=results['fold_reselection']['recipe_selection'])
+        results['fold_reselection_result'] = hr
         knn_hr = hr.get('knn')
         if knn_hr is not None:
             flag = ' [single-fold, NOT honest]' if knn_hr.get('single_fold') else ''
             print(f"\n  Honest LOFO re-score (knn){flag}: "
-                  f"hybrid={knn_hr['hybrid_honest']:.4f}, "
-                  f"best_single={knn_hr['best_single_honest']:.4f}, "
+                  f"hybrid={knn_hr['hybrid_reselected']:.4f}, "
+                  f"best_single={knn_hr['best_single_reselected']:.4f}, "
                   f"delta={knn_hr['delta']:+.4f} (positive=hybrid better)")
     except Exception as e:
-        print(f"  [warn] honest_rescore failed: {type(e).__name__}: {e}")
+        print(f"  [warn] fold_reselection failed: {type(e).__name__}: {e}")
 
     return results
 

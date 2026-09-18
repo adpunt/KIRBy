@@ -25,7 +25,7 @@ from experiments._shared import (
     select_model_rep_pairs,
     INTERNAL_EVALUATORS,
     get_best_search_for_downstream,
-    build_honest_rescore_input,
+    build_fold_reselection_input,
 )
 
 
@@ -439,11 +439,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # leave-one-fold-out selection-optimism correction without re-running
             # a search. This is the PER-MODEL replacement for the single
             # cross-model argmax `best` above: every evaluated model is retained,
-            # nothing collapses to one max cell. build_honest_rescore_input reads
+            # nothing collapses to one max cell. build_fold_reselection_input reads
             # search.baseline_fold_scores (per-fold baselines) and
             # search.all_results (per-fold hybrid candidates); on old caches that
             # lack per-fold baselines a model simply won't appear (soft miss).
-            honest_block = (build_honest_rescore_input(search)
+            reselection_block = (build_fold_reselection_input(search)
                             if search is not None else None)
 
             part_result[subpop_name] = {
@@ -459,10 +459,10 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'top2_pairs_by_model': (sel['pairs'] if sel else []),
                 'all_rows_bp_scores': all_rows_bp_scores,
                 'all_rows_bp_fold_scores': all_rows_bp_fold_scores,
-                # Per-model honest re-score inputs (per-fold, both arms). Exact
+                # Per-model per-fold reselection inputs (per-fold, both arms). Exact
                 # CONTRACT keys inside: lower_is_better / candidates_by_model /
                 # baselines_by_model. None if the search itself failed.
-                'honest_rescore': honest_block,
+                'fold_reselection': reselection_block,
                 # FIX 4d: None when the all-rows-bp second pass ran normally,
                 # else a string explaining why it was skipped (too few groups).
                 'skipped_insufficient_groups': all_rows_bp_skipped,

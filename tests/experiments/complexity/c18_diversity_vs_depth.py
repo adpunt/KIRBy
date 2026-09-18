@@ -31,7 +31,7 @@ from experiments._shared import (
     compute_feature_importance,
     build_fold_hybrid, get_precomputed_search, get_best_for_downstream,
     get_best_search_for_downstream,
-    build_honest_rescore_input,
+    build_fold_reselection_input,
 )
 
 
@@ -170,15 +170,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'rep_ranking_full_data': [(n, float(s)) for n, s in ranked_full],
         'per_budget': {},
         # Honest-comparison block, keyed by budget (this experiment runs one
-        # search per budget, so the single top-level "honest_rescore" block the
+        # search per budget, so the single top-level "fold_reselection" block the
         # contract describes can't represent it -- one block per budget instead).
-        # Each value is verbatim what build_honest_rescore_input(search) returns:
+        # Each value is verbatim what build_fold_reselection_input(search) returns:
         # the SEARCH's own hybrid candidate recipes + per-rep baselines with
         # per-fold scores, which is where the natural arm's upstream selection
-        # optimism lives. A reader picks a budget and calls honest_rescore(
+        # optimism lives. A reader picks a budget and calls fold_reselection(
         # block['candidates_by_model'], block['baselines_by_model'],
         # block['lower_is_better']).
-        'honest_rescore_by_budget': {},
+        'fold_reselection_by_budget': {},
     }
 
     # Per-budget blueprint discovery via pool helper (best (tier, aug_cond)
@@ -237,16 +237,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['importance_method_by_budget'][budget] = fold_imp_method
         results['importance_method_source_by_budget'][budget] = fold_imp_source
 
-        # Persist the honest-rescore input built from the SEARCH itself (all
+        # Persist the fold-reselection input built from the SEARCH itself (all
         # hybrid candidate recipes + per-rep baseline per-fold scores). Pure
         # arithmetic, no model fitting; lets the reader re-pick the winner per
         # held-out fold and expose the natural arm's selection optimism.
         if search is not None:
             try:
-                results['honest_rescore_by_budget'][budget] = convert_numpy(
-                    build_honest_rescore_input(search))
+                results['fold_reselection_by_budget'][budget] = convert_numpy(
+                    build_fold_reselection_input(search))
             except Exception as e:
-                print(f"  WARNING: honest_rescore build failed: {e}")
+                print(f"  WARNING: fold_reselection build failed: {e}")
 
         fold_scores = {}  # {condition_name: [per_fold_scores]}
 

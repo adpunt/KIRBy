@@ -102,7 +102,7 @@ from experiments._shared import (add_distance_metric_arg,
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
-    honest_rescore,
+    fold_reselection,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
@@ -583,7 +583,7 @@ def _paired_hybrid_delta(results, per_fold_key, lower_is_better,
 
     `results` is {rep_name: {'models': {model: summary}}} where each summary
     carries fold-index-aligned held-out scores under `per_fold_key` — either
-    'rmse_per_fold' or 'r2_per_fold'. Returns honest_rescore's output keyed by
+    'rmse_per_fold' or 'r2_per_fold'. Returns fold_reselection's output keyed by
     model: the hybrid is the only candidate, and the base representation is
     re-picked on every held-out group from the other groups.
 
@@ -614,7 +614,7 @@ def _paired_hybrid_delta(results, per_fold_key, lower_is_better,
     # No exclude_folds: one candidate per model, the hybrid rebuilt by its own
     # search inside each fold. There is no shared recipe list for fold 0 to have
     # filtered, so no fold needs dropping from either arm.
-    return honest_rescore(candidates_by_model, baselines_by_model,
+    return fold_reselection(candidates_by_model, baselines_by_model,
                           lower_is_better=lower_is_better,
                           metric_name=metric_name)
 
@@ -625,7 +625,7 @@ def _paired_hybrid_deltas(results, dataset_name):
     RMSE is the metric the registry reports these reaction datasets in, and it
     is defined on every held-out component. R2 is not: a component whose yields
     are near-constant has ss_tot == 0, evaluate_rep writes None for that
-    component, and honest_rescore drops any component where either arm has no
+    component, and fold_reselection drops any component where either arm has no
     score. So the R2 pairing covers fewer held-out components than the RMSE
     table does, and both n_paired_folds are kept so the two coverages are
     visible side by side.
@@ -780,7 +780,7 @@ def print_analysis(all_results):
     # For each model, the base representation is re-picked on every held-out
     # group from the other groups' scores only, and its score on that group is
     # subtracted from the hybrid's score on the SAME group. This is the
-    # arithmetic honest_rescore already runs; both arms pay the same tax.
+    # arithmetic fold_reselection already runs; both arms pay the same tax.
     for ds_name, ds_results in all_results.items():
         print(f"\n  Dataset: {ds_name} ({ds_results.get('n_reactions', '?')} reactions)")
         # Both deltas are hybrid minus best single representation on the SAME
@@ -826,7 +826,7 @@ def print_analysis(all_results):
             first = True
             for model_name in sorted(paired):
                 r = paired[model_name]
-                h, b = r['hybrid_honest'], r['best_single_honest']
+                h, b = r['hybrid_reselected'], r['best_single_reselected']
                 d = r['delta_mean_of_folds']
                 h_s = f"{h:.4f}" if not np.isnan(h) else "---"
                 b_s = f"{b:.4f}" if not np.isnan(b) else "---"

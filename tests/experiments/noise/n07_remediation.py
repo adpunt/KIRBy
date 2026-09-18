@@ -113,7 +113,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
     extract_top3_base_reps, DOWNSTREAM_MODELS_NOISE,
-    honest_rescore, build_honest_rescore_input,
+    fold_reselection, build_fold_reselection_input,
 )
 from kirby.utils.noise_estimation import (
     ActivityCliffAwareEstimator, GaussianProcessEstimator,
@@ -372,6 +372,162 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
     raise ValueError(f"cleaned_training_set: unknown cleanup {strategy!r}")
 
 
+# How many downstream models, and how many representations for each of them,
+# the three expensive cleanups are measured under. USER DECISION 2026-09-17.
+# Both are chosen from measurements this run makes itself; see
+# `rank_models_and_reps` below. Nothing is read from a file an earlier run
+# wrote, so this behaves the same on a laptop and on the cluster.
+N_TOP_MODELS = 2
+N_TOP_REPS_PER_MODEL = 2
+
+# The widest a set of features may be before the three model-fitting cleanups
+# refuse to run on it. USER DECISION 2026-09-18: 2000 features.
+#
+# WHY THERE IS A CEILING AT ALL. These three cleanups fit five models each
+# before they repair anything, and how long that takes is driven by the number
+# of features more than by anything else. MEASURED 2026-09-17 on this machine,
+# one run of all three on a training fold of 1,200 molecules: 275 seconds where
+# a molecule is described by 200 features, and 2,351 seconds -- 39 minutes --
+# where it is described by 2,048. Over a whole dataset that is the difference
+# between roughly nine hours and roughly forty-four.
+#
+# WHAT IT DOES AND DOES NOT TOUCH. A representation wider than this is still
+# measured by the ranking below and its score is still written out, so nothing
+# disappears; it is only barred from being one of the two a model's expensive
+# cleanups run on. A model whose hybrid budget exceeds it keeps every one of
+# the four older cleanups in those hybrid features and loses only the three.
+# Nothing else in n07 reads this number.
+#
+# Overridable per run with --max-cleanup-features or KIRBY_MAX_CLEANUP_FEATURES,
+# so it is a setting rather than a number baked into the file.
+MAX_CLEANUP_FEATURES = 2000
+
+
+def max_cleanup_features(kwargs=None):
+    """The width ceiling this run uses, and where it came from.
+
+    Order: the run's own argument, then the environment, then
+    MAX_CLEANUP_FEATURES. 0 or a negative number means no ceiling.
+    """
+    val = (kwargs or {}).get('max_cleanup_features')
+    src = 'run argument'
+    if val is None:
+        env = os.environ.get('KIRBY_MAX_CLEANUP_FEATURES')
+        if env not in (None, ''):
+            val, src = env, 'KIRBY_MAX_CLEANUP_FEATURES'
+    if val is None:
+        val, src = MAX_CLEANUP_FEATURES, 'n07.MAX_CLEANUP_FEATURES'
+    try:
+        val = int(val)
+    except (TypeError, ValueError):
+        val, src = MAX_CLEANUP_FEATURES, 'n07.MAX_CLEANUP_FEATURES'
+    return (val if val > 0 else None), src
+
+
+def rank_models_and_reps(reps, labels, groups, model_factories, model_names,
+                         n_folds, mode, sample_X, metric_fn, metric_name,
+                         lower_is_better, is_clf,
+                         n_top_models=N_TOP_MODELS,
+                         n_top_reps=N_TOP_REPS_PER_MODEL,
+                         max_features=None):
+    """Measure every (downstream model, representation) pair in this run, then
+    keep the best models and each kept model's best representations.
+
+    NOTHING IS READ FROM DISK. Until 2026-09-17 the representations were ranked
+    by `extract_top3_base_reps`, which reads scores out of a stored search. That
+    search ran somewhere else, at some other time, on activity values this
+    experiment has not corrupted, and on the cluster it may be stale or absent
+    altogether. This function instead fits each model on each representation on
+    the UNCORRUPTED activity values, one fit per (model, representation, fold),
+    and reads the error on the held-out molecules. Those errors are the ranking,
+    and they are written into the result so the ranking can be checked.
+
+    Cost: len(model_names) x len(reps) x n_folds model fits, each one a single
+    fit with no corruption and no cleanup. That is one fit where each of the
+    three expensive cleanups needs five.
+
+    Returns a dict:
+        scores          {model: {representation: mean held-out error}}
+        n_features      {representation: how many features it has}
+        model_order     every model, best first
+        top_models      the first `n_top_models` of model_order
+        top_reps        {model: [representation, ...]} for the kept models
+        ranked_on       what the ranking measured, in words
+    """
+    scores = {}
+    for m_name in model_names:
+        factory = model_factories.get(m_name)
+        if factory is None:
+            continue
+        per_rep = {}
+        for rep_name, X_rep in reps.items():
+            fold_scores = []
+            for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
+                                               labels, mode=mode):
+                sc = StandardScaler()
+                X_tr = sc.fit_transform(X_rep[train_idx])
+                X_va = sc.transform(X_rep[val_idx])
+                try:
+                    mdl = factory()
+                    mdl.fit(X_tr, labels[train_idx])
+                    fold_scores.append(float(metric_fn(
+                        labels[val_idx],
+                        _predict_for_metric(mdl, X_va, metric_name))))
+                except Exception as exc:
+                    print(f"      ranking fit failed for {m_name} on "
+                          f"{rep_name}: {type(exc).__name__}: {exc}")
+            if fold_scores:
+                per_rep[rep_name] = float(np.mean(fold_scores))
+        if per_rep:
+            scores[m_name] = per_rep
+
+    def _best(d):
+        return min(d.values()) if lower_is_better else max(d.values())
+
+    model_order = sorted(scores, key=lambda m: (
+        _best(scores[m]) if lower_is_better else -_best(scores[m])))
+    top_models = model_order[:n_top_models]
+    n_features = {r: int(np.asarray(X).shape[1]) for r, X in reps.items()}
+    # A representation wider than the ceiling keeps its measured score above
+    # and is only barred from being SELECTED here, so a reader can still see
+    # how it did and what it was excluded for.
+    too_wide = ([] if max_features is None
+                else sorted(r for r, w in n_features.items()
+                            if w > max_features))
+    top_reps = {}
+    for m_name in top_models:
+        eligible = [r for r in scores[m_name] if r not in too_wide]
+        ordered = sorted(eligible, key=lambda r: (
+            scores[m_name][r] if lower_is_better else -scores[m_name][r]))
+        top_reps[m_name] = ordered[:n_top_reps]
+
+    return {
+        'scores': scores,
+        'n_features': n_features,
+        'max_features': max_features,
+        'reps_excluded_as_too_wide': {
+            r: int(n_features[r]) for r in too_wide},
+        'exclusion_note': (
+            f'A representation describing a molecule with more than '
+            f'{max_features} features was measured and scored, but could not '
+            f'be selected for the three model-fitting cleanups. Those three '
+            f'fit five models each and their cost is driven by the feature '
+            f'count.' if max_features is not None
+            else 'No width ceiling was applied.'),
+        'model_order': model_order,
+        'top_models': top_models,
+        'top_reps': top_reps,
+        'metric_name': metric_name,
+        'lower_is_better': bool(lower_is_better),
+        'ranked_on': (
+            'Every downstream model was fitted on every representation using '
+            'the UNCORRUPTED activity values, once per fold, and scored on the '
+            'held-out molecules in the dataset\'s own metric. A model ranks by '
+            'its best representation; a representation ranks within that '
+            'model. Measured in this run, not read from any stored search.'),
+    }
+
+
 def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                    model_factory, metric_fn, is_clf=False, metric_name=None,
                    noise_seed=42, precomputed_y_tr=None, noise_scores=None,
@@ -532,7 +688,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     bp_by_model = {}
     aug_by_model = {}
     # Keep the winning per-model SearchResult so we can persist an honest
-    # hybrid-vs-baseline re-scoring block (see honest_rescore block below).
+    # hybrid-vs-baseline re-scoring block (see fold_reselection block below).
     search_by_model = {}
     # Every model in DOWNSTREAM_MODELS_NOISE that was ASKED for, and what
     # happened to it. A model with no blueprint contributes no row to
@@ -713,8 +869,103 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # test Huber separately, run a dedicated experiment with Huber as the
     # baseline model across all strategies.
 
+    # --- Which models and which representations the three expensive cleanups
+    # --- run under. USER DECISION 2026-09-17, measured in THIS run.
+    #
+    # The three cleanups added today each fit five models before they repair
+    # anything. On a training fold of 1,200 molecules the three together take
+    # 275 seconds where a molecule is described by 200 features and 39 minutes
+    # where it is described by 2048. So they are measured under the two
+    # downstream models that fit this dataset best, on the two representations
+    # each of those models fits best, and in those models' hybrid features.
+    #
+    # The ranking is measured here, not read from a stored search. A stored
+    # search was written by another run on another machine, and on the cluster
+    # it can be stale or missing. `rank_models_and_reps` fits every model on
+    # every representation using the uncorrupted activity values, one fit per
+    # model, representation and fold, and ranks on the held-out error. Every
+    # score it measured is written out under 'model_rep_ranking'.
+    #
+    # The four cleanups n07 already had are NOT restricted by any of this. None
+    # of them fits a model, so restricting them would save nothing and would
+    # throw away rows earlier runs have.
+    ranking = None
+    top_models = list(bp_by_model.keys())
+    top_reps_by_model = {}
+    cap_features, cap_source = max_cleanup_features(kwargs)
+    # The same ceiling applied to the hybrid features. A recipe's budget is the
+    # most features its hybrid can hold, so a model whose budget exceeds the
+    # ceiling keeps the four older cleanups in its hybrid and loses the three.
+    hybrid_too_wide = {}
+    if cap_features is not None:
+        for _m, _bp in bp_by_model.items():
+            _b = int(getattr(_bp, 'budget', 0) or 0)
+            if _b > cap_features:
+                hybrid_too_wide[_m] = _b
+    if not is_clf:
+        print(f"\n  Ranking every downstream model on every representation, "
+              f"uncorrupted activity values, to choose where the three "
+              f"model-fitting cleanups run. Ceiling: "
+              f"{cap_features if cap_features else 'none'} features, from "
+              f"{cap_source}.")
+        ranking = rank_models_and_reps(
+            reps, labels, groups, model_factories,
+            [m for m in models_with_blueprint],
+            n_folds, mode, sample_X, metric_fn, metric_name,
+            lower_is_better, is_clf, max_features=cap_features)
+        if ranking['reps_excluded_as_too_wide']:
+            print("    barred as too wide: " + ", ".join(
+                f"{r} ({w} features)"
+                for r, w in ranking['reps_excluded_as_too_wide'].items()))
+        top_models = [m for m in ranking['top_models']
+                      if m in bp_by_model and m not in hybrid_too_wide]
+        _dropped = [m for m in ranking['top_models'] if m in hybrid_too_wide]
+        for _m in _dropped:
+            print(f"    {_m} keeps the four older cleanups only: its recipe's "
+                  f"budget is {hybrid_too_wide[_m]} features, above the "
+                  f"{cap_features}-feature ceiling")
+        top_reps_by_model = {m: ranking['top_reps'][m] for m in top_models}
+        for _m in ranking['model_order']:
+            _best_rep = min(ranking['scores'][_m],
+                            key=lambda r: (ranking['scores'][_m][r]
+                                           if lower_is_better
+                                           else -ranking['scores'][_m][r]))
+            print(f"    {_m}: best {metric_name}="
+                  f"{ranking['scores'][_m][_best_rep]:.4f} on {_best_rep} "
+                  f"({ranking['n_features'][_best_rep]} features)"
+                  + ("  <- kept" if _m in top_models else ""))
+        for _m in top_models:
+            print(f"    {_m} keeps: " + ", ".join(
+                f"{r} ({ranking['n_features'][r]} features, {metric_name}="
+                f"{ranking['scores'][_m][r]:.4f})"
+                for r in top_reps_by_model[_m]))
+
     results = {
         'metric': metric_name,
+        # USER DECISION 2026-09-17. Which downstream models and which
+        # representations the three model-fitting cleanups were measured under,
+        # and every score that chose them. Measured in this run; nothing here
+        # came from a stored search.
+        'model_rep_ranking': ranking,
+        'expensive_cleanups': list(REGRESSION_ONLY_CLEANUPS),
+        # USER DECISION 2026-09-18: 2000 features. A set of features wider than
+        # this is still measured and still scored, and is only barred from
+        # carrying the three model-fitting cleanups, whose cost is driven by
+        # the feature count more than by anything else.
+        'max_cleanup_features': cap_features,
+        'max_cleanup_features_source': cap_source,
+        'hybrid_budgets_above_ceiling': dict(hybrid_too_wide),
+        'expensive_cleanup_models': list(top_models),
+        'expensive_cleanup_reps_by_model': dict(top_reps_by_model),
+        'expensive_cleanup_scope_note': (
+            'oof_smooth, gp_smooth and quantile_clip each fit five models '
+            'before they repair anything, so they run under the two downstream '
+            'models that fit this dataset best, on the two representations each '
+            'of those models fits best, and in those two models\' hybrid '
+            'features. The four older cleanups fit no model and are not '
+            'restricted: they still run under every downstream model and on '
+            'every representation. model_rep_ranking holds every score that '
+            'chose the two and how many features each representation has.'),
         'lower_is_better': lower_is_better,
         'noise_fraction': noise_fraction,
         'noise_level': noise_level,
@@ -853,7 +1104,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # --- Honest hybrid-vs-baseline re-scoring input (shared-helper contract) ---
     # Persist, per model, EVERY searched hybrid candidate recipe's per-fold
     # scores AND the per-fold baseline-rep scores. A reader feeds this straight
-    # to experiments._shared.honest_rescore, which for each HELD-OUT fold
+    # to experiments._shared.fold_reselection, which for each HELD-OUT fold
     # re-picks the winning recipe from the OTHER folds (leave-one-fold-out) and
     # applies the identical held-out tax to both arms. That is the n09
     # selection-honesty principle — "the recipe used at a fold is chosen without
@@ -862,12 +1113,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # space that also SELECTED each model's blueprint); the injected-noise
     # remediation numbers stay in per_model_per_strategy below and keep their
     # own recovery derivation.
-    honest_block = {
+    reselection_block = {
         'lower_is_better': lower_is_better,
         'metric_name': metric_name,
         # Which folds contribute no term to either arm. This was hardcoded to
         # [] on the claim that the candidates are arms this file built itself;
-        # they are not. build_honest_rescore_input takes them from each
+        # they are not. build_fold_reselection_input takes them from each
         # search's own candidate list, and it returns [0] whenever that search
         # filtered the list on fold 0 — fold 0's hybrid score is then read off
         # recipes fold 0 helped keep, while the single representations were
@@ -892,42 +1143,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _mixed_metric_models = []
     for _m, _s in search_by_model.items():
         try:
-            _blk = build_honest_rescore_input(_s)
+            _blk = build_fold_reselection_input(_s)
         except Exception as _exc:
-            print(f"  WARNING: honest_rescore input build failed for {_m} "
+            print(f"  WARNING: fold_reselection input build failed for {_m} "
                   f"({_exc})")
             continue
-        honest_block['metric_by_model'][_m] = {
+        reselection_block['metric_by_model'][_m] = {
             'metric_name': _blk.get('metric_name'),
             'lower_is_better': _blk.get('lower_is_better'),
         }
         _excl = [int(f) for f in (_blk.get('exclude_folds') or [])]
-        honest_block['exclude_folds_by_model'][_m] = _excl
-        honest_block['fold0_pruned_by_model'][_m] = _blk.get('fold0_pruned')
-        honest_block['objective_by_model'][_m] = hybrid_family_by_model.get(
+        reselection_block['exclude_folds_by_model'][_m] = _excl
+        reselection_block['fold0_pruned_by_model'][_m] = _blk.get('fold0_pruned')
+        reselection_block['objective_by_model'][_m] = hybrid_family_by_model.get(
             _m, {}).get('objective')
         if (_blk.get('metric_name') != metric_name
                 or bool(_blk.get('lower_is_better')) != bool(lower_is_better)):
             _mixed_metric_models.append(_m)
-            print(f"  NOTE: {_m}'s honest_rescore fold scores are in "
+            print(f"  NOTE: {_m}'s fold_reselection fold scores are in "
                   f"{_blk.get('metric_name')} (lower_is_better="
                   f"{_blk.get('lower_is_better')}), not the dataset's "
                   f"{metric_name} — its recipe came from the "
-                  f"{honest_block['objective_by_model'][_m]!r} search family. "
-                  f"Pass that model's own direction to honest_rescore.")
+                  f"{reselection_block['objective_by_model'][_m]!r} search family. "
+                  f"Pass that model's own direction to fold_reselection.")
         # Keep only THIS model's slice — a pooled SearchResult's all_results
         # may carry other models' candidates, so stay model-gated.
         if _m in _blk.get('candidates_by_model', {}):
-            honest_block['candidates_by_model'][_m] = \
+            reselection_block['candidates_by_model'][_m] = \
                 _blk['candidates_by_model'][_m]
         if _m in _blk.get('baselines_by_model', {}):
-            honest_block['baselines_by_model'][_m] = \
+            reselection_block['baselines_by_model'][_m] = \
                 _blk['baselines_by_model'][_m]
-    honest_block['models_not_in_dataset_metric'] = _mixed_metric_models
-    honest_block['exclude_folds'] = sorted(
-        {f for _folds in honest_block['exclude_folds_by_model'].values()
+    reselection_block['models_not_in_dataset_metric'] = _mixed_metric_models
+    reselection_block['exclude_folds'] = sorted(
+        {f for _folds in reselection_block['exclude_folds_by_model'].values()
          for f in _folds})
-    results['honest_rescore'] = honest_block
+    results['fold_reselection'] = reselection_block
 
     # --- Hybrid conditions: per-model ---
     # Loop order is (model × fold × seed × strategy) so the per-(fold, seed)
@@ -942,7 +1193,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         model_aug_cond = aug_by_model[model_name]
         model_augs = augmentations if model_aug_cond != 'none' else None
 
-        per_strategy_scores = {s: [] for s in strategies}
+        # The three model-fitting cleanups run only under the downstream models
+        # the ranking above kept. Every other model still gets the four older
+        # cleanups and the two baselines, exactly as before.
+        model_strategies = [st for st in strategies
+                            if st not in REGRESSION_ONLY_CLEANUPS
+                            or model_name in top_models]
+        per_strategy_scores = {s: [] for s in model_strategies}
         # Same strategies again, measured in the CLEAN-label feature space.
         # That space is the head start: create_hybrid ranks features and splits
         # the budget against the labels it is given, so features chosen before
@@ -950,7 +1207,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # about to corrupt. The reported arm above no longer gets it; this one
         # keeps it so the size of the head start is readable rather than
         # assumed. Read it as an oracle, the way n15 labels its clean_bp arm.
-        per_strategy_scores_oracle = {s: [] for s in strategies}
+        per_strategy_scores_oracle = {s: [] for s in model_strategies}
         # The ceiling in the CLEAN-label feature space: clean training labels,
         # no injection, features chosen before any label was corrupted. One
         # score per fold. Reported on its own so it can be compared against the
@@ -1059,7 +1316,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if _det is not None:
                         detection_acc.setdefault(_space_name, []).append(_det)
 
-                for strategy in strategies:
+                for strategy in model_strategies:
                     if strategy == 'no_noise':
                         continue
                     needs_scores = strategy in SCORE_DRIVEN_CLEANUPS
@@ -1084,7 +1341,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Aggregate per strategy. All strategies now use the iteration's
         # model, so model_used == model_name throughout.
         print(f"\n  {model_name}/hybrid:")
-        for strategy in strategies:
+        for strategy in model_strategies:
             fold_scores = per_strategy_scores[strategy]
             score = float(np.mean(fold_scores)) if fold_scores else float('nan')
             entry = {
@@ -1143,6 +1400,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Populate legacy per_strategy from RF (or first available model)
     _legacy_model = 'rf' if 'rf' in bp_by_model else next(iter(bp_by_model))
+    # This section reports ONE model, and since 2026-09-17 the three
+    # model-fitting cleanups run only under the two models the ranking kept. So
+    # when the legacy model is not one of those two, those three rows are empty
+    # here. That is not a failure and the numbers are not missing: they are in
+    # per_model_per_strategy under the two models that did run them. Said out
+    # loud rather than left as three NaNs a reader has to explain.
+    results['per_strategy_model'] = _legacy_model
+    _absent_here = [st for st in strategies
+                    if st in REGRESSION_ONLY_CLEANUPS
+                    and _legacy_model not in top_models]
+    results['per_strategy_absent'] = {
+        st: (f'{st} runs only under the downstream models the ranking kept '
+             f'({", ".join(top_models) or "none"}), and this section reports '
+             f'{_legacy_model}. Its score is in per_model_per_strategy under '
+             f'those models.')
+        for st in _absent_here}
+    if _absent_here:
+        print(f"  NOTE: per_strategy reports {_legacy_model}, which the "
+              f"ranking did not keep, so {', '.join(_absent_here)} are empty "
+              f"there. Their scores are under "
+              f"{', '.join(top_models)} in per_model_per_strategy.")
     for strategy in strategies:
         results['per_strategy'][strategy] = (
             results['per_model_per_strategy'][_legacy_model].get(strategy,
@@ -1162,8 +1440,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # dependent strategies. The previous (rep × strategy × fold × seed) order
     # recomputed them 4× per (fold, seed) — the same waste the hybrid block
     # avoids via `_compute_noise_scores` hoisting.
+    # This section is UNCHANGED by the 2026-09-17 additions: random forest, every
+    # representation the dataset loads, the four cleanups n07 already had. The
+    # three cleanups added that day are measured per downstream model on that
+    # model's top two base representations instead, in the section after this
+    # one -- USER DECISION 2026-09-17, 'top 2 base and hybrid reps per
+    # downstream evaluator'. Running them here as well would mean one call per
+    # representation, fold and noise draw on the representation at its full
+    # width, and each of the three fits five models where the older four fit
+    # none.
+    rep_strategies = [s for s in strategies
+                      if s not in REGRESSION_ONLY_CLEANUPS]
+    results['per_rep_strategies'] = list(rep_strategies)
+    results['per_rep_strategies_note'] = (
+        'per_strategy["<representation>/<strategy>"] covers the four cleanups '
+        'n07 had before 2026-09-17 and the two baselines, under random forest, '
+        'on every representation. oof_smooth, gp_smooth and quantile_clip are '
+        'not here: they are in per_model_per_top_rep, which runs all seven '
+        'cleanups under each downstream model on that model\'s top two base '
+        'representations.')
+
     for rep_name, X_rep in reps.items():
-        per_strategy_scores_rep = {s: [] for s in strategies}
+        per_strategy_scores_rep = {s: [] for s in rep_strategies}
 
         for fold_i, (train_idx, val_idx) in enumerate(
                 cv_split(groups, n_folds, sample_X, labels, mode=mode)):
@@ -1194,7 +1492,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 noise_scores_cache = _compute_noise_scores(
                     X_tr_s, y_tr_noisy, is_clf=is_clf)
 
-                for strategy in strategies:
+                for strategy in rep_strategies:
                     if strategy == 'no_noise':
                         continue
                     needs_scores = strategy in SCORE_DRIVEN_CLEANUPS
@@ -1211,7 +1509,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if fold_score is not None:
                         per_strategy_scores_rep[strategy].append(fold_score)
 
-        for strategy in strategies:
+        for strategy in rep_strategies:
             key = f"{rep_name}/{strategy}"
             fold_scores = per_strategy_scores_rep[strategy]
             score = float(np.mean(fold_scores)) if fold_scores else float('nan')
@@ -1226,6 +1524,137 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'hybrid_family': None,
             }
             print(f"  {key}... {metric_name}={score:.4f}")
+
+    # --- The best representations of the best downstream models --------------
+    # USER DECISION 2026-09-17: "top 2 base and hybrid reps per downstream
+    # evaluator", with both choices measured in this run rather than read from
+    # a stored search. The two models and each one's two representations come
+    # from `rank_models_and_reps` above, which fitted every model on every
+    # representation using the uncorrupted activity values and ranked on the
+    # held-out error. All seven cleanups run here, so the three added today can
+    # be read against the four older ones inside one set of features.
+    #
+    # There is no second, uncorrupted-value set of features here and no oracle
+    # arm, because a representation on its own has no feature selection:
+    # nothing in this part reads the activity values to decide which features
+    # to keep, so there is no second set of features for an oracle to differ
+    # in. Every score carries the number of features it was measured on.
+    results['per_model_per_top_rep'] = {}
+
+    for model_name in top_models:
+        model_factory = model_factories.get(model_name)
+        chosen = top_reps_by_model.get(model_name, [])
+        if model_factory is None or not chosen:
+            continue
+        print(f"\n  {model_name} on its best {len(chosen)} representations: "
+              + ", ".join(
+                  f"{r} ({ranking['n_features'][r]} features, {metric_name}="
+                  f"{ranking['scores'][model_name][r]:.4f})" for r in chosen))
+
+        for rep_name in chosen:
+            X_rep = reps[rep_name]
+            acc = {st: [] for st in strategies}
+
+            for fold_i, (train_idx, val_idx) in enumerate(
+                    cv_split(groups, n_folds, sample_X, labels, mode=mode)):
+                y_train_clean = labels[train_idx]
+                y_val = labels[val_idx]
+                g_tr = groups[train_idx] if groups is not None else None
+
+                sc_r = StandardScaler()
+                X_tr_s = sc_r.fit_transform(X_rep[train_idx])
+                X_va_s = sc_r.transform(X_rep[val_idx])
+
+                # Uncorrupted activity values, one fit per fold: this does not
+                # depend on which molecules the corruption picked.
+                nn_score = _evaluate_fold(
+                    X_tr_s, X_va_s, y_train_clean, y_val, 'no_noise',
+                    noise_fraction, model_factory, metric_fn,
+                    is_clf=is_clf, metric_name=metric_name)
+                if nn_score is not None:
+                    acc['no_noise'].append(nn_score)
+
+                for noise_seed in NOISE_SEEDS:
+                    actual_seed = 42 + fold_i * 1000 + noise_seed
+                    _spec = _noise_spec(dataset_name, noise_fraction,
+                                        noise_level, noise_seed=noise_seed,
+                                        is_clf=is_clf)
+                    y_tr_noisy, _cm, _prov = inject_train_labels(
+                        labels, _spec, train_idx=train_idx, is_clf=is_clf,
+                        dataset_name=dataset_name)
+                    noise_provenance.setdefault(_spec.spec_id, _prov)
+                    ns_cache = _compute_noise_scores(X_tr_s, y_tr_noisy,
+                                                     is_clf=is_clf)
+
+                    for strategy in strategies:
+                        if strategy == 'no_noise':
+                            continue
+                        needs = strategy in SCORE_DRIVEN_CLEANUPS
+                        fs = _evaluate_fold(
+                            X_tr_s, X_va_s, y_train_clean, y_val, strategy,
+                            noise_fraction, model_factory, metric_fn,
+                            is_clf=is_clf, metric_name=metric_name,
+                            noise_seed=actual_seed,
+                            precomputed_y_tr=y_tr_noisy,
+                            noise_scores=(ns_cache if needs else None),
+                            dataset_name=dataset_name,
+                            noise_level=noise_level,
+                            train_groups=g_tr)
+                        if fs is not None:
+                            acc[strategy].append(fs)
+
+            for strategy in strategies:
+                fold_scores = acc[strategy]
+                score = (float(np.mean(fold_scores)) if fold_scores
+                         else float('nan'))
+                (results['per_model_per_top_rep']
+                 .setdefault(model_name, {})
+                 .setdefault(rep_name, {})[strategy]) = {
+                    'score': score,
+                    'n_folds': len(fold_scores),
+                    'model_used': model_name,
+                    'fold_scores': [float(x) for x in fold_scores],
+                    'feature_space': 'single_base_rep',
+                    # How many features this number was measured on. These
+                    # three cleanups scale with it more than with anything
+                    # else, so no score of theirs is reported without it.
+                    'n_features': int(ranking['n_features'][rep_name]),
+                    'hybrid_family': None,
+                }
+                print(f"    {rep_name}/{strategy:<18} "
+                      f"{metric_name}={score:.4f} (n={len(fold_scores)})")
+
+    # Recovery inside each (model, top representation). The reference is that
+    # same model on that same representation, so nothing here divides by
+    # another model's damage or by a different set of features.
+    per_top_rep_recovery = {}
+    for m_name, by_rep in results['per_model_per_top_rep'].items():
+        for rep_name, strat_rows in by_rep.items():
+            r_clean = strat_rows.get('no_noise', {}).get('score', float('nan'))
+            r_noisy = strat_rows.get('noisy_baseline', {}).get('score',
+                                                               float('nan'))
+            r_gap = (r_clean - r_noisy
+                     if not (np.isnan(r_clean) or np.isnan(r_noisy))
+                     else float('nan'))
+            r_hurt = (r_gap < 0) if lower_is_better else (r_gap > 0)
+            row = {}
+            for strategy in strategies:
+                if strategy in ('no_noise', 'noisy_baseline'):
+                    continue
+                sc_ = strat_rows.get(strategy, {}).get('score', float('nan'))
+                if (not np.isnan(sc_) and not np.isnan(r_gap)
+                        and abs(r_gap) > 1e-10 and r_hurt):
+                    row[strategy] = float((sc_ - r_noisy) / r_gap * 100)
+                else:
+                    row[strategy] = float('nan')
+            if not np.isnan(r_gap) and not r_hurt:
+                results.setdefault('recovery_undefined', {})[
+                    f'{m_name}/{rep_name}'] = (
+                    f'noise did not degrade this model on this representation: '
+                    f'clean={r_clean:.6g}, noisy={r_noisy:.6g}, '
+                    f'lower_is_better={lower_is_better}')
+            per_top_rep_recovery.setdefault(m_name, {})[rep_name] = row
+    results['per_model_per_top_rep_recovery_pct'] = per_top_rep_recovery
 
     # Summary: recovery = (strategy - noisy_baseline) / (no_noise - noisy_baseline)
     clean = results['per_strategy'].get('no_noise', {}).get('score', float('nan'))
@@ -1359,6 +1788,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Canonical multi-model view: per-model recovery + per-model winners.
         'per_model_recovery_pct': per_model_recovery,
         'best_strategy_per_model': per_model_best,
+        # USER DECISION 2026-09-17, the base half of 'top 2 base and hybrid reps
+        # per downstream evaluator'. One recovery percentage per (model,
+        # representation, cleanup), each against that model's own uncorrupted
+        # and corrupted reference on that same representation. Which two models
+        # and which two representations, and every score that chose them, are in
+        # results['model_rep_ranking'].
+        'per_model_per_top_rep_recovery_pct': per_top_rep_recovery,
+        'best_strategy_per_model_per_top_rep': {
+            _m: {_r: _arg_max_finite(_row) for _r, _row in _by_rep.items()}
+            for _m, _by_rep in per_top_rep_recovery.items()
+        },
+        'expensive_cleanup_models': list(top_models),
+        'expensive_cleanup_reps_by_model': dict(top_reps_by_model),
+        'model_rep_ranking': ranking,
         # DECISION (2026-09-12): which search family each model's recipe came
         # from, next to that model's recovery percentage, and the space both
         # halves of that percentage were measured in. The percentage is a
@@ -1398,8 +1841,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 if __name__ == '__main__':
     parser = create_experiment_parser('N07: Noise Remediation')
+    parser.add_argument(
+        '--max-cleanup-features', type=int, default=None,
+        help=('The widest a set of features may be before oof_smooth, '
+              'gp_smooth and quantile_clip refuse to run on it. Those three '
+              'fit five models each and their cost is driven by the feature '
+              f'count: 275s on 1,200 molecules by 200 features against 39 '
+              f'minutes on 1,200 by 2,048. Default '
+              f'{MAX_CLEANUP_FEATURES}; 0 removes the ceiling. Also settable '
+              'with KIRBY_MAX_CLEANUP_FEATURES.'))
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, args.reps)
-    results = run(data, config, args.output, args.dataset)
+    results = run(data, config, args.output, args.dataset,
+                  max_cleanup_features=args.max_cleanup_features)
     save_experiment_results(results, args.output, 'n07_remediation', args.dataset)

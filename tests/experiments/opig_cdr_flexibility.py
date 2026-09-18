@@ -66,7 +66,7 @@ from experiments._shared import (add_distance_metric_arg,
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
-    honest_rescore, build_honest_rescore_input, hr_exclude_folds,
+    fold_reselection, build_fold_reselection_input, hr_exclude_folds,
 )
 
 # =============================================================================
@@ -270,15 +270,15 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
     # fold see its own labels through the full-data fit of `selected_indices`.
     #
     # The hybrid's reported AUC is the leave-one-fold-out re-score
-    # (honest_comparison below). Until 2026-09-04 this file reported
+    # (reselected_comparison below). Until 2026-09-04 this file reported
     # kirby_hybrid_search_score_mean instead — the winning recipe's own mean
     # over the folds that chose it, a maximum over hundreds of configurations,
     # printed beside per-representation AUCs that were means over held-out
     # folds. 0.6309 in the stored result file is that number.
     # No augmentation reps for CDR flexibility classification.
     hybrid_summary = None
-    honest_block = None
-    honest_result = None
+    reselection_block = None
+    reselection_result = None
     try:
         from experiments._shared import (
             resolve_pruning_kwargs, get_best_search_for_downstream)
@@ -308,23 +308,23 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
         if search is not None:
-            honest_block = build_honest_rescore_input(search)
-            honest_result = honest_rescore(
-                honest_block['candidates_by_model'],
-                honest_block['baselines_by_model'],
-                honest_block['lower_is_better'],
-                metric_name=honest_block.get('metric_name'),
+            reselection_block = build_fold_reselection_input(search)
+            reselection_result = fold_reselection(
+                reselection_block['candidates_by_model'],
+                reselection_block['baselines_by_model'],
+                reselection_block['lower_is_better'],
+                metric_name=reselection_block.get('metric_name'),
                 # The search dropped recipes using fold 0's own scores, so
                 # fold 0's hybrid number is measured over the recipes fold 0
                 # kept while no single representation was ever filtered. Both
                 # arms drop the same folds here, so the comparison stays
                 # paired; four folds are reported instead of five.
-                exclude_folds=hr_exclude_folds(honest_block),
+                exclude_folds=hr_exclude_folds(reselection_block),
             )
-            for mn, r in sorted(honest_result.items()):
+            for mn, r in sorted(reselection_result.items()):
                 flag = ' [single-fold: NOT honest]' if r['single_fold'] else ''
-                print(f"  honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "
-                      f"best_single={r['best_single_honest']:.4f}  "
+                print(f"  honest × {mn:8s}  hybrid={r['hybrid_reselected']:.4f}  "
+                      f"best_single={r['best_single_reselected']:.4f}  "
                       f"delta={r['delta']:+.4f}{flag}")
         if _meta is not None:
             hybrid_summary = {
@@ -341,7 +341,7 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
                 'search_metric': 'auc',
                 'note': ('search_best_score_mean is NOT a held-out score. The '
                          'hybrid number for this experiment is in '
-                         'honest_comparison.'),
+                         'reselected_comparison.'),
             }
         else:
             hybrid_summary = {'kirby_hybrid_failed': True,
@@ -384,8 +384,8 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         'hybrid_summary': hybrid_summary,
         # Held-out hybrid-vs-best-single comparison per downstream model, plus
         # the per-fold scores it was computed from.
-        'honest_rescore': honest_block,
-        'honest_comparison': honest_result,
+        'fold_reselection': reselection_block,
+        'reselected_comparison': reselection_result,
     }
 
 
@@ -438,7 +438,7 @@ def print_analysis(all_results):
         # per-representation AUCs above get. The search's own winning mean is
         # kept in hybrid_summary as a diagnostic and is not printed here.
         hs = ds.get('hybrid_summary') or {}
-        honest = ds.get('honest_comparison') or {}
+        honest = ds.get('reselected_comparison') or {}
         if honest:
             print(f"\n  kirby_hybrid vs best single representation "
                   f"(leave-one-fold-out, AUC):")
@@ -447,7 +447,7 @@ def print_analysis(all_results):
             print(f"    {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
             for model_name in sorted(honest):
                 r = honest[model_name]
-                h, b, d = (r['hybrid_honest'], r['best_single_honest'],
+                h, b, d = (r['hybrid_reselected'], r['best_single_reselected'],
                            r['delta'])
                 h_s = f"{h:.4f}" if not np.isnan(h) else "—"
                 b_s = f"{b:.4f}" if not np.isnan(b) else "—"

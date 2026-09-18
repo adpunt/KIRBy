@@ -380,8 +380,8 @@ def summarise_cell(result, objective):
             out['by_model_budget'][model][str(budget)] = {
                 'delta_mean_of_folds': d,
                 'n_paired_folds': n_paired,
-                'hybrid_honest_mean': _f(b.get('honest_mean')),
-                'hybrid_honest_std': _f(b.get('honest_std')),
+                'hybrid_reselected_mean': _f(b.get('reselected_mean')),
+                'hybrid_reselected_std': _f(b.get('reselected_std')),
             }
     return out
 

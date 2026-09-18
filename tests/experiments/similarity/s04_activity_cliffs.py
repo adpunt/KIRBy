@@ -230,17 +230,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'hybrid': {},
     }
 
-    # --- Honest-rescore accumulators (per this file's own cliff-CV folds) ---
+    # --- Per-fold reselection accumulators (this file's own cliff-CV folds) ---
     # The honest hybrid-vs-best-single comparison is done by the reader via the
-    # shared honest_rescore() helper. We only persist the per-fold inputs here,
+    # shared fold_reselection() helper. We only persist the per-fold inputs here,
     # keyed by downstream MODEL, using the CONTRACT json_convention names. This
     # file runs its OWN CV (kNN + RF on the shared splitter), so we build the
-    # block MANUALLY rather than build_honest_rescore_input(search) — the search's
+    # block MANUALLY rather than build_fold_reselection_input(search) — the search's
     # internal baselines are on different folds/metric. Fold scores are POSITIONAL
     # (one slot per split, NaN where a fold was skipped) so both arms stay aligned
     # across the identical split order; the helper skips NaN slots.
-    honest_candidates = {}  # model -> [ {name, fold_scores}, ... ]
-    honest_baselines = {}   # model -> { rep_name: [fold_scores], ... }
+    reselection_candidates = {}  # model -> [ {name, fold_scores}, ... ]
+    reselected_baselines = {}   # model -> { rep_name: [fold_scores], ... }
 
     # --- CV evaluation of prediction on cliff vs non-cliff ---
     # The folds come from nested_cv_outer_folds, the helper each fold's recipe
@@ -388,7 +388,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         """Run CV for a condition, return cliff/noncliff metrics."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
         fold_rmse_all, fold_rmse_cliff, fold_rmse_noncliff = [], [], []
-        # Positional per-fold metrics for honest_rescore, one slot per split so
+        # Positional per-fold metrics for fold_reselection, one slot per split so
         # every arm stays index-aligned. NaN where the fold was dropped, and on
         # the cliff/non-cliff lists also where the held-out fold carried 1 or
         # fewer rows of that stratum.
@@ -474,10 +474,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'score_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
             'score_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
             'metric': metric_name,
-            # Positional overall per-fold scores for the honest_rescore block.
+            # Positional overall per-fold scores for the fold_reselection block.
             'fold_scores': [float(s) for s in fold_scores_pos],
             # The same folds, scored on the cliff rows alone and on the
-            # non-cliff rows alone. The cliff list is what the honest_rescore
+            # non-cliff rows alone. The cliff list is what the fold_reselection
             # block below is fed, so its held-out re-pick answers the cliff
             # question rather than the overall one.
             'fold_scores_cliff': [float(s) for s in fold_cliff_pos],
@@ -521,10 +521,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         res = _evaluate_condition(_get_rep)
         if res:
             results['per_rep'][rep_name] = res
-            # Plain single-rep kNN is a baseline arm for honest_rescore (model=knn).
+            # Plain single-rep kNN is a baseline arm for fold_reselection (model=knn).
             # The cliff-row metric, not the overall one: this block's held-out
             # re-pick is the only place s04's cliff question is answered.
-            honest_baselines.setdefault('knn', {})[rep_name] = res['fold_scores_cliff']
+            reselected_baselines.setdefault('knn', {})[rep_name] = res['fold_scores_cliff']
 
             # Weighted: importance-weighted distance on this rep (precomputed per fold)
             def _get_rep_w(tr, va, yt, fold_i, _X=X_rep, _rname=rep_name):
@@ -546,7 +546,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     results['per_rep'][rep_name]['rmse_cliff_weighted'] = res_w.get('rmse_cliff', float('nan'))
                 # Importance-weighted single-rep kNN is still a single-rep baseline
                 # (no cross-rep mixing) — record as a distinct baseline entry.
-                honest_baselines.setdefault('knn', {})[f'{rep_name}|weighted'] = res_w['fold_scores_cliff']
+                reselected_baselines.setdefault('knn', {})[f'{rep_name}|weighted'] = res_w['fold_scores_cliff']
 
             rmse_part = f"  RMSE_cliff={res.get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
             w_part = ""
@@ -599,10 +599,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             }
             # A single representation, no cross-rep mixing, so it is a baseline
             # arm — one whose name says its identity was re-picked per fold.
-            honest_baselines.setdefault('knn', {})['pool_base_rep|per_fold'] = \
+            reselected_baselines.setdefault('knn', {})['pool_base_rep|per_fold'] = \
                 res_pb['fold_scores_cliff']
             if res_pb_w:
-                honest_baselines['knn']['pool_base_rep|per_fold|weighted'] = \
+                reselected_baselines['knn']['pool_base_rep|per_fold|weighted'] = \
                     res_pb_w['fold_scores_cliff']
             _names = sorted({v for v in _pool_base_by_fold.values() if v})
             rmse_part = (f"  RMSE_cliff={res_pb.get('rmse_cliff', float('nan')):.4f}"
@@ -729,13 +729,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 }
             results['pool_hybrid_arms'][_arm] = _entry
 
-            # Each arm is its own candidate for honest_rescore (model=knn).
+            # Each arm is its own candidate for fold_reselection (model=knn).
             if res:
-                honest_candidates.setdefault('knn', []).append(
+                reselection_candidates.setdefault('knn', []).append(
                     {'name': f'hybrid_{_obj}_rank{_rank}_unweighted',
                      'fold_scores': res['fold_scores_cliff']})
             if res_w:
-                honest_candidates.setdefault('knn', []).append(
+                reselection_candidates.setdefault('knn', []).append(
                     {'name': f'hybrid_{_obj}_rank{_rank}_weighted',
                      'fold_scores': res_w['fold_scores_cliff']})
 
@@ -883,7 +883,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # did not all land on one. The cliff-row metric, same as the kNN arms.
         _rf_key = (best_rep_name if len(_rf_reps) <= 1
                    else 'pool_base_rep|per_fold')
-        honest_baselines.setdefault('rf', {})[_rf_key] = [
+        reselected_baselines.setdefault('rf', {})[_rf_key] = [
             float(s) for s in fold_cliff_pos]
         if not is_clf:
             results['rf_baseline']['rmse_cliff'] = float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan')
@@ -929,8 +929,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for name, score in all_methods:
         print(f"  {name:<25} {score:<12.4f}")
 
-    # --- Honest-rescore block (CONTRACT json_convention) ---
-    # Reader: honest_rescore(block['candidates_by_model'],
+    # --- Per-fold reselection block (CONTRACT json_convention) ---
+    # Reader: fold_reselection(block['candidates_by_model'],
     #                        block['baselines_by_model'], block['lower_is_better']).
     # 2026-09-12: the recipes are the pool's now, so both of these change.
     # exclude_folds: where a pool search pruned mid-flight it filtered its own
@@ -945,7 +945,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # question. A fold whose held-out rows held 1 or fewer cliff molecules is
     # NaN in every arm and contributes nothing; the counts are on each arm as
     # 'n_cliff_rows_by_fold'.
-    results['honest_rescore'] = {
+    results['fold_reselection'] = {
         'lower_is_better': bool(lower_is_better),
         'fold_score_stratum': 'cliff_rows_only',
         'exclude_folds': ([] if fold0_pruned is False else [0]),
@@ -955,8 +955,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             "recipe and single representation ranked by their mean over the "
             "pool search's other folds; the pool search ran over every row, so "
             "this holds out the fold's SCORES, not its rows"),
-        'candidates_by_model': honest_candidates,
-        'baselines_by_model': honest_baselines,
+        'candidates_by_model': reselection_candidates,
+        'baselines_by_model': reselected_baselines,
     }
 
     return results

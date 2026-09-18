@@ -68,12 +68,12 @@ winner is chosen without ever seeing the rows it is scored on. Across the five s
 file calls it: `opig_scaffold_hybrid.py`. The only other callers are f26, f27 and f28, which
 are framework experiments.
 
-`honest_rescore` is the cheap version. It does arithmetic over per-fold scores that already
+`fold_reselection` is the cheap version. It does arithmetic over per-fold scores that already
 exist: for each held-out fold it re-picks each side's winner using only the other folds, so
 both sides pay the same tax. 18 experiment files call it. It cannot repair the list of
 candidates, which the search already pruned using every fold.
 
-A memory note dated 2026-07-13 records `honest_rescore` as deleted and the suite as migrated
+A memory note dated 2026-07-13 records `fold_reselection` as deleted and the suite as migrated
 onto `nested_cv_evaluate`. Neither is true of the code today. That note has been corrected.
 
 
@@ -418,22 +418,22 @@ wrong, what it touches, and the fix.
 Fold 0's held-out hybrid score picks from candidates fold 0 already helped filter.
 
 - FIXED: `SearchResult.fold0_pruned` records whether the search filtered its own
-  candidate list on fold 0. `build_honest_rescore_input` writes `exclude_folds: [0]`
-  into the persisted block when it did, `honest_rescore(exclude_folds=...)` drops that
+  candidate list on fold 0. `build_fold_reselection_input` writes `exclude_folds: [0]`
+  into the persisted block when it did, `fold_reselection(exclude_folds=...)` drops that
   fold's term from BOTH arms, and the 17 readers pass `hr_exclude_folds(block)`. A block
   with no such key reads as pruned: five allocation methods against `strategy_top_n=3`
   prunes under every schedule, including `default_pruning`.
 
-- Computes: For each held-out fold, honest_rescore picks the best hybrid recipe from all_results by the other folds' mean score, then reports its held-out-fold score.
+- Computes: For each held-out fold, fold_reselection picks the best hybrid recipe from all_results by the other folds' mean score, then reports its held-out-fold score.
 - Wrong because: Cluster submitters default to a prune that keeps only the top half of each allocation-importance pair's configs, ranked by fold-0 score. Fold 0's held-out hybrid score then gets picked from those survivors, while the single-representation score never goes through that cut.
-- Touches: Affects one fold's term in the hybrid-vs-single-representation delta from c02, c05, c07, and four OPIG experiments' saved honest_rescore blocks. Saved JSON does not record pruning mode, so you cannot tell which files it hit.
+- Touches: Affects one fold's term in the hybrid-vs-single-representation delta from c02, c05, c07, and four OPIG experiments' saved fold_reselection blocks. Saved JSON does not record pruning mode, so you cannot tell which files it hit.
 - Fix: Either drop fold 0's term when computing the delta from a pruned search, or run with a schedule that prunes nothing (checkpoints=[], tail_drop=0, threshold=0) so nothing is fold-dependent.
 
 **`tests/experiments/_shared.py:4513`** · FIXED 2026-09-04 (labelled, not re-searched)  
 A hybrid recipe is picked using every row, then s02 reports its score as held-out.
 
 - FIXED: `get_best_search_for_downstream` now returns `selection_scope: 'whole_dataset'`
-  in its metadata, `honest_rescore(recipe_selection=...)` copies it onto every model
+  in its metadata, `fold_reselection(recipe_selection=...)` copies it onto every model
   entry, and s09 prints it beside the number as "recipe picked on all rows; only the
   features are refit". s02 and s08 pass it. s04, s05, s07 and s13 no longer need it —
   they search the recipe inside each fold. Routing the rest through `nested_cv_evaluate`
@@ -462,17 +462,17 @@ c05 picks its hybrid winner from far more candidates than its representation win
 - Computes: At each subsample size, c05 takes the best hybrid config's own fold-mean score, and the best single representation's own fold-mean score, on the same folds.
 - Wrong because: The hybrid winner is chosen from about ten times more candidates than the representation winner. Picking a max over more candidates on the same folds inflates the hybrid score most when folds are small.
 - Touches: Every c05 result file on disk (28 checked) is missing the honest per-fold block, so today's sample-efficiency numbers, including the abagym_EGFR svm figures quoted in OPIG_SLIDE_CONTENT.md, are the biased ones.
-- Fix: Rerun c05 and read the curve from honest_rescore_by_n, which it already writes and which scores every candidate on folds that did not pick it.
-- **Fixed 2026-09-04:** c05 now computes the leave-one-fold-out curve from the blocks it already writes and stores it as `hybrid_honest` / `best_single_honest` / `honest_delta_mean_of_folds` per model per sample size. Costs no fits. Still needs the re-run.
+- Fix: Rerun c05 and read the curve from fold_reselection_by_n, which it already writes and which scores every candidate on folds that did not pick it.
+- **Fixed 2026-09-04:** c05 now computes the leave-one-fold-out curve from the blocks it already writes and stores it as `hybrid_reselected` / `best_single_reselected` / `reselected_delta_mean_of_folds` per model per sample size. Costs no fits. Still needs the re-run.
 
 **`tests/experiments/complexity/c11_ensemble_vs_hybrid.py:419`** · needs a decision first  
 c11's hybrid recipe and budget split are chosen using every fold's held-out labels
 
 - Computes: c11 picks each budget's hybrid recipe, and each representation's budget share, from a score computed over every row of the dataset, not just each fold's training rows.
-- Wrong because: The comparison assumes both arms see only their fold's training split, but the hybrid's recipe and per-representation scores come from every row, held-out rows included. honest_rescore only re-picks the budget itself; it doesn't redo the recipe or the per-representation scores.
+- Wrong because: The comparison assumes both arms see only their fold's training split, but the hybrid's recipe and per-representation scores come from every row, held-out rows included. fold_reselection only re-picks the budget itself; it doesn't redo the recipe or the per-representation scores.
 - Touches: auto_minus_hybrid and accuracy_delta_ensemble_minus_hybrid would be biased toward the hybrid if computed today, but no file on disk carries them — the nine files in tests/results/c11_ensemble_vs_hybrid/ are from May 2026, before these fields existed.
-- Fix: Either search for the recipe inside each fold's training split like nested_cv_evaluate does, or keep the full-dataset search and relabel hybrid_honest as recipe-selected on all folds.
-- **Fixed 2026-09-04:** both halves, as decided. c11 now searches the recipe inside each outer training fold by default, sweeping the same augmentation conditions the whole-dataset pool compares, so nothing is dropped for cost — one pool of searches per fold, five without augmentation representations and fifteen with. The ensemble arm already made every choice inside the fold; now both arms do, and the head-to-head is a comparison. `results[].recipes_per_fold` records what each fold picked, and `break_even`'s featuriser count is the union across them. `--c11-recipe-search whole_data` (also `run_dataset.py --c11-recipe-search`) keeps the old free path for a dataset whose number is not quoted; under it the file carries `hybrid_recipe_selected_on_all_rows`, `auto_minus_hybrid_recipe_all_rows` and `accuracy_delta_ensemble_minus_hybrid_recipe_all_rows`, and writes no `hybrid_honest` or `auto_minus_hybrid` at all. `firstpass_notready.py` prints a recipe column and marks every file without the new marker — the nine on disk — as ALL ROWS.
+- Fix: Either search for the recipe inside each fold's training split like nested_cv_evaluate does, or keep the full-dataset search and relabel hybrid_reselected as recipe-selected on all folds.
+- **Fixed 2026-09-04:** both halves, as decided. c11 now searches the recipe inside each outer training fold by default, sweeping the same augmentation conditions the whole-dataset pool compares, so nothing is dropped for cost — one pool of searches per fold, five without augmentation representations and fifteen with. The ensemble arm already made every choice inside the fold; now both arms do, and the head-to-head is a comparison. `results[].recipes_per_fold` records what each fold picked, and `break_even`'s featuriser count is the union across them. `--c11-recipe-search whole_data` (also `run_dataset.py --c11-recipe-search`) keeps the old free path for a dataset whose number is not quoted; under it the file carries `hybrid_recipe_selected_on_all_rows`, `auto_minus_hybrid_recipe_all_rows` and `accuracy_delta_ensemble_minus_hybrid_recipe_all_rows`, and writes no `hybrid_reselected` or `auto_minus_hybrid` at all. `firstpass_notready.py` prints a recipe column and marks every file without the new marker — the nine on disk — as ALL ROWS.
 
 **`tests/experiments/complexity/c16_feature_selection_as_regularization.py:365`** · needs a decision first  
 c16's budget allocation uses whole-dataset scores inside every fold's hybrid
@@ -481,7 +481,7 @@ c16's budget allocation uses whole-dataset scores inside every fold's hybrid
 - Wrong because: Every budget's representation ranking is scored using rows from the fold it will later be tested on, not just its own training rows. That leaks into the heatmap, the sensitivity curve, and the L2-equivalence output — not only the hybrid_wins count.
 - Touches: Every existing c16 result file's heatmap, sensitivity curve, and L2-equivalence numbers were computed this way, so all of them are affected.
 - Fix: Decide whether per-budget representation searches should run inside each outer training fold instead of once over the whole dataset, then re-run c16.
-- **Fixed 2026-09-04:** the budget split half is already fixed upstream: `build_fold_hybrid` no longer falls back to the recipe's whole-dataset representation scores, so every fold re-scores on its own training rows. c16 now stamps `budget_split_selected_on` and `recipe_selected_on` and computes `honest_rescore_result` per family. Still needs the re-run.
+- **Fixed 2026-09-04:** the budget split half is already fixed upstream: `build_fold_hybrid` no longer falls back to the recipe's whole-dataset representation scores, so every fold re-scores on its own training rows. c16 now stamps `budget_split_selected_on` and `recipe_selected_on` and computes `fold_reselection_result` per family. Still needs the re-run.
 
 **`tests/experiments/complexity/c24_blueprint_transfer.py:181`** · needs a decision first  
 c24's blueprint-transfer score is biased by an unfair recipe search, not by leaked features
@@ -520,13 +520,13 @@ n11's best_config is the top of ~4,800 configs, scored on the same folds it repo
 - FIXED 2026-09-04: `best_config`, `top_10` and `robust_configs` are renamed `*_search_max` and carry a caveat naming them a search result. Beside them sits `heldout_recovery`: for each fold the winner is re-picked from the OTHER folds and read on this one, then averaged — pure arithmetic over per-fold scores now kept alongside the pooled ones, no extra fitting. It also reports whether one config won on every fold. `read_n11` in firstpass_notready.py prints both columns. On a fixture where one config spikes on a single fold the search maximum reads 68% and the held-out number 22%.
 
 **`tests/experiments/noise/n13_noise_distributions.py:817`** · needs a decision first  ·  FIXED 2026-09-04 (renamed)
-n13 tags a fixed recipe as `honest_rescore`; the per-fold reselection it promises never runs.
+n13 tags a fixed recipe as `fold_reselection`; the per-fold reselection it promises never runs.
 
-- Computes: n13 computes `delta_mean_of_folds` between one hybrid recipe and a fixed baseline representation, across the same 5 folds used to pick that recipe, and labels it `honest_rescore`.
-- Wrong because: The `honest_rescore` key promises a recipe re-picked per held-out fold, but n13 gives it one recipe, so re-selection never happens. That recipe was chosen on all folds with clean labels, true of every recipe in the suite, and it does not inflate the delta.
-- Touches: No analysis script reads `results['honest_rescore']` — read_n13 uses `summary.hybrid_advantage_persists` instead. The one n13 result file on disk predates this code, so nothing already reported changes.
+- Computes: n13 computes `delta_mean_of_folds` between one hybrid recipe and a fixed baseline representation, across the same 5 folds used to pick that recipe, and labels it `fold_reselection`.
+- Wrong because: The `fold_reselection` key promises a recipe re-picked per held-out fold, but n13 gives it one recipe, so re-selection never happens. That recipe was chosen on all folds with clean labels, true of every recipe in the suite, and it does not inflate the delta.
+- Touches: No analysis script reads `results['fold_reselection']` — read_n13 uses `summary.hybrid_advantage_persists` instead. The one n13 result file on disk predates this code, so nothing already reported changes.
 - Fix: Either rename the key to drop its per-fold-selection promise, or feed every searched recipe so the re-selection is real — costing one refit per noise_type x level x fold x seed.
-- FIXED 2026-09-04: the key is `per_fold_scores_single_recipe`, and the block carries `reselection: 'none_single_recipe_per_model'`, `recipe_source: 'clean_label_search_pool'` and the recipe count per model. The printed header no longer says honest re-score. Confirmed no reader breaks: `read_n13` uses `summary.hybrid_advantage_persists`, and nothing else reads n13's block.
+- FIXED 2026-09-04: the key is `per_fold_scores_single_recipe`, and the block carries `reselection: 'none_single_recipe_per_model'`, `recipe_source: 'clean_label_search_pool'` and the recipe count per model. The printed header no longer says per-fold reselection. Confirmed no reader breaks: `read_n13` uses `summary.hybrid_advantage_persists`, and nothing else reads n13's block.
 
 **`tests/experiments/opig_blueprint_transfer.py:184`** · needs a decision first  
 Native arm's score is measured on the same folds that picked its recipe
@@ -540,7 +540,7 @@ Native arm's score is measured on the same folds that picked its recipe
 **`tests/experiments/similarity/s02_hybrid_similarity.py:170`** · needs a decision first  ·  FIXED 2026-09-04 (features per fold; recipe still whole-dataset)
 s02 picks the hybrid's features using rows it later scores as "held-out"
 
-- FIXED 2026-09-04: `_cv_honest_sac` now calls `build_fold_hybrid` inside each held-out
+- FIXED 2026-09-04: `_cv_reselected_sac` now calls `build_fold_hybrid` inside each held-out
   fold, so the features come from that fold's training rows instead of a slice of the
   whole-dataset matrix. The recipe is still the pool search's — that is the separate
   `_shared.py:4513` entry above — and the file's LIMITATION note now says exactly which
@@ -657,7 +657,7 @@ c02's hybrid-vs-best-rep number is picked on the same folds it's scored on, in e
 - Computes: For each dataset, c02 picks the best hybrid score and the best single-representation score, both chosen on the same inner folds, then subtracts them.
 - Wrong because: The hybrid score is the best of roughly 450 to 570 allocation-method, importance-method, evaluator and budget combinations per model. The single-representation score is the best of about 10 representations, so it is biased upward by an unmeasured amount.
 - Touches: Every c02 result file on disk (26, from June, before this fix) carries the inflated delta, including the figure c02_hybrid_vs_baselines.png. None have the corrected number yet.
-- Fix: Re-run c02 so it writes the honest-rescore block, then point make_supervisor_plots.py and supervisor_presentation.py at that block instead of the current fields.
+- Fix: Re-run c02 so it writes the fold-reselection block, then point make_supervisor_plots.py and supervisor_presentation.py at that block instead of the current fields.
 
 **`tests/experiments/complexity/c12_modality_ablation.py:497`** · re-run one experiment  
 c12's HELPS/HURTS verdict compares two best scores fit and scored on the same folds
@@ -666,7 +666,7 @@ c12's HELPS/HURTS verdict compares two best scores fit and scored on the same fo
 - Wrong because: The single representations entering a pair, and the single-modality winner it's compared against, are all picked by taking the best score on the same folds they are then scored on. Neither side is a held-out score, so the difference has no honest direction — not a known bias against the pair.
 - Touches: The results JSON stores this contaminated delta for every pair. The separate "effect of adding each modality to expression" table repeats the same computation, so it is affected too.
 - Fix: Use the leave-one-fold-out check already in the file: pick each modality's winning representation on the other folds, then score it only on the held-out fold.
-- **Fixed 2026-09-04:** HELPS/HURTS now reads a leave-one-fold-out delta: the single representation each pair is compared against is re-picked on the other folds. Stored per pair as `honest_delta`, `honest_delta_by_model` and a (model, fold) win count. The same-fold `delta_vs_best_single` is kept beside it. The 'adding to expression' table got the same treatment.
+- **Fixed 2026-09-04:** HELPS/HURTS now reads a leave-one-fold-out delta: the single representation each pair is compared against is re-picked on the other folds. Stored per pair as `reselected_delta`, `reselected_delta_by_model` and a (model, fold) win count. The same-fold `delta_vs_best_single` is kept beside it. The 'adding to expression' table got the same treatment.
 
 **`tests/experiments/complexity/c15_ml_theory_depth.py:291`** · re-run one experiment  
 c15b's Align column scores a hybrid against the same labels used to build it
@@ -737,7 +737,7 @@ Blueprint transfer picks the recipe and best representation on the folds it scor
 - Computes: For each target dataset, it picks the allocation method and single representation with the highest score on a 5-fold GroupKFold split, then scores them on that same split.
 - Wrong because: The evaluation folds are identical to the folds the search already scored, because GroupKFold is deterministic on the same groups. The recipe and the single representation chosen are the ones already seen during scoring, not held out from it.
 - Touches: Biases mean_delta_recipe, mean_delta_full, and the transfer verdict in opig_blueprint_transfer.py, because base_best carries the same look-ahead recipe and full are compared against. No full-mode result is on disk yet, only a 200-sample, n_folds=1 smoke run.
-- Fix: Re-select the recipe and the best single representation inside each held-out fold, using training rows only, or honest_rescore's per-fold argmax that excludes the scored fold.
+- Fix: Re-select the recipe and the best single representation inside each held-out fold, using training rows only, or fold_reselection's per-fold argmax that excludes the scored fold.
 - **Fixed 2026-09-04:** same change — per-fold recipe and per-fold best single representation; each fold's picks are saved as per_fold_native_blueprint and per_fold_base_rep, and the whole-data picks are kept beside them as context only.
 
 **`tests/experiments/opig_cdr_flexibility.py:297`** · re-run one experiment  
@@ -756,7 +756,7 @@ kirby_hybrid's recipe and features both see held-out labels before being scored 
 - Wrong because: The blueprint behind kirby_hybrid is chosen by a search ranked over every fold's labels, not held out from them. Its features then come from refitting that same blueprint on the whole dataset, so the folds test on labels already used twice.
 - Touches: tests/results/comparisons/opig_humanness.json stores kirby_hybrid rows (rf AUROC 0.9229) built this way, with no honest comparison saved next to them; the honest numbers print but are not written to that file.
 - Fix: Save the honest comparison the script already prints at lines 455-477 into that results file, and drop the kirby_hybrid rows built from leaked features.
-- **Fixed 2026-09-04:** the kirby_hybrid rows are no longer built; the computed honest comparison is saved to the result file under honest_comparison, beside the raw per-fold block it comes from.
+- **Fixed 2026-09-04:** the kirby_hybrid rows are no longer built; the computed honest comparison is saved to the result file under reselected_comparison, beside the raw per-fold block it comes from.
 
 **`tests/experiments/opig_kingsmith_component_splits.py:674`** · re-run one experiment  
 The hybrid-vs-base delta pits 5 hybrid models against 70 base draws.
@@ -764,7 +764,7 @@ The hybrid-vs-base delta pits 5 hybrid models against 70 base draws.
 - Computes: print_analysis takes the largest R2 across every representation and model in a split, subtracts it from the largest hybrid R2, and prints that as the Delta column.
 - Wrong because: Both numbers are maxima taken over the same folds they're measured on, so both run optimistic. The base side picks the best of 70 representation-model pairs, the hybrid side the best of only 5.
 - Touches: No number from this script has been reported yet, so nothing on disk changes meaning. The fix only changes future runs of this comparison.
-- Fix: For each model, subtract the base representation's held-out fold score from the hybrid's, using the same arithmetic honest_rescore already runs, then rerun the experiment keeping per-fold scores.
+- Fix: For each model, subtract the base representation's held-out fold score from the hybrid's, using the same arithmetic fold_reselection already runs, then rerun the experiment keeping per-fold scores.
 - **Fixed 2026-09-04:** the Delta is now per downstream model and per held-out group — the base representation is re-picked on each group from the other groups. evaluate_rep and the per-fold hybrid loop keep fold-index-aligned scores (r2_per_fold, rmse_per_fold) so the subtraction is paired.
 
 **`tests/experiments/opig_scaffold_similarity.py:283`** · re-run one experiment  
@@ -782,8 +782,8 @@ The printed hybrid AUC is the search's own best CV score, not a held-out score
 - Computes: It picks, for each of 8 budgets, the allocation method, importance measure and evaluator with the highest CV score, then reports the best of those 8 as the hybrid's AUC.
 - Wrong because: That score is chosen on the same folds it's measured on, so it's inflated by picking the best of many settings. Every single representation printed next to it is instead a mean AUROC over held-out folds.
 - Touches: opig_trastuzumab_enrichment.json stores this inflated number as hybrid_search.rf_cv_auc, printed as "Hybrid (RF search CV AUC)" beside honest per-representation AUROC values in every run's output.
-- Fix: Score the hybrid the same way as the representations: build_honest_rescore_input(search) then honest_rescore(...), the two calls opig_humanness.py already makes.
-- **Fixed 2026-09-04:** build_honest_rescore_input then honest_rescore, printed and saved as honest_comparison. The search maximum stays as hybrid_search.search_best_cv_auc, renamed from rf_cv_auc.
+- Fix: Score the hybrid the same way as the representations: build_fold_reselection_input(search) then fold_reselection(...), the two calls opig_humanness.py already makes.
+- **Fixed 2026-09-04:** build_fold_reselection_input then fold_reselection, printed and saved as reselected_comparison. The search maximum stays as hybrid_search.search_best_cv_auc, renamed from rf_cv_auc.
 
 **`tests/experiments/similarity/s08_optimal_dimension.py:217`** · re-run one experiment  ·  FIXED 2026-09-04
 s08's per-model budget picks aren't a real sweep, and never reach s09's optimal_dim_ratio
@@ -808,7 +808,7 @@ s12 says it re-picks the hybrid per fold; the recipe is picked once, on all rows
   rows (`get_fold_best_search`), so both arms now pay for held-out selection. Folds come
   from `nested_cv_outer_folds` and are shared by the single-representation and hybrid
   loops, which previously rebuilt the splitter separately. Each model's block records
-  `fold_recipes`, and `hybrid_cliff_delta_honest`'s stored 'selection' string says what
+  `fold_recipes`, and `hybrid_cliff_delta_reselected`'s stored 'selection' string says what
   the folds chose. Costs one search per model per fold.
   One side effect, worth knowing before comparing to an older s12 file: the folds now
   come from `nested_cv_outer_folds`, which is told the task type, where `cv_split` was
@@ -817,9 +817,9 @@ s12 says it re-picks the hybrid per fold; the recipe is picked once, on all rows
   not, so the fold composition moves. That is the refuted `s12:310` entry's mechanism,
   settled here by using the authoritative path rather than the fallback.
 
-- Computes: s12's hybrid_cliff_delta_honest compares held-out cliff-compound error between the hybrid and single representations, both labeled as re-picked per left-out fold.
+- Computes: s12's hybrid_cliff_delta_reselected compares held-out cliff-compound error between the hybrid and single representations, both labeled as re-picked per left-out fold.
 - Wrong because: The hybrid's features are refit inside each fold, but its recipe — allocation method, budget, importance, evaluator, augmentation — is chosen once, using every row. Single representations are re-picked fold by fold, so only that side pays for held-out selection, not the hybrid.
-- Touches: No stored result is affected — hybrid_cliff_delta_honest isn't in any file yet; the 16 saved s12 files predate it and hold only hybrid_cliff_delta.
+- Touches: No stored result is affected — hybrid_cliff_delta_reselected isn't in any file yet; the 16 saved s12 files predate it and hold only hybrid_cliff_delta.
 - Fix: Either pick the hybrid's recipe inside each fold using only its training rows, or give held-out re-selection several hybrid recipes per fold to choose among.
 
 **`tests/experiments/similarity_metrics/aggregate.py:108`** · re-run one experiment  ·  FIXED 2026-09-04
@@ -928,7 +928,7 @@ kirby_hybrid features are selected with each fold's own labels, then tested on t
 - Wrong because: Every held-out fold's labels helped pick which features kirby_hybrid uses, so no fold is scored on features chosen without seeing its own answers. The MAE, RMSE, R2, and AC-MCC printed for kirby_hybrid are measured on data that helped build it.
 - Touches: The activity-cliff claim for kirby_hybrid in this file's output isn't supported. Only the kirby_hybrid row and the Hybrid MAE/Delta columns are wrong — an honest version is already computed and printed in the file.
 - Fix: Drop the kirby_hybrid row from the per-representation table and the Hybrid MAE and Delta columns from the cross-target summary; report only the honest version already built.
-- **Fixed 2026-09-04:** the kirby_hybrid representation is no longer built or evaluated; the Hybrid MAE and Delta columns are gone from the cross-target summary, leaving the honest_rescore table as the only hybrid number.
+- **Fixed 2026-09-04:** the kirby_hybrid representation is no longer built or evaluated; the Hybrid MAE and Delta columns are gone from the cross-target summary, leaving the fold_reselection table as the only hybrid number.
 
 **`tests/experiments/opig_cgr_comparison.py:379`** · edit only  
 The CGR-helps-hybrid verdict is biased toward saying yes, not measuring it
@@ -943,7 +943,7 @@ The CGR-helps-hybrid verdict is biased toward saying yes, not measuring it
 s05's "pre-registered" baseline in fixed_ref is picked from the same folds it's scored on
 
 - FIXED 2026-09-04: `firstpass_notready.py`'s `read_s05` reads
-  `honest_rescore_result.knn.delta_mean_of_folds` — the leave-one-fold-out delta, both
+  `fold_reselection_result.knn.delta_mean_of_folds` — the leave-one-fold-out delta, both
   arms re-picked on the other folds — and prints why fixed_ref is not used. fixed_ref
   itself is kept and still written, with its stored note and its printed line corrected
   to say the baseline is picked in-sample; the module docstring no longer calls it the
@@ -1138,7 +1138,7 @@ Each fold's hybrid budget split is set by scores fit on that fold's held-out row
 
 - Computes: build_fold_hybrid passes each representation's whole-dataset baseline score into create_hybrid, which turns those scores into each representation's share of the fold's feature budget.
 - Wrong because: Those scores are fit on all rows of a dataset, including the rows held out in that fold. So each fold's hybrid is built using numbers that already saw its own held-out rows.
-- Touches: n01's hybrid-vs-representation gap is affected directly, with no honest re-score to cover it. n02 and n07 put the same composition on both compared sides, so it partly cancels. Whether stored results carry it is unverified.
+- Touches: n01's hybrid-vs-representation gap is affected directly, with no per-fold reselection to cover it. n02 and n07 put the same composition on both compared sides, so it partly cancels. Whether stored results carry it is unverified.
 - Fix: Score representations inside each fold's own training rows (nested cross-validation), or label the hybrid rows as selected on all rows, like n11 and n12 already do.
 - FIXED 2026-09-04: no change needed in n01. `_shared.build_fold_hybrid` stopped forwarding the blueprint's whole-dataset `rep_scores`, and n01 passes no `precomputed_alloc_scores`, so `create_hybrid` re-scores every representation on the fold's own training rows. Read both this session: `_shared.py:3955` and `hybrid.allocate_performance_weighted`'s `precomputed_scores=None` path.
 
@@ -1229,12 +1229,12 @@ No frac_single gate on the five-nearest-neighbour metric; the grouping goes unre
 - Fix: Gate this metric on frac_single like position_gated is gated, in both scaffold_experiment.py and base_rep_comparison.py, and write frac_single plus group counts into every output row.
 - FIXED 2026-09-04: the five-nearest-neighbour score is refused below FRAC_SINGLE_MIN = 0.99, the same threshold position_gated was already refused on, in both scaffold_experiment.py and base_rep_comparison.py. frac_single, the position-group count, the variant count and the grouping's name go into every output row, with two flags saying whether a computed rho is arithmetic.
 
-**`tests/experiments/similarity_metrics/winning_recipe_honest.py:37`** · re-run one experiment  ·  FIXED 2026-09-04
-winning_recipe_honest.py splits pairs, not molecules, and normalizes features on both halves
+**`tests/experiments/similarity_metrics/winning_recipe_reselected.py:37`** · re-run one experiment  ·  FIXED 2026-09-04
+winning_recipe_reselected.py splits pairs, not molecules, and normalizes features on both halves
 
 - Computes: It reports structural fidelity on a held-out half of 8000 MCS pairs from up to 1427 molecules.
 - Wrong because: Each molecule appears in about eleven pairs, so nearly every molecule sits on both the selection half and the scoring half. The feature z-scoring also uses all molecules, not just the selection half, so splitting the pairs by molecule would not fix it alone.
-- Touches: This changes the +0.374 held-out number quoted in SIMILARITY_METRICS_ROADMAP.md and SIMILARITY_STUDY_HANDOFF.md as the study's circularity fix. winning_recipe_honest.json on disk carries the unfixed number.
+- Touches: This changes the +0.374 held-out number quoted in SIMILARITY_METRICS_ROADMAP.md and SIMILARITY_STUDY_HANDOFF.md as the study's circularity fix. winning_recipe_reselected.json on disk carries the unfixed number.
 - Fix: Split molecules by scaffold group first, keep only pairs with both molecules on one side, and fit the z-score stats on the selection half only.
 - FIXED 2026-09-04: the split is now on MOLECULES by whole scaffold group, a cached pair counts only when both endpoints are on one side, and the z-score mean/sd comes from the select half alone (make_D_fit). Read-across is scored on the score half's rows; read_rho_all keeps the every-row number beside it.
 
@@ -1669,7 +1669,7 @@ Read directly, not inferred:
   features are not built from its own held-out rows.
 - `nested_cv_evaluate` raises when structural pair indices do not align with the row order of
   `base_reps` and `labels`, instead of scoring mis-aligned pairs.
-- `honest_rescore` applies the identical leave-one-fold-out tax to both arms and refuses to guess
+- `fold_reselection` applies the identical leave-one-fold-out tax to both arms and refuses to guess
   the metric direction, raising when a stored block contradicts `BUILTIN_METRICS`.
 - `evaluate_cv` and `evaluate_cv_with_train` pass `groups[train_idx]` into the per-fold rebuild.
 - The early-stopping split inside `DNNRegressor` and `PretrainedDNNRegressor` is group-aware.

@@ -27,12 +27,12 @@ WHAT IS MEASURED, AND WHY IT NEEDS NO NEW MACHINERY
     by_model_budget (:9553-9581). This experiment makes one nested run and
     reads that dict. It runs no second search.
 
-    honest_mean   the held-out score at that budget
+    reselected_mean   the held-out score at that budget
     search_mean   what the inner search said the same budget was worth
     bias          signed so POSITIVE MEANS THE INNER SEARCH OVER-PROMISED, in
                   both metric directions
 
-    Overfitting at high budgets is exactly: honest_mean peaking below the
+    Overfitting at high budgets is exactly: reselected_mean peaking below the
     molecule count and falling above it, and/or bias growing with budget.
 
 DOUBLE DESCENT — WHY THE BUDGET GRID IS NOT JUST FULL_BUDGETS
@@ -85,7 +85,7 @@ DOUBLE DESCENT — WHY THE BUDGET GRID IS NOT JUST FULL_BUDGETS
 
 THE TWO NUMBERS THE ANSWER TURNS ON, per model:
     the budget each outer fold actually PICKED, and the budget with the best
-    honest_mean. If the search picks 2,000 features on a 672-molecule dataset
+    reselected_mean. If the search picks 2,000 features on a 672-molecule dataset
     while 250 is honestly best, the process overfits and a cap has a measured
     reason — per dataset by its own molecule count, never a budget dropped from
     FULL_BUDGETS everywhere. If the honest curve keeps climbing past the
@@ -106,7 +106,7 @@ the SATURATED line below names it rather than dropping it.
 
 NOT c16. c16 asks whether the hybrid's budget subsumes model-level
 regularization, sweeping regularization strength through build_fold_hybrid +
-honest_rescore. It does not report the honest per-budget curve.
+fold_reselection. It does not report the honest per-budget curve.
 
 USAGE
     python tests/experiments/run_dataset.py complexity herg_ki --experiments c33
@@ -255,12 +255,12 @@ def _double_descent(rows, lower_is_better, min_train_rows):
     shape the folds could have produced, and is reported as inconclusive with
     its numbers, not as a finding.
     """
-    scored = {b: r for b, r in rows.items() if r['honest_mean'] is not None}
+    scored = {b: r for b, r in rows.items() if r['reselected_mean'] is not None}
     if not scored:
         return None
 
     def _pick(region, want_best):
-        cand = [(b, r['honest_mean']) for b, r in scored.items()
+        cand = [(b, r['reselected_mean']) for b, r in scored.items()
                 if _region(b, min_train_rows) == region]
         if not cand:
             return None, None
@@ -286,8 +286,8 @@ def _double_descent(rows, lower_is_better, min_train_rows):
     fall = _worse_by(interp_m, over_m)    # recovered past it
 
     # The yardstick: the largest fold spread among the three budgets named.
-    spreads = [rows[b]['honest_std'] for b in (under_b, interp_b, over_b)
-               if b is not None and rows[b]['honest_std'] is not None]
+    spreads = [rows[b]['reselected_std'] for b in (under_b, interp_b, over_b)
+               if b is not None and rows[b]['reselected_std'] is not None]
     spread = max(spreads) if spreads else None
 
     # All four sign combinations are named, so 'inconclusive' means a number
@@ -311,10 +311,10 @@ def _double_descent(rows, lower_is_better, min_train_rows):
 
     return {
         'interpolation_threshold_rows': int(min_train_rows),
-        'best_under_budget': under_b, 'best_under_honest': under_m,
+        'best_under_budget': under_b, 'best_under_reselection': under_m,
         'worst_interpolation_budget': interp_b,
-        'worst_interpolation_honest': interp_m,
-        'best_over_budget': over_b, 'best_over_honest': over_m,
+        'worst_interpolation_reselected': interp_m,
+        'best_over_budget': over_b, 'best_over_reselection': over_m,
         # Positive = worse. rise into the threshold, fall back out of it.
         'rise_to_threshold': rise,
         'fall_after_threshold': fall,
@@ -339,8 +339,8 @@ def _summarise_model(per_budget, base_folds, lower_is_better, min_train_rows):
         rows[int(budget)] = {
             'region': _region(int(budget), min_train_rows),
             'budget_over_train_rows': round(float(budget) / float(min_train_rows), 3),
-            'honest_mean': _f(b.get('honest_mean')),
-            'honest_std': _f(b.get('honest_std')),
+            'reselected_mean': _f(b.get('reselected_mean')),
+            'reselected_std': _f(b.get('reselected_std')),
             'fold_scores': b.get('fold_scores'),
             'search_mean': _f(b.get('search_mean')),
             # Positive = the inner search over-promised at this budget.
@@ -352,15 +352,15 @@ def _summarise_model(per_budget, base_folds, lower_is_better, min_train_rows):
             'budget_exceeds_train_rows': bool(int(budget) > min_train_rows),
         }
 
-    scored = [(b, r['honest_mean']) for b, r in rows.items()
-              if r['honest_mean'] is not None]
-    honest_best_budget = None
-    honest_best_mean = None
+    scored = [(b, r['reselected_mean']) for b, r in rows.items()
+              if r['reselected_mean'] is not None]
+    reselected_best_budget = None
+    reselected_best_mean = None
     if scored:
-        honest_best_budget, honest_best_mean = scored[0]
+        reselected_best_budget, reselected_best_mean = scored[0]
         for b, m in scored[1:]:
-            if _better(m, honest_best_mean, lower_is_better):
-                honest_best_budget, honest_best_mean = b, m
+            if _better(m, reselected_best_mean, lower_is_better):
+                reselected_best_budget, reselected_best_mean = b, m
 
     # Does the search's over-promise grow with budget? Spearman over the
     # budgets that produced both numbers. Positive = the bigger the budget,
@@ -374,11 +374,11 @@ def _summarise_model(per_budget, base_folds, lower_is_better, min_train_rows):
 
     return rows, {
         'double_descent': _double_descent(rows, lower_is_better, min_train_rows),
-        'honest_best_budget': honest_best_budget,
-        'honest_best_mean': honest_best_mean,
-        'honest_best_exceeds_train_rows': (
-            None if honest_best_budget is None
-            else bool(honest_best_budget > min_train_rows)),
+        'reselected_best_budget': reselected_best_budget,
+        'reselected_best_mean': reselected_best_mean,
+        'reselected_best_exceeds_train_rows': (
+            None if reselected_best_budget is None
+            else bool(reselected_best_budget > min_train_rows)),
         'bias_vs_budget_spearman': bias_trend,
     }
 
@@ -573,18 +573,18 @@ def run(data, config, output_dir, dataset_name):
         picked = _picked_budgets(entry)
         picked_modal = _modal(picked)
 
-        honest_at_picked = None
+        reselected_at_picked = None
         if picked_modal is not None and picked_modal in rows:
-            honest_at_picked = rows[picked_modal]['honest_mean']
+            reselected_at_picked = rows[picked_modal]['reselected_mean']
 
         # Positive = the budget the search picked scored WORSE, held out, than
         # the budget that was honestly best. That difference is what the
         # process costs by picking the way it does.
         overfit_gap = None
-        if honest_at_picked is not None and curve['honest_best_mean'] is not None:
+        if reselected_at_picked is not None and curve['reselected_best_mean'] is not None:
             overfit_gap = (
-                float(honest_at_picked - curve['honest_best_mean']) if lower
-                else float(curve['honest_best_mean'] - honest_at_picked))
+                float(reselected_at_picked - curve['reselected_best_mean']) if lower
+                else float(curve['reselected_best_mean'] - reselected_at_picked))
 
         # What the process actually delivers. nested CV picks a budget PER
         # OUTER FOLD, so hybrid_mean is the honest score of those per-fold
@@ -593,19 +593,19 @@ def run(data, config, output_dir, dataset_name):
         # would have. That is the cost of letting the search choose.
         process_gap = None
         hyb = _f(entry.get('hybrid_mean'))
-        if hyb is not None and curve['honest_best_mean'] is not None:
-            process_gap = (float(hyb - curve['honest_best_mean']) if lower
-                           else float(curve['honest_best_mean'] - hyb))
+        if hyb is not None and curve['reselected_best_mean'] is not None:
+            process_gap = (float(hyb - curve['reselected_best_mean']) if lower
+                           else float(curve['reselected_best_mean'] - hyb))
 
         summary[model] = {
-            'process_honest_mean': hyb,
+            'process_reselected_mean': hyb,
             'process_gap': process_gap,
             'picked_budget_per_fold': picked,
             'picked_budget_modal': picked_modal,
             'picked_exceeds_train_rows': (
                 None if picked_modal is None
                 else bool(picked_modal > min_train_rows)),
-            'honest_at_picked_budget': honest_at_picked,
+            'reselected_at_picked_budget': reselected_at_picked,
             'overfit_gap': overfit_gap,
             # Which representation was second best on each outer fold, for the
             # delta_vs_rank2_single curve added beside the rank-1 one.
@@ -670,8 +670,8 @@ def run(data, config, output_dir, dataset_name):
             star = '*' if r['budget_exceeds_train_rows'] else ' '
             def _s(v, w=9, p=4):
                 return f"{v:>{w}.{p}f}" if v is not None else f"{'-':>{w}}"
-            print(f"  {model:<10} {b_str + star:>7} {_s(r['honest_mean'])} "
-                  f"{_s(r['honest_std'], 7, 3)} {_s(r['search_mean'])} "
+            print(f"  {model:<10} {b_str + star:>7} {_s(r['reselected_mean'])} "
+                  f"{_s(r['reselected_std'], 7, 3)} {_s(r['search_mean'])} "
                   f"{_s(r['bias'], 8)} {_s(r['delta_vs_best_single'], 12)}")
 
     print(f"\n  WHAT THE SEARCH PICKED vs WHAT WAS HONESTLY BEST")
@@ -683,10 +683,10 @@ def run(data, config, output_dir, dataset_name):
         def _s(v, w=9, p=4):
             return f"{v:>{w}.{p}f}" if v is not None else f"{'-':>{w}}"
         pk = s['picked_budget_modal']
-        hb = s['honest_best_budget']
+        hb = s['reselected_best_budget']
         print(f"  {model:<10} "
               f"{(str(pk) + ('*' if s['picked_exceeds_train_rows'] else '')) if pk else '-':>8} "
-              f"{(str(hb) + ('*' if s['honest_best_exceeds_train_rows'] else '')) if hb else '-':>12} "
+              f"{(str(hb) + ('*' if s['reselected_best_exceeds_train_rows'] else '')) if hb else '-':>12} "
               f"{_s(s['process_gap'], 12)} "
               f"{_s(s['overfit_gap'], 10)} "
               f"{_s(s['picked_budget_per_fold_delta_std'])} "

@@ -25,7 +25,7 @@ from experiments._shared import (
     get_model_factories, cv_split, _cv_split,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
-    build_honest_rescore_input, honest_rescore,
+    build_fold_reselection_input, fold_reselection,
     _build_rep_factories, parse_rep_args,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
     hr_exclude_folds,
@@ -476,7 +476,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # subtracted here: the hybrid side is the best of 3,720 recipes and the
     # single-representation side the best of 10 representations, both maxima
     # taken on the same folds they are then reported on, so their difference
-    # runs high. The delta to read is honest_delta, printed below once the
+    # runs high. The delta to read is reselected_delta, printed below once the
     # per-fold re-pick has been done.
     print(f"\n  BEST BY MODEL (metric: {metric_label}):")
     for model_name, best in best_by_model.items():
@@ -615,12 +615,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Per-fold scores for BOTH arms (hybrid candidates + single-rep baselines),
     # keyed per model, so the reader can re-pick the per-fold winner and compute
     # an honest hybrid-vs-best-single delta instead of comparing a reported-mean
-    # hybrid against an argmax-over-means baseline. build_honest_rescore_input
+    # hybrid against an argmax-over-means baseline. build_fold_reselection_input
     # reads candidate fold_scores from search.all_results and per-fold baselines
     # from search.baseline_fold_scores (additive fields; empty on old caches ->
     # that model simply won't appear, tolerated by the helper). Built from the
     # primary (uncapped) search, matching best_by_model/baselines above.
-    honest_rescore_block = build_honest_rescore_input(search)
+    fold_reselection_block = build_fold_reselection_input(search)
 
     # One block per condition as well, not the uncapped search alone. Each
     # condition ran its own search and so carries its own per-fold candidate and
@@ -635,21 +635,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if search_ft is not None:
         condition_searches['frozen_plus_ft'] = search_ft
 
-    honest_rescore_by_condition = {}
+    fold_reselection_by_condition = {}
     for _cond, _s in condition_searches.items():
         if _s is None:
             continue
         try:
-            honest_rescore_by_condition[_cond] = build_honest_rescore_input(_s)
+            fold_reselection_by_condition[_cond] = build_fold_reselection_input(_s)
         except Exception as e:
-            print(f"  honest_rescore block for {_cond} unavailable: {e}")
+            print(f"  fold_reselection block for {_cond} unavailable: {e}")
     if search_per_model_top_rep:
         _merged = None
         for _mname, _s in search_per_model_top_rep.items():
             try:
-                _blk = build_honest_rescore_input(_s)
+                _blk = build_fold_reselection_input(_s)
             except Exception as e:
-                print(f"  honest_rescore block for per_model_top_rep_dim/"
+                print(f"  fold_reselection block for per_model_top_rep_dim/"
                       f"{_mname} unavailable: {e}")
                 continue
             if _merged is None:
@@ -660,13 +660,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _merged['baselines_by_model'].update(
                 _blk.get('baselines_by_model', {}))
             # A fold excluded by any of these searches is excluded for all of
-            # them: the blocks are merged into one, and honest_rescore drops
+            # them: the blocks are merged into one, and fold_reselection drops
             # the listed folds from both arms together.
             _merged['exclude_folds'] = sorted(
                 set(_merged.get('exclude_folds') or [])
                 | set(_blk.get('exclude_folds') or []))
         if _merged is not None:
-            honest_rescore_by_condition['per_model_top_rep_dim'] = _merged
+            fold_reselection_by_condition['per_model_top_rep_dim'] = _merged
 
     # Compute the delta here rather than leaving it to whoever reads the file.
     # best_by_model and baselines below are both maxima taken on the folds they
@@ -676,23 +676,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # each side's winner on the other folds and scores the held-out one, which
     # taxes both sides the same. It costs nothing: the per-fold scores are
     # already in the block above.
-    honest_delta = {}
+    reselected_delta = {}
     try:
-        honest_delta = honest_rescore(
-            honest_rescore_block.get('candidates_by_model', {}),
-            honest_rescore_block.get('baselines_by_model', {}),
-            honest_rescore_block.get('lower_is_better'),
-            metric_name=honest_rescore_block.get('metric_name'),
-            exclude_folds=hr_exclude_folds(honest_rescore_block),
+        reselected_delta = fold_reselection(
+            fold_reselection_block.get('candidates_by_model', {}),
+            fold_reselection_block.get('baselines_by_model', {}),
+            fold_reselection_block.get('lower_is_better'),
+            metric_name=fold_reselection_block.get('metric_name'),
+            exclude_folds=hr_exclude_folds(fold_reselection_block),
         )
     except Exception as e:
         print(f"  honest delta unavailable: {e}")
 
     # Same arithmetic on every condition's block.
-    honest_delta_by_condition = {}
-    for _cond, _blk in honest_rescore_by_condition.items():
+    reselected_delta_by_condition = {}
+    for _cond, _blk in fold_reselection_by_condition.items():
         try:
-            honest_delta_by_condition[_cond] = honest_rescore(
+            reselected_delta_by_condition[_cond] = fold_reselection(
                 _blk.get('candidates_by_model', {}),
                 _blk.get('baselines_by_model', {}),
                 _blk.get('lower_is_better'),
@@ -704,11 +704,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # The delta to read: each held-out fold's hybrid recipe and its best single
     # representation are both picked on the other folds only.
-    if honest_delta:
+    if reselected_delta:
         print(f"\n  HYBRID vs BEST SINGLE REPRESENTATION, held-out fold re-pick "
               f"({metric_label}, + means the hybrid won):")
         for model_name in models:
-            _hd = honest_delta.get(model_name)
+            _hd = reselected_delta.get(model_name)
             if not _hd:
                 continue
             _d = _hd.get('delta_mean_of_folds')
@@ -720,14 +720,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     return {
         'configs': configs,
-        'honest_rescore': honest_rescore_block,
+        'fold_reselection': fold_reselection_block,
         # Report this, not best_by_model minus baselines.
-        'honest_delta': honest_delta,
-        # Per-condition blocks and deltas. 'honest_rescore'/'honest_delta' above
+        'reselected_delta': reselected_delta,
+        # Per-condition blocks and deltas. 'fold_reselection'/'reselected_delta' above
         # are the uncapped condition, kept under their existing keys because
         # readers already fetch them there.
-        'honest_rescore_by_condition': honest_rescore_by_condition,
-        'honest_delta_by_condition': honest_delta_by_condition,
+        'fold_reselection_by_condition': fold_reselection_by_condition,
+        'reselected_delta_by_condition': reselected_delta_by_condition,
         'best_by_model': best_by_model,
         'baselines': baselines,
         'rep_dims': rep_dims,
