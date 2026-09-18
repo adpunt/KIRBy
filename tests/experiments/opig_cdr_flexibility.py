@@ -45,6 +45,7 @@ import json
 import time
 import argparse
 import warnings
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -250,10 +251,35 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
     _cache_root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     fams = _assign_vgene_groups(heavy_seqs, 'imgt', _cache_root)
+    # ⛔ THE RARE FAMILIES HAVE TO BE HELD OUT TOGETHER, OR NOTHING SCORES.
+    # On CDRH3 the 11 families run 2, 2, 3, 4, 7, 8, 9, 23, 24, 58 and 76
+    # antibodies. A held-out fold is a whole family, so the smallest fold the
+    # splitter can build holds 2 antibodies and both are flexible. AUROC on a
+    # one-class fold is undefined, and measured 2026-09-18 that made every one
+    # of the 25 (representation, model) rows NaN and every hybrid configuration
+    # NaN with them -- the search refused to name a winner and the file
+    # reported nothing at all. Dropping to 4 or 3 folds does not help: a
+    # 2-antibody family is an atom the splitter cannot break, so it survives
+    # every split.
+    #
+    # Families below MIN_FAMILY are held out together as one group. Every
+    # family big enough to be a fold on its own still is one. At 10 that merges
+    # 7 families holding 35 of 216 antibodies, leaves 5 groups of 76, 58, 35,
+    # 24 and 23, and no fold is one-class at 5, 4 or 3 folds. The floor is not
+    # delicate -- 10, 15 and 20 all merge the same 7 families.
+    MIN_FAMILY = 10
+    _sizes = Counter(fams)
+    _rare = sorted({f for f in fams if _sizes[f] < MIN_FAMILY})
+    fams = [f if _sizes[f] >= MIN_FAMILY else 'IGHV-rare' for f in fams]
     _fam_to_id = {f: i for i, f in enumerate(sorted(set(fams)))}
     groups = np.array([_fam_to_id[f] for f in fams], dtype=int)
-    print(f"  V-gene groups: {len(_fam_to_id)} families "
+    print(f"  V-gene groups: {len(_fam_to_id)} held-out groups "
           f"({', '.join(sorted(_fam_to_id))})")
+    if _rare:
+        print(f"    {len(_rare)} families under {MIN_FAMILY} antibodies held "
+              f"out together as IGHV-rare "
+              f"({sum(_sizes[f] for f in _rare)} of {n} antibodies): "
+              f"{', '.join(_rare)}")
 
     # Generate representations (with disk caching for expensive LM reps)
     from experiments.rep_cache import compute_or_load_reps
