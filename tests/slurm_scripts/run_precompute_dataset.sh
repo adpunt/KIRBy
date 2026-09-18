@@ -89,10 +89,14 @@ DS=${1:?usage: sbatch run_precompute_dataset.sh <dataset>}
 #             tz_her2_binary and tz_her2_multiclass 5,000 rows each
 #
 # ⛔ FAST IS NOT FREE: 3 allocation methods instead of 5, one importance method
-# instead of 3, 3 models instead of 5, 2 representation counts instead of 4 --
-# 432 configurations against 8,160. It answers a smaller question. Everything it
-# computes is reused by a later full pass, so a dataset can be upgraded after
-# the deadline without redoing anything.
+# instead of 3, 2 representation counts instead of 4 -- 816 configurations
+# against 8,160. It answers a smaller question. Everything it computes is reused
+# by a later full pass, so a dataset can be upgraded after the deadline without
+# redoing anything.
+#
+# It used to cut the downstream models from 5 to 3 as well, which took it to 432
+# configurations and made two of the five models unreadable to every experiment.
+# The MODELS block below names them back. Changed 2026-09-18.
 #
 # Move a dataset by editing one of these three lines. KIRBY_SPEED and
 # KIRBY_PRUNING override the class entirely.
@@ -109,6 +113,72 @@ fi
 SPEED="${KIRBY_SPEED:-$DEF_SPEED}"
 PRUNING="${KIRBY_PRUNING:-$DEF_PRUNING}"
 PASSES="${KIRBY_PASSES:-sim dist knn ridge}"
+
+# ── THE MODEL LIST IS ITS OWN DIAL, NOT PART OF THE SPEED ───────────────
+#
+# WHAT WAS WRONG. `--speed fast` shortens four lists at once, and one of them is
+# the downstream model list: rf, lightgbm and dnn are kept, xgboost and svm are
+# dropped. That happens at find_best_hybrid.py:8221-8232, inside `if models is
+# None`. Every experiment reads a recipe per model name in DOWNSTREAM_MODELS
+# (_shared.py:539), which is all five. A name the search never scored comes back
+# as (None, None) from get_best_search_for_downstream, and the experiment then
+# writes no rows for that model without saying so -- the comment at
+# _shared.py:544-548 describes exactly this failure. So on the twelve LARGE
+# datasets, two of the five downstream models were unreadable.
+#
+# THE FIX. Name the models explicitly. An explicit list skips the `models is
+# None` branch entirely, so `--speed fast` still shortens the allocation,
+# importance and representation-count lists and no longer touches the models.
+# Per condition the grid goes from 432 configurations to 816, against 8,160 at
+# full speed. Counted with find_best_hybrid._expected_config_count on a
+# 10-representation pool and the eight FULL_BUDGETS entries.
+#
+# WHY THE FAST PASS IS STILL NOT WASTED. find_best_hybrid puts the RESOLVED
+# model list in the search key (find_best_hybrid.py:8566), so a fast run naming
+# all five writes the same `model_names` tuple a full-speed read asks for. The
+# other three lists still differ, so the search pickle is still a miss -- but
+# the per-configuration rows are keyed by result_db_identity, which carries the
+# data, the fold split and the tier and NEVER the swept lists
+# (find_best_hybrid.py:8608-8611). Every row a fast pass writes is read by a
+# later full pass. Nothing here is redone.
+#
+# svm drops itself where it cannot run: _passes_max_samples applies to an
+# explicit list too (find_best_hybrid.py:8236-8241), and svm carries a
+# 10,000-row ceiling, which covers the five nucleotide sets and
+# gb_human_enhancers_cohn. Naming it there costs nothing.
+#
+# ⛔ FULL-SPEED DATASETS PASS NOTHING. On a full run `models=None` already
+# resolves to the same five names, so naming them changes nothing about what is
+# computed -- but None and the tuple are different search keys, so every
+# full-speed search pickle already on disk would stop matching. SMALL and MEDIUM
+# send no flag, on purpose.
+#
+# ⛔ THE knn AND ridge PASSES MUST NOT GET THIS FLAG. At
+# precompute_hybrids.py:682-693 an explicit --models wins over --with-knn and
+# --with-ridge, so passing it there would drop knn from the pass s02 reads and
+# ridge from the pass c16 reads. Below, the flag goes to the three
+# predictive/similarity passes only. The distance passes fix their own list
+# (DISTANCE_MODELS) and ignore it either way.
+#
+#   KIRBY_MODELS   comma-separated names, or the word 'default' to send no flag
+#                  and take whatever the speed resolves to.
+if [ "${KIRBY_MODELS:-}" = "default" ]; then
+    MODELS=""
+elif [ -n "${KIRBY_MODELS:-}" ]; then
+    MODELS="${KIRBY_MODELS}"
+elif [ "${SPEED}" = "fast" ]; then
+    MODELS="rf,lightgbm,dnn,svm,xgboost"
+else
+    MODELS=""
+fi
+
+# A plain string, deliberately expanded unquoted at the call sites below. Model
+# names hold no spaces, and an empty string expands to no argument at all --
+# which an empty bash array does not, under `set -u` on bash 3.2.
+MODEL_FLAG=""
+if [ -n "${MODELS}" ]; then
+    MODEL_FLAG="--models ${MODELS}"
+fi
 
 cd /data/stat-ecr/scat9264/KIRBy || exit 2
 
@@ -127,6 +197,8 @@ export TRANSFORMERS_VERBOSITY=error
 echo "=========================================================="
 echo " precompute  dataset=${DS}"
 echo " class=${CLASS}  speed=${SPEED}  pruning=${PRUNING}"
+echo " models=${MODELS:-<whatever the speed resolves to>}"
+echo "   the knn, ridge and distance passes keep their own lists"
 echo " passes=${PASSES}"
 echo " branch=${BRANCH} (${COMMIT})   job=${SLURM_JOB_ID:-none}"
 echo " cache=${KIRBY_CACHE_DIR}"
@@ -182,13 +254,13 @@ case "$DS" in
 esac
 
 # 1-2: what every experiment reads first.
-has_pass sim  && run_one general_none          --objectives predictive,similarity
+has_pass sim  && run_one general_none          --objectives predictive,similarity ${MODEL_FLAG}
 has_pass dist && run_one general_distance_none --distance
 
 # 3-5: the augmented conditions. A dataset with no augmentation representations
 # runs no condition here and returns in seconds.
-has_pass sim  && run_one general_uncapped           --objectives predictive,similarity
-has_pass sim  && run_one general_capped             --objectives predictive,similarity
+has_pass sim  && run_one general_uncapped           --objectives predictive,similarity ${MODEL_FLAG}
+has_pass sim  && run_one general_capped             --objectives predictive,similarity ${MODEL_FLAG}
 has_pass dist && run_one general_distance_uncapped  --distance
 
 # 6-7: the two single-experiment passes, last because they block only s02 and c16.
