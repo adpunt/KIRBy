@@ -322,7 +322,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'is_clf': is_clf,
         'n_classes': int(len(classes_)) if is_clf else None,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
-        # One entry per (sigma, fold): which labels chose that fold's recipe.
+        # One entry per (sigma, fold, noise draw) whose feature-mix search
+        # returned: which labels chose that pass's recipe, under 'source',
+        # beside the sigma, fold index and noise draw seed it belongs to. A
+        # pass whose search raised has no entry at all -- it is in the
+        # 'Hybrid failed' print and nowhere here.
         # 'noisy_search' is what this experiment is for; 'clean_pool_fallback'
         # means the noisy search scored no budget on that fold and the
         # clean-label recipe was used instead. Without this the two were
@@ -350,6 +354,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid_no_lnl': [],
             'weighted_hybrid_no_lnl': [],
         }
+        # Which noise draw each score came from, aligned with sigma_folds. A
+        # hybrid build fails for one (fold, draw) pass, not for a whole fold,
+        # so the fold index alone does not say which passes an arm holds.
+        sigma_draws = {
+            'base_no_lnl': [],
+            'hybrid_no_lnl': [],
+            'weighted_hybrid_no_lnl': [],
+        }
         # Detection readings for this level, one list per (condition, method).
         # Stays empty unless the condition is one where a corrupted subset exists.
         detection_acc = {}
@@ -364,6 +376,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # no two of them could be compared fold by fold.
             for _ck in ('base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl'):
                 sigma_folds[_ck] = {m: [] for m in methods_to_test}
+                sigma_draws[_ck] = {m: [] for m in methods_to_test}
 
         # THREE NOISE DRAWS PER FOLD, averaged. User decision 2026-09-12.
         #
@@ -475,7 +488,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # happened, so a fold that fell back read as one that did not.
                 inner_bp = _best_bp if _best_bp is not None else bp
                 _recipe_source = 'noisy_search' if _best_bp is not None else 'clean_pool_fallback'
-                _recipe_sources.append(_recipe_source)
+                # The fold this happened on used to be printed and nowhere in
+                # the saved output: recipe_sources was a bare list of strings,
+                # so a reader could not say WHICH fold fell back, only how many
+                # did. Each entry now carries its noise level, its fold index
+                # and its noise draw seed. Split audit D,
+                # tests/experiments/noise/n09_lnl_survey.py:338.
+                _recipe_sources.append({
+                    'sigma': float(sigma),
+                    'fold': int(fold_idx),
+                    'noise_seed': int(noise_seed),
+                    'source': _recipe_source,
+                })
                 if _best_bp is None:
                     print(f"    fold {fold_idx}: the noisy search scored no "
                           f"budget, so this fold uses the CLEAN-label recipe "
@@ -513,6 +537,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 score_a = float(metric_fn(y_val, y_pred_a))
                 sigma_results['base_no_lnl'].append(score_a)
                 sigma_folds['base_no_lnl'].append(fold_idx)
+                sigma_draws['base_no_lnl'].append(noise_seed)
             except Exception as e:
                 print(f"    Condition A failed: {e}")
 
@@ -526,6 +551,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     score_b = float(metric_fn(y_val, y_pred_b))
                     sigma_results['hybrid_no_lnl'].append(score_b)
                     sigma_folds['hybrid_no_lnl'].append(fold_idx)
+                    sigma_draws['hybrid_no_lnl'].append(noise_seed)
                 except Exception as e:
                     print(f"    Condition B failed: {e}")
 
@@ -571,6 +597,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     score_e = float(metric_fn(y_val, y_pred_e))
                     sigma_results['weighted_hybrid_no_lnl'].append(score_e)
                     sigma_folds['weighted_hybrid_no_lnl'].append(fold_idx)
+                    sigma_draws['weighted_hybrid_no_lnl'].append(noise_seed)
                 except Exception as e:
                     print(f"    Condition E failed: {e}")
 
@@ -592,6 +619,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                            result_c, _cmask, noise_condition)
                         sigma_results['base_lnl'][method_name].append(score_c)
                         sigma_folds['base_lnl'][method_name].append(fold_idx)
+                        sigma_draws['base_lnl'][method_name].append(noise_seed)
                     except Exception as e:
                         print(f"    C/{method_name} failed: {e}")
 
@@ -608,6 +636,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                result_d, _cmask, noise_condition)
                             sigma_results['hybrid_lnl'][method_name].append(score_d)
                             sigma_folds['hybrid_lnl'][method_name].append(fold_idx)
+                            sigma_draws['hybrid_lnl'][method_name].append(noise_seed)
                         except Exception as e:
                             print(f"    D/{method_name} failed: {e}")
 
@@ -624,6 +653,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                result_f, _cmask, noise_condition)
                             sigma_results['weighted_hybrid_lnl'][method_name].append(score_f)
                             sigma_folds['weighted_hybrid_lnl'][method_name].append(fold_idx)
+                            sigma_draws['weighted_hybrid_lnl'][method_name].append(noise_seed)
                         except Exception as e:
                             print(f"    F/{method_name} failed: {e}")
 
@@ -639,13 +669,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # The folds behind that mean. Compare two conditions only
                     # over the folds both of them scored.
                     'folds': list(sigma_folds[cond_key]),
+                    # The noise draw behind each of those scores, aligned with
+                    # 'folds'. (fold, draw) is the unit a failure drops.
+                    'fold_draws': list(sigma_draws[cond_key]),
                     # One score per fold, aligned with 'folds'. The mean and
                     # std above cannot be re-paired once written; these can.
                     'fold_scores': [float(x) for x in scores],
                 }
             else:
                 agg[cond_key] = {'mean': float('nan'), 'n_folds': 0,
-                                 'folds': [], 'fold_scores': []}
+                                 'folds': [], 'fold_draws': [],
+                                 'fold_scores': []}
 
         if sigma > 0:
             for cond_key in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
@@ -658,12 +692,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             'std': float(np.std(scores)),
                             'n_folds': len(scores),
                             'folds': list(sigma_folds[cond_key][method_name]),
+                            'fold_draws': list(sigma_draws[cond_key][method_name]),
                             'fold_scores': [float(x) for x in scores],
                         }
                     else:
                         agg[cond_key][method_name] = {
                             'mean': float('nan'), 'n_folds': 0,
-                            'folds': [], 'fold_scores': [],
+                            'folds': [], 'fold_draws': [], 'fold_scores': [],
                         }
 
         if detection_acc:
@@ -809,12 +844,57 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         summary[f'best_{cond}_score'] = float(best_score) if best_name else None
 
     # Methods where hybrid > base
+    #
+    # This loop used to read each arm's 'mean', which is that arm's average
+    # over whichever (fold, noise draw) passes it scored. A pass whose hybrid
+    # build fails drops out of hybrid_lnl but stays in base_lnl, so the two
+    # means came from different passes and the better/worse verdict below was
+    # not a paired comparison. Both sides now average only over the passes
+    # present in both arms, from the per-pass scores the aggregation above
+    # saves. When every pass scored in both arms, the two averages are the two
+    # 'mean' fields unchanged. Split audit D,
+    # tests/experiments/noise/n09_lnl_survey.py:338.
+    def _shared_fold_means(a, b):
+        """Each arm's mean over the passes both arms scored, or (nan, nan).
+
+        A pass is one (fold index, noise draw seed). 'folds', 'fold_draws'
+        and 'fold_scores' are aligned, one entry per pass. (nan, nan) comes
+        back when either arm lacks those three lists or has them at unequal
+        lengths, and when the two arms share no pass -- the same nan an arm
+        that scored nothing gave before, which the caller skips.
+        """
+        def _passes(d):
+            f, g, sc = d.get('folds'), d.get('fold_draws'), d.get('fold_scores')
+            if f is None or g is None or sc is None:
+                return None
+            if not (len(f) == len(g) == len(sc)):
+                return None
+            return [((int(fi), int(gi)), float(x))
+                    for fi, gi, x in zip(f, g, sc)]
+
+        pa, pb = _passes(a), _passes(b)
+        if pa is None or pb is None:
+            return float('nan'), float('nan')
+        shared = {k for k, _ in pa} & {k for k, _ in pb}
+        ka = [x for k, x in pa if k in shared]
+        kb = [x for k, x in pb if k in shared]
+        if not ka or not kb:
+            return float('nan'), float('nan')
+        return float(np.mean(ka)), float(np.mean(kb))
+
     hybrid_improves = []
     hybrid_harms = []
     for m in methods_to_test:
-        base_s = hs_data.get('base_lnl', {}).get(m, {}).get('mean', float('nan'))
-        hyb_s = hs_data.get('hybrid_lnl', {}).get(m, {}).get('mean', float('nan'))
+        _base_arm = hs_data.get('base_lnl', {}).get(m, {})
+        _hyb_arm = hs_data.get('hybrid_lnl', {}).get(m, {})
+        base_s, hyb_s = _shared_fold_means(_base_arm, _hyb_arm)
         if np.isnan(base_s) or np.isnan(hyb_s):
+            # Say so rather than drop the method from the counts in silence:
+            # both arms scored something, and they still share no pass.
+            if _base_arm.get('n_folds') and _hyb_arm.get('n_folds'):
+                print(f"    {m}: base and hybrid share no (fold, draw) pass "
+                      f"at sigma={highest_sigma}; left out of "
+                      f"hybrid_improves/hybrid_harms")
             continue
         if (not lower_is_better and hyb_s > base_s) or \
            (lower_is_better and hyb_s < base_s):
@@ -832,9 +912,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     whybrid_improves = []
     whybrid_harms = []
     for m in methods_to_test:
-        hyb_s = hs_data.get('hybrid_lnl', {}).get(m, {}).get('mean', float('nan'))
-        whyb_s = hs_data.get('weighted_hybrid_lnl', {}).get(m, {}).get('mean', float('nan'))
+        # Same pairing as the hybrid-versus-base verdict above. The weighted
+        # arm loses a pass whenever the per-fold weight vector and the hybrid
+        # feature count disagree, which the hybrid arm keeps, so these two
+        # 'mean' fields were averages over different passes.
+        _hyb_arm = hs_data.get('hybrid_lnl', {}).get(m, {})
+        _whyb_arm = hs_data.get('weighted_hybrid_lnl', {}).get(m, {})
+        hyb_s, whyb_s = _shared_fold_means(_hyb_arm, _whyb_arm)
         if np.isnan(hyb_s) or np.isnan(whyb_s):
+            if _hyb_arm.get('n_folds') and _whyb_arm.get('n_folds'):
+                print(f"    {m}: hybrid and weighted hybrid share no "
+                      f"(fold, draw) pass at sigma={highest_sigma}; left out "
+                      f"of weighted_improves_over_hybrid/weighted_harms")
             continue
         if (not lower_is_better and whyb_s > hyb_s) or \
            (lower_is_better and whyb_s < hyb_s):
