@@ -289,6 +289,17 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         Returns a {model: rep_name} map. Falls back to nothing when the fold's
         search is missing; the caller then holds that fold out of the arm.
         """
+        # ⛔ TIE-BREAK ADDED 2026-09-18, owner's decision. `cmp` is strictly
+        # better, so on an exact tie this kept whichever representation
+        # `baselines` iterated first — the order they were built in, which is
+        # arbitrary and recorded nowhere. Baseline scores are rounded to 4
+        # decimals before storage (find_best_hybrid.py:5525), so exact ties
+        # happen, and this pick names the representation a whole transfer arm
+        # is then measured against.
+        #
+        # The score does not change. Only which of two equal names is picked,
+        # and it is now the same name every run: the first by representation
+        # name among those on the best score.
         picks = {}
         for rn, mscores in (getattr(fold_search, 'baselines', {}) or {}).items():
             if rn.startswith('_') or rn not in shared_rep_names:
@@ -297,7 +308,7 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 if sc is None or np.isnan(sc):
                     continue
                 cur = picks.get(mn)
-                if cur is None or cmp(sc, cur[1]):
+                if cur is None or cmp(sc, cur[1]) or (sc == cur[1] and rn < cur[0]):
                     picks[mn] = (rn, sc)
         return {mn: rn for mn, (rn, _sc) in picks.items()}
 

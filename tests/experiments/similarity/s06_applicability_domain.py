@@ -82,6 +82,8 @@ from experiments._shared import (
     get_best_for_downstream, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
+from experiments.similarity._summary_keys import (
+    SELECTION_RULE as _SELECTION_RULE)
 # Default kNN budget for AD hybrid search (kept modest; AD is a diagnostic, not
 # a tuned downstream model).
 _DEFAULT_AD_BUDGET = 100
@@ -150,7 +152,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _rf_factory = get_model_factories(['rf'], task_type=task_type,
                                        n_samples=len(labels))['rf']
 
-    results = {'distance_error_correlation': {}, 'reliability': {}, 'conformal': {}}
+    results = {'distance_error_correlation': {}, 'reliability': {},
+               'conformal': {}, 'selection_rule': _SELECTION_RULE}
 
     augmentations = data.get('augmentations')
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])

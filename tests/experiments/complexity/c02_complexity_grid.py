@@ -278,8 +278,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _ranked = [(rn, sc) for rn, sc in
                    ((r, v.get(model_name)) for r, v in lib_baselines.items())
                    if sc is not None and np.isfinite(sc)]
-        _ranked.sort(key=lambda kv: kv[1], reverse=not _lower)
+        # Score first, then representation name. ⛔ TIE-BREAK ADDED 2026-09-18,
+        # owner's decision. Without the name this was `reverse=not _lower` on
+        # the score alone, so two representations on the same score kept
+        # whatever order lib_baselines iterated in — the order they were built
+        # in, which is arbitrary and recorded nowhere. Baseline scores are
+        # rounded to 4 decimals before storage (find_best_hybrid.py:5525), so
+        # exact ties happen. The width pass below reads _ranked[:2], so a tie
+        # decided which representation's width got measured.
+        # The scores do not change. Only which of two equal names is used does,
+        # and now it is the same name every run.
+        _ranked.sort(key=lambda kv: ((kv[1] if _lower else -kv[1]), kv[0]))
+        # Which representations tied with the rank-1 score, so a reader can see
+        # that "the best base representation" was not a single thing here.
+        _r1 = _ranked[0][1] if _ranked else None
+        _tied_at_top = sorted(rn for rn, sc in _ranked
+                              if _r1 is not None and sc == _r1)
         baselines[model_name] = {
+            # Every representation on the rank-1 score, name-ordered. One entry
+            # means no tie. Added 2026-09-18.
+            'tied_at_best_single': _tied_at_top,
             'best_single_rep': None if all_reps_failed else best_single_rep,
             'best_single_score': None if all_reps_failed else float(best_single_score),
             'all_reps_failed': all_reps_failed,

@@ -118,6 +118,8 @@ from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, violation_rate,
 )
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
+from experiments.similarity._summary_keys import (
+    SELECTION_RULE as _SELECTION_RULE)
 
 
 # 2026-09-12, owner decision: "s08's pool subset includes similarity hybrids.
@@ -165,7 +167,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                            n_samples=len(labels))
     print(f"  Models: {list(model_factories.keys())}")
 
-    results = {'budgets': {}}
+    results = {'budgets': {}, 'selection_rule': _SELECTION_RULE}
     # 2026-09-12: which search families the pool was allowed to draw from, and
     # per budget the family the winning recipe actually came from, so a reader
     # can tell a prediction-built hybrid from a similarity-built one.

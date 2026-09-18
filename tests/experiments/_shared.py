@@ -815,6 +815,22 @@ def extract_top3_base_reps(search, model='rf'):
 
     Returns:
         List of (rep_name, score) tuples, sorted best-first, length <= 3.
+
+    ⛔ TIES BREAK ON REPRESENTATION NAME SINCE 2026-09-18, OWNER'S DECISION.
+    Before that the sort was `scores.sort(key=lambda x: x[1], ...)` with no
+    second key, so two representations on the same score kept whatever order
+    `baselines` happened to iterate in. That order comes from the order the
+    representations were built, which is arbitrary and is recorded nowhere, so
+    the same stored rows could name a different top representation on two runs.
+    Baseline scores are rounded to 4 decimals before they are stored
+    (find_best_hybrid.py:5525), so exact ties are not rare.
+
+    The score is unchanged by this. Only WHICH of two equal-scoring names is
+    printed changes, and now it is the same name every run.
+
+    `extract_top_base_reps_with_ties` below returns the same ranking plus, for
+    each entry, the other representations it tied with. 38 call sites take the
+    plain (name, score) tuples and are unaffected.
     """
     baselines = getattr(search, 'baselines', {})
     # Direction of the quantity BEING SORTED, which is not always
@@ -836,8 +852,51 @@ def extract_top3_base_reps(search, model='rf'):
         s = model_scores.get(model)
         if s is not None and not np.isnan(s):
             scores.append((rep_name, float(s)))
-    scores.sort(key=lambda x: x[1], reverse=not lower)
+    # Score first, then representation name. `lower` flips the score half only:
+    # the name half is always ascending, so the tie-break does not depend on
+    # the metric's direction.
+    scores.sort(key=lambda x: ((x[1] if lower else -x[1]), x[0]))
     return scores[:3]
+
+
+def extract_top_base_reps_with_ties(search, model='rf', n=3, tol=0.0):
+    """extract_top3_base_reps, plus which representations tied with each entry.
+
+    Added 2026-09-18, owner's decision: break the tie by name AND report the
+    tie. A tie is what makes "the best base representation" an unstable thing to
+    measure against — if rank 1 and rank 2 hold the same score, an arm that
+    beats rank 1 has beaten one of two that were level.
+
+    tol: how close two scores must be to count as tied. 0.0 means exactly
+    equal, which is the case worth reporting, because baseline scores are
+    rounded to 4 decimals before they are stored (find_best_hybrid.py:5525) and
+    so land on each other exactly. A caller that wants "within 0.001" passes it.
+
+    Returns a list of dicts, best-first, length <= n:
+        {'rep': str, 'score': float, 'rank': int, 'tied_with': [str, ...]}
+    `tied_with` lists every OTHER representation within tol of this one,
+    ordered by name, and is empty when nothing tied.
+
+    Reads stored baseline rows. 0 new model fits.
+    """
+    baselines = getattr(search, 'baselines', {})
+    lower = object_direction(search, 'the SearchResult passed to '
+                             'extract_top_base_reps_with_ties')
+    scores = []
+    for rep_name, model_scores in baselines.items():
+        if rep_name.startswith('_'):
+            continue
+        sc = model_scores.get(model)
+        if sc is not None and not np.isnan(sc):
+            scores.append((rep_name, float(sc)))
+    scores.sort(key=lambda x: ((x[1] if lower else -x[1]), x[0]))
+    out = []
+    for i, (rep_name, sc) in enumerate(scores[:n]):
+        tied = sorted(other for other, o_sc in scores
+                      if other != rep_name and abs(o_sc - sc) <= tol)
+        out.append({'rep': rep_name, 'score': sc, 'rank': i + 1,
+                    'tied_with': tied})
+    return out
 
 
 # =============================================================================
