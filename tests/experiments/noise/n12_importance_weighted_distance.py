@@ -66,6 +66,22 @@ SIGMAS = None
 # other ten are reachable by passing noise_condition=..., one run each.
 NOISE_CONDITION = 'gaussian'
 K_VALUES = [5, 10, 20]
+
+# ⛔ THE REPAIR WAS TOO WEAK TO EXPRESS ANY DIFFERENCE THE DETECTOR MAKES.
+# strength 0.1 under the 'exponential' shape is a row weight of exp(-0.1) at the
+# most suspect end against 1 at the cleanest -- about 1.11 to 1, i.e. within a
+# tenth of not weighting at all. This experiment exists to ask whether better
+# DETECTION leads to better REPAIR, and it was reading that through a repair
+# step that barely moved the fit, so two detectors that rank very differently
+# would still produce nearly the same recovery number.
+#
+# 3.0 measured, not guessed: n18 swept the same knob over 2:1, 4:1 and 10:1 on
+# the same molecules and folds and the best setting was 3.0 (a 4-to-1 ratio) on
+# BOTH datasets and both metric directions -- 5 of 5 folds at +0.0069 rmse on
+# herg_ki and 5 of 5 at +0.0447 spearman on flab_thermo_tresanco. 'inverse' is
+# the shape n18 measured it under, so the number means the same thing here.
+REPAIR_STRENGTH = 3.0
+REPAIR_WEIGHT_METHOD = 'inverse'
 IMPORTANCE_METHODS = ['lightgbm_gain', 'treeshap']
 
 # activity_cliff_aware CUT 2026-09-12 (user decision, measured): it ranks the
@@ -389,8 +405,9 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
                     _det = detection_scores(corrupted_mask, scores, noise_condition)
                     if _det is not None:
                         detection[est_key] = _det
-                weights = weights_from_scores(scores, strength=0.1,
-                                              method='exponential')
+                weights = weights_from_scores(
+                    scores, strength=REPAIR_STRENGTH,
+                    method=REPAIR_WEIGHT_METHOD)
             except Exception as e:
                 # The suspicion score itself failed, so no model can be fitted on
                 # its weights. Record it once per model rather than once, so the

@@ -109,7 +109,47 @@ from experiments.noise.n07_remediation import _evaluate_fold
 from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
 
 # The cleanup applied to the training rows. 'no_cleaning' is the score to beat.
-CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth')
+#
+# ⛔ THIS LIST WAS FOUR AND n07's WAS SEVEN. The three below were added to
+# n07.cleaned_training_set on 2026-09-17 and never reached this file, so every
+# n18 number before 2026-09-18 came from a menu of four: two that are blunt
+# (delete the molecule, lean away from it) and two that move a label toward the
+# mean label of its ten nearest neighbours. None of them ESTIMATES what the
+# label should have been from a model.
+#
+#   oof_smooth     move the label toward what a LightGBM trained on the OTHER
+#                  training molecules predicts for it, on a scaffold-group-aware
+#                  inner split, in proportion to how suspect it is.
+#   gp_smooth      the same shape, aiming at a Gaussian process posterior mean.
+#   quantile_clip  not a move toward a target at all. Each molecule gets the
+#                  10th-to-90th-percentile range of the labels carried by the
+#                  training molecules sharing its leaves in a quantile
+#                  regression forest. A label inside its range is left exactly
+#                  as it is; one outside is pulled back to the edge it crossed.
+#                  So it rewrites only the labels no molecule like them carries.
+#
+# All three are REGRESSION ONLY -- none is defined on a nominal class label --
+# and n07 gates them the same way (REGRESSION_ONLY_CLEANUPS). `cleanups_run`
+# on the result file says which ones this run actually scored.
+ALL_CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
+                'oof_smooth', 'gp_smooth', 'quantile_clip')
+
+# Not defined on a nominal class label, so they are dropped on a
+# classification dataset rather than writing NaN rows. Same tuple as n07's.
+REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'quantile_clip')
+
+
+def cleanups_for(is_clf):
+    """The cleanups this task type can actually run."""
+    if not is_clf:
+        return ALL_CLEANUPS
+    return tuple(c for c in ALL_CLEANUPS
+                 if c not in REGRESSION_ONLY_CLEANUPS)
+
+
+# Kept as a name because the module-level accumulators below are built from it
+# before `is_clf` is known. run() narrows it to cleanups_for(is_clf).
+CLEANUPS = ALL_CLEANUPS
 
 # How many training rows in every hundred are treated as suspect. n07 sets this
 # to the share it corrupted; nobody can do that here, so it is swept.
@@ -158,8 +198,15 @@ def reads_flag_rate(cleanup, is_clf):
         return True
     if cleanup == 'downweight':
         return False
-    if cleanup == 'label_smooth':
+    if cleanup in ('label_smooth', 'oof_smooth', 'gp_smooth'):
+        # All three smooth every row in proportion to its score on a regression
+        # set, and threshold only on a classification one.
         return bool(is_clf)
+    if cleanup == 'quantile_clip':
+        # Reads neither axis. A label is inside the range its own leaves carry
+        # or it is not; there is no quantile of the suspicion scores and no
+        # strength. It is one column, scored once -- see setting_axis.
+        return False
     # An unknown cleanup is assumed to read it: scoring it at every rate is
     # wasteful, scoring it at one and calling that the whole sweep is wrong.
     return True
@@ -185,14 +232,30 @@ def reads_flag_rate(cleanup, is_clf):
 STRENGTHS = {
     'downweight': (1.0, 3.0, 9.0),      # 2:1, 4:1 and 10:1 row weights
     'label_smooth': (0.25, 0.5, 1.0),   # a quarter, half, all the way
+    # The two model-based corrections have the same alpha as label_smooth --
+    # all three call smooth_by_scores with method='proportional' and differ
+    # only in what they aim at -- so they get the same three settings, and the
+    # comparison between the three targets is like for like.
+    'oof_smooth': (0.25, 0.5, 1.0),
+    'gp_smooth': (0.25, 0.5, 1.0),
 }
 
 
 def setting_axis(cleanup, is_clf):
-    """(axis name, the three values) this cleanup is actually swept over."""
+    """(axis name, the values) this cleanup is actually swept over.
+
+    `quantile_clip` comes back with ONE value and the axis name 'none': a label
+    is inside the range its own leaves carry or it is not, so there is no
+    quantile of the suspicion scores to set and no strength to lean by. It is
+    scored once and the other two slots are skipped, the same way the rate-blind
+    cleanups used to be before they were given the strength axis.
+    """
     if reads_flag_rate(cleanup, is_clf):
         return 'flag_rate', tuple(FLAG_RATES)
-    return 'strength', STRENGTHS.get(cleanup, (None, None, None))
+    vals = STRENGTHS.get(cleanup)
+    if not vals:
+        return 'none', (None,)
+    return 'strength', tuple(vals)
 
 # Which per-molecule suspicion score decides what gets flagged. Swept, because
 # "did cleaning help" is a question about the whole cleanup and the detector is
@@ -366,6 +429,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      or pick_noise_base_rep(reps, dataset_name))
     X_source = reps[base_rep_name]
 
+    # What this task type can actually run. The three model-based corrections
+    # are not defined on a nominal class label, so on a classification dataset
+    # they are dropped rather than writing NaN rows -- n07 gates them the same
+    # way. Every loop below reads this, not the module tuple.
+    CLEANUPS = cleanups_for(is_clf)
+
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
@@ -374,6 +443,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'base_rep': base_rep_name,
         'models': downstream_models,
         'cleanups': list(CLEANUPS),
+        'cleanups_not_run': [c for c in ALL_CLEANUPS if c not in CLEANUPS],
         'flag_rates': flag_rates,
         'cleanups_that_read_the_flag_rate': [
             c for c in CLEANUPS if reads_flag_rate(c, is_clf)],
@@ -644,6 +714,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             # instead, at the same three slots. See
                             # setting_axis.
                             _axis, _vals = setting_axis(cleanup, is_clf)
+                            if slot >= len(_vals):
+                                # This cleanup has fewer settings than slots.
+                                # Only quantile_clip does: it reads neither
+                                # axis, so scoring it here would be the same
+                                # column fitted again.
+                                continue
                             _strength = (None if _axis == 'flag_rate'
                                          else _vals[slot])
                             sc = _evaluate_fold(
@@ -652,7 +728,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 is_clf=is_clf, metric_name=metric_name,
                                 dataset_name=dataset_name,
                                 precomputed_y_tr=y_train, noise_scores=scores,
-                                strength=_strength)
+                                strength=_strength,
+                                # ⛔ REQUIRED BY THE THREE MODEL-BASED
+                                # CORRECTIONS. oof_smooth, gp_smooth and
+                                # quantile_clip each fit a model on part of the
+                                # training rows and read the target off the
+                                # rest. Without the scaffold groups that inner
+                                # split is random, so a molecule's own scaffold
+                                # family trains the model that says what its
+                                # label should have been -- which is the leak
+                                # cleaned_training_set's docstring warns about.
+                                train_groups=g_tr)
                             acc[space][detector][rate][mname][cleanup].append(
                                 float(sc) if sc is not None else float('nan'))
         print(f"    fold {fold_i}: [{time.time() - t0:.0f}s]")
@@ -678,6 +764,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     row = {'no_cleaning_mean': float(np.nanmean(base))
                            if base.size else float('nan')}
                     for cleanup in CLEANUPS:
+                        _axis, _vals = setting_axis(cleanup, is_clf)
+                        _slot = flag_rates.index(rate)
+                        if _slot >= len(_vals):
+                            # quantile_clip reads neither axis, so it was
+                            # scored at the first slot only. Nothing to write
+                            # here; a duplicate row would be counted as a
+                            # second setting by the summary.
+                            continue
                         got = np.asarray(cell[cleanup], dtype=float)
                         wins = [_won(c, b, lower_is_better)
                                 for c, b in zip(got, base)]
@@ -686,8 +780,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             [(b - c) if lower_is_better else (c - b)
                              for c, b in zip(got, base)
                              if np.isfinite(c) and np.isfinite(b)], dtype=float)
-                        _axis, _vals = setting_axis(cleanup, is_clf)
-                        _slot = flag_rates.index(rate)
                         row[cleanup] = {
                             # Which knob this row's setting is, and its value.
                             # 'flag_rate' rows differ by how many molecules
@@ -711,7 +803,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['per_space'][space] = {'per_detector': space_block}
 
     results['summary'] = _summarise(results, downstream_models, flag_rates,
-                                    detectors, spaces, metric_name)
+                                    detectors, spaces, metric_name,
+                                    cleanups=CLEANUPS)
     _print_summary(results, metric_name)
 
     # (results, output_dir, experiment_id, dataset) — see the note in n17; the
@@ -721,7 +814,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return results
 
 
-def _summarise(results, models, flag_rates, detectors, spaces, metric_name):
+def _summarise(results, models, flag_rates, detectors, spaces, metric_name,
+               cleanups=None):
     """Which (cleanup, detector, flag rate, model) won on most folds, per space.
 
     A cleanup that wins on every fold at one flag rate and loses at the others
@@ -731,11 +825,12 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name):
     Every count is taken inside ONE space. A setting that swept the base
     representation and lost in the hybrid is two readings, not an average.
     """
+    cleanups = tuple(cleanups) if cleanups else CLEANUPS
     out = {'metric': metric_name, 'headline': 'folds won, not mean gain',
            'spaces': list(spaces), 'per_space': {}}
     for space in spaces:
         per_cleanup = {}
-        for cleanup in CLEANUPS:
+        for cleanup in cleanups:
             rows = []
             for d in detectors:
                 for r in flag_rates:
@@ -744,8 +839,13 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name):
                     if not blk:
                         continue
                     for m in models:
-                        cell = blk['per_model'][m][cleanup]
-                        if cell['folds_scored'] == 0:
+                        # Absent, not zero: a cleanup that reads neither axis
+                        # is scored at the first slot only, so it has no row at
+                        # the others. Counting a missing row as a setting would
+                        # make the counts mean different things per cleanup,
+                        # which is the defect this file already fixed once.
+                        cell = blk['per_model'][m].get(cleanup)
+                        if not cell or cell['folds_scored'] == 0:
                             continue
                         rows.append({
                             'detector': d, 'model': m,
@@ -794,7 +894,7 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name):
                     out['per_space']['hybrid']['per_cleanup'][c].get(
                         'settings_scored', 0),
             }
-            for c in CLEANUPS}
+            for c in cleanups}
         out['sweeps_by_space_note'] = (
             'How many settings each cleanup won EVERY fold at, in the base '
             'representation and in the hybrid, out of how many settings were '
