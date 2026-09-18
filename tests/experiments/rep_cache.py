@@ -104,8 +104,12 @@ def compute_or_load_reps(
                 else:
                     print(f"  {rep_name}: cache shape mismatch "
                           f"({X.shape} vs n={n}), recomputing")
-            except Exception:
-                pass
+            except Exception as e:
+                # Said out loud since 2026-09-18. A 0-byte cache file made
+                # np.load raise here and the bare pass hid it, so a cache that
+                # never once served a read looked exactly like a cache miss.
+                print(f"  {rep_name}: cached file unreadable "
+                      f"({type(e).__name__}: {e}), recomputing")
 
         # Compute fresh
         try:
@@ -121,20 +125,24 @@ def compute_or_load_reps(
             if X.ndim == 2 and X.shape[0] == n:
                 # Atomic write: tempfile + os.replace to prevent corruption
                 # if interrupted mid-write (e.g. SLURM timeout).
+                # np.save APPENDS '.npy' to any path that does not already end
+                # in it, so the old suffix='.npy.tmp' sent the array to
+                # <tmp>.npy.tmp.npy while os.replace moved the empty file
+                # mkstemp had made. Every cache entry on disk was 0 bytes, the
+                # np.load below raised, the bare `except Exception: pass`
+                # swallowed it, and every antibody embedding was recomputed on
+                # every run. Writing through the open descriptor gives np.save
+                # no name to extend.
                 fd, tmp = tempfile.mkstemp(
-                    dir=str(cache_file.parent), suffix='.npy.tmp')
+                    dir=str(cache_file.parent), suffix='.npy')
                 try:
-                    np.save(tmp, X)
+                    with os.fdopen(fd, 'wb') as fh:
+                        np.save(fh, X)
                     os.replace(tmp, str(cache_file))
                 except BaseException:
                     if os.path.exists(tmp):
                         os.unlink(tmp)
                     raise
-                finally:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
                 reps[rep_name] = X
                 print(f"  {rep_name}: {X.shape[1]}D (computed + cached)"
                       f"{f' [{dataset_tag}]' if dataset_tag else ''}")
