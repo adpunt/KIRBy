@@ -83,6 +83,45 @@ DO_EXP=true
 COLD_REFUSAL=1
 CATEGORIES="complexity similarity noise"
 
+# federated is a fourth category of run_dataset.py, but only these three
+# datasets have silo data. Mirrors FEDERATED_DATASETS in submit_all_datasets.sh.
+FEDERATED_DATASETS="lhasa_herg caco2 logd"
+
+# The opig suite is 13 standalone scripts, not a per-dataset category. Each line
+# is: <name>|<memory>|<script + arguments>|<datasets it reads>
+# The datasets decide what it waits for -- an opig job starts when the last
+# precompute link of every dataset it names has ended.
+#
+# Five of these were in no submitter before today: cdr_flexibility,
+# cgr_comparison, kingsmith, scaffold_hybrid, scaffold_similarity.
+#
+# shared_vectors_census names no dataset and activity_cliff_qsar reads
+# chembl_qsar, which builds its own representations, so neither waits for
+# anything.
+OPIG_JOBS='
+humanness|64G|opig_humanness.py --datasets humanness_therapeutic PM|humanness_therapeutic
+trastuzumab|64G|opig_trastuzumab_enrichment.py PM|tz_her2_binary
+ginkgo|128G|opig_ginkgo_developability.py PM|ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer
+graphinity|128G|opig_graphinity_ddg.py --max-foldx 5000 PM|ddg_combined
+qsar|64G|opig_activity_cliff_qsar.py PM|
+blueprint_transfer|64G|opig_blueprint_transfer.py --source logd --target herg_ki --mode full PM|logd herg_ki
+cdr_flexibility|64G|opig_cdr_flexibility.py PM|cdr_flexibility
+cgr_comparison|64G|opig_cgr_comparison.py PM|bh_doyle_plates buchwald_hartwig suzuki
+kingsmith|64G|opig_kingsmith_component_splits.py PM|bh_doyle_plates buchwald_hartwig
+shared_vectors_census|64G|opig_shared_vectors_census.py --check-freshness 200|
+shared_vectors_remedy|64G|opig_shared_vectors_remedy.py|herg_ki
+scaffold_hybrid|64G|opig_scaffold_hybrid.py|flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig
+scaffold_similarity|64G|opig_scaffold_similarity.py|ddg_combined flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig
+'
+DO_OPIG=true
+DO_FED=true
+
+# Which precompute link each dataset ended on, so the opig jobs can wait for the
+# right ones. A newline table and a lookup, not an associative array: this has
+# to dry-run on a mac, where bash is 3.2 and `declare -A` does not exist.
+LINK_TABLE=""
+last_link() { printf '%s\n' "$LINK_TABLE" | awk -v d="$1" '$1==d {print $2; exit}'; }
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run)          DRY_RUN=true; shift ;;
@@ -99,6 +138,8 @@ while [[ $# -gt 0 ]]; do
         --precompute-only)  DO_EXP=false; shift ;;
         --experiments-only) DO_PRE=false; shift ;;
         --no-cold-refusal)  COLD_REFUSAL=0; shift ;;
+        --no-opig)          DO_OPIG=false; shift ;;
+        --no-federated)     DO_FED=false; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -132,12 +173,21 @@ N_DS=$(echo "$DATASETS" | wc -w)
 # ── the plan ────────────────────────────────────────────────────────────
 N_PRE=$([ "$DO_PRE" = true ] && echo $((N_DS * LINKS)) || echo 0)
 N_EXP=$([ "$DO_EXP" = true ] && echo $((N_DS * $(echo "$CATEGORIES" | wc -w))) || echo 0)
+N_FED=0
+if [ "$DO_EXP" = true ] && [ "$DO_FED" = true ]; then
+    for D in $DATASETS; do
+        [[ " $FEDERATED_DATASETS " == *" $D "* ]] && N_FED=$((N_FED+1))
+    done
+fi
+N_OPIG=$([ "$DO_OPIG" = true ] && printf '%s\n' "$OPIG_JOBS" | grep -c '|' || echo 0)
 echo ""
 echo "=========================================================="
 echo " datasets       $N_DS"
 echo " precompute     $LINKS links x $N_DS = $N_PRE jobs, ${WALL} each"
 echo " experiments    $(echo "$CATEGORIES" | wc -w) categories x $N_DS = $N_EXP jobs, each after that dataset's last link"
-echo " TOTAL          $((N_PRE + N_EXP)) jobs"
+echo " federated      $N_FED jobs (lhasa_herg, caco2, logd only)"
+echo " opig           $N_OPIG jobs, each after the datasets it reads"
+echo " TOTAL          $((N_PRE + N_EXP + N_FED + N_OPIG)) jobs"
 echo ""
 echo " account        $ACCOUNT"
 echo " partition      $PARTITION"
@@ -162,7 +212,7 @@ if [ "$DRY_RUN" = true ]; then
     exit 0
 fi
 
-read -r -p "Submit $((N_PRE + N_EXP)) jobs? [y/N] " REPLY
+read -r -p "Submit $((N_PRE + N_EXP + N_FED + N_OPIG)) jobs? [y/N] " REPLY
 [[ "$REPLY" == "y" || "$REPLY" == "Y" ]] || { echo "Aborted."; exit 0; }
 
 # ── submit ──────────────────────────────────────────────────────────────
@@ -214,6 +264,11 @@ for DS in $DATASETS; do
             LAST="$JID"; N_OK=$((N_OK+1))
         done
     fi
+    # Remember what this dataset ended on -- the opig jobs below wait on it.
+    # When no chain was submitted (--experiments-only) fall back to whatever was
+    # already queued, so an opig job still waits rather than racing it.
+    LINK_TABLE="${LINK_TABLE}${DS} ${LAST:-$EXISTING}
+"
 
     if [ "$DO_EXP" = true ]; then
         for C in $CATEGORIES; do
@@ -241,12 +296,72 @@ for DS in $DATASETS; do
             [ -n "$JID" ] || { echo "  FAILED x_${C}_${DS}"; continue; }
             N_OK=$((N_OK+1))
         done
+
+        # federated is a fourth category of the same runner, but only the three
+        # datasets with silo data have anything to run.
+        if [ "$DO_FED" = true ] && [[ " $FEDERATED_DATASETS " == *" $DS "* ]]; then
+            DEP=""
+            if [ -n "$LAST" ]; then DEP="--dependency=afterany:${LAST}"
+            elif [ -n "$EXISTING" ]; then DEP="--dependency=afterany:${EXISTING}"; fi
+            EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
+            [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
+            JID=$(sbatch --parsable \
+                --account="$ACCOUNT" --partition="$PARTITION" \
+                --job-name="x_federated_${DS}" \
+                --mail-user="$EMAIL" --mail-type=FAIL \
+                --export="$EXPORTS" \
+                $DEP \
+                "$REPO/tests/slurm_scripts/submit_dataset.sh" federated "$DS" 2>/dev/null)
+            [ -n "$JID" ] && N_OK=$((N_OK+1)) || echo "  FAILED x_federated_${DS}"
+        fi
     fi
     echo "  $DS: queued"
 done
 
+# ── the opig suite ──────────────────────────────────────────────────────
+# Standalone scripts, not a per-dataset category. Each waits for the last
+# precompute link of every dataset it reads, so it cannot start before the
+# searches it looks up exist -- and cannot write a dataset's database while a
+# precompute job is still writing it.
+if [ "$DO_OPIG" = true ]; then
+    echo ""
+    printf '%s\n' "$OPIG_JOBS" | while IFS='|' read -r NAME MEM CMD DSLIST; do
+        [ -n "$NAME" ] || continue
+        DEPIDS=""
+        for D in $DSLIST; do
+            _l=$(last_link "$D")
+            [ -n "$_l" ] && DEPIDS="${DEPIDS}${_l}:"
+        done
+        DEPIDS="${DEPIDS%:}"
+        DEP=""
+        [ -n "$DEPIDS" ] && DEP="--dependency=afterany:${DEPIDS}"
+        EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
+        [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
+        # PM in the table marks the scripts that HAVE a --pruning-mode argument.
+        # Four do not -- scaffold_hybrid, scaffold_similarity and the two
+        # shared_vectors scripts -- and passing it to them is an immediate
+        # argparse error, which is why it is not appended blindly.
+        CMD=${CMD/ PM/ --pruning-mode ${PRUNING}}
+        WRAP="cd ${REPO} && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && python -u tests/experiments/${CMD}"
+        JID=$(sbatch --parsable \
+            --account="$ACCOUNT" --partition="$PARTITION" \
+            --job-name="opig_${NAME}" \
+            --nodes=1 --ntasks=1 --cpus-per-task=8 \
+            --time=47:59:00 --mem="$MEM" \
+            --mail-user="$EMAIL" --mail-type=FAIL \
+            --export="$EXPORTS" \
+            $DEP \
+            --wrap="$WRAP" 2>/dev/null)
+        if [ -n "$JID" ]; then
+            echo "  opig_${NAME}: queued${DSLIST:+ after $DSLIST}"
+        else
+            echo "  opig_${NAME}: FAILED"
+        fi
+    done
+fi
+
 echo ""
-echo "Submitted $N_OK jobs."
+echo "Submitted $N_OK jobs (opig counted separately above)."
 echo ""
 echo "Watch:    squeue -u \$USER -o '%.10i %.26j %.20P %.2t %.10M %.10L %R' | head -40"
 echo "Progress: python tests/precompute_coverage.py --trial     (in an srun)"
