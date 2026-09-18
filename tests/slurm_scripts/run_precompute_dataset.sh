@@ -146,6 +146,32 @@ run_one() {   # condition, then the pass's own flags
 
 has_pass() { [[ " ${PASSES} " == *" $1 "* ]]; }
 
+# ── NUCLEOTIDE DATASETS DO NOT NEED THE knn PASS ────────────────────────
+# The knn pass exists for s02 and nothing else -- it scores the six-model list
+# under the similarity objective so s02 can read a recipe chosen for
+# five-nearest-neighbour prediction. On a nucleotide dataset s02 never runs:
+# _shared.NUCLEOTIDE_SKIP_EXPERIMENTS skips ALL of s01-s13 there, on the stated
+# ground that "the similarity premise is unreliable for sequence embeddings".
+# So the pass computes searches that no experiment will ever open. Degenerate,
+# which is one of the three reasons a cut is allowed.
+#
+# The other three passes STAY, and each for a reason:
+#   sim    n13 sets POOL_SUBSET='predictive_and_similarity' and it is NOT in the
+#          nucleotide skip list, so it does read the similarity searches.
+#   dist   c03 reads the distance pool and complexity is not skipped at all --
+#          all 20 of its experiments run on nucleotide.
+#   ridge  c16 reads it, same reason.
+case "$DS" in
+    nt_*|gb_*)
+        if has_pass knn; then
+            PASSES="${PASSES// knn/}"; PASSES="${PASSES//knn /}"; PASSES="${PASSES//knn/}"
+            echo "  ${DS} is a nucleotide dataset: dropping the knn pass."
+            echo "  It is read by s02 alone, and every s01-s13 experiment is"
+            echo "  skipped on this domain (_shared.NUCLEOTIDE_SKIP_EXPERIMENTS)."
+        fi
+        ;;
+esac
+
 # 1-2: what every experiment reads first.
 has_pass sim  && run_one general_none          --objectives predictive,similarity
 has_pass dist && run_one general_distance_none --distance

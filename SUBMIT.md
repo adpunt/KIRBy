@@ -230,6 +230,17 @@ that never finishes still leaves the most useful things done:
 `KIRBY_PASSES="sim dist"` drops the last two if you are short of time — nothing
 but s02 and c16 notices.
 
+**Nucleotide datasets drop the knn pass automatically.** Every `s01`–`s13`
+experiment is skipped on that domain — `_shared.NUCLEOTIDE_SKIP_EXPERIMENTS`,
+on the stated ground that the similarity premise is unreliable for sequence
+embeddings — and s02 is the knn pass's only reader. The job says so when it
+does it.
+
+The other three passes stay, each for a reason worth knowing: `n13` sets
+`POOL_SUBSET='predictive_and_similarity'` and is *not* in that skip list, so the
+similarity searches are read; `c03` reads the distance pool; `c16` reads the
+ridge pass; and all 20 complexity experiments run on nucleotide.
+
 ---
 
 ## Checking on it## Checking on it
