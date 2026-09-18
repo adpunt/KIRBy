@@ -284,6 +284,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # pre-filter to top 2000 features by univariate MI before greedy selection.
     mrmr_prefilter = 2000
 
+    # ⛔ THE mRMR RANKING STOPS AT 200 FEATURES. Owner's decision 2026-09-18.
+    #
+    # The greedy loop picks features one at a time and, on each pick, measures
+    # every remaining candidate against the one just chosen. Its cost is
+    # therefore QUADRATIC in the budget it is asked for, and it is paid in
+    # mutual-information estimates, not model fits -- so none of it shows up in
+    # a fit count.
+    #
+    # Measured 2026-09-18 on one laptop core: one estimate on 2,000 molecules x
+    # 1 feature is 74 ms. At a budget of 2,000 features the greedy loop alone is
+    # about 2.0 million estimates per fold, 10.1 million over 5 folds, about 209
+    # hours. At 200 features it is about 378,000 per fold.
+    #
+    # Nothing has ever run at 2,000. Every one of the 15 stored c17 results
+    # (tests/results/**/c17_*/*.json) tops out at a budget of 200, so the
+    # quadratic case was a cliff a wide dataset could fall off, not a cost
+    # anything had paid. Naming the cap here is what stops that.
+    #
+    # WHY THE ARM STAYS. Over those 15 datasets and 60 (dataset, budget) cells,
+    # scored on downstream R2, mrmr is best in 2 cells against 29 for rfe and 29
+    # for hybrid, and its mean rank is 2.80 of 5 against 1.62 and 1.67. It is
+    # third and it is not close -- but it beats pca and random in 58 of the 60,
+    # so it is a real method losing to two better ones, which is a result worth
+    # reporting. Cutting it would remove one of five arms; capping it removes a
+    # cliff nothing was standing on.
+    #
+    # The OTHER four strategies are unaffected and still run at every budget.
+    MRMR_MAX_BUDGET = 200
+
     print(f"  Total dim: {total_dim}, budgets: {budgets}")
     if total_dim > mrmr_prefilter:
         print(f"  mRMR: enabled with pre-filter to top {mrmr_prefilter} features")
@@ -335,7 +364,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             else:
                 _X_rank, _y_rank = _Xtr_s, _ytr
             try:
-                _rank = _greedy_mrmr(_X_rank, _y_rank, budget=max(budgets),
+                # Capped at MRMR_MAX_BUDGET: the greedy loop is quadratic in
+                # this number and it is paid in mutual-information estimates.
+                # Above the cap the mrmr arm's ranking simply stops, so the
+                # strategies it is compared against still cover every budget and
+                # mrmr covers the ones it can afford.
+                _mrmr_budget = min(max(budgets), MRMR_MAX_BUDGET)
+                if max(budgets) > MRMR_MAX_BUDGET:
+                    print(f"    mRMR ranking capped at {MRMR_MAX_BUDGET} "
+                          f"features (budgets reach {max(budgets)}); the other "
+                          f"four strategies are uncapped")
+                _rank = _greedy_mrmr(_X_rank, _y_rank, budget=_mrmr_budget,
                                      k_mi=5, max_features=_mf)
             except Exception as _e:
                 print(f"  mRMR ranking failed on fold {_fi}: {_e}")
@@ -425,6 +464,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rank = fold_mrmr_ranking[fi]
             if rank is None:
                 raise RuntimeError('mRMR ranking unavailable for this fold')
+            # ⛔ REFUSE A BUDGET THE RANKING CANNOT FILL. Added 2026-09-18
+            # with MRMR_MAX_BUDGET. `rank[:budget]` returns whatever it has, so
+            # a ranking 200 long asked for 500 features would hand back 200 and
+            # the row would be filed as a 500-feature mrmr arm — fewer features
+            # than every other strategy in that cell, reported as the same.
+            # Raising instead means the cell is absent, which the caller already
+            # handles, and absent is readable where a short arm is not.
+            if len(rank) < budget:
+                raise RuntimeError(
+                    f'mRMR ranking holds {len(rank)} features and this cell '
+                    f'asks for {budget}. The ranking is capped at '
+                    f'MRMR_MAX_BUDGET={MRMR_MAX_BUDGET} because the greedy loop '
+                    f'is quadratic in it. The mrmr arm is absent above the cap; '
+                    f'the other four strategies still run at this budget.')
             # COST-2: slice the prefix-monotone ranking instead of re-running
             # greedy mRMR at this budget (identical result).
             idxs = rank[:budget]
