@@ -244,6 +244,23 @@ def _fit_score(factory, X_tr, y_tr, weights, X_va, y_va, metric_fn,
         return None, f'{type(exc).__name__}: {exc}'
 
 
+def _label_column_key(y):
+    """8 hex characters of the training label column this search will see.
+
+    Added 2026-09-18. The cleaned search used to be namespaced on the flag rate.
+    Two of n20's four cleanups ignore the rate and hand back an identical column
+    at all three of theirs, so three identical searches filed under three
+    namespaces and each paid in full. Keying on the column itself collapses them
+    to one and leaves every genuinely different column on its own namespace.
+
+    float64 and C-order before hashing, so a column that is equal is also
+    byte-equal and two runs agree.
+    """
+    import hashlib
+    a = np.ascontiguousarray(np.asarray(y, dtype=np.float64))
+    return hashlib.sha1(a.tobytes()).hexdigest()[:8]
+
+
 def _run_one_search(train_reps, y_score, y_train_col, groups_train, *,
                     dataset_name, task_type, metric_name, models, n_folds,
                     budgets, settings, namespace, cache, cache_dir, verbose):
@@ -595,8 +612,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 y_s = y0
                                 y_t = col
                                 g_s = g_tr
-                            ns_c = (f'{ns}_{cleanup}_'
-                                    f'{str(rate).replace(".", "p")}')
+                            # ⛔ THE SEARCH IS KEYED ON THE LABEL COLUMN, NOT
+                            # THE FLAG RATE. Owner's decision 2026-09-18.
+                            #
+                            # Two of the four cleanups do not read the flag
+                            # rate at all. IDENTITY_CONTROL hands back the
+                            # original column whatever the rate (:552-555), and
+                            # on a regression dataset label_smooth moves every
+                            # label toward its neighbours in proportion to that
+                            # molecule's suspicion score and never consults the
+                            # rate -- the docstring at :100-105 says so.
+                            #
+                            # The namespace carried the rate, so those two ran
+                            # the SAME search three times and could not hit each
+                            # other's cache: 4 wasted searches of the 13 per
+                            # (fold, pass), 1,105 searches per dataset instead
+                            # of 765.
+                            #
+                            # An 8-hex digest of the training label column
+                            # replaces the rate. Two rates that produce the same
+                            # column now share one namespace and one cached
+                            # search; two that produce different columns still
+                            # get different namespaces, so the flag-rate axis is
+                            # swept in full on the two cleanups that read it and
+                            # no arm is lost.
+                            #
+                            # Degenerate, not a cut for compute.
+                            #
+                            # ⛔ EVERY CLEANED SEARCH ALREADY ON DISK IS FILED
+                            # UNDER THE OLD SPELLING and will not be read again.
+                            # The namespace is part of the cache path, so this
+                            # is a cold rebuild of the cleaned arm, not a
+                            # migration. The uncleaned arm's namespace is
+                            # untouched.
+                            _col_key = _label_column_key(y_t)
+                            ns_c = f'{ns}_{cleanup}_{_col_key}'
                             search_cleaned = _run_one_search(
                                 tr_for_search, y_s, y_t, g_s,
                                 dataset_name=dataset_name,
