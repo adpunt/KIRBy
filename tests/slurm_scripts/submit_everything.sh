@@ -57,6 +57,10 @@
 #   --no-cold-refusal    let an experiment build a missing search instead of
 #                        failing fast. Default is to fail fast.
 #
+# EXISTING JOBS ARE NEVER CANCELLED. A dataset that already has jobs queued
+# keeps them, and its new links wait for them -- so no queue position is lost
+# and two processes never write one dataset's database at the same time.
+#
 # Run the checks in an srun first (they import rdkit and stat every
 # representation file):
 #   bash tests/slurm_scripts/submit_precompute_extra_passes.sh sim --domain all --checks-only
@@ -167,11 +171,37 @@ for DS in $DATASETS; do
     MEM=64G
     case "$DS" in nt_*|gb_*|tcga_*|kiba|bindingdb_kd|qm9) MEM=128G ;; esac
 
+    # ── DO NOT STRAND AN EXISTING JOB ───────────────────────────────────
+    # Jobs already queued for this dataset carry days of accrued age -- worth
+    # 235 to 344 priority points on 2026-09-18, against jobs getting slots at
+    # 1088 to 1541. Cancelling them to resubmit throws that away.
+    #
+    # So they are KEPT, and this dataset's first new link waits for them. Two
+    # processes on one dataset both write result_db/<dataset>.db; SQLite waits
+    # 120 s for the other writer and then the search dies AFTER paying for its
+    # baselines and its per-fold scores (result_cache.py:187-200). Depending on
+    # them costs nothing -- the new link would have waited in the queue anyway --
+    # and removes that entirely.
+    #
+    # Matches the old naming, pc_<dataset>_general_..., which cannot collide
+    # with the new pc_<dataset>_<link>. The trailing _general_ also stops
+    # pc_herg_ matching pc_herg_ki_.
+    EXISTING=$(squeue -u "$USER" -h -o "%i %j" 2>/dev/null \
+               | awk -v d="$DS" '$2 ~ "^pc_" d "_general_" {printf "%s:", $1}' \
+               | sed 's/:$//')
+    if [ -n "$EXISTING" ]; then
+        echo "  $DS: $(echo "$EXISTING" | tr ':' '\n' | wc -l | tr -d ' ') job(s) already queued — new links wait for them"
+    fi
+
     LAST=""
     if [ "$DO_PRE" = true ]; then
         for L in $(seq 1 "$LINKS"); do
             DEP=""
-            [ -n "$LAST" ] && DEP="--dependency=afterany:${LAST}"
+            if [ -n "$LAST" ]; then
+                DEP="--dependency=afterany:${LAST}"
+            elif [ -n "$EXISTING" ]; then
+                DEP="--dependency=afterany:${EXISTING}"
+            fi
             JID=$(sbatch --parsable \
                 --account="$ACCOUNT" --partition="$PARTITION" --time="$WALL" \
                 --mem="$MEM" --cpus-per-task=8 \
@@ -188,7 +218,11 @@ for DS in $DATASETS; do
     if [ "$DO_EXP" = true ]; then
         for C in $CATEGORIES; do
             DEP=""
-            [ -n "$LAST" ] && DEP="--dependency=afterany:${LAST}"
+            if [ -n "$LAST" ]; then
+                DEP="--dependency=afterany:${LAST}"
+            elif [ -n "$EXISTING" ]; then
+                DEP="--dependency=afterany:${EXISTING}"
+            fi
             # The CALIBRATED schedule, not aggressive_pruning. The experiment
             # jobs must prune the same way the precompute did, or they ask for
             # configurations it deleted. aggressive_pruning is the April
