@@ -106,14 +106,29 @@ from experiments.noise.noise_helpers import hybrid_for_fold
 # the labels exactly as the loader produced them. So the same code runs, over the
 # real labels, with nothing corrupted.
 from experiments.noise.n07_remediation import _evaluate_fold
-from kirby.utils.noise_estimation import get_noise_estimator
+from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
 
 # The cleanup applied to the training rows. 'no_cleaning' is the score to beat.
 CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth')
 
 # How many training rows in every hundred are treated as suspect. n07 sets this
 # to the share it corrupted; nobody can do that here, so it is swept.
-FLAG_RATES = (0.05, 0.10, 0.20)
+#
+# ⛔ THE OLD LOW END WAS STILL WELL ABOVE THE SHARE OF LABELS THAT ARE WRONG.
+# The grid was (0.05, 0.10, 0.20). The repository's own ChEMBL probe
+# (NOISE_AUDIT_2026_09_10.md 14.11, run 2026-09-18 on 12,010 CHEMBL240 IC50
+# records) measured how far a compound's repeat measurements actually disagree:
+# across documents the median spread is 0.000 log units and 64 of 9,802
+# compounds -- 0.65% -- exceed 1 log unit. herg_ki's own loader then deletes
+# every molecule whose spread is over 1 log unit before an experiment sees it.
+#
+# So `remove` at the old lowest rate was deleting about eight times as many
+# molecules as are plausibly mislabelled, and what it deleted beyond that was
+# molecules that are merely hard -- which is this file's own caveat at :23-26,
+# arriving through the grid rather than through the method. 0.01 replaces 0.10,
+# so the sweep still has three values and now spans the measured error share at
+# one end and a deliberately aggressive setting at the other.
+FLAG_RATES = (0.01, 0.05, 0.20)
 
 # ⛔ TWO OF THE FOUR CLEANUPS DO NOT READ THE FLAG RATE ON A REGRESSION SET.
 # Read out of n07.cleaned_training_set on 2026-09-18:
@@ -149,15 +164,62 @@ def reads_flag_rate(cleanup, is_clf):
     # wasteful, scoring it at one and calling that the whole sweep is wrong.
     return True
 
+
+# What the two rate-blind cleanups sweep INSTEAD of the flag rate: how hard
+# they lean on the suspicion score, in each one's own units. Three values each,
+# so every cleanup is scored at three settings and the counts stay comparable.
+#
+# ⛔ THE OLD FIXED VALUES WERE THE GENTLEST SETTINGS THE METHODS HAVE.
+# `downweight` used strength 1.0 with the 'inverse' shape, which is a row
+# weight of 1/(1+1) = 0.5 at the most suspect end against 1 at the cleanest --
+# a ratio of 2 to 1. 3.0 is 4 to 1 and 9.0 is 10 to 1. `label_smooth` used
+# alpha 0.5, which moves the most suspect label half of the way to its
+# neighbours' mean. Nothing in the suite had tried a harder setting: n11 sweeps
+# this same knob over ALPHAS = [0.1, 0.3, 0.5, 0.7], every one of which is
+# gentler than or equal to the fixed value.
+#
+# That matters because downweight is the cleanup that WINS on herg_ki -- a
+# majority of folds in every setting it was scored in, and all five folds in
+# one, at +0.0047 rmse. A method that wins at its weakest setting is a method
+# whose strength has not been measured.
+STRENGTHS = {
+    'downweight': (1.0, 3.0, 9.0),      # 2:1, 4:1 and 10:1 row weights
+    'label_smooth': (0.25, 0.5, 1.0),   # a quarter, half, all the way
+}
+
+
+def setting_axis(cleanup, is_clf):
+    """(axis name, the three values) this cleanup is actually swept over."""
+    if reads_flag_rate(cleanup, is_clf):
+        return 'flag_rate', tuple(FLAG_RATES)
+    return 'strength', STRENGTHS.get(cleanup, (None, None, None))
+
 # Which per-molecule suspicion score decides what gets flagged. Swept, because
 # "did cleaning help" is a question about the whole cleanup and the detector is
 # part of it.
 #
-# activity_cliff_aware is what n07 uses and is kept here for comparison with it.
-# It was cut from n11, n13 and n06 on 2026-09-12: on herg_ki in ecfp4 over 1,412
-# molecules it ranks the molecules the same way as neighbor_residual at Spearman
-# 0.989, so the two are one method in two names. If they agree here too, drop it.
-DETECTORS = ('neighbor_residual', 'activity_cliff_aware')
+# ⛔ activity_cliff_aware WAS THE SECOND ENTRY AND IS NOT ANY MORE, measured
+# 2026-09-18 on all three datasets in the space this file runs them in:
+#
+#   dataset                molecules   spearman   same molecules flagged at
+#                                      all rows   0.05    0.10    0.20
+#   herg_ki                    1,412     0.9888   78.9%   86.5%   90.8%
+#   caco2                      2,158     0.9853   83.3%   82.4%   89.4%
+#   flab_thermo_tresanco         672     0.9843   88.2%   83.6%   90.3%
+#
+# So it and neighbor_residual are near enough one method in two names to be a
+# poor use of the second slot -- which is what n11, n13 and n06 concluded on
+# 2026-09-12, on the Spearman alone.
+#
+# What sits there now is a DIFFERENT signal: how badly a model trained on the
+# OTHER molecules predicts this label, out of fold on scaffold-disjoint folds.
+# Both entries in this tuple used to be a molecule judged against its
+# neighbours' LABELS; this one is a molecule judged against a fitted model, so
+# the sweep now covers two kinds of evidence rather than one kind twice.
+#
+# It could not be named here until 2026-09-18: `_suspicion` handed every
+# detector `k` and `metric`, which CrossValResidualEstimator takes neither of.
+DETECTORS = ('neighbor_residual', 'cross_val')
 DETECTOR_K = 10
 
 # Which feature space each cleanup is measured in. Both, always, unless the pool
@@ -173,23 +235,35 @@ SPACES = ('base', 'hybrid')
 POOL_SUBSET = 'predictive_and_similarity'
 
 
-def _suspicion(detector, X_tr_s, y_tr, is_clf):
+def _suspicion(detector, X_tr_s, y_tr, is_clf, groups=None):
     """One suspicion score per training row, or None if the detector failed.
 
     Returning None drops the four cleanups from this fold rather than scoring
     them against a silent fallback.
+
+    ⛔ THE ARGUMENTS ARE CHOSEN BY THE ESTIMATOR'S OWN SIGNATURE. This used to
+    hand `k` and `metric` to every detector and catch the TypeError, which
+    worked only because both detectors it ran were neighbour-based and took
+    them. `CrossValResidualEstimator` takes neither, so both attempts raised
+    and the fold dropped all four cleanups with one printed line -- the
+    out-of-fold residual, which is the standard detector in this literature,
+    could not be named here at all.
+
+    `groups` is the fold's training scaffold groups, and it matters for exactly
+    the reason CrossValResidualEstimator's own docstring gives: without it a
+    molecule's scaffold-mates train the model that predicts it, so its residual
+    is small for a reason that has nothing to do with its label.
     """
+    import inspect
+    offered = {'k': DETECTOR_K, 'metric': None, 'groups': groups}
+    if is_clf:
+        offered['is_clf'] = True
     try:
-        est = get_noise_estimator(detector, k=DETECTOR_K, metric=None,
-                                  **({'is_clf': True} if is_clf else {}))
+        cls = ESTIMATOR_REGISTRY[detector]
+        accepts = set(inspect.signature(cls.__init__).parameters)
+        kwargs = {k: v for k, v in offered.items() if k in accepts}
+        est = cls(**kwargs)
         return np.asarray(est.estimate(X_tr_s, y_tr), dtype=float)
-    except TypeError:
-        try:
-            est = get_noise_estimator(detector, k=DETECTOR_K, metric=None)
-            return np.asarray(est.estimate(X_tr_s, y_tr), dtype=float)
-        except Exception as exc:
-            print(f"      {detector} failed: {type(exc).__name__}: {exc}")
-            return None
     except Exception as exc:
         print(f"      {detector} failed: {type(exc).__name__}: {exc}")
         return None
@@ -303,12 +377,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'flag_rates': flag_rates,
         'cleanups_that_read_the_flag_rate': [
             c for c in CLEANUPS if reads_flag_rate(c, is_clf)],
+        'swept_axis_per_cleanup': {
+            c: {'axis': setting_axis(c, is_clf)[0],
+                'values': list(setting_axis(c, is_clf)[1])}
+            for c in CLEANUPS},
         'flag_rate_note': (
             'A cleanup absent from cleanups_that_read_the_flag_rate produces '
-            'the same cleaned training set at every rate, so it is scored once '
-            'at the first rate and the other rates carry '
-            'not_scored_at_this_rate rather than a duplicate of that score. '
-            'The setting counts in the summary count it once for that reason.'),
+            'the same cleaned training set at every flag rate, so the rate is '
+            'not its axis. It is swept over STRENGTHS instead -- how hard it '
+            'leans on the suspicion score -- at the same three slots, and '
+            'every row says which axis it sits on under swept_axis and where '
+            'under setting. swept_axis_per_cleanup lists both.'),
         'detectors': detectors,
         'claim_scope': (
             'No noise is injected. The uncleaned model trains on the labels as '
@@ -498,14 +577,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # The hybrid is built ONCE, here, from those same training molecules at
         # their UNCLEANED labels, and every cleanup below shares it.
         fold_spaces = {}
+        # This fold's training scaffold groups. Bound here and not inside the
+        # hybrid branch below, because the detector reads them too and a run
+        # with no hybrid recipe still has to reach them.
+        g_tr = (np.asarray(groups)[train_idx]
+                if groups is not None else None)
         scaler = StandardScaler()
         fold_spaces['base'] = (
             scaler.fit_transform(np.asarray(X_source[train_idx],
                                             dtype=np.float64)),
             scaler.transform(np.asarray(X_source[val_idx], dtype=np.float64)))
         if 'hybrid' in spaces:
-            g_tr = (np.asarray(groups)[train_idx]
-                    if groups is not None else None)
             X_tr_h, X_va_h = hybrid_for_fold(
                 {k: np.asarray(v[train_idx], dtype=np.float64)
                  for k, v in reps.items()},
@@ -543,33 +625,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # Re-run per space. The detector reads features, so the
                 # molecules it flags in the hybrid are not the ones it flags in
                 # the base representation.
-                scores = _suspicion(detector, X_tr_s, y_train, is_clf)
+                scores = _suspicion(detector, X_tr_s, y_train, is_clf,
+                                    groups=g_tr)
                 if scores is None:
                     continue
-                for rate in flag_rates:
+                for slot, rate in enumerate(flag_rates):
                     folds_ran[space][detector][rate] += 1
                     for mname in downstream_models:
                         acc[space][detector][rate][mname]['no_cleaning'].append(
                             base_score[mname])
                         for cleanup in CLEANUPS:
-                            # A cleanup that does not read the rate produces
-                            # one cleaned column, so it is scored at the first
-                            # rate and left absent at the others rather than
-                            # fitted on the same column twice more. See
-                            # reads_flag_rate.
-                            if (not reads_flag_rate(cleanup, is_clf)
-                                    and rate != flag_rates[0]):
-                                continue
-                            # noise_fraction is the share of rows flagged. n07
-                            # reads it as the share it corrupted; here nothing
-                            # was corrupted, so it is only how suspicious we
-                            # chose to be.
+                            # Each cleanup is swept over the axis it actually
+                            # reads. `remove` and `knn_smooth` threshold at the
+                            # (1 - rate) quantile, so the rate is their axis.
+                            # `downweight` and `label_smooth` read no quantile
+                            # on a regression set, so sweeping the rate for
+                            # them swept nothing -- they get the strength axis
+                            # instead, at the same three slots. See
+                            # setting_axis.
+                            _axis, _vals = setting_axis(cleanup, is_clf)
+                            _strength = (None if _axis == 'flag_rate'
+                                         else _vals[slot])
                             sc = _evaluate_fold(
                                 X_tr_s, X_va_s, y_train, y_val, cleanup, rate,
                                 model_factories[mname], metric_fn,
                                 is_clf=is_clf, metric_name=metric_name,
                                 dataset_name=dataset_name,
-                                precomputed_y_tr=y_train, noise_scores=scores)
+                                precomputed_y_tr=y_train, noise_scores=scores,
+                                strength=_strength)
                             acc[space][detector][rate][mname][cleanup].append(
                                 float(sc) if sc is not None else float('nan'))
         print(f"    fold {fold_i}: [{time.time() - t0:.0f}s]")
@@ -595,22 +678,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     row = {'no_cleaning_mean': float(np.nanmean(base))
                            if base.size else float('nan')}
                     for cleanup in CLEANUPS:
-                        if (not reads_flag_rate(cleanup, is_clf)
-                                and rate != flag_rates[0]):
-                            # Not scored here on purpose; the number is under
-                            # the first rate and is the same number.
-                            row[cleanup] = {
-                                'not_scored_at_this_rate': True,
-                                'reason': (f'{cleanup} does not read the flag '
-                                           f'rate on this task type, so its '
-                                           f'one score is under rate '
-                                           f'{flag_rates[0]}'),
-                                'folds_won': 0, 'folds_scored': 0,
-                                'mean_gain': float('nan'), 'fold_gains': [],
-                                'spread_over_folds': float('nan'),
-                                'cleaned_mean': float('nan'),
-                            }
-                            continue
                         got = np.asarray(cell[cleanup], dtype=float)
                         wins = [_won(c, b, lower_is_better)
                                 for c, b in zip(got, base)]
@@ -619,7 +686,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             [(b - c) if lower_is_better else (c - b)
                              for c, b in zip(got, base)
                              if np.isfinite(c) and np.isfinite(b)], dtype=float)
+                        _axis, _vals = setting_axis(cleanup, is_clf)
+                        _slot = flag_rates.index(rate)
                         row[cleanup] = {
+                            # Which knob this row's setting is, and its value.
+                            # 'flag_rate' rows differ by how many molecules
+                            # were flagged; 'strength' rows differ by how hard
+                            # the cleanup leaned on the score.
+                            'swept_axis': _axis,
+                            'setting': (rate if _axis == 'flag_rate'
+                                        else _vals[_slot]),
                             # The headline. Folds the cleaned model beat the
                             # uncleaned one on, out of the folds both scored.
                             'folds_won': int(sum(scored)),
@@ -669,16 +745,16 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name):
                         continue
                     for m in models:
                         cell = blk['per_model'][m][cleanup]
-                        # A rate a rate-blind cleanup was not scored at is not
-                        # a setting. Counting it would make "won a majority in
-                        # N of M settings" mean one thing for `remove` and
-                        # another for `downweight`.
-                        if cell.get('not_scored_at_this_rate'):
-                            continue
                         if cell['folds_scored'] == 0:
                             continue
                         rows.append({
-                            'detector': d, 'flag_rate': r, 'model': m,
+                            'detector': d, 'model': m,
+                            'swept_axis': cell.get('swept_axis', 'flag_rate'),
+                            'setting': cell.get('setting', r),
+                            # Kept so a reader written before the strength axis
+                            # existed still finds the key it looks for. On a
+                            # strength row it is the slot, not a quantile.
+                            'flag_rate': r,
                             'folds_won': cell['folds_won'],
                             'folds_scored': cell['folds_scored'],
                             'mean_gain': cell['mean_gain'],
@@ -747,8 +823,10 @@ def _print_summary(results, metric_name):
                   f"{row['settings_scored']} settings; every fold in "
                   f"{row['settings_winning_every_fold']}")
             print(f"                   best: {b['model']}/{b['detector']}"
-                  f"/flag {b['flag_rate']} — {b['folds_won']} of "
-                  f"{b['folds_scored']} folds, mean gain {b['mean_gain']:+.4f}")
+                  f"/{b.get('swept_axis', 'flag_rate')} "
+                  f"{b.get('setting', b.get('flag_rate'))} — "
+                  f"{b['folds_won']} of {b['folds_scored']} folds, "
+                  f"mean gain {b['mean_gain']:+.4f}")
     print("\n  One setting winning on one fold is not a result. Read the counts.")
     if 'sweeps_by_space' in s:
         print("  'sweeps_by_space' in the result file holds the sweep counts in "
