@@ -25,6 +25,7 @@ from experiments._shared import (
     get_model_factories, cv_split, _cv_split,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     build_fold_reselection_input, fold_reselection,
     _build_rep_factories, parse_rep_args,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
@@ -718,6 +719,112 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {model_name}: {_d:+.4f} over "
                   f"{_hd.get('n_paired_folds', 0)} folds")
 
+    # --- The top TWO of each arm, and the two reference numbers -------------
+    # Everything above reports one winner per downstream model: best_by_model
+    # holds one hybrid configuration, baselines[model]['best_single_rep'] one
+    # representation. Nothing said what came second or by how much. Baseline
+    # scores are stored rounded to 4 decimals (find_best_hybrid.py:5525), so two
+    # representations can hold the same score -- 'tied_at_best_single' above was
+    # added on 2026-09-18 for exactly that, and it names the tie without saying
+    # what the runner-up scored. These read rows the search already stored and
+    # fit nothing: 0 new model fits.
+    #
+    # Built from `search` (the uncapped condition), the same SearchResult
+    # best_by_model, baselines and fold_reselection are built from.
+    #
+    # require_full=False everywhere: a downstream model the search never scored
+    # comes back as a short list carrying its own shortfall_reason, instead of
+    # raising after every fit in the grid above has already been paid for.
+    def _no_blueprint(obj):
+        """Drop the pickled Blueprint from the blocks added below.
+
+        It does serialise -- convert_numpy routes it through Blueprint.to_dict
+        (find_best_hybrid.py:1438) -- but it carries kept_augmentations, one
+        list of feature indices per fold per donor representation, and every
+        recipe field on it (allocation method, importance method, budget,
+        internal evaluator, step size, representation count) is already a key of
+        the entry it hangs off. Which representations actually fed a hybrid is
+        recorded by hybrid_deltas under 'source_reps'.
+        """
+        if isinstance(obj, dict):
+            return {k: _no_blueprint(v) for k, v in obj.items()
+                    if k != 'blueprint'}
+        if isinstance(obj, list):
+            return [_no_blueprint(v) for v in obj]
+        return obj
+
+    top2_base_reps = {}
+    top2_hybrids = {}
+    hybrid_deltas_by_model = {}
+    for _m in models:
+        try:
+            top2_base_reps[_m] = top_base_reps(search, _m, 2,
+                                               require_full=False)
+        except Exception as _e:
+            print(f"  top-2 base representations for {_m} unavailable: {_e}")
+        _th = None
+        try:
+            _th = top_hybrids(search, _m, 2, require_full=False)
+            top2_hybrids[_m] = _no_blueprint(_th)
+        except Exception as _e:
+            print(f"  top-2 hybrid configurations for {_m} unavailable: {_e}")
+        # The rank-1 hybrid is handed to hybrid_deltas explicitly. Called
+        # without one it picks its own and reads it as
+        # _picked['selected'][0]['row'] (_shared.py:7432), and a selected entry
+        # from top_hybrids has no 'row' key -- 24 keys, none of them 'row' --
+        # so that path raises KeyError('row'). Checked by running both calls in
+        # this session. The entry carries 'score_mean' and 'blueprint', which is
+        # all hybrid_deltas reads off the hybrid it is given.
+        if _th and _th['selected']:
+            try:
+                hybrid_deltas_by_model[_m] = hybrid_deltas(
+                    search, _m, hybrid=_th['selected'][0])
+            except Exception as _e:
+                print(f"  hybrid deltas for {_m} unavailable: {_e}")
+
+    # The same two-by-two grid in one block: per downstream model, the 2 base
+    # representations and the 2 hybrids, plus 'n_distinct_units' -- how many
+    # separate things would have to be BUILT once one representation chosen by
+    # three downstream models is counted once.
+    top2_pairs_by_model = {}
+    try:
+        top2_pairs_by_model = _no_blueprint(
+            select_model_rep_pairs(search, models=list(models),
+                                   n_base=2, n_hybrids=2,
+                                   require_full=False))
+    except Exception as _e:
+        print(f"  top-2 model-and-representation grid unavailable: {_e}")
+
+    # Printed because the two deltas answer different questions and a reader
+    # given one number cannot tell which was asked. The first is the hybrid
+    # against the mean of the representations the budget actually gave features
+    # to, read off Blueprint.allocation_per_fold, so a representation given 0
+    # features is not in the mean. The second is the hybrid against the single
+    # best base representation for the same downstream model. A hybrid can win
+    # the first and lose the second.
+    if hybrid_deltas_by_model:
+        print(f"\n  TOP HYBRID vs TWO REFERENCE NUMBERS ({metric_label}, "
+              f"+ means the hybrid won):")
+        for _m in models:
+            _hd = hybrid_deltas_by_model.get(_m)
+            if not _hd:
+                continue
+            _dsm = _hd.get('delta_vs_source_mean')
+            _dbr = _hd.get('delta_vs_best_rep')
+            _n_src = _hd.get('n_source_reps')
+            _src_mean = _hd.get('source_mean')
+            _best_rep = _hd.get('best_rep')
+            _best_sc = _hd.get('best_rep_score')
+            _left = (f"vs the mean of the {_n_src} representations that fed it "
+                     f"({_src_mean:.4f}): {_dsm:+.4f}"
+                     if _dsm is not None and _src_mean is not None
+                     else "vs the mean of its source representations: --")
+            _right = (f"vs the best single representation {_best_rep} "
+                      f"({_best_sc:.4f}): {_dbr:+.4f}"
+                      if _dbr is not None and _best_sc is not None
+                      else "vs the best single representation: --")
+            print(f"    {_m}: {_left}; {_right}")
+
     return {
         'configs': configs,
         'fold_reselection': fold_reselection_block,
@@ -738,6 +845,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'best_per_model_across_conditions': best_per_model_across_conditions,
         'has_augmentation': augs is not None,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # Added 2026-09-18, additive. New keys, no existing key touched:
+        # 'baselines' still carries best_single_rep/best_single_score,
+        # 'best_by_model' still carries one hybrid per downstream model, and
+        # 'reselected_delta' is still the delta to read. 0 new model fits --
+        # all four read rows the search above already stored.
+        'top2_base_reps': top2_base_reps,
+        'top2_hybrids': top2_hybrids,
+        'top2_pairs_by_model': top2_pairs_by_model,
+        'hybrid_deltas_by_model': hybrid_deltas_by_model,
     }
 
 

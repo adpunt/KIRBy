@@ -300,6 +300,11 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     # The shared helper fits this experiment exactly (classification, primary
     # metric = auc), so NO local re-score helper is needed here.
     reselection_block = None
+    # Filled from the same SearchResult as reselection_block, below. Stay None
+    # when the hybrid search is unavailable, and the two keys they feed are then
+    # absent from the saved dict rather than present and empty.
+    top2_block = None
+    hybrid_delta_block = None
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -329,6 +334,66 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             # scores). Model set is derived by the helper from what the search
             # actually evaluated, so gates are respected automatically.
             reselection_block = build_fold_reselection_input(search)
+
+            # Top 2 beside the top 3 printed above, and saved rather than
+            # printed. The line above names 3 representations under rf only and
+            # keeps nothing; until now the JSON held no ranking at all, so a
+            # reader could not see the second-best representation, or any
+            # hybrid configuration other than the winner, for any of the 5
+            # downstream models. Both halves read rows this search already
+            # stored: 0 new model fits.
+            try:
+                from experiments._shared import (select_model_rep_pairs,
+                                                  top_hybrids, hybrid_deltas)
+                top2_block = select_model_rep_pairs(
+                    search, models=MODELS_LIST, n_base=2, n_hybrids=2,
+                    # require_full=False: a downstream model this search never
+                    # scored yields a short list and a line in 'shortfalls'.
+                    # The default raises, which would lose the whole dataset
+                    # over a missing model.
+                    require_full=False, context=f'{dataset_name}/top2')
+
+                # The hybrid against two reference numbers, per downstream
+                # model: the mean of the base representations that actually fed
+                # it, and the best single base representation. A hybrid can beat
+                # the first and lose to the second. 0 new model fits.
+                hybrid_delta_block = {}
+                for _m in MODELS_LIST:
+                    try:
+                        # hybrid= is passed by hand. hybrid_deltas(search, m)
+                        # with no hybrid reads _picked['selected'][0]['row']
+                        # (_shared.py:7432) and top_hybrids' entries carry no
+                        # 'row' key -- score_mean and blueprint sit at the top
+                        # level of the entry -- so the defaulted call raises
+                        # KeyError('row'). Checked against these two functions
+                        # on 2026-09-18.
+                        _top1 = top_hybrids(search, _m, 1, require_full=False,
+                                            context=f'{dataset_name}/{_m}')
+                        if not _top1['selected']:
+                            print(f"  hybrid_deltas[{_m}]: the search stored no "
+                                  f"hybrid configuration for this downstream "
+                                  f"model")
+                            continue
+                        hybrid_delta_block[_m] = hybrid_deltas(
+                            search, _m, hybrid=_top1['selected'][0],
+                            context=f'{dataset_name}/{_m}')
+                    except Exception as _e:
+                        print(f"  hybrid_deltas[{_m}] failed: {_e}")
+
+                # The Blueprint object off each selected hybrid: it is a recipe
+                # object, not JSON, and every field of it this file reports
+                # (allocation method, importance method, budget, internal
+                # evaluator, step size, representation count) is already a key
+                # of the same entry. Dropped AFTER hybrid_deltas, which reads
+                # Blueprint.allocation_per_fold to find the representations that
+                # fed the hybrid.
+                for _sel in top2_block.get('per_model', {}).values():
+                    for _e in _sel['hybrid']['selected']:
+                        _e.pop('blueprint', None)
+            except Exception as e:
+                # A failure here leaves the two new keys out of the saved dict.
+                # Every number this file reported before stays where it was.
+                print(f"  Top-2 selection failed: {e}")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -384,6 +449,17 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             metric_name=reselection_block.get('metric_name'),
             exclude_folds=hr_exclude_folds(reselection_block),
         )
+    # Additive, and named so they cannot be read as the existing blocks: the
+    # 2 best base representations and the 2 best hybrid configurations per
+    # downstream model, and the two hybrid deltas per downstream model. Nothing
+    # above is recomputed. Both are keyed by name, and nothing iterates this
+    # dict as models or as representations -- print_analysis reads 'results',
+    # 'n_samples', 'n_human', 'n_nonhuman' and 'fold_reselection' by name, and
+    # main() only writes it to JSON.
+    if top2_block is not None:
+        out['top2_pairs_by_model'] = top2_block
+    if hybrid_delta_block:
+        out['hybrid_deltas_by_model'] = hybrid_delta_block
     return out
 
 

@@ -22,6 +22,7 @@ from experiments._shared import (
     get_model_factories, fit_learning_curve,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     INTERNAL_EVALUATORS,
     get_best_search_for_downstream, build_fold_hybrid, cv_split,
     build_fold_reselection_input, fold_reselection,
@@ -471,6 +472,123 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {model_name}: {metric_name}_max~{fit['r2_max']:.4f} (fit failed: {fit.get('error', '?')})")
 
     results['top3_base_reps'] = [(n, s) for n, s in top3_full] if top3_full else []
+
+    # --- The top TWO of each arm, and the two reference numbers -------------
+    # The curve above keeps ONE hybrid and ONE base representation per
+    # downstream model per sample size: results['models'][m]['hybrid'] is the
+    # mean over seeds of search.best_by_model, and ['best_single'] the mean over
+    # seeds of the single highest-scoring representation. Nothing said what came
+    # second, so a rung where the top two representations are a thousandth apart
+    # reads the same as one where the second is far behind.
+    #
+    # `last_search` is the search at the LAST sample size in `sample_sizes` and
+    # the last seed that did not raise -- the same SearchResult top3_base_reps
+    # above is read from. On a dataset under LARGE_DATASET_N that last size is
+    # every row; on a larger one it is the LARGE_SUBSAMPLE_K cap, so this block
+    # describes that subsample and not the whole dataset.
+    #
+    # All four read rows that search already stored, so this costs 0 new model
+    # fits on top of the searches the curve already paid for -- at 5 sample
+    # sizes x 3 seeds that is 15 find_best_hybrid calls, and none of them is
+    # repeated here.
+    #
+    # require_full=False everywhere: a downstream model this subsample's search
+    # never scored yields a short list carrying its own shortfall_reason,
+    # instead of raising at the end of the run.
+    def _no_blueprint(obj):
+        """Drop the pickled Blueprint from the blocks added below.
+
+        It does serialise -- convert_numpy routes it through Blueprint.to_dict
+        (find_best_hybrid.py:1438) -- but it carries kept_augmentations, one
+        list of feature indices per fold per donor representation, and every
+        recipe field on it is already a key of the entry it hangs off. Which
+        representations actually fed a hybrid is recorded by hybrid_deltas under
+        'source_reps'.
+        """
+        if isinstance(obj, dict):
+            return {k: _no_blueprint(v) for k, v in obj.items()
+                    if k != 'blueprint'}
+        if isinstance(obj, list):
+            return [_no_blueprint(v) for v in obj]
+        return obj
+
+    # New top-level keys. Nothing is written into results['models'], which is
+    # looped as downstream models in three places in this file and in
+    # firstpass_notready.py's read_c05, nor into
+    # results['fold_reselection_by_n'], whose keys are str(sample size) and are
+    # read back with int(float(nkey)).
+    results['top2_base_reps'] = {}
+    results['top2_hybrids'] = {}
+    results['hybrid_deltas_by_model'] = {}
+    results['top2_pairs_by_model'] = {}
+    if last_search is not None:
+        for _m in model_names:
+            try:
+                results['top2_base_reps'][_m] = top_base_reps(
+                    last_search, _m, 2, require_full=False)
+            except Exception as _e:
+                print(f"  top-2 base representations for {_m} unavailable: {_e}")
+            _th = None
+            try:
+                _th = top_hybrids(last_search, _m, 2, require_full=False)
+                results['top2_hybrids'][_m] = _no_blueprint(_th)
+            except Exception as _e:
+                print(f"  top-2 hybrid configurations for {_m} unavailable: {_e}")
+            # The rank-1 hybrid is handed to hybrid_deltas explicitly. Called
+            # without one it picks its own and reads it as
+            # _picked['selected'][0]['row'] (_shared.py:7432), and a selected
+            # entry from top_hybrids has no 'row' key -- 24 keys, none of them
+            # 'row' -- so that path raises KeyError('row'). Checked by running
+            # both calls in this session. The entry carries 'score_mean' and
+            # 'blueprint', which is all hybrid_deltas reads off the hybrid it is
+            # given.
+            if _th and _th['selected']:
+                try:
+                    results['hybrid_deltas_by_model'][_m] = hybrid_deltas(
+                        last_search, _m, hybrid=_th['selected'][0])
+                except Exception as _e:
+                    print(f"  hybrid deltas for {_m} unavailable: {_e}")
+        try:
+            results['top2_pairs_by_model'] = _no_blueprint(
+                select_model_rep_pairs(last_search, models=list(model_names),
+                                       n_base=2, n_hybrids=2,
+                                       require_full=False))
+        except Exception as _e:
+            print(f"  top-2 model-and-representation grid unavailable: {_e}")
+    else:
+        print("  top-2 rows and hybrid deltas skipped: every find_best_hybrid "
+              "call raised, so no SearchResult was kept")
+
+    # Printed because the two deltas answer different questions and a reader
+    # given one number cannot tell which was asked. The first is the hybrid
+    # against the mean of the representations the budget actually gave features
+    # to, read off Blueprint.allocation_per_fold, so a representation given 0
+    # features is not in the mean. The second is the hybrid against the single
+    # best base representation for the same downstream model. A hybrid can win
+    # the first and lose the second.
+    if results['hybrid_deltas_by_model']:
+        print(f"\n  TOP HYBRID vs TWO REFERENCE NUMBERS at n={sample_sizes[-1]} "
+              f"({metric_name}, + means the hybrid won):")
+        for _m in model_names:
+            _hd = results['hybrid_deltas_by_model'].get(_m)
+            if not _hd:
+                continue
+            _dsm = _hd.get('delta_vs_source_mean')
+            _dbr = _hd.get('delta_vs_best_rep')
+            _n_src = _hd.get('n_source_reps')
+            _src_mean = _hd.get('source_mean')
+            _best_rep = _hd.get('best_rep')
+            _best_sc = _hd.get('best_rep_score')
+            _left = (f"vs the mean of the {_n_src} representations that fed it "
+                     f"({_src_mean:.4f}): {_dsm:+.4f}"
+                     if _dsm is not None and _src_mean is not None
+                     else "vs the mean of its source representations: --")
+            _right = (f"vs the best single representation {_best_rep} "
+                      f"({_best_sc:.4f}): {_dbr:+.4f}"
+                      if _dbr is not None and _best_sc is not None
+                      else "vs the best single representation: --")
+            print(f"    {_m}: {_left}; {_right}")
+
     return results
 
 

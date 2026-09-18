@@ -94,6 +94,25 @@ search stores the dataset's own metric, a similarity-built one stores a
 Spearman correlation named 'readacross' — so the pool does not rank one against
 the other. It returns the first family the subset names and puts every family's
 own best in `pool_by_objective`.
+
+Top 2 of each arm, and the two deltas (2026-09-18, owner's decision: "I'll add
+the top 2 rows everywhere as an extra, change nothing that's already reported").
+Additive: four new keys on each entry of `results['budgets'][b]`, no existing key
+changed, and `results['budgets']` is still keyed by the number of features.
+- `top2_base_reps[model]`: the 2 best base representations for that downstream
+  model, from the pool search this budget resolved to. Every representation the
+  search scored is still ranked; 2 of them are reported.
+- `top2_hybrids[model]`: the 2 best hybrid configurations for that downstream
+  model. Each carries the number of features it was searched at under 'budget'.
+- `top2_pairs_by_model`: the same 2-and-2 grid over the six downstream models in
+  one block, with 'n_distinct_units' -- how many separate things would have to
+  be BUILT once one representation picked by several models counts once.
+- `hybrid_deltas_by_model[model]`: the rank-1 hybrid against TWO reference
+  numbers, 'delta_vs_source_mean' (the mean of the representations the budget
+  actually gave features to, read off Blueprint.allocation_per_fold) and
+  'delta_vs_best_rep' (the best single base representation for that model).
+  Positive means the hybrid won, whichever way the metric runs.
+All four read rows the pool search already stored: 0 new model fits.
 """
 import sys
 import os
@@ -112,6 +131,7 @@ from experiments._shared import (
     estimate_intrinsic_dim_mle, make_cv_splitter,
     get_domain_metric, get_model_factories,
     build_fold_hybrid, extract_top3_base_reps, fold_reselection,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
 )
 from experiments.similarity.similarity_helpers import (
@@ -131,6 +151,25 @@ from experiments.similarity._summary_keys import (
 # the distance evaluator and budget lineage and whose searches are still
 # prediction-built; both are passed and they are separate.
 POOL_SUBSET = 'predictive_and_similarity'
+
+
+def _drop_blueprint(obj):
+    """Strip the pickled Blueprint out of the top-2 blocks added below.
+
+    It does survive the JSON write -- convert_numpy routes it through
+    Blueprint.to_dict (find_best_hybrid.py:1438) -- but it carries one list of
+    feature indices per fold per donor representation, and every recipe field on
+    it (allocation method, importance method, number of features, internal
+    evaluator, step size, representation count) is already a key of the entry it
+    hangs off. Which representations actually fed a hybrid is recorded by
+    hybrid_deltas under 'source_reps'.
+    """
+    if isinstance(obj, dict):
+        return {k: _drop_blueprint(v) for k, v in obj.items()
+                if k != 'blueprint'}
+    if isinstance(obj, list):
+        return [_drop_blueprint(v) for v in obj]
+    return obj
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -393,6 +432,101 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         elapsed = time.time() - t0
 
+        # ── The top TWO of each arm, and the two reference numbers ──────────
+        # Everything above reports one thing per arm: search.best_by_model['knn']
+        # is one hybrid configuration, and 'top3_base_reps' is one ranking by one
+        # downstream model, printed once for the first budget only. Nothing said
+        # what came second. All four calls below read rows this budget's pool
+        # search already stored, so they cost 0 new model fits and add no fold.
+        #
+        # They go on this budget's own row because every budget in the sweep
+        # resolves to its own pool search: one block at the top of the file would
+        # be whichever budget ran last, with nothing saying which.
+        #
+        # DISTANCE_MODELS is the six downstream models this lineage scores (rf,
+        # xgboost, svm, dnn, lightgbm, knn); every one is asked for.
+        # require_full=False so a downstream model this search never scored comes
+        # back as a short list carrying its own shortfall_reason, instead of
+        # raising and losing a budget row after every model fit above has been
+        # paid for.
+        _top2_base, _top2_hyb, _hyb_deltas = {}, {}, {}
+        for _m in DISTANCE_MODELS:
+            try:
+                _top2_base[_m] = top_base_reps(search, _m, 2,
+                                               require_full=False)
+            except Exception as _e:
+                print(f"    top-2 base representations for {_m} "
+                      f"unavailable: {_e}")
+            _th = None
+            try:
+                # No budget= filter. The pool substitutes a recipe searched at
+                # another number of features when it holds none at the number
+                # asked for (get_best_for_downstream), so filtering the stored
+                # rows to this loop's number can leave nothing and the two
+                # deltas below would then be absent. Every returned entry
+                # carries its own 'budget' -- the number of features that
+                # configuration was searched at -- so the widths are readable
+                # rather than assumed.
+                _th = top_hybrids(search, _m, 2, require_full=False)
+                _top2_hyb[_m] = _drop_blueprint(_th)
+            except Exception as _e:
+                print(f"    top-2 hybrid configurations for {_m} "
+                      f"unavailable: {_e}")
+            # The rank-1 hybrid is handed to hybrid_deltas explicitly. Left to
+            # pick its own it reads _picked['selected'][0]['row']
+            # (_shared.py:7432), and a top_hybrids entry has no 'row' key, so
+            # that path raises KeyError('row'). The entry does carry
+            # 'score_mean' and 'blueprint', which is all hybrid_deltas reads off
+            # the hybrid it is given.
+            if _th and _th['selected']:
+                try:
+                    _hyb_deltas[_m] = hybrid_deltas(
+                        search, _m, hybrid=_th['selected'][0])
+                except Exception as _e:
+                    print(f"    hybrid deltas for {_m} unavailable: {_e}")
+        _top2_pairs = {}
+        try:
+            # The same two-by-two grid in one block: per downstream model the 2
+            # base representations and the 2 hybrids, plus 'n_distinct_units' --
+            # how many separate things would have to be BUILT once one
+            # representation picked by three downstream models counts once.
+            _top2_pairs = _drop_blueprint(
+                select_model_rep_pairs(search, models=list(DISTANCE_MODELS),
+                                       n_base=2, n_hybrids=2,
+                                       require_full=False))
+        except Exception as _e:
+            print(f"    top-2 model-and-representation grid unavailable: {_e}")
+
+        # Printed because the two deltas answer different questions and a reader
+        # given one number cannot tell which was asked. The first is the hybrid
+        # against the mean of the representations the budget actually gave
+        # features to, read off Blueprint.allocation_per_fold, so a
+        # representation given 0 features is not in that mean. The second is the
+        # hybrid against the single best base representation for the same
+        # downstream model. A hybrid can win the first and lose the second.
+        for _m in DISTANCE_MODELS:
+            _hd = _hyb_deltas.get(_m)
+            if not _hd:
+                continue
+            _dsm = _hd.get('delta_vs_source_mean')
+            _dbr = _hd.get('delta_vs_best_rep')
+            _left = (f"vs the mean of the {_hd['n_source_reps']} "
+                     f"representations that fed it "
+                     f"({_hd['source_mean']:.4f}): {_dsm:+.4f}"
+                     if _dsm is not None else
+                     "vs the mean of its source representations: --")
+            _right = (f"vs the best single representation {_hd['best_rep']} "
+                      f"({_hd['best_rep_score']:.4f}): {_dbr:+.4f}"
+                      if _dbr is not None else
+                      "vs the best single representation: --")
+            # The unit is the winning SEARCH's metric, not the dataset's: since
+            # 2026-09-12 this budget's recipe can come from a similarity-built
+            # search, whose stored scores are a Spearman correlation named
+            # 'readacross' rather than the dataset's own metric.
+            print(f"    top hybrid, {_m}, in "
+                  f"{getattr(search, 'metric_name', None) or metric_name} "
+                  f"(+ means the hybrid won): {_left}; {_right}")
+
         budget_result = {
             'actual_dim': actual_dim,
             'mle_id': mle_id,
@@ -412,6 +546,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Keep rf_score/knn_score for backwards compat with Pareto/optimal analysis
         budget_result['rf_score'] = model_means.get('rf', float('nan'))
         budget_result['knn_score'] = model_means.get('knn', float('nan'))
+        # Added 2026-09-18, additive. Four new keys on this budget's row; no key
+        # set above changes value -- 'actual_dim', 'sac_rho', the two
+        # sac_fold_scores lists, 'model_scores', 'rf_score' and 'knn_score' are
+        # what they were, and results['budgets'] is still keyed by the number of
+        # features so sorted(results['budgets'].keys()) below is unchanged. 0 new
+        # model fits: all four read rows the pool search already stored.
+        budget_result['top2_base_reps'] = _top2_base
+        budget_result['top2_hybrids'] = _top2_hyb
+        budget_result['top2_pairs_by_model'] = _top2_pairs
+        budget_result['hybrid_deltas_by_model'] = _hyb_deltas
         results['budgets'][budget] = budget_result
 
         scores_str = ', '.join(f"{mn}={model_means[mn]:.4f}" for mn in model_means

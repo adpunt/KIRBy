@@ -82,6 +82,7 @@ from experiments._shared import (
     get_best_for_downstream,
     DOWNSTREAM_MODELS,
     FULL_BUDGETS, INTERNAL_EVALUATORS,
+    select_model_rep_pairs, hybrid_deltas, top_hybrids,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 from kirby.hybrid import create_hybrid, apply_feature_selection
@@ -717,6 +718,96 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         print(f"\n  RESULT: Blueprint does NOT transfer reliably. "
               f"Hybrid is dataset-specific for this pair.")
 
+    # ── Top-2 rows and the two deltas, added 2026-09-18 ──────────────────
+    # An extra beside every number above. Nothing here feeds base_best,
+    # native, recipe_transfer, full_transfer, delta_vs_base, delta_n_folds,
+    # delta_std, n_recipe_wins or n_full_wins, and no arm loses a
+    # representation: both searches still run over all
+    # len(shared_rep_names) shared representations and every fold arm above
+    # still picks from all of them.
+    #
+    # Every call reads rows find_best_hybrid already stored, so this costs 0
+    # new model fits on top of the 2 whole-dataset searches and the
+    # 2 * n_folds per-fold searches this run performs.
+    def _top2_for(search_obj, which, ds_name):
+        """The top-2 grid and the two deltas for one of the two searches.
+
+        Returns None when nothing could be read, so a key is either a full
+        block or absent — never half of one.
+        """
+        block = {'dataset': ds_name, 'which_search': which}
+        ctx = f'opig_blueprint_transfer/{which}={ds_name}'
+        try:
+            # models=model_names, the list both searches scored (line 224),
+            # not _shared.py's 5-name default: a downstream model the two
+            # searches did not share is not evaluated anywhere in this file.
+            # len(model_names) downstream models * (2 representations +
+            # 2 hybrids) rows. per_model inside this holds each downstream
+            # model's own top_base_reps and top_hybrids return, so the two
+            # halves are recorded here and not as separate keys.
+            block['top2_pairs_by_model'] = select_model_rep_pairs(
+                search_obj, models=model_names, n_base=2, n_hybrids=2,
+                require_full=False, context=ctx)
+        except Exception as _e:
+            print(f"    top2_pairs_by_model ({which}) not added: "
+                  f"{type(_e).__name__}: {_e}")
+
+        # The rank-1 hybrid against TWO reference numbers rather than one:
+        #   delta_vs_source_mean — against the MEAN of the base
+        #     representations the budget split actually gave features to,
+        #     read off Blueprint.allocation_per_fold, so a representation
+        #     given 0 features on every fold is out of that mean.
+        #   delta_vs_best_rep — against the single best base representation
+        #     for that same downstream model.
+        # Positive means the hybrid is better, on either metric direction.
+        # Both are in this run's metric, metric_name, which the two searches
+        # were given; delta_vs_base above is the same metric measured a
+        # different way — per held-out fold — so the two are not the same
+        # number and carry different key names.
+        #
+        # hybrid= is passed rather than left to default. hybrid_deltas with
+        # hybrid=None reads _picked['selected'][0]['row'] at
+        # _shared.py:7432, and the entry top_hybrids builds
+        # (_shared.py:7043-7066) carries no 'row' key — read in this session,
+        # both ends. The rank-1 entry handed in carries 'score_mean' and
+        # 'blueprint', the only two keys hybrid_deltas reads off it.
+        #
+        # One try per downstream model, so a model with no stored hybrid does
+        # not cost the others their entry. Keys are downstream model names;
+        # this dict is new and nothing iterates it.
+        deltas = {}
+        for mn in model_names:
+            try:
+                top1 = top_hybrids(search_obj, mn, 1, require_full=False,
+                                   context=f'{ctx}/deltas/{mn}')
+                if not top1['selected']:
+                    print(f"    hybrid_deltas ({which}) for downstream model "
+                          f"{mn} not added: {top1['shortfall_reason']}")
+                    continue
+                deltas[mn] = hybrid_deltas(
+                    search_obj, mn, hybrid=top1['selected'][0],
+                    context=f'{ctx}/deltas/{mn}')
+            except Exception as _e:
+                print(f"    hybrid_deltas ({which}) for downstream model {mn} "
+                      f"not added: {type(_e).__name__}: {_e}")
+        if deltas:
+            block['hybrid_deltas_by_model'] = deltas
+        if len(block) == 2:      # only 'dataset' and 'which_search' got in
+            return None
+        return block
+
+    # Keyed 'source' and 'target', so the two searches' rows can never be read
+    # as one set. This dict is new; nothing in this file or in the summary
+    # tables above iterates it, and per_model is untouched — a non-model key
+    # there would break the three loops at lines 663, 677 and 692-695, each of
+    # which reads res['source'] and res['target'] off every value.
+    top2_selection = {}
+    for _which, _search_obj, _ds in (('source', source_search, source_name),
+                                     ('target', target_search, target_name)):
+        _blk = _top2_for(_search_obj, _which, _ds)
+        if _blk is not None:
+            top2_selection[_which] = _blk
+
     # ── Compile results ─────────────────────────────────────────────────
     results = {
         'source_dataset': source_name,
@@ -737,6 +828,13 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             'n_models': n_models,
         },
     }
+    # Added, never overwritten: 'top2_selection' is not a key this dict
+    # carried before, and the nine keys above are written exactly as they
+    # were. convert_numpy runs over the whole dict inside
+    # save_experiment_results (_shared.py:7966) and turns each stored
+    # Blueprint into its to_dict form, so the block is JSON-serialisable.
+    if top2_selection:
+        results['top2_selection'] = convert_numpy(top2_selection)
 
     return results
 

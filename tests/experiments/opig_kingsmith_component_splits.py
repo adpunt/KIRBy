@@ -391,6 +391,7 @@ def _summarize_scores(r2_scores, rmse_scores, spearman_scores):
 def _evaluate_hybrid_per_fold(
     dataset_name, split_key, base_reps, aug_dict, labels, groups,
     fold_splits, models, pruning_mode='default_pruning',
+    selection_out=None,
 ):
     """Build the KIRBy hybrid PER FOLD and evaluate downstream models.
 
@@ -407,6 +408,10 @@ def _evaluate_hybrid_per_fold(
     Returns:
         (rep_results_dict_for_kirby_hybrid_per_model, dim_estimate, top3_first_fold)
         or (None, 0, None) if every fold failed.
+
+    `selection_out`, when a dict is passed, is FILLED with fold 0's top-2 rows
+    and its two hybrid deltas. It is an out-parameter and not a fourth return
+    value so that the 3-tuple this function has always returned is unchanged.
     """
     from kirby.find_best_hybrid import find_best_hybrid
     from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
@@ -493,6 +498,77 @@ def _evaluate_hybrid_per_fold(
 
         if fold_idx == 0 and fold_search is not None:
             top3_first_fold = extract_top3_base_reps(fold_search)
+
+            # Top 2 beside that top 3, from the SAME fold-0 search, and kept
+            # instead of printed. Every search here is built on one fold's
+            # training components only, so these rows are fold 0's ranking and
+            # the keys say so. Until now the only ranking this experiment
+            # produced was the 3 representation names printed on the line above
+            # and thrown away; the saved JSON held per-representation scores but
+            # no ranking and no hybrid configuration other than the one that was
+            # rebuilt and scored. Rows already stored by this search: 0 new
+            # model fits, on top of the fits the fold already paid for.
+            if selection_out is not None:
+                try:
+                    from experiments._shared import (select_model_rep_pairs,
+                                                      top_hybrids,
+                                                      hybrid_deltas)
+                    _ctx = f'{dataset_name}/loo_{split_key}/fold0'
+                    _pairs = select_model_rep_pairs(
+                        fold_search, models=list(models.keys()),
+                        n_base=2, n_hybrids=2,
+                        # require_full=False: a downstream model this search
+                        # never scored yields a short list and a line in
+                        # 'shortfalls'. The default raises, and the raise would
+                        # be caught by the fold loop and cost the fold.
+                        require_full=False, context=_ctx)
+
+                    # The hybrid against two reference numbers, per downstream
+                    # model: the mean of the base representations that actually
+                    # fed it, and the best single base representation. A hybrid
+                    # can beat the first and lose to the second.
+                    _deltas = {}
+                    for _m in models:
+                        try:
+                            # hybrid= is passed by hand. hybrid_deltas(search,
+                            # m) with no hybrid reads
+                            # _picked['selected'][0]['row'] (_shared.py:7432)
+                            # and top_hybrids' entries carry no 'row' key --
+                            # score_mean and blueprint sit at the top level of
+                            # the entry -- so the defaulted call raises
+                            # KeyError('row'). Checked against those two
+                            # functions on 2026-09-18.
+                            _t1 = top_hybrids(fold_search, _m, 1,
+                                              require_full=False, context=_ctx)
+                            if not _t1['selected']:
+                                print(f"    fold 0: no hybrid configuration "
+                                      f"stored for downstream model {_m}")
+                                continue
+                            _deltas[_m] = hybrid_deltas(
+                                fold_search, _m, hybrid=_t1['selected'][0],
+                                context=_ctx)
+                        except Exception as _e:
+                            print(f"    fold 0: hybrid_deltas[{_m}] failed: {_e}")
+
+                    # The Blueprint object off each selected hybrid: it is a
+                    # recipe object, not JSON, and every field of it reported
+                    # here (allocation method, importance method, budget,
+                    # internal evaluator, step size, representation count) is
+                    # already a key of the same entry. Dropped AFTER
+                    # hybrid_deltas, which reads Blueprint.allocation_per_fold
+                    # to find the representations that fed the hybrid.
+                    for _sel in _pairs.get('per_model', {}).values():
+                        for _e in _sel['hybrid']['selected']:
+                            _e.pop('blueprint', None)
+
+                    selection_out['top2_pairs_by_model_fold0'] = _pairs
+                    if _deltas:
+                        selection_out['hybrid_deltas_by_model_fold0'] = _deltas
+                except Exception as _e:
+                    # A failure here leaves both keys out of the split's saved
+                    # dict. Every number this file reported before stays where
+                    # it was, and the fold continues.
+                    print(f"    fold 0: top-2 selection failed: {_e}")
 
         fitted = (fold_search.fitted_results.get('rf')
                   if fold_search is not None else None)
@@ -684,6 +760,10 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
     models = get_model_factories(MODELS_LIST, 'regression', n_samples=n)
 
     print(f"  Building KIRBy hybrid per fold ({actual_folds} folds, train-only) ...")
+    # Filled by fold 0 of the call below, and empty when that fold's search
+    # failed or was not reached. Passed in rather than returned so the 3-tuple
+    # this call has always unpacked is unchanged.
+    fold0_selection = {}
     hybrid_results, hybrid_dim, top3 = _evaluate_hybrid_per_fold(
         dataset_name=dataset_name,
         split_key=split_key,
@@ -693,6 +773,7 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
         fold_splits=fold_splits,
         models=models,
         pruning_mode=pruning_mode,
+        selection_out=fold0_selection,
     )
 
     if top3:
@@ -738,7 +819,12 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
     registry_metric, paired_rmse, paired_r2 = _paired_hybrid_deltas(
         results, dataset_name)
 
-    return {
+    # Additive, and NOT put inside `results`: that dict is keyed by
+    # representation name and read as {rep: {'models': ...}} by
+    # _paired_hybrid_delta (line 679), so a key that is not a representation
+    # would be handed to .get('models', {}) there. These go on
+    # the split's own dict, whose keys print_analysis reads by name.
+    split_result = {
         'split_key': split_key,
         'n_groups': n_groups,
         'n_folds': actual_folds,
@@ -758,6 +844,13 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
         # can be smaller than the RMSE one.
         'paired_hybrid_delta_r2': paired_r2,
     }
+    # The 2 best base representations and the 2 best hybrid configurations per
+    # downstream model, and the two hybrid deltas per downstream model, both
+    # from fold 0's train-only search. They do not replace 'paired_hybrid_delta'
+    # above: that one is held-out, over every component, and this one is fold 0's
+    # own ranking of what its search stored.
+    split_result.update(fold0_selection)
+    return split_result
 
 
 # =============================================================================

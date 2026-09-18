@@ -41,6 +41,27 @@ for; which one the loaded recipe came from is stored in
 results['hybrid_family'], and every eligible family's own best is stored in
 results['pool_by_objective']. This is NOT the distance=True flag, which this
 file already passed and which is left exactly as it was.
+
+Top 2 of each arm, and the two deltas (2026-09-18, owner's decision: "I'll add
+the top 2 rows everywhere as an extra, change nothing that's already reported").
+Additive: four new TOP-LEVEL keys on `results`, no existing key changed, and the
+nine widths each task builds an arm at are untouched.
+- `top2_base_reps[model]`: the 2 best base representations for that downstream
+  model, off the whole-dataset pool search. Every representation the search
+  scored is still ranked; 2 of them are reported.
+- `top2_hybrids[model]`: the 2 best hybrid configurations for that downstream
+  model. Each carries the number of features it was searched at under 'budget'.
+- `top2_pairs_by_model`: the same 2-and-2 grid over the six downstream models in
+  one block, with 'n_distinct_units' -- how many separate things would have to
+  be BUILT once one representation picked by several models counts once.
+- `hybrid_deltas_by_model[model]`: the rank-1 hybrid against TWO reference
+  numbers, 'delta_vs_source_mean' (the mean of the representations the budget
+  actually gave features to, read off Blueprint.allocation_per_fold) and
+  'delta_vs_best_rep' (the best single base representation for that model).
+  Positive means the hybrid won, whichever way the metric runs.
+Top level, not inside a task block, because _orient_deltas negates every field
+named 'delta*' inside the four task blocks and these two are already oriented.
+All four read rows the pool search already stored: 0 new model fits.
 """
 import sys
 import os
@@ -63,7 +84,8 @@ from experiments._shared import (
     compute_feature_importance, build_fold_hybrid,
     get_precomputed_search, get_best_for_downstream, extract_top3_base_reps,
     get_best_search_for_downstream, get_fold_pool_recipes,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, FULL_BUDGETS,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS, FULL_BUDGETS,
     flatten_fold_weights,
     fold_reselection, build_fold_reselection_input,
 )
@@ -154,6 +176,25 @@ _HYBRID_BUILD_ERROR_BASIS = (
     "fold contributes no score to either arm of this task's hybrid block. An "
     "empty list means every fold built."
 )
+
+
+def _drop_blueprint(obj):
+    """Strip the pickled Blueprint out of the top-2 blocks added below.
+
+    It does survive the JSON write -- convert_numpy routes it through
+    Blueprint.to_dict (find_best_hybrid.py:1438) -- but it carries one list of
+    feature indices per fold per donor representation, and every recipe field on
+    it (allocation method, importance method, number of features, internal
+    evaluator, step size, representation count) is already a key of the entry it
+    hangs off. Which representations actually fed a hybrid is recorded by
+    hybrid_deltas under 'source_reps'.
+    """
+    if isinstance(obj, dict):
+        return {k: _drop_blueprint(v) for k, v in obj.items()
+                if k != 'blueprint'}
+    if isinstance(obj, list):
+        return [_drop_blueprint(v) for v in obj]
+    return obj
 
 
 def _record_build_error(store, exc, **where):
@@ -1480,6 +1521,113 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 pool_meta['metric_name'] if pool_meta is not None else None)
         except Exception as e:
             results['fold_reselection_error'] = f'{type(e).__name__}: {e}'
+
+    # ── The top TWO of each arm, and the two reference numbers ───────────────
+    # Everything above reports one thing per arm: 'top3_base_reps' is one
+    # ranking by one downstream model, and each fold's recipe is the pool's
+    # rank-1 for that fold. Nothing said what came second or by how much. All
+    # four calls below read rows the whole-dataset pool search already stored,
+    # so they cost 0 new model fits and touch no fold.
+    #
+    # They sit at the TOP LEVEL of `results`, not inside one of the four task
+    # blocks, and that placement is load-bearing: _orient_deltas below negates
+    # every field whose name starts with 'delta' inside 'weighted_knn',
+    # 'weighted_gp', 'weighted_svr' and 'qrasar' when the dataset's metric is
+    # lower-is-better. hybrid_deltas already returns both of its numbers with
+    # positive meaning the hybrid won, so either of them inside one of those
+    # blocks would be negated a second time.
+    #
+    # DISTANCE_MODELS is the six downstream models this lineage scores (rf,
+    # xgboost, svm, dnn, lightgbm, knn); every one is asked for.
+    # require_full=False so a downstream model this search never scored comes
+    # back as a short list carrying its own shortfall_reason, instead of raising
+    # and losing the four tasks' results after every fit has been paid for.
+    if search is not None:
+        _top2_base, _top2_hyb, _hyb_deltas = {}, {}, {}
+        for _m in DISTANCE_MODELS:
+            try:
+                _top2_base[_m] = top_base_reps(search, _m, 2,
+                                               require_full=False)
+            except Exception as _e:
+                print(f"  top-2 base representations for {_m} unavailable: {_e}")
+            _th = None
+            try:
+                # No budget= filter. This file asks the pool for a recipe at
+                # `requested_budget` features and the pool substitutes one
+                # searched at another number when it holds none at that number,
+                # so filtering the stored rows to the requested number can leave
+                # nothing and the two deltas below would then be absent. Every
+                # returned entry carries the number of features it was searched
+                # at under 'budget'.
+                _th = top_hybrids(search, _m, 2, require_full=False)
+                _top2_hyb[_m] = _drop_blueprint(_th)
+            except Exception as _e:
+                print(f"  top-2 hybrid configurations for {_m} unavailable: {_e}")
+            # The rank-1 hybrid is handed to hybrid_deltas explicitly. Left to
+            # pick its own it reads _picked['selected'][0]['row']
+            # (_shared.py:7432), and a top_hybrids entry has no 'row' key, so
+            # that path raises KeyError('row'). The entry does carry
+            # 'score_mean' and 'blueprint', which is all hybrid_deltas reads off
+            # the hybrid it is given.
+            if _th and _th['selected']:
+                try:
+                    _hyb_deltas[_m] = hybrid_deltas(
+                        search, _m, hybrid=_th['selected'][0])
+                except Exception as _e:
+                    print(f"  hybrid deltas for {_m} unavailable: {_e}")
+        _top2_pairs = {}
+        try:
+            # The same 2-and-2 grid in one block: per downstream model the 2
+            # base representations and the 2 hybrids, plus 'n_distinct_units' --
+            # how many separate things would have to be BUILT once one
+            # representation picked by several downstream models counts once.
+            _top2_pairs = _drop_blueprint(
+                select_model_rep_pairs(search, models=list(DISTANCE_MODELS),
+                                       n_base=2, n_hybrids=2,
+                                       require_full=False))
+        except Exception as _e:
+            print(f"  top-2 model-and-representation grid unavailable: {_e}")
+
+        # Added 2026-09-18, additive. Four new top-level keys; no key set above
+        # changes value -- 'top3_base_reps', 'fold_recipes', 'budget',
+        # 'fold_reselection' and the four task blocks are what they were.
+        results['top2_base_reps'] = _top2_base
+        results['top2_hybrids'] = _top2_hyb
+        results['top2_pairs_by_model'] = _top2_pairs
+        results['hybrid_deltas_by_model'] = _hyb_deltas
+
+        # Printed because the two deltas answer different questions and a reader
+        # given one number cannot tell which was asked. The first is the hybrid
+        # against the mean of the representations the budget actually gave
+        # features to, read off Blueprint.allocation_per_fold, so a
+        # representation given 0 features is not in that mean. The second is the
+        # hybrid against the single best base representation for the same
+        # downstream model. A hybrid can win the first and lose the second.
+        #
+        # The unit is the winning SEARCH's metric, not the dataset's: since
+        # 2026-09-12 the recipe can come from a similarity-built search, whose
+        # stored scores are a Spearman correlation named 'readacross'.
+        if _hyb_deltas:
+            print(f"\n  TOP HYBRID vs TWO REFERENCE NUMBERS "
+                  f"({getattr(search, 'metric_name', None) or metric_name}, "
+                  f"+ means the hybrid won):")
+            for _m in DISTANCE_MODELS:
+                _hd = _hyb_deltas.get(_m)
+                if not _hd:
+                    continue
+                _dsm = _hd.get('delta_vs_source_mean')
+                _dbr = _hd.get('delta_vs_best_rep')
+                _left = (f"vs the mean of the {_hd['n_source_reps']} "
+                         f"representations that fed it "
+                         f"({_hd['source_mean']:.4f}): {_dsm:+.4f}"
+                         if _dsm is not None else
+                         "vs the mean of its source representations: --")
+                _right = (f"vs the best single representation "
+                          f"{_hd['best_rep']} ({_hd['best_rep_score']:.4f}): "
+                          f"{_dbr:+.4f}"
+                          if _dbr is not None else
+                          "vs the best single representation: --")
+                print(f"    {_m}: {_left}; {_right}")
 
     # (2) Within-file weighted-vs-unweighted kNN: the stored best k is picked on
     #     the SAME folds it scores on (s10:210 + _print_summary). Re-pick the

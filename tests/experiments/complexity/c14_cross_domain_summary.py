@@ -39,6 +39,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_config,
     extract_top3_base_reps,
+    top_base_reps, hybrid_deltas,
     DOWNSTREAM_MODELS,
     INTERNAL_EVALUATORS,
 )
@@ -331,6 +332,60 @@ def _evaluate_task(task_name, rep_preset, config):
             delta_cf = hybrid_score - best_single_score_cf
         pct_cf = delta_cf / _denom_cf * 100
 
+    # -----------------------------------------------------------------
+    # Added 2026-09-18, beside everything above; no number above is re-derived.
+    #
+    # This file named ONE winning representation per task (best_single_rep) and
+    # printed the top 3 by RandomForest only. Nothing recorded the runner-up
+    # under the other 4 downstream models, so a task where two representations
+    # were within rounding of each other read the same as one where the winner
+    # was clear. top_base_reps ranks on ncv.baselines, which
+    # NestedCVResult builds from baselines_by_model
+    # (find_best_hybrid.py:9734-9741): the mean over the outer folds, one number
+    # per representation per downstream model, the same held-out rows the
+    # hybrid arm is scored on.
+    #
+    # hybrid_deltas puts two reference numbers under the hybrid instead of one:
+    #   delta_vs_source_mean -- the hybrid against the mean of the
+    #     representations its recipe actually gave features to.
+    #   delta_vs_best_rep -- the hybrid against the single best representation
+    #     for that downstream model.
+    # 'delta' above is neither: it is delta_mean_of_folds, the fold-by-fold
+    # difference against the representation re-picked inside each outer fold.
+    # All three stay in the file under their own keys.
+    #
+    # hybrid= is passed explicitly, and it is ncv.best_by_model[m], whose
+    # score_mean is the outer-fold hybrid mean. Left to default, hybrid_deltas
+    # calls top_hybrids, which reads ncv.all_results -- and all_results on a
+    # NestedCVResult is the INNER searches' own CV scores
+    # (find_best_hybrid.py:9752-9761), which are selection-side numbers. Those
+    # against outer-fold baselines would be a delta between two different
+    # things. For the same reason top_hybrids and select_model_rep_pairs are not
+    # called here at all.
+    #
+    # Both read stored rows: 0 new model fits, 0 new folds.
+    # require_full=False so a downstream model the nested CV never scored
+    # returns a short list instead of raising and losing the whole task.
+    _ncv_best_by_model = ncv.best_by_model
+    top2_base_reps_by_model = {}
+    hybrid_deltas_by_model = {}
+    for _m in DOWNSTREAM_MODELS:
+        try:
+            top2_base_reps_by_model[_m] = top_base_reps(
+                ncv, _m, 2, require_full=False,
+                context=f'c14 {task_name} outer-fold means')
+        except Exception as e:
+            print(f"    WARNING: top 2 base representations for {_m} failed: {e}")
+        _bp_row = _ncv_best_by_model.get(_m)
+        if _bp_row is None:
+            continue
+        try:
+            hybrid_deltas_by_model[_m] = hybrid_deltas(
+                ncv, _m, hybrid=_bp_row,
+                context=f'c14 {task_name} outer-fold means')
+        except Exception as e:
+            print(f"    WARNING: the two hybrid deltas for {_m} failed: {e}")
+
     print(f"    Hybrid (held out): {hybrid_score:.4f} vs best single "
           f"{reselected_best_single:.4f}  "
           f"(delta_mean_of_folds={delta:+.4f}, {pct:+.1f}%, "
@@ -420,6 +475,14 @@ def _evaluate_task(task_name, rep_preset, config):
         'all_rep_scores_common_folds': all_rep_scores_common_folds,
         'all_rep_n_folds_used': fold_counts,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # See the block above the print. {downstream model: top_base_reps(...)},
+        # ranked on the outer-fold mean. top3_base_reps stays as it was: it is
+        # RandomForest only and carries no tie or drop record.
+        'top2_base_reps_by_model': top2_base_reps_by_model,
+        # {downstream model: {'delta_vs_source_mean', 'delta_vs_best_rep', ...}},
+        # both positive when the hybrid is ahead. Not the same quantity as
+        # 'delta' above, which is delta_mean_of_folds.
+        'hybrid_deltas_by_model': hybrid_deltas_by_model,
     }
 
 

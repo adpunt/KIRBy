@@ -59,6 +59,9 @@ from experiments._shared import (
     get_fitted_hybrid, flatten_fold_weights, build_fold_hybrid,
     get_best_for_downstream,
     extract_top3_base_reps,
+    # Added 2026-09-18. All four read rows a search already stored and fit
+    # nothing, so the block that calls them costs 0 new model fits.
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     DOWNSTREAM_MODELS_NOISE, FULL_BUDGETS,
     _resolve_search_metric,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
@@ -576,6 +579,132 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         ((k, float(np.mean(v))) for k, v in _rank_scores.items() if v),
         key=lambda kv: kv[1], reverse=not lower_is_better)[:3]
 
+    # --- Top-2 rows and the two hybrid deltas, added beside the above -------
+    # 2026-09-18, owner: add the top 2 rows as an extra and change nothing that
+    # is already reported. Nothing above this line moves. top3_base_reps,
+    # top3_base_reps_by_fold and recipe_rows keep the numbers they already had,
+    # and the sweep is untouched: each fold's search still scores every
+    # representation in `reps` over all 8 budgets in FULL_BUDGETS.
+    #
+    # What a result file could not say before this block existed. recipe_rows
+    # holds ONE configuration per (fold, downstream model) -- the argmax
+    # get_best_for_downstream returns -- so the second-best configuration was
+    # never written down and the gap to it could not be read off the file. The
+    # representation ranking above is rf's alone: extract_top3_base_reps
+    # (_shared.py:809) reads the 'rf' baseline and _rank_scores reads 'rf' at
+    # line 568, so the other 4 downstream models had no representation ranking
+    # stored at all.
+    #
+    # All four helpers read rows the per-fold searches already stored. 0 new
+    # model fits, 0 new searches.
+    #
+    # require_full=False everywhere: a downstream model this fold's search
+    # never scored yields a short list with 'shortfall_reason' set, instead of
+    # raising and killing a run whose per-representation baselines are fine.
+    _HYB_KEEP = ('rank', 'label', 'score_mean', 'score_std', 'n_folds_scored',
+                 'n_folds_asked', 'n_features', 'model', 'allocation_method',
+                 'importance_method', 'budget', 'internal_evaluator',
+                 'step_size', 'rep_count', 'rep_count_source', 'rep_subset',
+                 'tune', 'tune_source', 'tied_with')
+
+    def _trim_hybrid_sel(sel):
+        """The hybrid rows without the pickled Blueprint. convert_numpy walks a
+        dataclass through asdict (_shared.py:7615-7617), so a Blueprint left in
+        here writes its per-fold feature allocation into the result JSON."""
+        out = {k: v for k, v in sel.items() if k != 'selected'}
+        out['selected'] = [{k: e.get(k) for k in _HYB_KEEP}
+                           for e in sel['selected']]
+        return out
+
+    top2_base_reps_by_fold = {}
+    top2_hybrids_by_fold = {}
+    top2_pairs_by_model_by_fold = {}
+    hybrid_deltas_by_model_by_fold = {}
+    for fold_i, search in fold_searches.items():
+        if search is None:
+            continue
+        _ctx = f'n01 {dataset_name} fold {fold_i}'
+        _base_f, _hyb_f, _delta_f = {}, {}, {}
+        for model_name in search_models:
+            try:
+                _base_f[model_name] = top_base_reps(
+                    search, model_name, 2, require_full=False, context=_ctx)
+            except Exception as e:
+                print(f"      [warn] top-2 base representations "
+                      f"(fold {fold_i}, {model_name}): "
+                      f"{type(e).__name__}: {str(e)[:150]}")
+            _h = None
+            try:
+                _h = top_hybrids(search, model_name, 2, require_full=False,
+                                 context=_ctx)
+                _hyb_f[model_name] = _trim_hybrid_sel(_h)
+            except Exception as e:
+                print(f"      [warn] top-2 hybrid configurations "
+                      f"(fold {fold_i}, {model_name}): "
+                      f"{type(e).__name__}: {str(e)[:150]}")
+            # The rank-1 hybrid is handed over explicitly. Called with
+            # hybrid=None, hybrid_deltas reads _picked['selected'][0]['row']
+            # (_shared.py:7424) and top_hybrids builds no 'row' key in its
+            # entries (:7043-7066), so that path raises KeyError. The rank-1
+            # entry itself carries both fields hybrid_deltas reads off it,
+            # score_mean and blueprint.
+            if _h and _h.get('selected'):
+                try:
+                    _delta_f[model_name] = hybrid_deltas(
+                        search, model_name, hybrid=_h['selected'][0],
+                        context=_ctx)
+                except Exception as e:
+                    print(f"      [warn] hybrid deltas "
+                          f"(fold {fold_i}, {model_name}): "
+                          f"{type(e).__name__}: {str(e)[:150]}")
+        if _base_f:
+            top2_base_reps_by_fold[int(fold_i)] = _base_f
+        if _hyb_f:
+            top2_hybrids_by_fold[int(fold_i)] = _hyb_f
+        if _delta_f:
+            hybrid_deltas_by_model_by_fold[int(fold_i)] = _delta_f
+
+        # models=search_models, not the default: DOWNSTREAM_MODELS is 5 names
+        # (_shared.py:539) and models_to_run can be shorter, so the default
+        # would count a downstream model this run never asked for as missing.
+        try:
+            _pairs = select_model_rep_pairs(
+                search, models=search_models, n_base=2, n_hybrids=2,
+                require_full=False, context=_ctx)
+            _row = {k: _pairs[k] for k in (
+                'models', 'n_base', 'n_hybrids', 'n_pairs_possible', 'n_pairs',
+                'n_missing', 'complete', 'n_distinct_units', 'metric_name',
+                'shortfalls')}
+            # 'per_model' holds the same two selections again, each hybrid with
+            # its Blueprint attached, and 'distinct_units' is keyed by tuples.
+            # Both are dropped: the per-model detail is already above under
+            # top2_base_reps_by_fold and top2_hybrids_by_fold.
+            _row['pairs'] = [
+                {'downstream_model': p['downstream_model'], 'kind': p['kind'],
+                 'rank_within_model': p['rank_within_model'],
+                 'label': p['label'], 'score': p['score'],
+                 'unit_id': str(p['unit_id'])}
+                for p in _pairs['pairs']]
+            _row['collapsed'] = [
+                {'unit_id': str(c['unit_id']), 'label': c['label'],
+                 'chosen_by': [list(t) for t in c['chosen_by']]}
+                for c in _pairs['collapsed']]
+            top2_pairs_by_model_by_fold[int(fold_i)] = _row
+        except Exception as e:
+            print(f"      [warn] top-2 model-and-representation pairs "
+                  f"(fold {fold_i}): {type(e).__name__}: {str(e)[:150]}")
+
+    if top2_pairs_by_model_by_fold:
+        _n_pairs = sum(r['n_pairs'] for r in top2_pairs_by_model_by_fold.values())
+        _n_poss = sum(r['n_pairs_possible']
+                      for r in top2_pairs_by_model_by_fold.values())
+        print(f"    Top-2 rows: {_n_pairs} of {_n_poss} "
+              f"model-and-representation pairs filled across "
+              f"{len(top2_pairs_by_model_by_fold)} folds "
+              f"({len(search_models)} downstream models x "
+              f"(2 base representations + 2 hybrids) per fold), "
+              f"0 new model fits")
+
     def _evaluate_condition(get_Xy_fn, label, model_factory):
         """Run CV, return {metric_all, metric_cliff, metric_noncliff, gap, ...}."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
@@ -766,6 +895,26 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         }),
         'top3_base_reps': [(nm, sc) for nm, sc in top3_base_reps],
         'top3_base_reps_by_fold': convert_numpy(top3_by_fold),
+        # Added 2026-09-18, beside the keys above and overwriting none of them.
+        # Each is keyed by fold number first, then by downstream model. They are
+        # NOT inside 'stratified_by_model': firstpass_notready.py:1592-1593
+        # loops that dict as `for model, mv in bym.items()` and reads
+        # mv['_comparison'], so a fold number landing in it would be read as a
+        # downstream model. Nothing loops this dict's top level -- the readers
+        # are firstpass_notready.py:1589-1592 (.get('error'),
+        # .get('stratified_by_model')) and run() below (.get('top3_base_reps')),
+        # all key lookups.
+        'top2_base_reps_by_fold': convert_numpy(top2_base_reps_by_fold),
+        'top2_hybrids_by_fold': convert_numpy(top2_hybrids_by_fold),
+        'top2_pairs_by_model_by_fold': convert_numpy(top2_pairs_by_model_by_fold),
+        # delta_vs_source_mean is the rank-1 hybrid against the mean of the base
+        # representations that actually fed it, read off the per-fold budget
+        # split so a representation given 0 features is out of the mean.
+        # delta_vs_best_rep is the same hybrid against the single best base
+        # representation for that downstream model. Positive = hybrid better,
+        # on either metric direction.
+        'hybrid_deltas_by_model_by_fold': convert_numpy(
+            hybrid_deltas_by_model_by_fold),
     }
 
 

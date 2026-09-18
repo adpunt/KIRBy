@@ -82,6 +82,7 @@ from experiments._shared import (
     extract_top3_base_reps, FULL_BUDGETS,
     fold_reselection, build_fold_reselection_input,
     hr_exclude_folds,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 
 # =============================================================================
@@ -473,6 +474,13 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     # feature selection, NO cross-model MAX. Stays None if the search is unavailable.
     reselection_block = None
     hybrid_inputs = None
+    # The top-2 rows, added 2026-09-18 as an extra beside everything already
+    # reported. Filled inside the try below, where the SearchResult exists;
+    # stays None when the search raises, so target_out never carries a half
+    # block. Nothing here changes the per-representation table: that still
+    # scores every representation get_representations returned against all 5
+    # downstream models in MODELS_LIST.
+    top2_block = None
     try:
         from experiments._shared import (
             resolve_pruning_kwargs, get_best_search_for_downstream)
@@ -541,6 +549,98 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
             'search_kwargs': dict(internal_evaluators=_eval_list,
                                   **_smoke_search, **_pkw),
         }
+
+        # ── Top-2 rows, read off the search above. 0 new model fits. ───────
+        # Every call below reads rows the search already stored, so this adds
+        # no fit to the ~13,500,000 the three targets already run
+        # (EXPERIMENT_COMPUTE_AUDIT_2026_09_18.md:90 — a dated claim, not
+        # re-measured here).
+        #
+        # Additive. `results` below still holds one entry per representation
+        # and one model entry per downstream model, and print_analysis still
+        # ranks every one of those rows. These keys sit on target_out beside
+        # 'results', never inside it: print_analysis reads rep_data['models']
+        # for every value of results, so a key there with no 'models' raises
+        # KeyError and takes the whole cross-target table with it.
+        #
+        # require_full=False everywhere: a downstream model this search never
+        # scored comes back as a short list carrying its own shortfall_reason
+        # instead of raising. svm is the live case — its row ceiling falls to
+        # 5,000 training molecules under the 'uncapped' augmentation strategy
+        # (find_best_hybrid.py:2862) and d2 carries 6,333 compounds.
+        if search is not None:
+            _sel_ctx = f'opig_activity_cliff_qsar/{target}'
+            top2_block = {}
+            try:
+                # 'rf' is the model this search was asked for
+                # (downstream_model='rf' above) and the model the Top-3 line
+                # printed a few lines up already ranks by, so the two rankings
+                # are the same quantity ranked to different depths.
+                top2_block['top2_base_reps'] = top_base_reps(
+                    search, 'rf', 2, require_full=False, context=_sel_ctx)
+            except Exception as _e:
+                print(f"  top2_base_reps not added: {type(_e).__name__}: {_e}")
+            try:
+                # budget=None: the best two configurations across every budget
+                # in the search, not within one budget in features. This file
+                # searches all budgets at once (budget=None above), so a
+                # per-budget cut here would name a pair the file never used.
+                top2_block['top2_hybrids'] = top_hybrids(
+                    search, 'rf', 2, require_full=False, context=_sel_ctx)
+            except Exception as _e:
+                print(f"  top2_hybrids not added: {type(_e).__name__}: {_e}")
+            try:
+                # 5 downstream models in MODELS_LIST * (2 representations +
+                # 2 hybrids) = 20 rows. models=MODELS_LIST rather than the
+                # default, so the models axis is reported at the width this
+                # file scores at and not at _shared.py's default width.
+                top2_block['top2_pairs_by_model'] = select_model_rep_pairs(
+                    search, models=MODELS_LIST, n_base=2, n_hybrids=2,
+                    require_full=False, context=_sel_ctx)
+            except Exception as _e:
+                print(f"  top2_pairs_by_model not added: "
+                      f"{type(_e).__name__}: {_e}")
+
+            # Two reference numbers for the rank-1 hybrid, per downstream
+            # model, not one:
+            #   delta_vs_source_mean — against the MEAN of the base
+            #     representations the budget split actually gave features to,
+            #     read off Blueprint.allocation_per_fold, so a representation
+            #     given 0 features on every fold is out of that mean.
+            #   delta_vs_best_rep — against the single best base
+            #     representation for that same downstream model.
+            # Positive means the hybrid is better, on either metric direction.
+            #
+            # hybrid= is passed rather than left to default. hybrid_deltas with
+            # hybrid=None reads _picked['selected'][0]['row'] at
+            # _shared.py:7432, and the entry top_hybrids builds
+            # (_shared.py:7043-7066) carries no 'row' key — read in this
+            # session, both ends. The rank-1 entry handed in below carries
+            # 'score_mean' and 'blueprint', the only two keys hybrid_deltas
+            # reads off it.
+            #
+            # One try per downstream model, so a model with no stored hybrid
+            # does not cost the other four their entry. Keys are downstream
+            # model names; this dict is new and nothing iterates it.
+            _deltas = {}
+            for _m in MODELS_LIST:
+                try:
+                    _top1 = top_hybrids(search, _m, 1, require_full=False,
+                                        context=f'{_sel_ctx}/deltas/{_m}')
+                    if not _top1['selected']:
+                        print(f"  hybrid_deltas for downstream model {_m} not "
+                              f"added: {_top1['shortfall_reason']}")
+                        continue
+                    _deltas[_m] = hybrid_deltas(
+                        search, _m, hybrid=_top1['selected'][0],
+                        context=f'{_sel_ctx}/deltas/{_m}')
+                except Exception as _e:
+                    print(f"  hybrid_deltas for downstream model {_m} not "
+                          f"added: {type(_e).__name__}: {_e}")
+            if _deltas:
+                top2_block['hybrid_deltas_by_model'] = _deltas
+            if not top2_block:
+                top2_block = None
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -657,6 +757,13 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     # reader can load result[target]['fold_reselection'] and call fold_reselection().
     if reselection_block is not None:
         target_out['fold_reselection'] = reselection_block
+    # Beside 'results', not inside it. main() copies every top-level key of
+    # target_out except 'results' straight into the saved JSON, and
+    # print_analysis reads only 'results', 'target_name', 'n_compounds',
+    # 'n_acs' and 'fold_reselection' — so this key is saved and printed by
+    # nothing, which is what an extra is.
+    if top2_block is not None:
+        target_out['top2_selection'] = top2_block
     return target_out
 
 
