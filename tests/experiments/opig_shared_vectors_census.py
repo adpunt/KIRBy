@@ -326,6 +326,16 @@ _REBUILDABLE = {
     'ecfp4': 'create_ecfp4', 'maccs': 'create_maccs', 'avalon': 'create_avalon',
     'atom_pair': 'create_atom_pair', 'top_torsion': 'create_top_torsion',
     'rdkfp': 'create_rdkfp', 'pdv': 'create_pdv', 'chemberta': 'create_chemberta',
+    # ⛔ chembert IS NOT chemberta, AND IT IS THE ONE THE POOLS USE.
+    # Added 2026-09-18. chembert is 256 features and sits in the general pool of
+    # adme_hlm, herg_ki, logd and qm9; chemberta is 384 and sits in qm9's alone.
+    # Only chemberta was in this map, so the pools of three datasets held a
+    # representation this check had never once looked at — and a stale-cache
+    # note about "chemberta on herg_ki and logd" was chasing a representation
+    # those two do not carry.
+    # Its builder wants torch and transformers, same as chemberta, and the
+    # check rebuilds only the sampled rows, so a CPU node is enough.
+    'chembert': 'create_chembert',
 }
 
 
