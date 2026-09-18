@@ -14,7 +14,7 @@ hybrid.py, not a per-fold draw.
 
 Settings are injected through the callable branch of _evaluate_allocation
 (`elif callable(internal_evaluator): m = internal_evaluator()`), which is the
-same extension point f07 used. The shipped 500-row fit cap for svm/mlp is
+same extension point f07 used. The shipped 500-row fit cap for svm is
 reproduced by _CappedFit with the same seed and RandomState draw as
 hybrid._subsample_for_scorer, so the *_default arms are bit-identical to the
 shipped evaluator. --verify-defaults asserts that.
@@ -192,7 +192,37 @@ EVALUATOR_SETTINGS = {
     'svm_C10_allrows':       ('svm', lambda: _svr(C=10.0), None),
     'svm_C100_gauto_allrows': ('svm', lambda: _svr(C=100.0, gamma='auto'), None),
 
-    # mlp — shipped: (64, 32), max_iter=200, early_stopping, capped at 500 rows.
+    # THE mlp ARM, RE-ASKED IN dnn. mlp was cut from the suite on 2026-09-18:
+    # it did not perform and it was slow. Its six settings asked four questions,
+    # and each one is carried over below at the same width and the same knob, so
+    # no question is dropped and nothing new is invented:
+    #
+    #   the 500-row fit cap        (64, 32) capped against (64, 32) on all rows
+    #   the width                  (64, 32) / (256, 128) / (512,)
+    #   regularisation             mlp's alpha=0.01 -> dnn's dropout, its own
+    #                              regularisation knob, at the same width
+    #   the learning rate          1e-2 at the same width
+    #
+    # The widths are mlp's, not dnn's, on purpose: the point is to re-ask mlp's
+    # questions, and the dnn arm below already sweeps dnn's own widths.
+    #
+    # The six mlp settings stay DEFINED just below, and are named in
+    # DROPPED_SETTINGS, which is this file's convention for a setting that is out
+    # of the sweep but whose rows are already on disk: f31_analyse reads its
+    # names from EVALUATOR_SETTINGS, so deleting them would leave every measured
+    # mlp row unlabelled.
+    'dnn_64_32_capped':      ('dnn', lambda: _dnn(hidden_sizes=(64, 32)), SHIPPED_FIT_CAP),
+    'dnn_64_32_allrows':     ('dnn', lambda: _dnn(hidden_sizes=(64, 32)), None),
+    'dnn_256_128_allrows':   ('dnn', lambda: _dnn(hidden_sizes=(256, 128)), None),
+    'dnn_512_allrows':       ('dnn', lambda: _dnn(hidden_sizes=(512,)), None),
+    'dnn_256_128_do0.01':    ('dnn', lambda: _dnn(hidden_sizes=(256, 128),
+                                                  dropout=0.01), None),
+    'dnn_256_128_lr0.01':    ('dnn', lambda: _dnn(hidden_sizes=(256, 128),
+                                                  lr=0.01), None),
+
+    # mlp — OUT OF THE SWEEP since 2026-09-18, kept defined so f31_analyse can
+    # label the rows already on disk. Shipped was (64, 32), max_iter=200,
+    # early_stopping, capped at 500 rows.
     'mlp_default':           ('mlp', lambda: _mlp(hidden_layer_sizes=(64, 32)), SHIPPED_FIT_CAP),
     'mlp_default_allrows':   ('mlp', lambda: _mlp(hidden_layer_sizes=(64, 32)), None),
     'mlp_256_128_allrows':   ('mlp', lambda: _mlp(hidden_layer_sizes=(256, 128)), None),
@@ -229,10 +259,23 @@ EVALUATOR_SETTINGS = {
 # 0.7201 (koenig) for a fortieth to a hundred-and-fortieth of the time.
 # They stay DEFINED so f31_analyse can still label the buchwald and caco2 rows
 # already on disk; they are just out of the default sweep.
+#
+# The six mlp settings joined this set on 2026-09-18, for a different reason:
+# the owner cut mlp from the suite, because it did not perform and it was slow.
+# They are not dropped for cost and they were not degenerate. Each of the four
+# questions they asked is re-asked above in dnn, at the same width and the same
+# knob. Same rule as the three above: still defined, so the mlp rows already on
+# disk keep their labels.
 DROPPED_SETTINGS = {
     'rf_200_dNone',
     'rf_200_d10',
     'lgbm_500_dfree_lr0.01',
+    'mlp_default',
+    'mlp_default_allrows',
+    'mlp_256_128_allrows',
+    'mlp_512_allrows',
+    'mlp_256_128_a0.01',
+    'mlp_256_128_lr0.01',
 }
 
 DEFAULT_SETTINGS = [s for s in EVALUATOR_SETTINGS if s not in DROPPED_SETTINGS]
@@ -264,17 +307,25 @@ def setting_spec(name):
 # The shipped evaluator name each *_default arm is supposed to reproduce.
 DEFAULT_ARM_OF = {
     'rf': 'rf_default', 'lightgbm': 'lgbm_default', 'svm': 'svm_default',
-    'mlp': 'mlp_default', 'dnn': 'dnn_default',
+    'dnn': 'dnn_default',
 }
+# mlp's entry went with mlp on 2026-09-18. None of the six dnn arms that
+# replaced it is a *_default arm: the shipped dnn evaluator has no fit cap and
+# its own widths, so only 'dnn_default' reproduces it, and --verify-defaults
+# checks that one.
 
 
 def make_evaluator(setting_name):
     """Return the zero-arg callable _evaluate_allocation's callable branch wants."""
     if setting_name in DROPPED_SETTINGS:
+        _why = ('mlp was cut from the suite on 2026-09-18 (it did not perform '
+                'and it was slow); its questions are re-asked in the dnn_* arms'
+                if setting_name.startswith('mlp_')
+                else 'cut on 2026-09-05 for cost')
         raise ValueError(
-            f'{setting_name!r} was cut on 2026-09-05 for cost (see '
-            f'DROPPED_SETTINGS) and cannot be run. It stays defined only so '
-            f'f31_analyse can label rows already on disk.')
+            f'{setting_name!r} is out of the sweep — {_why}. See '
+            f'DROPPED_SETTINGS. It stays defined only so f31_analyse can label '
+            f'rows already on disk.')
     _family, factory, cap = EVALUATOR_SETTINGS[setting_name]
     if cap is None:
         return factory
