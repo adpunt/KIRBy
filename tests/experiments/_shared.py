@@ -4838,6 +4838,62 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
                 f"y_train has {len(y_train)}. Pass this fold's TRAIN slice "
                 f"(groups[train_idx]), not the whole-dataset groups array.")
 
+    # ── THE RECIPE'S REPRESENTATION COUNT. Fixed 2026-09-18. ──────────────
+    #
+    # DEFAULT_REP_COUNTS = [2, 3, 5, None] is a SEARCHED axis: the whole grid
+    # runs once per entry, each time restricted to the N representations that
+    # fold's allocation scores rank highest (find_best_hybrid.py:4706-4721).
+    # A configuration that won on 2 of 10 is stored with rep_count=2.
+    #
+    # This function ignored that. It handed create_hybrid whatever `train_reps`
+    # its caller passed — the whole pool — so a recipe that won on 2
+    # representations was rebuilt over all 10. Different features, different
+    # budget split, and the score read back under the winning recipe's name.
+    # Same class as the ranking/threshold fields the comment below records:
+    # a recipe field that existed in the search and was never threaded into the
+    # rebuild, with nothing raising.
+    #
+    # The search ranks by that fold's allocation scores. The nearest thing here
+    # is `precomputed_alloc_scores` when the caller passed this fold's, and
+    # `Blueprint.rep_scores` otherwise — the search's own per-rep allocation
+    # scores, carried on the recipe for exactly this. Higher is better in both,
+    # whatever the dataset's metric (find_best_hybrid.py:4700-4701).
+    #
+    # ⛔ NO SILENT FALLBACK, same rule the search states at :4703-4705. A recipe
+    # that asks for N and cannot be ranked raises here rather than quietly
+    # rebuilding on the whole pool and being read as N.
+    _rep_count = getattr(blueprint, 'rep_count', None)
+    _rep_count_source = None
+    if _rep_count is not None and int(_rep_count) < len(train_reps):
+        _rep_count = int(_rep_count)
+        _scores = precomputed_alloc_scores or getattr(blueprint, 'rep_scores', None)
+        _rep_count_source = ('fold_alloc_scores' if precomputed_alloc_scores
+                             else 'blueprint.rep_scores')
+        if not _scores:
+            raise ValueError(
+                f"build_fold_hybrid: this recipe was searched over "
+                f"{_rep_count} of the pool's representations "
+                f"(blueprint.rep_count={_rep_count}) and neither "
+                f"precomputed_alloc_scores nor blueprint.rep_scores is "
+                f"available to say WHICH {_rep_count}. Rebuilding on all "
+                f"{len(train_reps)} would give a different feature set and a "
+                f"different budget split from the configuration that won, and "
+                f"the score would be filed under the winner's name.")
+        _missing = [r for r in train_reps if r not in _scores]
+        if len(train_reps) - len(_missing) < _rep_count:
+            raise ValueError(
+                f"build_fold_hybrid: the recipe asks for {_rep_count} "
+                f"representations and only {len(train_reps) - len(_missing)} of "
+                f"the {len(train_reps)} given carry an allocation score "
+                f"({_rep_count_source}). Missing: {sorted(_missing)}.")
+        # Score first, then name, so two representations on the same score
+        # resolve the same way on every run.
+        _ranked = sorted(train_reps,
+                         key=lambda r: (-_scores.get(r, float('-inf')), r))
+        _keep = set(_ranked[:_rep_count])
+        train_reps = {k: v for k, v in train_reps.items() if k in _keep}
+        val_reps = {k: v for k, v in val_reps.items() if k in _keep}
+
     _budget = budget_override if budget_override is not None else blueprint.budget
     X_tr_h, feat_info = create_hybrid(
         train_reps, y_train,
@@ -4939,6 +4995,15 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
             X_va_aug = apply_augmentation_selection(val_pool, aug_info)
             if X_va_aug is not None:
                 X_va_h = np.hstack([X_va_h, X_va_aug])
+
+    # Which representations this rebuild was actually restricted to, and what
+    # ranked them. Without it a reader cannot tell a recipe rebuilt on its own
+    # N from one rebuilt on the whole pool — which is the state every rebuild
+    # was in before 2026-09-18.
+    if _rep_count_source is not None:
+        feat_info['rep_count_applied'] = _rep_count
+        feat_info['rep_count_ranked_by'] = _rep_count_source
+        feat_info['rep_count_kept'] = sorted(train_reps)
 
     return X_tr_h, X_va_h, feat_info
 
