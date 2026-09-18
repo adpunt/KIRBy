@@ -97,6 +97,27 @@ enough, and say so in the writeup.
 
 ---
 
+## Existing jobs are never cancelled
+
+A dataset that already has jobs queued keeps them. Its first new link waits for
+them with `afterany`, and its experiment jobs wait behind that.
+
+**Why not cancel and resubmit.** A queued job accrues age, worth up to 1000
+priority points. On 2026-09-18 the 55 jobs queued three days earlier were at 235
+to 344 age against jobs getting slots at 1088 to 1541 total. A resubmitted job
+starts at zero. That age is the margin.
+
+**Why wait rather than run alongside.** Two processes on one dataset both write
+`result_db/<dataset>.db`. SQLite waits 120 seconds for the other writer, and if
+it does not get the lock the search dies after paying for its baselines and its
+per-fold scores. Waiting costs nothing — the new link would have sat in the
+queue anyway, and the old jobs are doing that dataset's work meanwhile.
+
+Only datasets with old jobs wait. The rest start as soon as the scheduler
+reaches them.
+
+---
+
 ## Changing things after submission
 
 | what you want to do | how |
