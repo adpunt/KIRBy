@@ -201,7 +201,7 @@ count-alone on ACTIVITY on ALL THREE datasets** (herg +0.024, logd +0.073, adme 
 AND on structure on all three (+0.13..+0.39). **3D SHAPE is what buys the activity win.**
 
 ⚠ **THE 2026-08-11 CIRCULARITY FIX WAS A PAIR SPLIT, AND A PAIR SPLIT HOLDS NO MOLECULE
-OUT (`winning_recipe_honest.py`).** The concern was real (`select_fine2d` /
+OUT (`winning_recipe_reselected.py`).** The concern was real (`select_fine2d` /
 `desc_blacklist_greedy` chose features on the same MCS pairs `struct_fidelity` scored
 on). The fix applied split the 8000 MCS pairs 50/50 — SELECT features on one half, SCORE
 structure on the disjoint half. Each molecule sits in about eleven of those 8000 pairs, so
@@ -210,8 +210,8 @@ molecule it was graded on; the per-feature z-score mean and sd came from all n m
 besides. So herg struct 0.449 (in-sample) → 0.410, baseline 0.036 → +0.374, and logd 0.699
 → 0.687, baseline 0.380 → +0.307 are **pair-split numbers, not held-out-molecule ones**.
 The file was rewritten on 2026-09-04 to split MOLECULES by whole Bemis-Murcko scaffold
-group and records that reasoning in its own docstring (`winning_recipe_honest.py:7-12`);
-it has not been run since — `winning_recipe_honest.json` is absent from
+group and records that reasoning in its own docstring (`winning_recipe_reselected.py:7-12`);
+it has not been run since — `winning_recipe_reselected.json` is absent from
 `tests/experiments/similarity_metrics/`. **No held-out-molecule structure number has been
 measured**, and none is written here in place of these. Activity gain (herg +0.017, logd
 +0.071) comes from the same run; the feature selection reads no labels, so the activity
@@ -1508,7 +1508,7 @@ Answered by Adelaide on 2026-08-26. Recorded here as her decisions, not as findi
   and logd. The winning space also changes on herg_ki. The one dataset where recovery
   survives is `adme_solubility`, which this file already records as the wrong ADME set.
   Both arms are written to the result file side by side. Note the pair-only split in
-  `winning_recipe_honest.py` does NOT catch this: both pair halves come from the same
+  `winning_recipe_reselected.py` does NOT catch this: both pair halves come from the same
   molecules, so it moved herg_ki agreement only from 0.449 to 0.410.
 - **CLOSED 2026-08-26 as silent failures; NEITHER RUN REPEATED.** Missing antibody
   structure prediction now raises instead of returning an all-zero feature matrix, and an

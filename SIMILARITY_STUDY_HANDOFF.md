@@ -53,7 +53,7 @@ load locally yet (`load_data` hangs; rep cache is content-hashed). OPEN.
   rests on the two numbers in the next bullet, which no molecule-level held-out run has
   produced.
 - **The 0.410 and 0.687 came from a PAIR split, which does not hold molecules out**
-  (`winning_recipe_honest.py`, 2026-08-11). The feature-selection and the structure
+  (`winning_recipe_reselected.py`, 2026-08-11). The feature-selection and the structure
   scoring were split across disjoint halves of the 8000 cached MCS pairs. Each molecule
   sits in about eleven of those pairs, so nearly every molecule landed in both halves and
   the selection had already seen every molecule it was graded on; the per-feature z-score
@@ -61,8 +61,8 @@ load locally yet (`load_data` hangs; rep cache is content-hashed). OPEN.
   baseline 0.036 and logd 0.687 vs 0.380 are pair-split numbers, not held-out-molecule
   ones. The file was rewritten on 2026-09-04 to split MOLECULES by whole Bemis-Murcko
   scaffold group and states that reasoning in its own docstring
-  (`winning_recipe_honest.py:7-12`), but it has not been run since —
-  `winning_recipe_honest.json` is not in the directory. **No held-out-molecule structure
+  (`winning_recipe_reselected.py:7-12`), but it has not been run since —
+  `winning_recipe_reselected.json` is not in the directory. **No held-out-molecule structure
   number has been measured**, and none is written here in place of these two. The activity
   gains (herg +0.017, logd +0.071) come from the same run; the feature selection reads no
   labels, so the activity half was never the circular one.
@@ -97,7 +97,7 @@ domains. Finder: `blacklist.py` (`identify_saboteurs`), demo notebook
 **Key files in `tests/experiments/similarity_metrics/`:**
 - `_data.py` — shared loader; `load_prepared(name)` returns y/groups/smiles + rep matrices.
 - `mcs_cache.py` — builds `mcs_pairs_<ds>.npz` (I, J, mcs, dy; 8000 pairs).
-- `winning_recipe_honest.py` — the honest, circularity-fixed winning-recipe run. **Most
+- `winning_recipe_reselected.py` — the honest, circularity-fixed winning-recipe run. **Most
   important result file.**
 - `creative_hybrids_v2.py` — the winning-recipe block algebra (helpers reused above).
 - `blacklist.py` + `saboteur_finder_demo.ipynb` — saboteur finder + demo.

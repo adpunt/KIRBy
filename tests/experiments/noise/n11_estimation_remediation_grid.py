@@ -755,6 +755,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Gaussian-process smoothing target is the same O(n^3) fit that flag exists
     # to drop, so it has to see the flag too.
     light_estimators = os.environ.get('KIRBY_NOISE_LIGHT_ESTIMATORS') == '1'
+    # The spaces the two added targets are built in: every hybrid, plus the one
+    # representation n11 uses as its control. See the note at the build site.
+    extra_target_spaces = ({f'{base_rep_name}_raw'}
+                           | {_r['space'] for _r in hybrid_recipes})
 
     results = {
         'metric': metric_name,
@@ -780,6 +784,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             "byte-identical, and pulls each label outside it alpha of the way "
             "onto the edge it crossed."),
         'extra_target_errors': extra_target_errors,
+        # USER DECISION 2026-09-17: which spaces the two added targets are built
+        # in. Building one costs five model fits, so they are built in the
+        # hybrid feature sets and in the control representation only, not in
+        # every representation the dataset has. A smoothing row carrying a
+        # target name appears under these spaces and nowhere else.
+        'extra_target_spaces': sorted(extra_target_spaces),
         # FIX 4f: regression-only estimators dropped on classification, with the
         # explicit reason, so empty cells aren't confused with failed runs.
         'skipped_estimators': {e: 'skipped_regression_estimator_on_clf'
@@ -894,8 +904,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # so the inner split is group-disjoint. Cost: one LightGBM
                     # out-of-fold pass and one Gaussian-process out-of-fold pass
                     # per (fold, draw, space), whatever estimators are enabled.
+                    # USER DECISION 2026-09-17: the two targets added today are
+                    # NOT computed in every representation. Building one costs
+                    # five model fits -- a LightGBM pass and a Gaussian-process
+                    # pass -- and n11 holds one space per representation the
+                    # dataset has, each at its full width. They are built in the
+                    # hybrid feature sets and in the one representation n11 uses
+                    # as its control, and nowhere else. Which spaces got them is
+                    # written to results['extra_target_spaces'], so an absent row
+                    # reads as a decision rather than as a failure. The clip is
+                    # not affected: it costs no extra fit beyond the
+                    # quantile_forest estimator, which sweeps every space as
+                    # every other estimator does.
                     extra_targets = {}
-                    if not is_clf:
+                    if not is_clf and space_name in extra_target_spaces:
                         _g_tr = (groups[train_idx] if groups is not None
                                  else None)
                         try:

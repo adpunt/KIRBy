@@ -377,7 +377,7 @@ Everything here is OPEN unless §4 says I fixed it.
   two swept.
 - **L** n13 `184-193` Track A/B builds the hybrid with a bare `create_hybrid` while the honest arm
   400 lines later builds it correctly; `939-952` the similarity-objective hybrid is counted as a
-  baseline in the hybrid-advantage tally; `806-828` the honest re-score arm has one candidate and
+  baseline in the hybrid-advantage tally; `806-828` the per-fold reselection arm has one candidate and
   one baseline, so the leave-one-fold-out selection it claims to perform does nothing.
 - **L** n15 `18-37` the noise-searched arm still picked its blueprint using clean validation labels.
 - **L** noise_helpers `64-90` the noisy-search levels do not overlap the levels the rest of the

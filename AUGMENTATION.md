@@ -60,7 +60,7 @@ The four stages of this workstream, in order:
 | 08-21 | Editing `c21` is inside the boundary; measure the defects before fixing them | done. |
 | 08-21 | Top-5 per donor, not 64 | done, via the per-source cap. |
 | 08-23 | Drop the three full-width representations from logD's augmentation list | done — logD's list is `maccs`, `pharmacophore3d`, `usrcat` (276 features, was 3,604). |
-| 08-24 | Fix the random splitting in the honest re-score | done in the honest evaluator, **inert everywhere else** (§4.1). |
+| 08-24 | Fix the random splitting in the per-fold reselection | done in the honest evaluator, **inert everywhere else** (§4.1). |
 | 08-24 | Remove the dormant routine | **not done.** Both candidates turned out to be reachable or referenced (§7.4). |
 | 08-24 | Keep the base-aware ranker as the default | done. |
 | 08-25 | Nothing runs locally for more than 3 hours; route it to the server instead of cutting axes | standing. |
@@ -559,7 +559,7 @@ Fixed and verified: the per-source cap no longer collides two runs on one stored
 are gone; logD's augmentation list no longer contains three full-width representations; top-5 per
 donor is honoured; the base representation now enters at full native width so "budgets too small"
 and "pool too big" cannot apply to the single-representation arm; the ratcheting bar is out of
-the default path; the residual ranker is out-of-fold and is the default; the honest re-score
+the default path; the residual ranker is out-of-fold and is the default; the per-fold reselection
 passes the scaffold grouping in five places.
 
 Settled by decision: representations are never in the cache key and there is no in-cache
@@ -813,7 +813,7 @@ Use 0.0018 and say where it came from.
 ## 8. Where things live
 
 **Engine.** The admission paths, the two rankers and the auto-demotion are all in
-`src/kirby/hybrid.py`. The search, the cache identity and the honest re-score are in
+`src/kirby/hybrid.py`. The search, the cache identity and the per-fold reselection are in
 `src/kirby/find_best_hybrid.py`. Neither imports the per-dataset pool.
 
 **Pools.** `DATASET_REPS` in `tests/experiments/complexity/complexity_helpers.py`.

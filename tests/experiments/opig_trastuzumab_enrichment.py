@@ -66,7 +66,7 @@ from experiments._shared import (add_distance_metric_arg,
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
-    honest_rescore, build_honest_rescore_input, hr_exclude_folds,
+    fold_reselection, build_fold_reselection_input, hr_exclude_folds,
 )
 
 # =============================================================================
@@ -567,7 +567,7 @@ def _paired_enrichment_delta(results):
         # exactly one candidate per model — the hybrid rebuilt inside each fold —
         # so there is no recipe list for fold 0 to have filtered, and both arms
         # pay the same held-out tax on every fold.
-        out[f'enrich_{key}'] = honest_rescore(
+        out[f'enrich_{key}'] = fold_reselection(
             candidates_by_model, baselines_by_model, lower_is_better=False)
     return out
 
@@ -625,7 +625,7 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # carries the per-representation `selected_indices` across folds (P0 fix).
     #
     # The number reported for the hybrid is the leave-one-fold-out re-score
-    # (honest_block below), not the search's own best mean AUC. That best mean
+    # (reselection_block below), not the search's own best mean AUC. That best mean
     # was the maximum over every allocation method, importance method,
     # evaluator and budget, taken on the same folds it was measured on, while
     # every single representation beside it was a mean over held-out folds.
@@ -633,8 +633,8 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # Augmentation config matches tz_her2_binary in DATASET_REPS:
     # augmentation = [] (no augmentation reps for antibody classification)
     hybrid_search_meta = None
-    honest_block = None
-    honest_result = None
+    reselection_block = None
+    reselection_result = None
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -662,30 +662,30 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             # held-out fold both arms pick their winner from the other folds
             # only, so the hybrid AUROC is measured the same way as the
             # per-representation AUROCs it sits beside.
-            honest_block = build_honest_rescore_input(search)
+            reselection_block = build_fold_reselection_input(search)
             # Fold 0 is dropped from BOTH arms. The search filtered its own
             # recipe list using fold 0's scores, so fold 0's hybrid score is
             # read off recipes fold 0 helped keep, while every single
             # representation passed through no such filter. hr_exclude_folds
             # reads which folds that was off the block.
-            _excluded = hr_exclude_folds(honest_block)
-            honest_result = honest_rescore(
-                honest_block['candidates_by_model'],
-                honest_block['baselines_by_model'],
-                honest_block['lower_is_better'],
-                metric_name=honest_block.get('metric_name'),
+            _excluded = hr_exclude_folds(reselection_block)
+            reselection_result = fold_reselection(
+                reselection_block['candidates_by_model'],
+                reselection_block['baselines_by_model'],
+                reselection_block['lower_is_better'],
+                metric_name=reselection_block.get('metric_name'),
                 exclude_folds=_excluded,
             )
             if _excluded:
-                print(f"  honest re-score drops fold(s) {_excluded} from both "
+                print(f"  per-fold reselection drops fold(s) {_excluded} from both "
                       f"arms (the search filtered its recipe list on them)")
-            for mn, r in sorted(honest_result.items()):
+            for mn, r in sorted(reselection_result.items()):
                 flag = ' [single-fold: NOT honest]' if r['single_fold'] else ''
                 # delta_mean_of_folds is the paired per-fold difference. r['delta']
                 # is the difference of the two arms' means and is not printed
                 # here; the two diverge whenever either arm drops a fold.
-                print(f"  honest × {mn:8s}  hybrid={r['hybrid_honest']:.4f}  "
-                      f"best_single={r['best_single_honest']:.4f}  "
+                print(f"  honest × {mn:8s}  hybrid={r['hybrid_reselected']:.4f}  "
+                      f"best_single={r['best_single_reselected']:.4f}  "
                       f"delta_mean_of_folds={r['delta_mean_of_folds']:+.4f} "
                       f"over {r['n_paired_folds']} paired folds{flag}")
         if _meta is not None and _meta.get('score_mean') is not None:
@@ -701,7 +701,7 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
                     'search folds, not a held-out score — it is the maximum '
                     'over every allocation method, importance method, '
                     'evaluator and budget, measured on the folds that chose '
-                    'it. The hybrid number to report is in honest_comparison, '
+                    'it. The hybrid number to report is in reselected_comparison, '
                     'a leave-one-fold-out re-score against the same baseline '
                     'representations (2026-09-04, split audit). The key was '
                     'renamed from rf_cv_auc, so a reader that asks for the old '
@@ -812,11 +812,11 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         'hybrid_search': hybrid_search_meta,  # search diagnostic; NOT held-out
         # The held-out hybrid-vs-best-single comparison, per downstream model,
         # plus the raw per-fold scores it was computed from.
-        'honest_rescore': honest_block,
-        'honest_comparison': honest_result,
+        'fold_reselection': reselection_block,
+        'reselected_comparison': reselection_result,
         # Hybrid minus best single representation on the same held-out fold, in
         # binder enrichment, one block per top fraction. This is the file's
-        # question 3; honest_comparison above is in AUROC and does not answer it.
+        # question 3; reselected_comparison above is in AUROC and does not answer it.
         'enrichment_comparison': _paired_enrichment_delta(results),
     }
 
@@ -893,7 +893,7 @@ def print_analysis(ds_results):
     # hybrid recipe and the best single representation are both picked from the
     # other folds, so the two arms pay the same tax. AUROC, so it is not
     # rankable against the E@1% column above; printed separately.
-    honest = ds_results.get('honest_comparison') or {}
+    honest = ds_results.get('reselected_comparison') or {}
     if honest:
         _dropped = sorted({f for r in honest.values()
                            for f in (r.get('excluded_folds') or [])})
@@ -908,7 +908,7 @@ def print_analysis(ds_results):
         print(f"    {'-'*10} {'-'*10} {'-'*12} {'-'*10} {'-'*6}")
         for model_name in sorted(honest):
             r = honest[model_name]
-            h, b = r['hybrid_honest'], r['best_single_honest']
+            h, b = r['hybrid_reselected'], r['best_single_reselected']
             d = r['delta_mean_of_folds']
             h_s = f"{h:.4f}" if not np.isnan(h) else "—"
             b_s = f"{b:.4f}" if not np.isnan(b) else "—"
@@ -933,7 +933,7 @@ def print_analysis(ds_results):
             top_s = f"{frac * 100:g}%"
             for model_name in sorted(block):
                 r = block[model_name]
-                h, b = r['hybrid_honest'], r['best_single_honest']
+                h, b = r['hybrid_reselected'], r['best_single_reselected']
                 d = r['delta_mean_of_folds']
                 h_s = f"{h:.4f}" if not np.isnan(h) else "—"
                 b_s = f"{b:.4f}" if not np.isnan(b) else "—"

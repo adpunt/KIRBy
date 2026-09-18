@@ -45,11 +45,11 @@ the points it is scored on:
   * per-fold held-out scores are averaged across folds.
 Both axes ALSO persist the per-fold held-out scores for BOTH arms (hybrid
 candidate cells and single-rep baseline cells) in the CONTRACT-shaped blocks
-`honest_rescore_clustering` and `honest_rescore_retrieval`. The two axes have
+`fold_reselection_clustering` and `fold_reselection_retrieval`. The two axes have
 OPPOSITE metric directions (coherence higher-better, retrieval-cost
-lower-better), so they cannot share one `honest_rescore` block (that helper
+lower-better), so they cannot share one `fold_reselection` block (that helper
 takes a single `lower_is_better`); hence two separate, identically-structured
-blocks. A reader feeds each block straight to experiments._shared.honest_rescore.
+blocks. A reader feeds each block straight to experiments._shared.fold_reselection.
 
 WHAT CHANGED IN THE RESULT FILE ON 2026-09-12. There is no single 'hybrid' space
 any more. `clustering` and `retrieval` hold one space per pool slot, named
@@ -85,7 +85,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     compute_feature_importance, get_domain_metric,
     build_fold_hybrid, get_fold_pool_recipes,
-    honest_rescore,
+    fold_reselection,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
     hr_exclude_folds,
 )
@@ -105,7 +105,7 @@ N_HYBRIDS_PER_FAMILY = 3
 
 
 # =========================================================================
-# LOCAL HELD-OUT STATISTICS (unsupervised — the shared honest_rescore helper
+# LOCAL HELD-OUT STATISTICS (unsupervised — the shared fold_reselection helper
 # does the honest ARITHMETIC on per-fold scores, but these two statistics are
 # not model-prediction metrics, so the held-out computation lives here.)
 # =========================================================================
@@ -137,7 +137,7 @@ def _heldout_coherence(X_tr_s, y_tr, X_va_s, y_va, n_clusters, is_clf):
     cluster. Higher = the train-learned cluster geometry organises unseen
     labels well. Returns NaN when the fold cannot support the statistic (too few
     train points for n_clusters, degenerate labels, no cluster with >=2 held-out
-    points, etc.) — the honest_rescore helper skips NaN folds.
+    points, etc.) — the fold_reselection helper skips NaN folds.
 
     Both branches need at least 2 held-out rows in a cluster. A cluster holding
     one row has purity 1.0 by construction, so admitting singletons rewarded a
@@ -264,7 +264,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _pool_cache = {}
     _pool_warnings_seen = set()
     # True as soon as any pool member filtered its own candidate list on fold 0's
-    # scores. It decides which folds the honest re-score drops from BOTH arms.
+    # scores. It decides which folds the per-fold reselection drops from BOTH arms.
     pool_fold0_pruned = None
     pool_read = {
         'pool_subset': POOL_SUBSET,
@@ -649,7 +649,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Legacy summary (kept for downstream readers) — now on HELD-OUT means ──
     # Top-3 baseline reps per axis, and the hybrid-vs-best-rep win booleans.
     # These still use same-fold selection of the best rep, so they carry mild
-    # optimism; the fully-honest number is the honest_rescore block below.
+    # optimism; the fully-honest number is the fold_reselection block below.
     rep_retrieval = {k: v['unweighted']['mean_delta_y']
                      for k, v in retrieval_results.items()
                      if k.startswith('rep_')
@@ -718,14 +718,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"({'win' if h_ret < best_rep_ret_val else 'loss'})")
 
     # ── Honest leave-one-fold-out re-score blocks (CONTRACT shape) ──
-    # Two axes with OPPOSITE directions cannot share one honest_rescore block
+    # Two axes with OPPOSITE directions cannot share one fold_reselection block
     # (the helper takes a single lower_is_better), so each axis gets its own
     # identically-structured block. Each hybrid n_clusters / retrieval condition
     # is a candidate CELL and each single-rep (space x n_clusters / space) is a
-    # baseline CELL, so honest_rescore re-picks the winning cell per held-out
+    # baseline CELL, so fold_reselection re-picks the winning cell per held-out
     # fold instead of trusting the same-fold argmax. Single grouping model per
     # axis by design ('kmeans' / 'knn'). A reader feeds each block straight to
-    # experiments._shared.honest_rescore.
+    # experiments._shared.fold_reselection.
     #
     # 2026-09-12: the candidate cells are no longer one searched recipe. Each
     # (family, rank) slot the pool filled is a cell, at each cluster count, so a
@@ -783,7 +783,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # search pickled before the flag existed reads as pruned, which is the
     # reading hr_exclude_folds takes.
     _exclude = [0] if (pool_fold0_pruned is None or pool_fold0_pruned) else []
-    results['honest_rescore_clustering'] = {
+    results['fold_reselection_clustering'] = {
         'lower_is_better': False,
         'recipe_selection': 'other_folds_of_pool_search',
         'exclude_folds': _exclude,
@@ -794,7 +794,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'baselines_by_model': ({'kmeans': clu_baselines}
                                if clu_baselines else {}),
     }
-    results['honest_rescore_retrieval'] = {
+    results['fold_reselection_retrieval'] = {
         'lower_is_better': True,
         'recipe_selection': 'other_folds_of_pool_search',
         'exclude_folds': _exclude,
@@ -809,10 +809,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Reuse the shared pure-arithmetic helper (no ML) to report the honest
     # hybrid-vs-best-single-rep delta inline for each axis.
     for axis, block, better in (
-            ('clustering', results['honest_rescore_clustering'], 'higher'),
-            ('retrieval', results['honest_rescore_retrieval'], 'lower')):
+            ('clustering', results['fold_reselection_clustering'], 'higher'),
+            ('retrieval', results['fold_reselection_retrieval'], 'lower')):
         try:
-            hr = honest_rescore(block['candidates_by_model'],
+            hr = fold_reselection(block['candidates_by_model'],
                                 block['baselines_by_model'],
                                 block['lower_is_better'],
                                 exclude_folds=hr_exclude_folds(block),
@@ -820,17 +820,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 # into the inline result too, so it is not read
                                 # as a whole-dataset pick.
                                 recipe_selection=block['recipe_selection'])
-            results[f'honest_rescore_{axis}_result'] = hr
+            results[f'fold_reselection_{axis}_result'] = hr
             model_key = 'kmeans' if axis == 'clustering' else 'knn'
             m = hr.get(model_key)
             if m is not None:
                 flag = ' [single-fold, NOT honest]' if m.get('single_fold') else ''
                 print(f"  Honest LOFO re-score ({axis}, {better}-better){flag}: "
-                      f"hybrid={m['hybrid_honest']:.4f}, "
-                      f"best_single={m['best_single_honest']:.4f}, "
+                      f"hybrid={m['hybrid_reselected']:.4f}, "
+                      f"best_single={m['best_single_reselected']:.4f}, "
                       f"delta={m['delta']:+.4f} (positive=hybrid better)")
         except Exception as e:
-            print(f"  [warn] honest_rescore ({axis}) failed: "
+            print(f"  [warn] fold_reselection ({axis}) failed: "
                   f"{type(e).__name__}: {e}")
 
     return results

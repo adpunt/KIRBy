@@ -98,7 +98,7 @@ kirby-rogii/
 │   ├── search.py                      # per-(view-subset × model × postproc) enumeration, 5-fold CV w/ gap mask, OOF accumulation
 │   ├── run.py                         # orchestrator (CLI): --views, --models, --speed fast|full, writes per-condition OOF + final model
 │   │
-│   ├── refuse_honest.py               # nested-CV honest re-fusion (mirror annitia)
+│   ├── refuse_reselection.py               # nested-CV honest re-fusion (mirror annitia)
 │   ├── refuse_variants.py             # 12 simple fusion variants (§6 F1-F12)
 │   ├── refuse_meta_aware.py           # 5 per-row routing meta-variants (§6 F13-F17)
 │   ├── refuse_diverse.py              # greedy diverse-by-OOF-improvement

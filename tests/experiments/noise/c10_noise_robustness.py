@@ -18,7 +18,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, _cv_split,
     get_domain_metric, convert_numpy, get_model_factories,
-    build_fold_hybrid, build_honest_rescore_input, honest_rescore,
+    build_fold_hybrid, build_fold_reselection_input, fold_reselection,
     hr_exclude_folds,
 )
 from kirby.find_best_hybrid import find_best_hybrid
@@ -327,7 +327,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         _searches[key] = s
         return s
 
-    def _honest_cell(search):
+    def _reselected_cell(search):
         """Held-out scores for one (condition, level), hybrid and reps alike.
 
         Each reported fold is read with the recipe that scored best on the OTHER
@@ -336,12 +336,12 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         read off recipes fold 0 helped keep while the representations passed
         through no such filter. Four folds are reported, not five.
 
-        Returns per_budget (one honest_rescore entry per budget, the hybrid arm
+        Returns per_budget (one fold_reselection entry per budget, the hybrid arm
         restricted to that budget's recipes), per_rep (each representation's own
         mean over the reported folds) and best_single (the representation
         re-picked per fold, which is the arm the hybrid is compared against).
         """
-        block = build_honest_rescore_input(search)
+        block = build_fold_reselection_input(search)
         excluded = hr_exclude_folds(block)
         _drop = {int(f) for f in excluded}
         bases = (block['baselines_by_model'].get('rf') or {})
@@ -361,7 +361,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
         per_budget = {}
         for budget in budgets:
-            per_budget[budget] = honest_rescore(
+            per_budget[budget] = fold_reselection(
                 {'rf': cands_by_budget.get(budget, [])},
                 {'rf': bases},
                 block['lower_is_better'],
@@ -378,7 +378,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         return {
             'per_budget': per_budget,
             'per_rep': per_rep,
-            'best_single': per_budget[budgets[0]]['best_single_honest'],
+            'best_single': per_budget[budgets[0]]['best_single_reselected'],
             'excluded_folds': excluded,
             'recipes': {
                 budget: [bp.allocation_method, bp.importance_method,
@@ -397,7 +397,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             s = _search_for(strategy, level)
             if s is None:
                 continue
-            cells[(strategy, float(level))] = _honest_cell(s)
+            cells[(strategy, float(level))] = _reselected_cell(s)
 
     results['search_failures'] = search_failures
     _any_cell = next(iter(cells.values()), None)
@@ -545,7 +545,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 cell = cells.get((strategy, float(level)))
                 if cell is None:
                     continue
-                score = cell['per_budget'][budget]['hybrid_honest']
+                score = cell['per_budget'][budget]['hybrid_reselected']
                 if score is None or np.isnan(score):
                     continue
                 level_scores[level] = float(score)
@@ -612,7 +612,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                     'recipes_differ': _clean_recipe != _noisy_recipe,
                     # The held-out score this condition's own recipe reaches at
                     # this level, the same number phase 2 reports.
-                    'noisy_recipe_score': cell['per_budget'][budget]['hybrid_honest'],
+                    'noisy_recipe_score': cell['per_budget'][budget]['hybrid_reselected'],
                 }
             if _per_level:
                 _rows[float(level)] = _per_level

@@ -67,7 +67,7 @@ from experiments._shared import (add_distance_metric_arg,
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
-    honest_rescore, build_honest_rescore_input,
+    fold_reselection, build_fold_reselection_input,
     hr_exclude_folds, hr_direction,
 )
 
@@ -420,7 +420,7 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
     # so it carries the only hybrid scores this file reports. The whole-data
     # hybrid matrix it used to sit beside is gone (see below).
     # None when no search was produced; reader must guard.
-    honest_block = None
+    reselection_block = None
 
     # Build hybrid with aac as augmentation rep (matches DDG domain config)
     try:
@@ -461,12 +461,12 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
             **_pkw,
         )
         # Persist per-fold scores for BOTH arms straight from the SearchResult.
-        # build_honest_rescore_input groups hybrid candidates by DOWNSTREAM model
+        # build_fold_reselection_input groups hybrid candidates by DOWNSTREAM model
         # (each with its per-fold 'fold_scores') and inverts search.baseline_fold_scores
         # into {model: {rep: [folds]}} — respecting whatever model gate the search
         # ran under (never a fixed set). skip_secondary defaults True.
         if search is not None:
-            honest_block = build_honest_rescore_input(search)
+            reselection_block = build_fold_reselection_input(search)
         top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{nm}={s:.4f}' for nm, s in top3)}")
@@ -517,9 +517,9 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
         'results': results,
         # Honest arithmetic input (contract key names). One block per condition
         # since each condition is its own dataset/search; a reader loads it and
-        # calls honest_rescore(block['candidates_by_model'],
+        # calls fold_reselection(block['candidates_by_model'],
         # block['baselines_by_model'], block['lower_is_better']).
-        'honest_rescore': honest_block,
+        'fold_reselection': reselection_block,
     }
 
 
@@ -552,7 +552,7 @@ def print_analysis(all_results):
         print(f"    {method}: Pearson r = {r_p:.2f}")
 
     # Per-condition best results. No hybrid column: the hybrid number lives in
-    # print_honest_analysis below, where the recipe is re-picked on the other
+    # print_reselection_analysis below, where the recipe is re-picked on the other
     # folds and the features were built inside each training fold. The column
     # that used to sit here read a matrix selected over every row.
     print(f"\n  {'Condition':20s} {'N':>7s} {'Best rep':>25s} {'Model':>8s} "
@@ -617,14 +617,14 @@ def print_analysis(all_results):
               f"gap to EGNN = {gap:.4f}")
 
 
-def print_honest_analysis(all_results):
+def print_reselection_analysis(all_results):
     """Per-model, held-out honest comparison (selection-optimism corrected).
 
     The only hybrid-versus-single-representation number this file reports: for
     each condition and each DOWNSTREAM model actually evaluated, the shared
     helper re-picks the winning hybrid recipe and the best single rep using the
     OTHER folds and scores on the held-out fold (identical tax to both arms).
-    Reuses experiments._shared.honest_rescore — no re-fitting, pure arithmetic.
+    Reuses experiments._shared.fold_reselection — no re-fitting, pure arithmetic.
 
     Delta is delta_mean_of_folds, the mean over folds of (hybrid - best single)
     on that held-out fold, and Folds is how many folds both arms scored. The
@@ -638,13 +638,13 @@ def print_honest_analysis(all_results):
         cr = all_results.get(cond)
         if not cr:
             continue
-        block = cr.get('honest_rescore')
+        block = cr.get('fold_reselection')
         if not block:
             # transfer_foldx (single train/test, no search) and any condition
             # whose hybrid build failed carry no honest block.
-            print(f"\n  {cond}: no honest_rescore block (no CV search)")
+            print(f"\n  {cond}: no fold_reselection block (no CV search)")
             continue
-        res = honest_rescore(
+        res = fold_reselection(
             block.get('candidates_by_model'),
             block.get('baselines_by_model'),
             # hr_direction, not a defaulted False — see its docstring: a
@@ -655,7 +655,7 @@ def print_honest_analysis(all_results):
             exclude_folds=hr_exclude_folds(block),
         )
         if not res:
-            print(f"\n  {cond}: honest_rescore produced no models")
+            print(f"\n  {cond}: fold_reselection produced no models")
             continue
         metric_label = block.get('metric_name') or 'the search metric'
         direction = ('lower better' if hr_direction(block) else 'higher better')
@@ -665,8 +665,8 @@ def print_honest_analysis(all_results):
               f"{'Delta':>9s} {'Folds':>6s}")
         for model in sorted(res):
             r = res[model]
-            h = r['hybrid_honest']
-            b = r['best_single_honest']
+            h = r['hybrid_reselected']
+            b = r['best_single_reselected']
             # delta_mean_of_folds, not delta: 'delta' subtracts the two arms'
             # MEAN scores and equals the paired quantity only when both arms
             # scored the same fold set (_shared.py:1552-1568).
@@ -760,7 +760,7 @@ def main():
         print_analysis(all_results)
         # Honest per-model held-out comparison (the leak-free counterpart to the
         # same-fold table above).
-        print_honest_analysis(all_results)
+        print_reselection_analysis(all_results)
 
     # Save results
     output_path = (args.output or

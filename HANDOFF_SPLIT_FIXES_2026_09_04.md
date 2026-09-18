@@ -104,8 +104,8 @@ n11's best_config is the top of ~4,800 configs, scored on the same folds it repo
 *Fix:* Pre-register one config before running, split the folds in two to score the winner separately, or relabel these three fields as a search result, not a measured recovery.
 
 **`tests/experiments/noise/n13_noise_distributions.py:817`**  
-n13 tags a fixed recipe as `honest_rescore`; the per-fold reselection it promises never runs.  
-*Wrong because:* The `honest_rescore` key promises a recipe re-picked per held-out fold, but n13 gives it one recipe, so re-selection never happens. That recipe was chosen on all folds with clean labels, true of every recipe in the suite, and it does not inflate the delta.  
+n13 tags a fixed recipe as `fold_reselection`; the per-fold reselection it promises never runs.  
+*Wrong because:* The `fold_reselection` key promises a recipe re-picked per held-out fold, but n13 gives it one recipe, so re-selection never happens. That recipe was chosen on all folds with clean labels, true of every recipe in the suite, and it does not inflate the delta.  
 *Fix:* Either rename the key to drop its per-fold-selection promise, or feed every searched recipe so the re-selection is real — costing one refit per noise_type x level x fold x seed.
 
 **`tests/experiments/noise/n14_activity_cliff_landscape.py:342`**  
@@ -130,7 +130,7 @@ n15 picks its noisy-label blueprint by scoring candidates against clean labels
 ## P2-complexity — The complexity experiments c05-c24  (18 findings)
 These report a hybrid-versus-best-single-representation number whose winning recipe was
 chosen by its score on the same folds the number is measured on. Most need the
-leave-one-fold-out re-pick that `honest_rescore` in tests/experiments/_shared.py already
+leave-one-fold-out re-pick that `fold_reselection` in tests/experiments/_shared.py already
 does; the per-fold scores it needs are usually already saved, so it costs no compute. Two
 (c06, c07, c09, c17) are a different shape: a quantity computed over every row enters a
 held-out score.
@@ -145,7 +145,7 @@ c05/c07 call a blueprint "no leakage" though it's tuned on the same rows it's sc
 **`tests/experiments/complexity/c05_learning_curves.py:242`**  
 c05 picks its hybrid winner from far more candidates than its representation winner.  
 *Wrong because:* The hybrid winner is chosen from about ten times more candidates than the representation winner. Picking a max over more candidates on the same folds inflates the hybrid score most when folds are small.  
-*Fix:* Rerun c05 and read the curve from honest_rescore_by_n, which it already writes and which scores every candidate on folds that did not pick it.
+*Fix:* Rerun c05 and read the curve from fold_reselection_by_n, which it already writes and which scores every candidate on folds that did not pick it.
 
 **`/Users/apunt/repos/KIRBy/tests/experiments/complexity/c06_within_family_gradient.py:186`**  
 c06's default mode fits importance scores on rows it later validates on  
@@ -174,8 +174,8 @@ c09's fallback picks its blueprint from all rows, then scores it on folds of the
 
 **`tests/experiments/complexity/c11_ensemble_vs_hybrid.py:419`**  
 c11's hybrid recipe and budget split are chosen using every fold's held-out labels  
-*Wrong because:* The comparison assumes both arms see only their fold's training split, but the hybrid's recipe and per-representation scores come from every row, held-out rows included. honest_rescore only re-picks the budget itself; it doesn't redo the recipe or the per-representation scores.  
-*Fix:* Either search for the recipe inside each fold's training split like nested_cv_evaluate does, or keep the full-dataset search and relabel hybrid_honest as recipe-selected on all folds.
+*Wrong because:* The comparison assumes both arms see only their fold's training split, but the hybrid's recipe and per-representation scores come from every row, held-out rows included. fold_reselection only re-picks the budget itself; it doesn't redo the recipe or the per-representation scores.  
+*Fix:* Either search for the recipe inside each fold's training split like nested_cv_evaluate does, or keep the full-dataset search and relabel hybrid_reselected as recipe-selected on all folds.
 
 **`tests/experiments/complexity/c12_modality_ablation.py:497`**  
 c12's HELPS/HURTS verdict compares two best scores fit and scored on the same folds  
@@ -380,8 +380,8 @@ No frac_single gate on the five-nearest-neighbour metric; the grouping goes unre
 *Wrong because:* The position_gated metric checks frac_single is at least 0.99 before running; this metric runs with no such check. The written JSON stores no frac_single and no group count, so a later reader can't tell the split was this uneven.  
 *Fix:* Gate this metric on frac_single like position_gated is gated, in both scaffold_experiment.py and base_rep_comparison.py, and write frac_single plus group counts into every output row.
 
-**`tests/experiments/similarity_metrics/winning_recipe_honest.py:37`**  
-winning_recipe_honest.py splits pairs, not molecules, and normalizes features on both halves  
+**`tests/experiments/similarity_metrics/winning_recipe_reselected.py:37`**  
+winning_recipe_reselected.py splits pairs, not molecules, and normalizes features on both halves  
 *Wrong because:* Each molecule appears in about eleven pairs, so nearly every molecule sits on both the selection half and the scoring half. The feature z-scoring also uses all molecules, not just the selection half, so splitting the pairs by molecule would not fix it alone.  
 *Fix:* Split molecules by scaffold group first, keep only pairs with both molecules on one side, and fit the z-score stats on the selection half only.
 
@@ -418,7 +418,7 @@ Native arm's score is measured on the same folds that picked its recipe
 **`tests/experiments/opig_blueprint_transfer.py:215`**  
 Blueprint transfer picks the recipe and best representation on the folds it scores them on  
 *Wrong because:* The evaluation folds are identical to the folds the search already scored, because GroupKFold is deterministic on the same groups. The recipe and the single representation chosen are the ones already seen during scoring, not held out from it.  
-*Fix:* Re-select the recipe and the best single representation inside each held-out fold, using training rows only, or honest_rescore's per-fold argmax that excludes the scored fold.
+*Fix:* Re-select the recipe and the best single representation inside each held-out fold, using training rows only, or fold_reselection's per-fold argmax that excludes the scored fold.
 
 **`tests/experiments/opig_cdr_flexibility.py:297`**  
 opig_cdr_flexibility reports a search maximum as the hybrid AUC, not a held-out score  
@@ -443,7 +443,7 @@ kirby_hybrid's recipe and features both see held-out labels before being scored 
 **`/Users/apunt/repos/KIRBy/tests/experiments/opig_kingsmith_component_splits.py:674`**  
 The hybrid-vs-base delta pits 5 hybrid models against 70 base draws.  
 *Wrong because:* Both numbers are maxima taken over the same folds they're measured on, so both run optimistic. The base side picks the best of 70 representation-model pairs, the hybrid side the best of only 5.  
-*Fix:* For each model, subtract the base representation's held-out fold score from the hybrid's, using the same arithmetic honest_rescore already runs, then rerun the experiment keeping per-fold scores.
+*Fix:* For each model, subtract the base representation's held-out fold score from the hybrid's, using the same arithmetic fold_reselection already runs, then rerun the experiment keeping per-fold scores.
 
 **`/Users/apunt/repos/KIRBy/tests/experiments/opig_scaffold_similarity.py:283`**  
 mode_features picks its feature subset and scores it on the same pairs it picked from  
@@ -453,7 +453,7 @@ mode_features picks its feature subset and scores it on the same pairs it picked
 **`/Users/apunt/repos/KIRBy/tests/experiments/opig_trastuzumab_enrichment.py:361`**  
 The printed hybrid AUC is the search's own best CV score, not a held-out score  
 *Wrong because:* That score is chosen on the same folds it's measured on, so it's inflated by picking the best of many settings. Every single representation printed next to it is instead a mean AUROC over held-out folds.  
-*Fix:* Score the hybrid the same way as the representations: build_honest_rescore_input(search) then honest_rescore(...), the two calls opig_humanness.py already makes.
+*Fix:* Score the hybrid the same way as the representations: build_fold_reselection_input(search) then fold_reselection(...), the two calls opig_humanness.py already makes.
 
 ### Bring these to me before doing them
 

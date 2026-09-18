@@ -33,7 +33,7 @@ The empirical pattern observed: **more variants → better generalization** (0.9
 22. **Cohort-specific specialists**: (e.g., diabetes vs no-diabetes patients use different models)
 
 ### D. Calibration / regularization
-23. **Mid-alpha Coxnet** instead of smallest-alpha (which is least regularized) ✓ done in refuse_honest
+23. **Mid-alpha Coxnet** instead of smallest-alpha (which is least regularized) ✓ done in refuse_reselection
 24. **Strong L2 on stack_meta**: increases robustness when many features
 25. **Conformal prediction wrappers**: produce calibrated risk intervals from any base model
 26. **Isotonic regression calibration**: reshape predictions to be probabilistically meaningful (concordance is rank-based but calibration helps stacking)

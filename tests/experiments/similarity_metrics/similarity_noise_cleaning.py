@@ -27,7 +27,7 @@ injection seeds. The count-Tanimoto fingerprint is the baseline to beat.
 MOLECULE-HELD-OUT SCORING (the fix this file exists for). Every fitted step --
 the drop-one descriptor blacklist, the fine-2D column selection, and the
 per-feature z-score mean/sd -- used to see all n molecules and then be graded on
-all n molecules. winning_recipe_honest.py splits the MCS PAIRS 50/50, which is
+all n molecules. winning_recipe_reselected.py splits the MCS PAIRS 50/50, which is
 not enough: both pair halves are drawn from the same molecules, so the selection
 has still seen every molecule it is scored on. Here the MOLECULES are split
 50/50 by whole Bemis-Murcko scaffold group (same convention as

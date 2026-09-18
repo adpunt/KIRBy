@@ -67,11 +67,11 @@ from experiments._shared import (
     get_config, create_experiment_parser,
     save_experiment_results,
     get_model_factories, cv_split,
-    honest_rescore,
+    fold_reselection,
 )
 
 
-def _honest_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores,
+def _reselected_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores,
                        lower_is_better=False):
     """Leave-one-fold-out delta for one modality combination.
 
@@ -108,7 +108,7 @@ def _honest_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores,
         return {'delta_by_model': {}, 'delta': float('nan'),
                 'wins': 0, 'n_cells': 0, 'per_model': {}}
 
-    hr = honest_rescore(candidates_by_model, baselines_by_model,
+    hr = fold_reselection(candidates_by_model, baselines_by_model,
                         lower_is_better)
     delta_by_model, wins, n_cells = {}, 0, 0
     for m, r in hr.items():
@@ -153,7 +153,7 @@ def _honest_pair_delta(pair_model_scores, baseline_rep_names, all_rep_scores,
 # changes and no new fit happens.
 #
 # The re-pick is per model, which is what the single side already does
-# (honest_rescore picks the baseline representation per model, per held-out
+# (fold_reselection picks the baseline representation per model, per held-out
 # fold). Doing it cross-model on the combination side would make the two arms
 # differ in a second way.
 
@@ -615,7 +615,7 @@ def eval_single_rep(X, labels, groups, model_factories, n_folds, task_type,
                 'score_std': float('nan'),
                 'dim': X.shape[1],
                 # Every fold raised. The NaNs are kept in fold order so the
-                # honest re-score still lines this model up with the others.
+                # per-fold reselection still lines this model up with the others.
                 'fold_scores': [float(s) for s in fold_scores],
             }
 
@@ -915,23 +915,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _lofo_model_scores = {m: {'fold_scores': fs}
                               for m, fs in _lofo['fold_scores_by_model'].items()}
 
-        _hp = _honest_pair_delta(
+        _hp = _reselected_pair_delta(
             _lofo_model_scores,
             list(available_by_modality.get(mod_a, []))
             + list(available_by_modality.get(mod_b, [])),
             all_rep_scores, lower_is_better=False)
-        pairwise_results[pair_key]['honest_delta'] = _hp['delta']
-        pairwise_results[pair_key]['honest_delta_by_model'] = _hp['delta_by_model']
-        pairwise_results[pair_key]['honest_per_model'] = _hp['per_model']
-        pairwise_results[pair_key]['honest_wins'] = _hp['wins']
-        pairwise_results[pair_key]['honest_n_cells'] = _hp['n_cells']
+        pairwise_results[pair_key]['reselected_delta'] = _hp['delta']
+        pairwise_results[pair_key]['reselected_delta_by_model'] = _hp['delta_by_model']
+        pairwise_results[pair_key]['reselected_per_model'] = _hp['per_model']
+        pairwise_results[pair_key]['reselected_wins'] = _hp['wins']
+        pairwise_results[pair_key]['reselected_n_cells'] = _hp['n_cells']
         # What each side's representations were chosen on.
         pairwise_results[pair_key]['same_fold_reps_selected_on'] = 'all folds'
         pairwise_results[pair_key]['reps_selected_on'] = (
             'other folds, per held-out fold and per model'
             if _lofo['repick_applied'] else 'all folds (single fold: no re-pick)')
         # The pair actually scored on each held-out fold, per model, and the
-        # scores it got there. Both feed honest_delta.
+        # scores it got there. Both feed reselected_delta.
         pairwise_results[pair_key]['lofo_pair_fold_scores'] = \
             _lofo['fold_scores_by_model']
         pairwise_results[pair_key]['lofo_pair_reps_per_fold'] = \
@@ -1008,16 +1008,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _la_model_scores = {m: {'fold_scores': fs}
                             for m, fs in _la['fold_scores_by_model'].items()}
 
-        _ha = _honest_pair_delta(
+        _ha = _reselected_pair_delta(
             _la_model_scores,
             [r for m in modalities_with_reps
              for r in available_by_modality.get(m, [])],
             all_rep_scores, lower_is_better=False)
-        all_combined_result['honest_delta'] = _ha['delta']
-        all_combined_result['honest_delta_by_model'] = _ha['delta_by_model']
-        all_combined_result['honest_per_model'] = _ha['per_model']
-        all_combined_result['honest_wins'] = _ha['wins']
-        all_combined_result['honest_n_cells'] = _ha['n_cells']
+        all_combined_result['reselected_delta'] = _ha['delta']
+        all_combined_result['reselected_delta_by_model'] = _ha['delta_by_model']
+        all_combined_result['reselected_per_model'] = _ha['per_model']
+        all_combined_result['reselected_wins'] = _ha['wins']
+        all_combined_result['reselected_n_cells'] = _ha['n_cells']
         all_combined_result['same_fold_reps_selected_on'] = 'all folds'
         all_combined_result['reps_selected_on'] = (
             'other folds, per held-out fold and per model'
@@ -1066,15 +1066,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"{'wins':>7}  {'Dim':>6}")
     print("    " + "-" * 80)
     for pair_key, pr in sorted(pairwise_results.items(),
-                                key=lambda x: -(x[1].get('honest_delta')
-                                                if x[1].get('honest_delta') is not None
-                                                and not np.isnan(x[1]['honest_delta'])
+                                key=lambda x: -(x[1].get('reselected_delta')
+                                                if x[1].get('reselected_delta') is not None
+                                                and not np.isnan(x[1]['reselected_delta'])
                                                 else -np.inf)):
         score = pr['score_mean']
         delta = pr['delta_vs_best_single']
-        hdelta = pr.get('honest_delta', float('nan'))
+        hdelta = pr.get('reselected_delta', float('nan'))
         dim = pr['total_dim']
-        wins = f"{pr.get('honest_wins', 0)}/{pr.get('honest_n_cells', 0)}"
+        wins = f"{pr.get('reselected_wins', 0)}/{pr.get('reselected_n_cells', 0)}"
         flag = ''
         if not np.isnan(hdelta):
             flag = (' <-- HELPS' if hdelta > 0.01
@@ -1086,7 +1086,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  All modalities combined:")
         print(f"    {metric}={all_combined_result['score_mean']:+.4f}  "
               f"Δ={all_combined_result['delta_vs_best_single']:+.4f}  "
-              f"lofo Δ={all_combined_result.get('honest_delta', float('nan')):+.4f}  "
+              f"lofo Δ={all_combined_result.get('reselected_delta', float('nan')):+.4f}  "
               f"dim={all_combined_result['total_dim']}")
 
     # Rank modalities by contribution when paired with expression
@@ -1113,13 +1113,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # representation on each held-out fold's other folds.
             # 2026-09-12 — the pair side is re-picked on the other folds too,
             # so this reads the per-fold pair scores, not the all-folds pair.
-            _he = _honest_pair_delta(
+            _he = _reselected_pair_delta(
                 {m: {'fold_scores': fs} for m, fs in
                  pr.get('lofo_pair_fold_scores', {}).items()},
                 available_by_modality.get('expression', []),
                 all_rep_scores, lower_is_better=False)
-            pr['honest_delta_vs_expression'] = _he['delta']
-            pr['honest_delta_vs_expression_by_model'] = _he['delta_by_model']
+            pr['reselected_delta_vs_expression'] = _he['delta']
+            pr['reselected_delta_vs_expression_by_model'] = _he['delta_by_model']
             partner_deltas.append((mod, delta, pr['score_mean'], _he))
 
         for mod, delta, combined_score, _he in sorted(
@@ -1140,7 +1140,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The prints above pick the best score across models AND across cells
     # (double-sided cross-model max), which is optimistically biased. Here we
     # instead persist the raw per-fold scores per model for BOTH arms and let
-    # the shared honest_rescore helper re-pick the winner on each held-out fold,
+    # the shared fold_reselection helper re-pick the winner on each held-out fold,
     # keeping every model's result separately (no collapse to one max cell).
     #
     # Mapping onto the helper's contract:
@@ -1185,7 +1185,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     candidates_by_model = {m: c for m, c in candidates_by_model.items() if c}
     baselines_by_model = {m: b for m, b in baselines_by_model.items() if b}
 
-    honest_block = {
+    reselection_block = {
         'lower_is_better': lower_is_better,
         # Every fold counts. The candidates here are the arms this file built itself,
         # not a search's recipe list, so no fold filtered them.
@@ -1195,20 +1195,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
 
     # Compute the honest per-model deltas now for the log; readers can re-derive
-    # from the persisted block via honest_rescore(...).
-    honest_result = honest_rescore(candidates_by_model, baselines_by_model,
+    # from the persisted block via fold_reselection(...).
+    reselection_result = fold_reselection(candidates_by_model, baselines_by_model,
                                    lower_is_better)
 
     print("\n" + "-" * 60)
     print("  HONEST PER-MODEL RE-SCORE (leave-one-fold-out, per model)")
     print("-" * 60)
-    if honest_result:
+    if reselection_result:
         print(f"    {'Model':<12} {'hybrid':>10} {'best_single':>12} {'delta':>10}  note")
-        for m in sorted(honest_result.keys()):
-            r = honest_result[m]
+        for m in sorted(reselection_result.keys()):
+            r = reselection_result[m]
             note = 'SINGLE-FOLD (optimistic)' if r.get('single_fold') else ''
-            print(f"    {m:<12} {r['hybrid_honest']:>10.4f} "
-                  f"{r['best_single_honest']:>12.4f} {r['delta']:>+10.4f}  {note}")
+            print(f"    {m:<12} {r['hybrid_reselected']:>10.4f} "
+                  f"{r['best_single_reselected']:>12.4f} {r['delta']:>+10.4f}  {note}")
     else:
         print("    (no models with usable per-fold data)")
 
@@ -1244,12 +1244,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'all_combined': all_combined_result,
         # Honest, per-model, leave-one-fold-out re-score block. Matches the
         # shared contract exactly: a reader loads this and calls
-        # honest_rescore(block['candidates_by_model'], block['baselines_by_model'],
+        # fold_reselection(block['candidates_by_model'], block['baselines_by_model'],
         #                block['lower_is_better']).
-        'honest_rescore': honest_block,
+        'fold_reselection': reselection_block,
         # Pre-computed per-model honest deltas (convenience; re-derivable from
-        # 'honest_rescore' above). NOT a cross-model max — one entry per model.
-        'honest_rescore_result': honest_result,
+        # 'fold_reselection' above). NOT a cross-model max — one entry per model.
+        'fold_reselection_result': reselection_result,
     }
 
     return output

@@ -39,7 +39,7 @@ from experiments._shared import (
     get_domain_metric, get_model_factories, get_precomputed_search,
     get_fold_pool_recipes,
     build_fold_hybrid, DOWNSTREAM_MODELS,
-    honest_rescore,
+    fold_reselection,
     hr_exclude_folds,
 )
 from kirby.find_best_hybrid import nested_cv_outer_folds
@@ -75,7 +75,7 @@ def _finite_mean(fold_scores):
     subset); NaN if none are finite. Local helper: the cliff/non-cliff CV scores are
     a redesigned segmented statistic that never flows through a SearchResult, so the
     shared arithmetic in _shared.py does not fit here. Kept fold-aligned (NaN
-    placeholders) so honest_rescore can index the same fold across reps/hybrid."""
+    placeholders) so fold_reselection can index the same fold across reps/hybrid."""
     finite = [s for s in fold_scores if s is not None and not np.isnan(s)]
     return float(np.mean(finite)) if finite else float('nan')
 
@@ -414,7 +414,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Fold-aligned per-fold cliff scores: append NaN for any fold that has
             # no usable cliff subset (or a failed fit) so fold f means the same fold
             # across every rep + the hybrid — required for held-out selection in
-            # honest_rescore (the scalar means below are NaN-tolerant, so identical
+            # fold_reselection (the scalar means below are NaN-tolerant, so identical
             # to the old skip-based values).
             cliff_fold_scores = []
             noncliff_fold_scores = []
@@ -512,7 +512,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     fold0_pruned_any = None
     for mname, mfactory in model_factories.items():
         # Fold-aligned per-fold hybrid scores (NaN placeholder on skipped/failed
-        # folds) so honest_rescore can index the same fold as the per-rep baselines.
+        # folds) so fold_reselection can index the same fold as the per-rep baselines.
         rank_cliff = [[] for _ in range(_N_POOL_HYBRIDS)]
         rank_noncliff = [[] for _ in range(_N_POOL_HYBRIDS)]
         rank_recipes = [{} for _ in range(_N_POOL_HYBRIDS)]
@@ -645,11 +645,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Honest-comparison block (CONTRACT json_convention). Built on the CLIFF score
     # (the headline cliff comparison the same-fold argmax below optimises). Fold
-    # scores are fold-aligned NaN-padded lists so honest_rescore can re-pick the
+    # scores are fold-aligned NaN-padded lists so fold_reselection can re-pick the
     # winning rep / hybrid per HELD-OUT fold instead of the same-fold argmax. This
     # experiment computes its own segmented CV baselines (no SearchResult), so the
     # two per-model dicts are assembled by hand rather than via
-    # build_honest_rescore_input. Only models actually evaluated appear.
+    # build_fold_reselection_input. Only models actually evaluated appear.
     #
     # 2026-09-12, owner's decision (s12 reads the pool): the hybrid candidates
     # are now one per pool rank — 'pool_rank1' is "take the configuration the
@@ -686,7 +686,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # so its fold 0 is not the pool's fold 0 and there is nothing to drop.
     _fold0_pruned = True if fold0_pruned_any is None else bool(fold0_pruned_any)
     _folds_match_pool = (pool_n_folds_seen == {len(folds)})
-    results['honest_rescore'] = {
+    results['fold_reselection'] = {
         'lower_is_better': lower_is_better,
         'exclude_folds': ([0] if (_fold0_pruned and _folds_match_pool) else []),
         'fold0_pruned': _fold0_pruned,
@@ -704,7 +704,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ORIGINAL key: a raw subtraction, NOT direction-corrected, so on a
     # lower-is-better metric its positive values mean the hybrid's cliff error
     # rose. 'hybrid_cliff_delta_directed' is the same pair of scores with the
-    # metric direction applied, matching 'hybrid_cliff_delta_honest'. Both are
+    # metric direction applied, matching 'hybrid_cliff_delta_reselected'. Both are
     # kept so results written under either convention still load.
     results['delta_conventions'] = {
         'metric': metric_name,
@@ -728,8 +728,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'selection': 'same-fold argmax over reps (selection-optimistic)',
             'hybrid_arm': 'pool_rank1',
         },
-        'hybrid_cliff_delta_honest': {
-            'formula': 'see honest_rescore in _shared.py',
+        'hybrid_cliff_delta_reselected': {
+            'formula': 'see fold_reselection in _shared.py',
             'direction_corrected': True,
             'positive_means': 'hybrid did better',
             # 2026-09-12, owner's decision (s12 reads the pool): rewritten,
@@ -757,7 +757,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for mname in model_factories:
         h_cliff = hybrid_results_by_model.get(mname, {}).get('cliff_score', float('nan'))
         # Best single rep cliff score for this model (same-fold argmax — optimistic;
-        # retained for back-compat, superseded by honest_rescore above).
+        # retained for back-compat, superseded by fold_reselection above).
         rep_cliffs = [r.get(mname, {}).get('cliff_score', float('nan'))
                       for r in per_rep_results.values()]
         rep_cliffs = [s for s in rep_cliffs if not np.isnan(s)]
@@ -774,23 +774,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Honest held-out cliff delta (replaces the same-fold argmax): pick the winning
     # rep / hybrid on the OTHER folds, score it on the held-out fold, average.
-    honest = honest_rescore(
-        results['honest_rescore']['candidates_by_model'],
-        results['honest_rescore']['baselines_by_model'],
+    honest = fold_reselection(
+        results['fold_reselection']['candidates_by_model'],
+        results['fold_reselection']['baselines_by_model'],
         lower_is_better,
-        exclude_folds=hr_exclude_folds(results['honest_rescore']),
+        exclude_folds=hr_exclude_folds(results['fold_reselection']),
         # 2026-09-12: copied onto every model entry, so a stored result says
         # what chose the recipe without opening this file.
-        recipe_selection=results['honest_rescore']['recipe_selection'])
-    results['hybrid_cliff_delta_honest'] = {
+        recipe_selection=results['fold_reselection']['recipe_selection'])
+    results['hybrid_cliff_delta_reselected'] = {
         m: convert_numpy(r) for m, r in honest.items()}
     print(f"\n  Honest held-out cliff {metric_name} per model "
           f"(direction-corrected, + means the hybrid did better; rep chosen on "
           f"the other folds, i.e. held out):")
     for mname, r in honest.items():
         if not np.isnan(r.get('delta', float('nan'))):
-            print(f"    {mname}: hybrid={r['hybrid_honest']:.4f} "
-                  f"best_single={r['best_single_honest']:.4f} "
+            print(f"    {mname}: hybrid={r['hybrid_reselected']:.4f} "
+                  f"best_single={r['best_single_reselected']:.4f} "
                   f"delta={r['delta']:+.4f}"
                   f"{' [single_fold]' if r.get('single_fold') else ''}")
 

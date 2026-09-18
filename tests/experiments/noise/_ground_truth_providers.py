@@ -39,6 +39,14 @@ import numpy as np  # noqa: E402
 
 
 # A group needs at least this many measurements before it has a spread at all.
+# Checked 2026-09-18: on bindingdb_kd, n06's default dataset, of the 3,494
+# drug-target pairs measured more than once, 2,649 (76%) were measured
+# exactly twice -- so most of what this provider calls "disagreement" comes
+# from a 2-measurement spread. Decision: acceptable given the data this runs
+# on. MIN_GROUND_TRUTH_GROUPS below is the actual safety net -- it refuses to
+# report anything if too few groups (of whatever size) survive, so a dataset
+# with mostly 2-measurement pairs still needs 50 of them before this runs at
+# all. Do not re-raise the "how small" question without a new number.
 MIN_REPLICATES = 2
 
 # Below this many groups the correlation is not reported. Forty groups is not a

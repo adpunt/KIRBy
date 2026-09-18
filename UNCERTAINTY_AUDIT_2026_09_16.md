@@ -145,7 +145,7 @@ Files read in full, nothing found: `_data.py`, `_heldout.py`, `_nanrank.py`,
 `extra_fingerprints.py`, `feature_ablation.py`, `feature_type_study.py`,
 `learned_embeddings.py`, `nary_similarity.py`, `rankers.py`, `scaffold_feature_isolation.py`,
 `scaffold_reps.py`, `shape_similarity.py`, `simeval.py`, `similarity_noise_cleaning.py`,
-`structural_embeddings.py`, `structural_yardstick.py`, `winning_recipe_honest.py`,
+`structural_embeddings.py`, `structural_yardstick.py`, `winning_recipe_reselected.py`,
 `winning_recipe_vs_standard.py`. No "CI" false positives found. No plotting code anywhere in
 this directory.
 

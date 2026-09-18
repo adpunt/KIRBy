@@ -42,7 +42,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid,
     flatten_fold_weights, extract_top3_base_reps,
-    cv_split, honest_rescore, build_fold_hybrid,
+    cv_split, fold_reselection, build_fold_hybrid,
     hr_exclude_folds, MAIN_MODELS_WITH_KNN, FULL_BUDGETS,
 )
 from experiments.similarity.similarity_helpers import (
@@ -63,17 +63,17 @@ from experiments.similarity._summary_keys import (
 # SAC of every rep on the FULL dataset (run() best_rep loop), the hybrid was
 # built on the FULL dataset via get_fitted_pool_hybrid, and its weighted SAC was
 # computed on the FULL dataset too. Both arms therefore SELECTED and SCORED on
-# the same samples — pure selection optimism, exactly the leak the honest-rescore
+# the same samples — pure selection optimism, exactly the leak the fold-reselection
 # fix targets.
 #
 # REDESIGN: split by the dataset groups (group-aware CV). SELECT the winning rep
 # and the winning hybrid recipe on TRAIN folds only, then COMPUTE the SAC
 # statistic on the HELD-OUT fold, and average held-out SAC across folds. Because
 # SAC is an UNSUPERVISED distance-metric statistic (not a model fold-score from
-# find_best_hybrid), the SearchResult-based build_honest_rescore_input helper
+# find_best_hybrid), the SearchResult-based build_fold_reselection_input helper
 # does not fit here; instead this file computes per-fold HELD-OUT SAC for every
 # baseline rep and every hybrid recipe locally (below) and writes them into the
-# CONTRACT's "honest_rescore" JSON block. The shared honest_rescore() helper then
+# CONTRACT's "fold_reselection" JSON block. The shared fold_reselection() helper then
 # supplies the identical held-out arithmetic used everywhere else: for each
 # held-out fold it re-picks the winner by the mean over the OTHER folds and reads
 # that winner's held-out score. Any feature SELECTION that depends on labels
@@ -90,7 +90,7 @@ from experiments.similarity._summary_keys import (
 # pool search (get_fitted_pool_hybrid). That is a separate open finding against
 # get_best_search_for_downstream, not something this file decides. The
 # recipe-level choice s02 itself makes (which weight method, weighted vs
-# unweighted) is made per held-out fold by honest_rescore().
+# unweighted) is made per held-out fold by fold_reselection().
 #
 # SAC is a single-model statistic (the distance metric; downstream_model='knn'),
 # so everything is keyed under one model name, 'knn'. lower_is_better is False
@@ -130,7 +130,7 @@ def _hybrid_weights_from_fi(fi, wm_importance, n_cols):
     return weights_flat
 
 
-def _cv_honest_sac(reps, labels, groups, blueprint, aug_condition,
+def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
                    augmentations, weight_methods,
                    n_splits, n_sample, is_clf, task_type, seed=42):
     """Cross-validated, selection-honest SAC (the redesign described above).
@@ -147,11 +147,11 @@ def _cv_honest_sac(reps, labels, groups, blueprint, aug_condition,
     features had been chosen with the held-out rows' labels in hand, while the
     single representations it is compared against had no selection at all.
 
-    Returns the CONTRACT "honest_rescore" block ready to json.dump:
+    Returns the CONTRACT "fold_reselection" block ready to json.dump:
         {"lower_is_better": False,
          "candidates_by_model": {"knn": [{"name", "fold_scores"}, ...]},
          "baselines_by_model":  {"knn": {rep_key: [fold_scores], ...}}}
-    A reader loads it and calls honest_rescore(...) to get the honest deltas.
+    A reader loads it and calls fold_reselection(...) to get the honest deltas.
     """
     labels = np.asarray(labels)
     baseline_folds = {}   # rep_key   -> [per-fold held-out SAC]
@@ -273,7 +273,7 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
     """Every hybrid number in this file, for ONE (lineage, budget) cell.
 
     Returns the cell dict: the pool metadata, the recipe that was built, one
-    block per weight method, and the held-out honest_rescore block with its
+    block per weight method, and the held-out fold_reselection block with its
     resolved summary. run() stores these under
     results['lineages'][lineage]['budgets'][budget].
     """
@@ -500,20 +500,20 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
     # Cross-validated, selection-honest SAC (redesign — decision B). The block
     # above is the ORIGINAL whole-dataset statistic (kept for back-compat /
     # reference); the numbers reported as the honest result come from held-out
-    # CV folds with per-fold winner re-selection. See _cv_honest_sac docstring.
-    # Persisted under the CONTRACT key "honest_rescore" (per-fold scores for BOTH
-    # arms) so any reader can call honest_rescore(...) without re-running.
+    # CV folds with per-fold winner re-selection. See _cv_reselected_sac docstring.
+    # Persisted under the CONTRACT key "fold_reselection" (per-fold scores for BOTH
+    # arms) so any reader can call fold_reselection(...) without re-running.
     # -------------------------------------------------------------------------
     n_splits = int(config.get('n_splits', 5))
     if _blueprint_for_folds is None:
-        cell['honest_rescore_error'] = (
+        cell['fold_reselection_error'] = (
             'the pool returned no blueprint for this budget, so no per-fold '
             'hybrid could be rebuilt')
         print("  Honest CV SAC skipped: no blueprint from the pool search")
     try:
         if _blueprint_for_folds is None:
             raise RuntimeError('no blueprint for this budget')
-        hr_block = _cv_honest_sac(
+        hr_block = _cv_reselected_sac(
             reps, labels, groups, _blueprint_for_folds,
             _meta.get('aug_condition', 'none'),
             augmentations, weight_methods,
@@ -527,10 +527,10 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
         hr_block['pool_subset'] = cell.get('pool_subset')
         hr_block['budget'] = budget
         hr_block['distance_lineage'] = bool(distance)
-        cell['honest_rescore'] = hr_block
+        cell['fold_reselection'] = hr_block
         # Reuse the shared honest arithmetic to also store the resolved summary
         # (held-out hybrid vs best-single, direction-corrected delta) inline.
-        hr_summary = honest_rescore(
+        hr_summary = fold_reselection(
             hr_block['candidates_by_model'], hr_block['baselines_by_model'],
             hr_block['lower_is_better'],
             exclude_folds=hr_exclude_folds(hr_block),
@@ -540,12 +540,12 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
             # number below is held out for the weights and not for the recipe;
             # s09 prints this label next to it.
             recipe_selection=_meta.get('selection_scope'))
-        cell['honest_rescore_result'] = hr_summary
+        cell['fold_reselection_result'] = hr_summary
         knn = hr_summary.get(_SAC_MODEL_KEY, {})
         if knn:
             print(f"\n  Honest CV SAC ({n_splits}-fold held-out): "
-                  f"hybrid={knn.get('hybrid_honest'):+.4f}, "
-                  f"best_single={knn.get('best_single_honest'):+.4f}, "
+                  f"hybrid={knn.get('hybrid_reselected'):+.4f}, "
+                  f"best_single={knn.get('best_single_reselected'):+.4f}, "
                   f"delta={knn.get('delta'):+.4f}"
                   + ("  [single-fold: OPTIMISTIC, not honest]"
                      if knn.get('single_fold') else ""))
@@ -553,7 +553,7 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
         # Group-aware CV can legitimately fail (too few distinct groups for
         # n_splits); never let it crash the whole experiment. Record and move on.
         print(f"  Honest CV SAC skipped: {e}")
-        cell['honest_rescore_error'] = str(e)
+        cell['fold_reselection_error'] = str(e)
 
     return cell
 
@@ -702,7 +702,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Back-compat top level. s09, firstpass_notready.py, quick_hybrid_summary.py
     # and make_supervisor_plots.py all read results['best_sac'],
-    # results['honest_rescore_result'] and results['weight_methods'] off the top
+    # results['fold_reselection_result'] and results['weight_methods'] off the top
     # level, and every s02 file already on disk has them there. They now mirror
     # ONE named cell — the general lineage at budget 100, the only cell this
     # file scored before today — and results['primary_cell'] names it. Every
@@ -716,8 +716,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                  'hybrid_search_metric', 'hybrid_search_score', 'pool_subset',
                  'pool_by_objective', 'top3_base_reps',
                  'top3_base_reps_metric', 'top3_base_reps_family',
-                 'sac_delta_comparator', 'honest_rescore',
-                 'honest_rescore_result', 'honest_rescore_error'):
+                 'sac_delta_comparator', 'fold_reselection',
+                 'fold_reselection_result', 'fold_reselection_error'):
         if _key in _primary:
             results[_key] = _primary[_key]
 

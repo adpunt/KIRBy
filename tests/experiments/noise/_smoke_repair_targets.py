@@ -275,6 +275,25 @@ def test_n07_carries_the_rules():
     for rule in ('remove', 'downweight', 'label_smooth', 'knn_smooth'):
         check(f'{rule} is still a cleanup', rule in n07.CLEANUPS)
 
+    # USER DECISION 2026-09-17, "top 2 base and hybrid reps per downstream
+    # evaluator". The three new cleanups run on base representations, but on
+    # each downstream model's own top two rather than on every representation
+    # under random forest. The older section keeps its four cleanups and every
+    # representation, untouched.
+    src = open(n07.__file__).read()
+    check('the every-representation section still runs the four older cleanups',
+          'rep_strategies = [s for s in strategies' in src
+          and src.count('for strategy in rep_strategies:') == 2)
+    check('there is a per-model top-representation section',
+          "results['per_model_per_top_rep'] = {}" in src
+          and 'N_TOP_MODELS = 2' in src and 'N_TOP_REPS_PER_MODEL = 2' in src)
+    check('it runs all seven cleanups, not only the three new ones',
+          'acc = {st: [] for st in strategies}' in src)
+    check('it reports a recovery per (model, representation, cleanup)',
+          "results['per_model_per_top_rep_recovery_pct']" in src)
+    check('nothing ranks representations from a stored search any more',
+          'extract_top3_base_reps(search_by_model' not in src)
+
     s = make_set()
     y_cls = (s['y_tr'] > np.median(s['y_tr'])).astype(int)
     scores = np.abs(np.asarray(y_cls, dtype=float) - 0.5)
@@ -349,11 +368,107 @@ def test_n11_grid_keys():
           'quantile_forest' in n11.BASE_ESTIMATORS)
 
 
+# ---------------------------------------------------------------------------
+# 6: the ranking is measured in this run, not read from disk
+# ---------------------------------------------------------------------------
+
+def test_ranking_is_measured_here():
+    print("\n=== The models and representations are ranked by this run ===")
+    s = make_set()
+    # Two representations over the same molecules: one carries the signal, one
+    # is noise only. A ranking that measures anything must prefer the first.
+    rng = np.random.RandomState(7)
+    n = len(s['y_tr']) + len(s['y_va'])
+    labels = np.concatenate([s['y_tr'], s['y_va']])
+    X_good = np.vstack([s['X_tr'], s['X_va']])
+    X_junk = rng.normal(size=(n, 6))
+    reps = {'informative': X_good, 'noise_only': X_junk}
+    groups = np.repeat(np.arange(8), int(np.ceil(n / 8)))[:n]
+
+    out = n07.rank_models_and_reps(
+        reps, labels, groups,
+        {'rf': lambda: RandomForestRegressor(n_estimators=40, random_state=0,
+                                             n_jobs=1)},
+        ['rf'], 3, 'full', X_good, rmse, 'rmse', True, False,
+        n_top_models=1, n_top_reps=1)
+
+    print(f"  rf scored {out['scores']['rf']['informative']:.4f} on the "
+          f"informative representation and "
+          f"{out['scores']['rf']['noise_only']:.4f} on the noise-only one "
+          f"(rmse, lower is better)")
+    check('the ranking measured both representations',
+          set(out['scores']['rf']) == {'informative', 'noise_only'})
+    check('it kept the representation that carries the signal',
+          out['top_reps']['rf'] == ['informative'])
+    check('it reports how many features each representation has',
+          out['n_features'] == {'informative': X_good.shape[1],
+                                'noise_only': 6},
+          f"{out['n_features']}")
+    check('it says in words what the ranking measured',
+          'UNCORRUPTED' in out['ranked_on'])
+
+
+# ---------------------------------------------------------------------------
+# 7: the width ceiling bars wide representations without hiding them
+# ---------------------------------------------------------------------------
+
+def test_width_ceiling():
+    print("\n=== The width ceiling bars wide features without hiding them ===")
+    check('the ceiling is 2000 features', n07.MAX_CLEANUP_FEATURES == 2000)
+    val, src = n07.max_cleanup_features({})
+    check('a run with no argument reads the file setting',
+          val == 2000 and 'MAX_CLEANUP_FEATURES' in src, f'{val} from {src}')
+    val, src = n07.max_cleanup_features({'max_cleanup_features': 300})
+    check('a run can override it', val == 300 and src == 'run argument')
+    val, _ = n07.max_cleanup_features({'max_cleanup_features': 0})
+    check('zero means no ceiling at all', val is None)
+
+    # A narrow representation that carries the signal, and a wide one that
+    # carries it slightly better. With no ceiling the wide one wins; with a
+    # ceiling below its width the narrow one is selected instead, and the wide
+    # one keeps its measured score.
+    rng = np.random.RandomState(3)
+    n = 240
+    X_core = rng.normal(size=(n, 8))
+    y = 3.0 * np.sin(X_core[:, 0]) + 2.0 * X_core[:, 1] + 0.2 * rng.normal(size=n)
+    narrow = X_core
+    wide = np.hstack([X_core, rng.normal(size=(n, 2100))])
+    groups = np.repeat(np.arange(6), n // 6)
+
+    def rank(cap):
+        return n07.rank_models_and_reps(
+            {'narrow': narrow, 'wide': wide}, y, groups,
+            {'rf': lambda: RandomForestRegressor(n_estimators=30,
+                                                 random_state=0, n_jobs=1)},
+            ['rf'], 3, 'full', narrow, rmse, 'rmse', True, False,
+            n_top_models=1, n_top_reps=1, max_features=cap)
+
+    capped = rank(2000)
+    print(f"  widths measured: {capped['n_features']}; "
+          f"barred: {capped['reps_excluded_as_too_wide']}")
+    check('the wide representation is barred from selection',
+          capped['top_reps']['rf'] == ['narrow'],
+          f"selected {capped['top_reps']['rf']}")
+    check('the wide representation keeps its measured score',
+          'wide' in capped['scores']['rf']
+          and np.isfinite(capped['scores']['rf']['wide']),
+          f"rmse {capped['scores']['rf']['wide']:.4f}")
+    check('it is named as barred, with its width',
+          capped['reps_excluded_as_too_wide'].get('wide') == 2108)
+
+    uncapped = rank(None)
+    check('with no ceiling nothing is barred',
+          uncapped['reps_excluded_as_too_wide'] == {}
+          and len(uncapped['top_reps']['rf']) == 1)
+
+
 if __name__ == '__main__':
     state = test_each_rule_recovers_some_of_the_gap()
     test_clip_moves_only_the_labels_outside_the_range(state)
     test_n07_carries_the_rules()
     test_n11_grid_keys()
+    test_ranking_is_measured_here()
+    test_width_ceiling()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")

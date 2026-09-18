@@ -80,7 +80,7 @@ from experiments._shared import (add_distance_metric_arg,
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
-    honest_rescore, build_honest_rescore_input,
+    fold_reselection, build_fold_reselection_input,
     hr_exclude_folds,
 )
 
@@ -468,10 +468,10 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     # Build hybrid
     # Augmentation config matches molecular datasets (caco2, logd) in DATASET_REPS:
     # augmentation = ['maccs', 'pharmacophore3d']
-    # honest_block: the per-model, HELD-OUT re-score arm (contract json_convention).
+    # reselection_block: the per-model, HELD-OUT re-score arm (contract json_convention).
     # Built purely from the SearchResult's per-fold scores — NO leaky full-data
     # feature selection, NO cross-model MAX. Stays None if the search is unavailable.
-    honest_block = None
+    reselection_block = None
     hybrid_inputs = None
     try:
         from experiments._shared import (
@@ -511,14 +511,14 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         )
         # Honest per-model held-out comparison (hybrid candidates vs baseline
         # reps), built straight from the search's per-fold scores. The reader
-        # feeds this block to honest_rescore(): for each available model it
+        # feeds this block to fold_reselection(): for each available model it
         # re-selects that model's own best hybrid recipe and best baseline rep
         # per held-out fold, so neither arm is chosen on the fold it's scored on.
         # This SUPERSEDES the same-fold argmax comparison in print_analysis for
         # the honest hybrid-vs-single verdict; the legacy per-rep table below is
         # retained unchanged for backward compatibility.
         if search is not None:
-            honest_block = build_honest_rescore_input(search)
+            reselection_block = build_fold_reselection_input(search)
 
         top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
@@ -653,10 +653,10 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         'target_name': data['target_name'],
         'results': results,
     }
-    # Attach the honest re-score block under the exact contract key name so the
-    # reader can load result[target]['honest_rescore'] and call honest_rescore().
-    if honest_block is not None:
-        target_out['honest_rescore'] = honest_block
+    # Attach the per-fold reselection block under the exact contract key name so the
+    # reader can load result[target]['fold_reselection'] and call fold_reselection().
+    if reselection_block is not None:
+        target_out['fold_reselection'] = reselection_block
     return target_out
 
 
@@ -759,26 +759,26 @@ def print_analysis(all_results):
     # Honest per-model, held-out QSAR-MAE verdict (selection-optimism corrected).
     # Each model's own hybrid recipe and own best baseline rep are re-selected per
     # held-out fold, so the delta is not inflated by same-fold argmax. Only shown
-    # where the search populated the honest_rescore block (fresh runs / warmed
+    # where the search populated the fold_reselection block (fresh runs / warmed
     # per-fold baseline cache); MAE is lower-is-better so +delta = hybrid better.
-    have_honest = any('honest_rescore' in all_results.get(t, {}) for t in ALL_TARGETS)
-    if have_honest:
+    have_reselection = any('fold_reselection' in all_results.get(t, {}) for t in ALL_TARGETS)
+    if have_reselection:
         print(f"\n  Honest per-model held-out (LOFO) QSAR-MAE — hybrid vs best single rep:")
         print(f"  {'Target':10s} {'Model':8s} {'Hybrid':>9s} {'BestSingle':>11s} "
               f"{'Delta':>9s} {'Folds':>6s}")
         print(f"  {'-'*10} {'-'*8} {'-'*9} {'-'*11} {'-'*9} {'-'*6}")
         for target in ALL_TARGETS:
-            blk = all_results.get(target, {}).get('honest_rescore')
+            blk = all_results.get(target, {}).get('fold_reselection')
             if not blk:
                 continue
-            res = honest_rescore(blk['candidates_by_model'],
+            res = fold_reselection(blk['candidates_by_model'],
                                  blk['baselines_by_model'],
                                  blk['lower_is_better'],
                                  exclude_folds=hr_exclude_folds(blk))
             for model_name in sorted(res):
                 r = res[model_name]
-                h_v = r['hybrid_honest']
-                b_v = r['best_single_honest']
+                h_v = r['hybrid_reselected']
+                b_v = r['best_single_reselected']
                 d_v = r['delta']
                 h_str = f"{h_v:.4f}" if not np.isnan(h_v) else "—"
                 b_str = f"{b_v:.4f}" if not np.isnan(b_v) else "—"

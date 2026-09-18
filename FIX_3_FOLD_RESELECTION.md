@@ -20,14 +20,14 @@ opig_activity_cliff_qsar opig_cdr_flexibility opig_cgr_comparison
 opig_graphinity_ddg opig_kingsmith_component_splits opig_trastuzumab_enrichment
 ```
 
-`honest_rescore` at `tests/experiments/_shared.py:881` applies the same held-out-fold tax to
+`fold_reselection` at `tests/experiments/_shared.py:881` applies the same held-out-fold tax to
 both arms. It is arithmetic over per-fold scores. It fits nothing and reads nothing from disk.
-`build_honest_rescore_input` at `_shared.py:1002` builds its input from a `SearchResult`.
+`build_fold_reselection_input` at `_shared.py:1002` builds its input from a `SearchResult`.
 
 Work in three tiers, cheapest first:
 
 1. **Where the input block is already stored and never read.** About a third of these already
-   call `build_honest_rescore_input` and write the block. Compute `honest_rescore` on it, print
+   call `build_fold_reselection_input` and write the block. Compute `fold_reselection` on it, print
    `delta_mean_of_folds`, and store it next to the existing number. Do not delete the old
    number; label it as the searched maximum.
 2. **Where the per-fold scores exist but the block is not built.** Build it.

@@ -1851,7 +1851,7 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
 
     Arm: all six quantities are read from the winning cell — best rep, best
     budget, best k, best weight method — picked on the same scores that are
-    then reported. No experiment in this file calls honest_rescore or stores a
+    then reported. No experiment in this file calls fold_reselection or stores a
     held-out re-pick, so there is no counterpart arm here to aggregate. The
     standalone aggregator tests/experiments/similarity/s09_cross_dataset_summary.py
     reads 7 held-out counterparts from the JSON result files it loads.

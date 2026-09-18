@@ -134,6 +134,14 @@ RANKINGS = ('residual_correlation', 'rf_importance', 'lightgbm_gain', 'mutual_in
 PER_SOURCE_BUDGETS = (None, 5, 10, 20)
 # Multiples of the target representation's own spread across outer folds, so the
 # number means the same thing on a dataset scored in RMSE and one scored in AUC.
+#
+# This IS the sensitivity sweep for that margin -- reviewed 2026-09-18 after a
+# question about whether the margin should be tested at different sizes. It
+# already is, at 0/0.25x/0.5x/1.0x, crossed with every ranking rule, budget
+# cap and fraction (172 configurations). Only a 14-row smoke slice has
+# actually run so far (tests/results/comparisons/opig_shared_vectors_remedy.json),
+# not the full sweep. Decision: leave the design as-is; run the full sweep
+# when there's a reason to read its result, not before.
 MARGIN_MULTIPLES = (0.0, 0.25, 0.5, 1.0)
 FRACTIONS = (None, 0.05, 0.10, 0.25)
 AUGMENTATION_BUDGETS = (5, 20, 50)          # read by strategy 'all' only

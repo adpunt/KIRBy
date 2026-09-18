@@ -12,14 +12,14 @@ mean of correlations, which is always higher-is-better, so the flag is False
 while the metric is still RMSE. nested_cv_evaluate renames the metric at the
 moment it flips the flag. find_best_hybrid did not until 2026-09-17, so a blend
 search on an RMSE dataset came back saying metric_name='rmse' and
-lower_is_better=False, and build_honest_rescore_input raised
+lower_is_better=False, and build_fold_reselection_input raised
 "SearchResult direction contradiction" on it.
 
 Checked on an RMSE dataset, for all four objectives, on the search and on the
 blueprint it hands back:
 
   1. the two fields agree.
-  2. build_honest_rescore_input accepts the search and reports the same
+  2. build_fold_reselection_input accepts the search and reports the same
      direction the search used.
   3. a blueprint rebuilt through apply_blueprint's own resolution lands on the
      direction the search used, not the opposite one.
@@ -51,7 +51,7 @@ import experiments.dataset_policy  # noqa: F401  (populates the registry)
 import kirby.find_best_hybrid as F
 from kirby.find_best_hybrid import find_best_hybrid, BUILTIN_METRICS
 from kirby.registry import all_datasets
-from experiments._shared import build_honest_rescore_input
+from experiments._shared import build_fold_reselection_input
 
 FAIL = []
 
@@ -124,13 +124,13 @@ def test_search_direction(objective):
               True, f"metric_name={name!r}, lower_is_better={flag}")
 
     try:
-        blk = build_honest_rescore_input(res)
-        check(f'{label}: build_honest_rescore_input accepts the search',
+        blk = build_fold_reselection_input(res)
+        check(f'{label}: build_fold_reselection_input accepts the search',
               bool(blk['lower_is_better']) == flag,
               f"block says lower_is_better={blk['lower_is_better']}, "
               f"the search used {flag}")
     except Exception as exc:
-        check(f'{label}: build_honest_rescore_input accepts the search',
+        check(f'{label}: build_fold_reselection_input accepts the search',
               False, f'{type(exc).__name__}: {exc}')
 
     bp = F.Blueprint.from_dict(res.all_results[0]['blueprint'].to_dict())

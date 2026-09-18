@@ -28,11 +28,11 @@ Also clamps the Coxnet alpha to a less-aggressive index (the median of
 the path, not the last column).
 
 Outputs a new submission to:
-    tests/results/annitia/full/sub_master_honest.csv
+    tests/results/annitia/full/sub_master_reselected.csv
 
 Usage:
-    python tests/experiments/annitia/refuse_honest.py
-    python tests/experiments/annitia/refuse_honest.py --outer-folds 5
+    python tests/experiments/annitia/refuse_reselection.py
+    python tests/experiments/annitia/refuse_reselection.py --outer-folds 5
 """
 from __future__ import annotations
 
@@ -273,7 +273,7 @@ def main():
                     default='/Volumes/seagate/kirby/annitia/val_test.csv')
     ap.add_argument('--outer-folds', type=int, default=5)
     ap.add_argument('--seed', type=int, default=42)
-    ap.add_argument('--output', default='tests/results/annitia/full/sub_master_honest.csv')
+    ap.add_argument('--output', default='tests/results/annitia/full/sub_master_reselected.csv')
     args = ap.parse_args()
 
     res_root = _REPO / 'tests' / 'results' / 'annitia'

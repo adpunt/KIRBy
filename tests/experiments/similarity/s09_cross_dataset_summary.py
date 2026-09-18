@@ -24,7 +24,7 @@ import numpy as np
 from scipy.stats import wilcoxon
 
 from experiments._shared import (
-    save_experiment_results, load_experiment_results, honest_rescore,
+    save_experiment_results, load_experiment_results, fold_reselection,
     hr_exclude_folds,
 )
 from experiments.similarity._summary_keys import (
@@ -77,7 +77,7 @@ HELDOUT_METRIC_FIELDS = [
 #   selection-optimistic: the winning cell (best rep, best budget, best k,
 #       best weight method) is picked on the same scores that are reported.
 #   held-out: the winner is re-picked on the other folds and the reported score
-#       is read off the held-out fold (experiments._shared.honest_rescore).
+#       is read off the held-out fold (experiments._shared.fold_reselection).
 #   pre-registered: a fixed cell fixed before the grid was scored — no selection
 #       over the grid, but the score is still in-sample.
 #   no winner selected: a descriptive statistic with no cell to pick.
@@ -126,11 +126,11 @@ def _record_absent(ds_summary, field, source, reason):
 
 
 def _heldout_delta(hr_result, model_key):
-    """Paired held-out delta and arm label from a stored honest_rescore result.
+    """Paired held-out delta and arm label from a stored fold_reselection result.
 
     Accepts the {model: entry} shape (s02/s05) and the already-unwrapped
-    single entry (s08 'sac_honest'). Reads 'delta_mean_of_folds': the mean over
-    folds where BOTH arms scored, which honest_rescore documents as the paired
+    single entry (s08 'sac_reselected'). Reads 'delta_mean_of_folds': the mean over
+    folds where BOTH arms scored, which fold_reselection documents as the paired
     quantity to report. Returns (value, arm, None) or (None, None, reason).
     """
     if not isinstance(hr_result, dict):
@@ -151,7 +151,7 @@ def _heldout_delta(hr_result, model_key):
     if not _is_number(value):
         return None, None, (f"delta_mean_of_folds={value!r}, "
                             f"n_paired_folds={entry.get('n_paired_folds')}")
-    # single_fold=True means honest_rescore had one fold, so no held-out tax was
+    # single_fold=True means fold_reselection had one fold, so no held-out tax was
     # applied; the flag rides in the arm label rather than being dropped.
     arm = (_ARM_HELD_OUT + ' (single fold: no held-out tax applied)'
            if entry.get('single_fold') else _ARM_HELD_OUT)
@@ -172,9 +172,9 @@ def _heldout_delta(hr_result, model_key):
 def _rescore_block(block):
     """Apply the shared leave-one-fold-out arithmetic to a stored contract block.
 
-    s04 persists 'honest_rescore' (per-fold scores for both arms) but no
+    s04 persists 'fold_reselection' (per-fold scores for both arms) but no
     re-scored result, so the result is produced here. Pure arithmetic over
-    stored numbers — honest_rescore fits no model and reads no data.
+    stored numbers — fold_reselection fits no model and reads no data.
     Returns (result, None) or (None, reason).
     """
     if not isinstance(block, dict):
@@ -190,11 +190,11 @@ def _rescore_block(block):
     # folds come out of both arms. s02, s05, s12 and s13 all read it the same
     # way, so s04's block is re-scored on the same folds they would use.
     try:
-        return honest_rescore(candidates, baselines,
+        return fold_reselection(candidates, baselines,
                               bool(block.get('lower_is_better')),
                               exclude_folds=hr_exclude_folds(block)), None
     except Exception as e:
-        return None, f'honest_rescore raised {type(e).__name__}: {e}'
+        return None, f'fold_reselection raised {type(e).__name__}: {e}'
 
 
 def run(all_dataset_results):
@@ -213,7 +213,7 @@ def run(all_dataset_results):
                               'that are then reported'),
             _ARM_HELD_OUT: ('the winner is re-picked on the other folds and '
                             'the score is read off the held-out fold '
-                            '(experiments._shared.honest_rescore)'),
+                            '(experiments._shared.fold_reselection)'),
             _ARM_PREREGISTERED: ('the cell was fixed before the grid was '
                                  'scored; no selection over the grid, score '
                                  'still in-sample'),
@@ -299,14 +299,14 @@ def run(all_dataset_results):
             ds_summary['best_rep'] = best_rep_name
 
             # Counterpart arm: s02 also stores the held-out CV SAC, winner
-            # re-picked per fold, under 'honest_rescore_result'.
-            _src2h = 's02 honest_rescore_result.knn.delta_mean_of_folds'
+            # re-picked per fold, under 'fold_reselection_result'.
+            _src2h = 's02 fold_reselection_result.knn.delta_mean_of_folds'
             _v2, _arm2, _why2 = _heldout_delta(
-                exp2.get('honest_rescore_result'), 'knn')
+                exp2.get('fold_reselection_result'), 'knn')
             if _v2 is None:
-                if exp2.get('honest_rescore_error'):
-                    _why2 = (f"s02 honest_rescore_error: "
-                             f"{exp2['honest_rescore_error']}")
+                if exp2.get('fold_reselection_error'):
+                    _why2 = (f"s02 fold_reselection_error: "
+                             f"{exp2['fold_reselection_error']}")
                 _record_absent(ds_summary, 'sac_delta_heldout', _src2h, _why2)
                 print(f"    SAC delta [{_ARM_HELD_OUT}]: not read ({_why2})")
             else:
@@ -382,14 +382,14 @@ def run(all_dataset_results):
             ds_summary['n_cliff_compounds'] = exp4.get('cliff_definition', {}).get('n_cliff_compounds', 0)
 
         # Counterpart arm, outside the guard above: s04 stores per-fold scores
-        # for both arms under 'honest_rescore' but no re-scored result, so it is
+        # for both arms under 'fold_reselection' but no re-scored result, so it is
         # computed here. Those fold scores are the OVERALL metric over every
         # compound in the fold, not rmse_cliff, so this delta is a different
         # statistic from the two reductions above.
         if exp4:
-            _src4h = ('s04 honest_rescore -> knn.delta_mean_of_folds '
+            _src4h = ('s04 fold_reselection -> knn.delta_mean_of_folds '
                       '(per-fold OVERALL metric, not rmse_cliff)')
-            _hr4, _why4h = _rescore_block(exp4.get('honest_rescore'))
+            _hr4, _why4h = _rescore_block(exp4.get('fold_reselection'))
             if _hr4 is None:
                 _record_absent(ds_summary, 'cliff_overall_delta_heldout',
                                _src4h, _why4h)
@@ -498,13 +498,13 @@ def run(all_dataset_results):
 
             # Counterpart arm 2: leave-one-fold-out re-score, winner re-picked
             # per held-out fold.
-            _src5h = 's05 honest_rescore_result.knn.delta_mean_of_folds'
+            _src5h = 's05 fold_reselection_result.knn.delta_mean_of_folds'
             _v5, _arm5, _why5 = _heldout_delta(
-                exp5.get('honest_rescore_result'), 'knn')
+                exp5.get('fold_reselection_result'), 'knn')
             if _v5 is None:
-                _st5 = exp5.get('honest_rescore_status', {})
+                _st5 = exp5.get('fold_reselection_status', {})
                 if not _st5.get('computed', True) and _st5.get('reason'):
-                    _why5 = f"s05 honest_rescore_status: {_st5['reason']}"
+                    _why5 = f"s05 fold_reselection_status: {_st5['reason']}"
                 _record_absent(ds_summary, 'knn_delta_heldout', _src5h, _why5)
                 print(f"    kNN delta [{_ARM_HELD_OUT}]: not read ({_why5})")
             else:
@@ -574,7 +574,7 @@ def run(all_dataset_results):
                 _record_absent(
                     ds_summary, 'ad_corr_delta_heldout',
                     's06 (no key)',
-                    's06 selects no cell and stores no honest_rescore block; it '
+                    's06 selects no cell and stores no fold_reselection block; it '
                     'has no held-out counterpart to this correlation delta')
                 _series('AD_corr_delta', ds_name, delta_ad, _ARM_NO_SELECTION,
                         _src6)
@@ -615,16 +615,16 @@ def run(all_dataset_results):
 
         # s08's held-out SAC arms, read whether or not the ratio above was
         # computed. Two arms, differing in the hybrid-side distance only:
-        # 'sac_honest' scores the hybrid with importance-weighted distances
-        # against unweighted single reps; 'sac_honest_unweighted' scores both
+        # 'sac_reselected' scores the hybrid with importance-weighted distances
+        # against unweighted single reps; 'sac_reselected_unweighted' scores both
         # sides unweighted.
         if exp8:
             for _field, _key, _agg, _contrast in (
-                    ('sac_delta_heldout_s08', 'sac_honest',
+                    ('sac_delta_heldout_s08', 'sac_reselected',
                      'SAC_delta_heldout_s08',
                      'hybrid importance-weighted vs single reps unweighted'),
                     ('sac_delta_heldout_s08_unweighted',
-                     'sac_honest_unweighted',
+                     'sac_reselected_unweighted',
                      'SAC_delta_heldout_s08_unweighted',
                      'both arms unweighted')):
                 _src8h = f's08 {_key}.delta_mean_of_folds ({_contrast})'

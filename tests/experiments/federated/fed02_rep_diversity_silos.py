@@ -283,6 +283,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     fold_best_silo = []     # best silo letter per fold, picked on the TEST fold
     fold_best_silo_train = []   # best silo letter per fold, picked on the TRAIN rows
     fold_inner_scores = []  # {silo: inner train-only score} per fold
+    # How far the inner ranking's #1 and #2 silos sit apart, in the metric's
+    # own units, and which silo was #2. A margin near zero means the pick
+    # between them is close to a coin flip -- MEASURED on caco2 fold 0: the
+    # #1 pick flipped between two silos in 6 of 20 redraws of the same
+    # training rows, and their scores sat 0.0010 apart against a run-to-run
+    # wobble of 0.0006-0.0010 each (2026-09-18 check). Recorded per fold so a
+    # reader can tell a real winner from a near-tie without rerunning that
+    # check themselves.
+    fold_rank0_margin = []
+    fold_rank0_runnerup = []
     fold_top_3_silos = []   # top-3 silo letters per fold
     fold_top_3_reps = []
     fold_n_train = []
@@ -348,6 +358,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             inner_scores, silo_ranked = None, None
         fold_inner_scores.append(convert_numpy(inner_scores)
                                  if inner_scores else None)
+        if silo_ranked and len(silo_ranked) >= 2:
+            fold_rank0_margin.append(float(abs(silo_ranked[1][1] - silo_ranked[0][1])))
+            fold_rank0_runnerup.append(silo_ranked[1][0])
+        else:
+            fold_rank0_margin.append(None)
+            fold_rank0_runnerup.append(None)
 
         # ── Phase 2: Single-silo baselines (C1) ──────────────────────
         print(f"\n--- Phase 2: Single-silo baselines (C1) [task={task_type}] ---")
@@ -735,6 +751,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'picked_reps_per_fold': [silo_reps[s] if s in silo_reps else None
                                  for s in fold_best_silo_train],
         'n_folds_scored': len(_trainpick_vals.get(_primary_key, [])),
+        # How close the #1 pick above was to the runner-up, per fold, in
+        # inner_rank_metric's own units. A small margin next to a large
+        # rank0_std/std elsewhere in this dict means the pick could easily
+        # have gone the other way -- see the note on fold_rank0_margin above.
+        'rank0_margin_per_fold': list(fold_rank0_margin),
+        'rank0_runnerup_per_fold': list(fold_rank0_runnerup),
+        'rank0_runnerup_reps_per_fold': [
+            silo_reps[s] if s in silo_reps else None
+            for s in fold_rank0_runnerup],
     }
     for k, vals in _trainpick_vals.items():
         c1_trainpick[k] = float(np.mean(vals))

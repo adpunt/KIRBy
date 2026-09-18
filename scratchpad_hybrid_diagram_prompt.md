@@ -125,7 +125,7 @@ Per CV fold: slice train/val → look up precomputed fold importance + alloc sco
 ### B.4 Downstream artifacts (depict as outputs)
 - **`Blueprint` / `apply_blueprint`:** apply a recipe to new data with no search; can run **label-free** if `rep_scores` are stored (skips per-rep model evaluation).
 - **`get_best_hybrid`:** registry lookup (`hybrid_registry.json`) keyed `dataset → tier/aug_condition → model → budget`.
-- **`nested_cv_evaluate`:** honest outer evaluation; runs the full search on outer-train only, applies the winner to outer-test, and reports **bias = search_mean − honest_mean** (quantifies selection bias).
+- **`nested_cv_evaluate`:** honest outer evaluation; runs the full search on outer-train only, applies the winner to outer-test, and reports **bias = search_mean − reselected_mean** (quantifies selection bias).
 
 ### B.5 Metrics
 `BUILTIN_METRICS` (scorer, lower_is_better): `r2`(F), `rmse`(T), `mae`(T), `accuracy`(F), `auc`(F), `spearman`(F), `pearson`(F), `ci`(F), `f1_weighted`(F), `mcc`(F), `sac`(geometry, F). Everything is compared through a direction-aware "higher is better" convention.

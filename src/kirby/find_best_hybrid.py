@@ -1554,7 +1554,7 @@ class SearchResult:
     alloc_cache: Dict = field(default_factory=dict)
     # Per-(rep, model) per-fold BASELINE scores: {rep_name: {model_name: [f0, f1, ...]}}.
     # Parallels the scalar mean at baselines[rep][model] WITHOUT changing it —
-    # additive so the leave-one-fold-out honest re-score can apply the same
+    # additive so the leave-one-fold-out per-fold reselection can apply the same
     # held-out-fold tax to baseline reps as to hybrid candidates. Empty by
     # default for back-compat with older cache files / pickles. Only populated
     # for the models actually evaluated (same gate as baselines).
@@ -5259,7 +5259,7 @@ def _evaluate_baselines(
         ['_secondary': ...]}} dict (unchanged shape/types).
       - baseline_fold_scores: additive parallel {rep: {model: [f0, f1, ...]}}
         holding the raw per-fold primary-metric scores, so a leave-one-fold-out
-        honest re-score can tax baseline reps the same way as hybrid candidates.
+        per-fold reselection can tax baseline reps the same way as hybrid candidates.
         Only carries entries for the models actually evaluated. Entries served
         from an OLD per-rep baseline cache (written before per-fold caching) are
         simply absent — readers must tolerate a missing (rep, model).
@@ -6741,7 +6741,7 @@ def _run_search(
     # prune — so fold 0's own held-out score is measured over survivors fold 0
     # picked. A leave-one-fold-out re-score must drop fold 0's term; the single
     # representations never go through this cut, so keeping it makes the two
-    # arms pay different taxes. Read by _shared.build_honest_rescore_input.
+    # arms pay different taxes. Read by _shared.build_fold_reselection_input.
 
     if _pruning_enabled:
         # Check if fold 0 is already done (from checkpoint)
@@ -9067,8 +9067,8 @@ def _find_best_hybrid_inner(
         # The flag was flipped to False above, because the winner is picked on
         # the blend. The NAME has to move with it. Left as 'rmse' it said
         # lower-is-better while the flag said the opposite, and every reader
-        # that cross-checks the two -- build_honest_rescore_input in
-        # tests/experiments/_shared.py, honest_rescore beside it -- refused the
+        # that cross-checks the two -- build_fold_reselection_input in
+        # tests/experiments/_shared.py, fold_reselection beside it -- refused the
         # search outright. nested_cv_evaluate has renamed it at the same moment
         # it flips the flag since 2026-09-04; this path had not. Same name
         # nested_cv_evaluate and the cache filenames use, so a blend search and
@@ -9650,7 +9650,7 @@ class NestedCVResult:
 
     Both arms pay the identical held-out tax: each picks its winner using only
     outer_train, and is judged on an outer_test it never touched. That is what
-    makes the delta meaningful. `bias` (search_mean - honest_mean) is the
+    makes the delta meaningful. `bias` (search_mean - reselected_mean) is the
     selection-overfitting the old whole-dataset path was silently reporting.
     """
     # {model: {'hybrid_fold_scores', 'best_single_fold_scores', 'per_fold_delta',
@@ -9666,7 +9666,7 @@ class NestedCVResult:
     lower_is_better: bool
     n_outer_folds: int
     # Per-(model, budget) honest scores, for experiments that report by budget.
-    # {model: {budget: {'honest_mean','honest_std','fold_scores','search_mean','bias'}}}
+    # {model: {budget: {'reselected_mean','reselected_std','fold_scores','search_mean','bias'}}}
     by_model_budget: Dict[str, Dict[int, dict]] = field(default_factory=dict)
     # The inner SearchResult from each outer fold, for inspection / blueprint
     # reporting (rep_sparsity, chosen reps, ...). One per outer fold.
@@ -9782,8 +9782,8 @@ class NestedCVResult:
                        else (bp if isinstance(bp, dict) else {})) or {}
                 out[m][b] = {
                     'model': m,
-                    'score_mean': e['honest_mean'],
-                    'score_std': e['honest_std'],
+                    'score_mean': e['reselected_mean'],
+                    'score_std': e['reselected_std'],
                     'fold_scores': e['fold_scores'],
                     'search_mean': e.get('search_mean'),
                     'bias': e.get('bias'),
@@ -10919,8 +10919,8 @@ def nested_cv_evaluate(
             bps_b = [x for x in
                      (budget_bps.get(model_name, {}).get(budget) or []) if x]
             by_model_budget[model_name][budget] = {
-                'honest_mean': h_mean,
-                'honest_std': float(np.std(f)) if len(f) > 1 else float('nan'),
+                'reselected_mean': h_mean,
+                'reselected_std': float(np.std(f)) if len(f) > 1 else float('nan'),
                 'fold_scores': fs,
                 'search_mean': s_mean,
                 'bias': b,

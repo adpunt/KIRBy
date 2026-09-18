@@ -1,7 +1,7 @@
 # ANNITIA MASLD survival — `honest` submission
 
 **Author:** Adelaide Punt (St Catherine's College, Oxford)
-**Submission CSV:** `sub_master_honest.csv`
+**Submission CSV:** `sub_master_reselected.csv`
 **Pipeline:** KIRBy `tests/experiments/annitia/` (multi-layered ensemble)
 
 ## Honest fusion picks

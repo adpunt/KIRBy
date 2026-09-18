@@ -119,7 +119,7 @@ from experiments._shared import (
     get_domain_metric,
     build_fold_hybrid, extract_top3_base_reps,
     get_best_search_for_downstream,
-    honest_rescore, classify_rep_tier,
+    fold_reselection, classify_rep_tier,
     INTERNAL_EVALUATORS,
 )
 from kirby.find_best_hybrid import (
@@ -569,9 +569,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return bps
 
     results = []
-    honest_candidates = {}      # hybrid recipes -> honest_rescore
-    honest_baselines = {}       # single reps    -> honest_rescore
-    honest_ens_candidates = {}  # ensemble procs -> honest_rescore
+    reselection_candidates = {}      # hybrid recipes -> fold_reselection
+    reselected_baselines = {}       # single reps    -> fold_reselection
+    reselection_ens_candidates = {}  # ensemble procs -> fold_reselection
     cost_rows = []
 
     # ---- The two prediction stores that make everything else free. ----------
@@ -705,7 +705,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     (not lower_is_better and mean_s > best_score)):
                 best_score, best_rep = mean_s, rep_name
 
-        honest_baselines[model_name] = baseline_folds
+        reselected_baselines[model_name] = baseline_folds
         if best_rep is None:
             print("    Best single: NONE (all reps failed)")
             continue
@@ -786,7 +786,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             # One entry per OUTER FOLD, always, in fold order. A fold this arm
             # cannot score records NaN and keeps its slot: the baseline arm
-            # above does the same, and the honest re-score pairs the two arms
+            # above does the same, and the per-fold reselection pairs the two arms
             # by fold INDEX. Dropping the entry instead shifted every later
             # fold's hybrid score up one position and paired it against the
             # wrong fold of the single-representation arm.
@@ -899,7 +899,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             cost_rows.append((model_name, f'hybrid_b{b_lab}',
                               results[-1]['cost'], score))
 
-        honest_candidates[model_name] = hybrid_cands
+        reselection_candidates[model_name] = hybrid_cands
 
     # =====================================================================
     # 4/5. ENSEMBLE PROCESSES
@@ -1048,7 +1048,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if model_key == 'optimal' and not all_models:
             continue
         print(f"\n  {model_key} ({method}):")
-        honest_ens_candidates.setdefault(model_key, [])
+        reselection_ens_candidates.setdefault(model_key, [])
 
         aggs = list(CONTINUOUS_AGGREGATORS.items())
         if task_type == 'classification' and not metric_needs_proba:
@@ -1062,7 +1062,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fs = _run_process(model_key, rep_set, agg_name, agg_fn, hard=hard)
                 if not any(np.isfinite(s) for s in fs):
                     continue
-                _emit(results, cost_rows, honest_ens_candidates, model_key,
+                _emit(results, cost_rows, reselection_ens_candidates, model_key,
                       method, rep_set, agg_name, fs, _select, member_cost,
                       rep_dims, metric_name, n_out, inner_folds, general_reps,
                       all_models)
@@ -1100,7 +1100,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             auto_choice.append(f'{rep_set}|{agg_name}')
 
         if any(np.isfinite(s) for s in auto_fs):
-            _emit(results, cost_rows, honest_ens_candidates, model_key,
+            _emit(results, cost_rows, reselection_ens_candidates, model_key,
                   f'{method}_auto', 'auto', 'auto', auto_fs, _select,
                   member_cost, rep_dims, metric_name, n_out, inner_folds,
                   general_reps, all_models, auto_choice=auto_choice)
@@ -1136,11 +1136,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"{metric_name}={np.nanmean(oracle):.4f}")
 
     # =====================================================================
-    # HONEST RE-SCORE + HEAD-TO-HEAD
+    # PER-FOLD RESELECTION + HEAD-TO-HEAD
     # =====================================================================
-    honest_hybrid = honest_rescore(honest_candidates, honest_baselines,
+    reselected_hybrid = fold_reselection(reselection_candidates, reselected_baselines,
                                    lower_is_better)
-    honest_ens = honest_rescore(honest_ens_candidates, honest_baselines,
+    reselected_ens = fold_reselection(reselection_ens_candidates, reselected_baselines,
                                 lower_is_better)
 
     def _delta(better, worse):
@@ -1193,25 +1193,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # side then saw rows the ensemble side never did, so the difference is not
     # a comparison. The hybrid number and the deltas are written under names
     # carrying that, and the names a reader would take for held-out numbers —
-    # hybrid_honest, auto_minus_hybrid, ensemble_minus_hybrid,
+    # hybrid_reselected, auto_minus_hybrid, ensemble_minus_hybrid,
     # hybrid_minus_single — are not written at all.
-    _honest_recipe = (recipe_search == 'per_fold')
-    _h_key = ('hybrid_honest' if _honest_recipe
+    _reselected_recipe = (recipe_search == 'per_fold')
+    _h_key = ('hybrid_reselected' if _reselected_recipe
               else 'hybrid_recipe_selected_on_all_rows')
-    _suffix = '' if _honest_recipe else '_recipe_all_rows'
+    _suffix = '' if _reselected_recipe else '_recipe_all_rows'
 
     head_to_head = {}
-    for m in sorted(set(honest_hybrid) | set(honest_ens)):
-        h = honest_hybrid.get(m, {}).get('hybrid_honest', float('nan'))
-        e = honest_ens.get(m, {}).get('hybrid_honest', float('nan'))
-        b = honest_hybrid.get(m, {}).get('best_single_honest', float('nan'))
+    for m in sorted(set(reselected_hybrid) | set(reselected_ens)):
+        h = reselected_hybrid.get(m, {}).get('hybrid_reselected', float('nan'))
+        e = reselected_ens.get(m, {}).get('hybrid_reselected', float('nan'))
+        b = reselected_hybrid.get(m, {}).get('best_single_reselected', float('nan'))
         a = auto_by_key.get(m, float('nan'))
         # Fold-index-aligned held-out scores behind each of the three means
-        # above. honest_rescore returns them already paired; the *_auto arm
+        # above. fold_reselection returns them already paired; the *_auto arm
         # writes its own per-fold scores into `results`.
-        h_folds = honest_hybrid.get(m, {}).get('hybrid_fold_scores', [])
-        e_folds = honest_ens.get(m, {}).get('hybrid_fold_scores', [])
-        b_folds = honest_hybrid.get(m, {}).get('baseline_fold_scores', [])
+        h_folds = reselected_hybrid.get(m, {}).get('hybrid_fold_scores', [])
+        e_folds = reselected_ens.get(m, {}).get('hybrid_fold_scores', [])
+        b_folds = reselected_hybrid.get(m, {}).get('baseline_fold_scores', [])
         a_folds = auto_folds_by_key.get(m, [])
         ens_paired, ens_nf = _paired_delta(e_folds, h_folds)
         auto_paired, auto_nf = _paired_delta(a_folds, h_folds)
@@ -1219,9 +1219,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         head_to_head[m] = {
             _h_key: h,
             'hybrid_recipe_search': recipe_search,
-            'ensemble_honest': e,          # best process, LOFO-reselected
+            'ensemble_reselected': e,          # best process, LOFO-reselected
             'ensemble_auto': a,            # self-contained process (preferred)
-            'best_single_honest': b,
+            'best_single_reselected': b,
             f'ensemble_minus_hybrid{_suffix}': _delta(e, h),
             f'auto_minus_hybrid{_suffix}': _delta(a, h),
             f'hybrid_minus_single{_suffix}': _delta(h, b),
@@ -1242,15 +1242,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'ensemble_auto_fold_scores': [float(x) for x in a_folds],
             'best_single_fold_scores': b_folds,
             'ensemble_rule_per_fold':
-                honest_ens.get(m, {}).get('hybrid_winners_per_fold', []),
+                reselected_ens.get(m, {}).get('hybrid_winners_per_fold', []),
             'hybrid_recipe_per_fold':
-                honest_hybrid.get(m, {}).get('hybrid_winners_per_fold', []),
-            'single_fold': honest_hybrid.get(m, {}).get(
-                'single_fold', honest_ens.get(m, {}).get('single_fold', False)),
+                reselected_hybrid.get(m, {}).get('hybrid_winners_per_fold', []),
+            'single_fold': reselected_hybrid.get(m, {}).get(
+                'single_fold', reselected_ens.get(m, {}).get('single_fold', False)),
         }
 
     print("\n" + "=" * 78)
-    print("  HEAD-TO-HEAD" if _honest_recipe
+    print("  HEAD-TO-HEAD" if _reselected_recipe
           else "  HEAD-TO-HEAD (hybrid recipe from every row - NOT comparable)")
     print("=" * 78)
     print(f"    {'Model':<9} {'Hybrid':>9} {'EnsAuto':>9} {'EnsBest':>9} "
@@ -1258,7 +1258,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("    " + "-" * 72)
     for m, hh in head_to_head.items():
         print(f"    {m:<9} {hh[_h_key]:>9.4f} {hh['ensemble_auto']:>9.4f} "
-              f"{hh['ensemble_honest']:>9.4f} {hh['best_single_honest']:>9.4f} "
+              f"{hh['ensemble_reselected']:>9.4f} {hh['best_single_reselected']:>9.4f} "
               f"{hh[f'auto_minus_hybrid{_suffix}']:>+9.4f} "
               f"{hh[f'auto_minus_hybrid_mean_of_folds{_suffix}']:>+9.4f}")
     print("    Auto-Hyb is the difference of the two means; paired is the mean")
@@ -1269,7 +1269,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("    split - exactly as the hybrid picks its own recipe.")
     print("    Auto-Hyb > 0 => the ensemble is more accurate. The cost table says")
     print("    what that accuracy costs, forever, per inference.")
-    if not _honest_recipe:
+    if not _reselected_recipe:
         print("\n    The hybrid column's recipe was chosen over every row, "
               "including")
         print("    each fold's held-out rows; the ensemble columns chose "
@@ -1402,25 +1402,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_inner_folds': n_in,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         # Existing contract - hybrid vs best single rep. UNCHANGED.
-        'honest_rescore': {
+        'fold_reselection': {
             'lower_is_better': bool(lower_is_better),
             # Every fold counts. The candidates here are the arms this file built itself,
             # not a search's recipe list, so no fold filtered them.
             'exclude_folds': [],
-            'candidates_by_model': honest_candidates,
-            'baselines_by_model': honest_baselines,
+            'candidates_by_model': reselection_candidates,
+            'baselines_by_model': reselected_baselines,
         },
         # Same shape, ensemble PROCESSES as the candidates. NOTE: the key
-        # 'hybrid_honest' returned by honest_rescore() means "best ENSEMBLE
+        # 'hybrid_reselected' returned by fold_reselection() means "best ENSEMBLE
         # process, LOFO-reselected" when fed this block. Prefer `ensemble_auto`
         # in head_to_head - it is self-contained and needs no reselection.
-        'honest_rescore_ensemble': {
+        'fold_reselection_ensemble': {
             'lower_is_better': bool(lower_is_better),
             # Every fold counts. The candidates here are the arms this file built itself,
             # not a search's recipe list, so no fold filtered them.
             'exclude_folds': [],
-            'candidates_by_model': honest_ens_candidates,
-            'baselines_by_model': honest_baselines,
+            'candidates_by_model': reselection_ens_candidates,
+            'baselines_by_model': reselected_baselines,
         },
         'head_to_head': head_to_head,
         'break_even': break_even,
@@ -1437,7 +1437,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
 
 
-def _emit(results, cost_rows, honest_ens_candidates, model_key, method,
+def _emit(results, cost_rows, reselection_ens_candidates, model_key, method,
           rep_set, agg_name, fold_scores, select_fn, member_cost, rep_dims,
           metric_name, n_out, inner_folds, general_reps, all_models,
           auto_choice=None):
@@ -1503,7 +1503,7 @@ def _emit(results, cost_rows, honest_ens_candidates, model_key, method,
                 if (rep_set == 'auto' or _needs_selection(rep_set, agg_name))
                 else 0)
 
-    honest_ens_candidates.setdefault(model_key, []).append(
+    reselection_ens_candidates.setdefault(model_key, []).append(
         {'name': f'{method}|{rep_set}|{agg_name}',
          'fold_scores': [float(s) for s in fold_scores]})
 

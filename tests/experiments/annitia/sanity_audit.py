@@ -2,7 +2,7 @@
 
 Triggered by Round 3's Trustii test C=0.7181 vs reported OOF=0.98 — a 0.26
 gap suggested somewhere in the pipeline an OOF was not actually OOF.
-The fusion meta-learner overfit was identified separately (refuse_honest.py
+The fusion meta-learner overfit was identified separately (refuse_reselection.py
 fixes that). This script audits every other potential leakage source:
 
 For each base model (BE/CD/HB/BRANCHES/EXTERNAL) and each endpoint:

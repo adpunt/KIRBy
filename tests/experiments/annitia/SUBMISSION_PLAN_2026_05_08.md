@@ -94,7 +94,7 @@ Encoded in `pre_submit_check.py` (TODO — write).
 - **Submitting tiny perturbations** (e.g., reweighting by 0.1) — wastes a submission, no info.
 - **Submitting variants that scored < 0.92 OOF** — public leaderboard punishes overfit.
 - **Submitting Round 3-style learned stack** — proven to overfit catastrophically (0.7181).
-- **Submitting hierarchical v1 or refuse_honest** — both underperformed in offline tests.
+- **Submitting hierarchical v1 or refuse_reselection** — both underperformed in offline tests.
 
 ---
 

@@ -4,7 +4,7 @@ direction registry: 70 datasets
 RULES: no metric averages as a headline; win/tie/loss COUNTS + median/range
 for spreads; core-claim readers report PER MODEL (no read-time argmax over
 models/reps/grid cells), hybrid vs best single rep on the SAME model; when the
-experiment persists an honest_rescore block the winner is re-picked per held-
+experiment persists an fold_reselection block the winner is re-picked per held-
 out fold and the SAME tax hits both arms (OPTIMISTIC(1fold) = only one fold, not
 honest); older files fall back to the stored same-fold view. Δ direction-
 corrected (+ = hybrid better); tie band |Δ|<=0.01.
@@ -238,13 +238,13 @@ Core-claim experiments first in each block; diagnostics after.
   [antibody] per-model honest: +106 hybrid-better  =25 tie  -14 worse (145 model-cases)
   [molecular] per-model honest: +6 hybrid-better  =2 tie  -0 worse (8 model-cases)
   [tcga] per-model honest: +4 hybrid-better  =1 tie  -1 worse (6 model-cases)
-  (27 dataset(s) had no honest_rescore block — legacy same-fold view shown, optimistic.)
+  (27 dataset(s) had no fold_reselection block — legacy same-fold view shown, optimistic.)
 
 ============================================================================================
 [c05]  learning curves — does the hybrid advantage GROW or SHRINK with n?
 ============================================================================================
   Per model (no deployed-model pick): Δ = hybrid − best single per n,
-  direction-corrected (+ = hybrid better). honest_rescore_by_n gives the
+  direction-corrected (+ = hybrid better). fold_reselection_by_n gives the
   held-out Δ (winner re-picked per fold), averaged across seeds; older files
   fall back to the stored same-fold curves. Δ at smallest & largest n.
 
@@ -922,7 +922,7 @@ Core-claim experiments first in each block; diagnostics after.
 ============================================================================================
 [s02]  hybrid similarity — hybrid distance SAC vs best single rep (core claim, similarity side)
 ============================================================================================
-  SAC higher = better. Prefers the held-out CV honest_rescore block (single
+  SAC higher = better. Prefers the held-out CV fold_reselection block (single
   kNN pseudo-model; winner re-picked per fold, same tax both arms); older
   files fall back to the stored whole-data best_sac. lift = hybrid − best rep.
 
@@ -937,7 +937,7 @@ Core-claim experiments first in each block; diagnostics after.
 ============================================================================================
 [s05]  kNN prediction — hybrid-space kNN vs best single-rep kNN (core claim)
 ============================================================================================
-  Uses honest_rescore_result.knn.delta_mean_of_folds: for each held-out
+  Uses fold_reselection_result.knn.delta_mean_of_folds: for each held-out
   fold both arms are re-picked on the OTHER folds, so neither the hybrid
   cell nor the baseline representation is chosen on the fold it scores.
   summary.fixed_ref is NOT used: its baseline is the best representation
@@ -952,7 +952,7 @@ Core-claim experiments first in each block; diagnostics after.
 ============================================================================================
 [s13]  clustering / retrieval — does the hybrid space cluster & retrieve better?
 ============================================================================================
-  Held-out honest re-score of both axes (winner re-picked per fold, same tax
+  Held-out per-fold reselection of both axes (winner re-picked per fold, same tax
   both arms): clustering coherence (kmeans, higher better), retrieval Δy (knn,
   lower better). Both Δ direction-corrected so + = hybrid better. Older files
   fall back to the stored win booleans.
@@ -991,7 +991,7 @@ Core-claim experiments first in each block; diagnostics after.
 [s04]  activity cliffs — hybrid vs best rep on cliff compounds (molecular only)
 ============================================================================================
   Non-molecular / no-ecfp4 datasets are skipped by design. Prefers the
-  held-out honest_rescore block: per model (knn hybrid recipes; rf baseline-
+  held-out fold_reselection block: per model (knn hybrid recipes; rf baseline-
   only -> NaN Δ) held-out hybrid vs best single rep on the overall metric.
   Older files fall back to the stored whole-data cliff score.
 
@@ -1015,7 +1015,7 @@ Core-claim experiments first in each block; diagnostics after.
 [s07]  noise bridge — do hybrid distances flag fewer false 'noise' cliffs than the best rep?
 ============================================================================================
   Cliff-contamination rate: LOWER is better. Prefers the held-out CV
-  honest_rescore block (single kNN pseudo-model; winner re-picked per fold);
+  fold_reselection block (single kNN pseudo-model; winner re-picked per fold);
   its Δ is direction-corrected so + = hybrid better. Older files: stored
   whole-data delta (raw hybrid − best rep, so NEGATIVE = win).
 
@@ -1045,7 +1045,7 @@ Core-claim experiments first in each block; diagnostics after.
 ============================================================================================
 [s10]  importance downstream — does importance weighting help the downstream hybrid?
 ============================================================================================
-  Prefers the pooled held-out honest_rescore block: per DISTANCE-pool model
+  Prefers the pooled held-out fold_reselection block: per DISTANCE-pool model
   (winner re-picked per fold), held-out hybrid vs best single rep — no single-
   best-rep / single-best-model collapse. Older files fall back to the stored
   kNN / GP / SVR / qRASAR weighting deltas.
@@ -1135,7 +1135,7 @@ Core-claim experiments first in each block; diagnostics after.
 ============================================================================================
 [n07]  remediation — best strategy recovering the clean→noisy gap (thin, synthetic noise)
 ============================================================================================
-  Prefers the held-out honest_rescore block: per downstream model, held-out
+  Prefers the held-out fold_reselection block: per downstream model, held-out
   hybrid vs best single rep (winner re-picked per fold, same tax both arms),
   + = hybrid better. No post-hoc max over the model×strategy grid. Older files
   fall back to per-model recovery% (median & range across strategies, no max).

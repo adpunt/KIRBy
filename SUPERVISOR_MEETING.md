@@ -140,7 +140,7 @@ hyperparameter selection bias — the more configs we try, the luckier the best 
 - **Inner search**: Runs find_best_hybrid() on outer-train only, searching all configs
 - **Honest evaluation**: Takes the winning config from inner search, builds hybrid on
   outer-train, scores on held-out outer-test
-- Reports `bias = search_score - honest_score` to quantify selection optimism
+- Reports `bias = search_score - reselected_score` to quantify selection optimism
 - **Materialized fold indices**: All configs are compared on identical CV splits.
   No accidental fold variation inflating winners.
 

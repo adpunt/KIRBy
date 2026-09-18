@@ -131,6 +131,19 @@ from kirby.utils.noise_estimation import get_noise_estimator
 # "consensus of the rest" is a single measurement, which is not a consensus.
 MIN_MEASUREMENTS = 3
 
+# `true_spread` (below) is defined from 2 measurements, one lower than
+# MIN_MEASUREMENTS. Checked on herg_ic50, 2026-09-18: of the entities the
+# ceiling removes, 70% (689 of 980) carry a spread computed from exactly 2
+# measurements. Two alternatives were tried and rejected: requiring 3+
+# measurements before an entity is eligible drops the ceiling's reachable
+# population from 1,218 entities to 405; shrinking each entity's variance
+# toward the population mean (weighted by measurement count) flagged MORE
+# 2-measurement entities, not fewer, because entities measured more often
+# turned out to disagree more, which pulled the population mean up and
+# dragged every 2-measurement entity's shrunk estimate up with it. Decision:
+# 2 measurements is an acceptable floor given the data this runs on. Do not
+# re-raise this without a new number attached.
+
 # Share of training entities the detector flags, and the share the ceiling
 # removes. Held equal on purpose: `drop`, `ceiling` and `floor` must remove the
 # same NUMBER of entities, or the comparison measures training-set size.
