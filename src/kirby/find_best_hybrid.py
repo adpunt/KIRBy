@@ -2570,7 +2570,11 @@ DEFAULT_MODELS = {
         'classifier': lambda: __import__('sklearn.neural_network', fromlist=['MLPClassifier']).MLPClassifier(
             hidden_layer_sizes=(256,), random_state=42, max_iter=500,
             early_stopping=True, validation_fraction=0.1),
-        'tier': 'extra',
+        # CUT BY THE OWNER 2026-09-18: it did not perform and it was slow.
+        # Tier 'off', so no search selects it and nothing in the suite plans a
+        # run with it. dnn is the neural model everywhere it was used. The
+        # factory stays, per the tier-table rule, so a caller can still name it.
+        'tier': 'off',
     },
     'svm': {
         'regressor': lambda: __import__('sklearn.svm', fromlist=['SVR']).SVR(),

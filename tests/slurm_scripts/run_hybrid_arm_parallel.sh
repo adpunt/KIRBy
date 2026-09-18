@@ -39,7 +39,7 @@ cd /data/stat-ecr/scat9264/KIRBy || exit 1
 OUTPUT="${OUTPUT:-tests/results/geometry_survey}"
 LOGS="${LOGS:-logs/hybrid_arm}"
 BASE_REPS="${BASE_REPS:-pruned}"
-MODELS="${MODELS:-rf,mlp}"
+MODELS="${MODELS:-rf,dnn}"
 DATASETS="${DATASETS:-abcov_kd ddg_combined flab_thermo_tresanco ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer}"
 
 # One thread per process. Eight datasets on eight cores each trying to use all

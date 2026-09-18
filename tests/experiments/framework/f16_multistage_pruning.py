@@ -72,7 +72,7 @@ F16_DATASETS = [
     'buchwald_hartwig',
 ]
 
-F16_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+F16_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'dnn', 'lightgbm']
 
 # The two swept dimensions.
 CHECKPOINT_CONFIGS: Dict[str, List[int]] = {

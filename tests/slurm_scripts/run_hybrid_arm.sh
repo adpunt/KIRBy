@@ -38,7 +38,7 @@ ds="${DATASETS[${SLURM_ARRAY_TASK_ID:-0}]}"
 
 OUTPUT="${OUTPUT:-tests/results/geometry_survey}"
 BASE_REPS="${BASE_REPS:-pruned}"
-MODELS="${MODELS:-rf,mlp}"
+MODELS="${MODELS:-rf,dnn}"
 
 { git pull --ff-only origin similarity-metrics-study \
     || echo "[job] GIT PULL FAILED — running the checked-out tree, may be stale"; }

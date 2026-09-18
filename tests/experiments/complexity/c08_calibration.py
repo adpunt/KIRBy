@@ -126,7 +126,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             best_model = None
             best_search = None
             best_meta = None
-            for candidate_model in ['rf', 'svm', 'lightgbm', 'mlp', 'knn']:
+            for candidate_model in ['rf', 'svm', 'lightgbm', 'dnn', 'knn']:
                 try:
                     s, m = get_best_search_for_downstream(
                         reps, labels, groups,

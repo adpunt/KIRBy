@@ -24,7 +24,7 @@ Usage:
     python tests/experiments/structural_geometry_survey.py flab_thermo_jain
     python tests/experiments/structural_geometry_survey.py all_inter
     python tests/experiments/structural_geometry_survey.py all_inter --base-reps esm2,ablang2,prot_t5
-    python tests/experiments/structural_geometry_survey.py all --models rf,mlp
+    python tests/experiments/structural_geometry_survey.py all --models rf,dnn
 
     # Report which cached geometry arrays are entirely zero (reports only):
     python tests/experiments/structural_geometry_survey.py --scan-zero-cache
@@ -131,7 +131,7 @@ DEFAULT_BASE_REPS = [
 ]
 
 # Ridge is ruled out of this project, so it is not a default here.
-DEFAULT_MODELS_ARG = 'rf,mlp'
+DEFAULT_MODELS_ARG = 'rf,dnn'
 
 
 # =============================================================================
@@ -1039,7 +1039,7 @@ Geometry features:
   vhvl_interface (30D)      all_geometry (162D, all combined)
 
 Examples:
-  %(prog)s flab_thermo_jain --models rf,mlp
+  %(prog)s flab_thermo_jain --models rf,dnn
   %(prog)s all_inter --base-reps esm2,ablang2,prot_t5
   %(prog)s all --output tests/results/geometry_survey/
         """

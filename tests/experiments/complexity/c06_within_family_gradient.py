@@ -42,7 +42,7 @@ from kirby.find_best_hybrid import _resolve_models, FAST_INTERNAL_EVALUATORS
 # _resolve_models is the only way to trigger _max_samples + _DOMAIN_MODEL_SKIPS
 # + _DATASET_STRATEGY_SKIPS; the dict form is a passthrough.
 _FAMILY_TO_CANONICAL = {
-    'RF': 'rf', 'Ridge': 'ridge', 'kNN': 'knn', 'MLP': 'mlp',
+    'RF': 'rf', 'Ridge': 'ridge', 'kNN': 'knn', 'DNN': 'dnn',
     'XGBoost': 'xgboost', 'SVM': 'svm', 'GP': 'gp',
 }
 
@@ -63,7 +63,7 @@ _FAMILY_TO_CANONICAL = {
 # there is no name to pass for Lasso. Its searches run on the rest of the
 # list and a line below says so.
 _FAMILY_TO_EVALUATOR = {
-    'RF': 'rf', 'kNN': 'knn', 'MLP': 'mlp',
+    'RF': 'rf', 'kNN': 'knn', 'DNN': 'dnn',
     'XGBoost': 'xgboost', 'SVM': 'svm', 'GP': 'gp',
 }
 
@@ -447,7 +447,7 @@ if __name__ == '__main__':
     parser = create_experiment_parser('C06: Within-Family Complexity Gradient',
                                      has_delta=True, has_augment=True)
     parser.add_argument('--families', type=str, nargs='+', default=None,
-                        help='Model families to test (RF, Ridge, kNN, MLP, XGBoost, SVM, GP)')
+                        help='Model families to test (RF, Ridge, kNN, DNN, XGBoost, SVM, GP)')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, args.reps,
