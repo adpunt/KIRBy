@@ -240,7 +240,7 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
 
 
 def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
-                         is_clf=False, groups=None):
+                         is_clf=False, groups=None, strength=None):
     """What one of the cleanups hands the downstream fit, before any fit runs.
 
     Hoisted out of `_evaluate_fold` on 2026-09-17 so that `n20` can apply the
@@ -253,6 +253,25 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
 
     noise_fraction is the share of training rows treated as suspect, so the
     cut-off sits at the (1 - noise_fraction) quantile of `noise_scores`.
+
+    strength is how HARD the two rate-blind cleanups lean on that score, in
+    each one's own units, and None keeps the value this function used before it
+    was a parameter. It exists because `downweight` and `label_smooth` read no
+    quantile at all on a regression set, so sweeping the flag rate for them
+    sweeps nothing:
+
+      downweight    `weights_from_scores(..., strength=s)` with the 'inverse'
+                    shape gives a row weight of 1/(1+s) at the most suspect end
+                    and 1 at the cleanest. The old fixed 1.0 is therefore the
+                    gentlest setting the shape has -- a 2:1 ratio between the
+                    most and least suspect molecule. 3.0 is 4:1 and 9.0 is 10:1.
+      label_smooth  the alpha `smooth_by_scores` moves a label by, 0 to 1.
+                    The old fixed 0.5 moves the most suspect label half of the
+                    way to its neighbours' mean.
+
+    Nothing in the suite had ever tried a hard setting: n11 sweeps this same
+    knob over ALPHAS = [0.1, 0.3, 0.5, 0.7], every one of which is gentler than
+    or equal to the fixed value here.
 
     Returns a dict, or None when the cleanup cannot be applied:
 
@@ -291,7 +310,9 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
 
     if strategy == 'downweight':
         return {'X': X_tr_s, 'y': y_tr,
-                'sample_weight': weights_from_scores(noise_scores, strength=1.0),
+                'sample_weight': weights_from_scores(
+                    noise_scores,
+                    strength=1.0 if strength is None else float(strength)),
                 'keep': None, 'label_column': None}
 
     if strategy == 'label_smooth':
@@ -311,8 +332,10 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
             nn.fit(X_tr_s)
             _, nbr_idx = nn.kneighbors(X_tr_s)
             nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
-            y_smoothed = smooth_by_scores(y_tr, noise_scores, nbr_means,
-                                          alpha=0.5, method='proportional')
+            y_smoothed = smooth_by_scores(
+                y_tr, noise_scores, nbr_means,
+                alpha=0.5 if strength is None else float(strength),
+                method='proportional')
         return {'X': X_tr_s, 'y': y_smoothed, 'sample_weight': None,
                 'keep': None, 'label_column': y_smoothed}
 
@@ -548,7 +571,8 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                    model_factory, metric_fn, is_clf=False, metric_name=None,
                    noise_seed=42, precomputed_y_tr=None, noise_scores=None,
                    dataset_name=None, noise_level=0.5,
-                   y_all=None, train_idx=None, train_groups=None):
+                   y_all=None, train_idx=None, train_groups=None,
+                   strength=None):
     """Evaluate a single remediation strategy on one fold.
 
     train_groups: one scaffold-group label per TRAINING row, forwarded to
@@ -619,7 +643,8 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
         elif strategy in CLEANUPS:
             cleaned = cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores,
                                            noise_fraction, is_clf=is_clf,
-                                           groups=train_groups)
+                                           groups=train_groups,
+                                           strength=strength)
             if cleaned is None:
                 # `remove` left under 10 training rows. Same fall-through as
                 # before: no score for this fold rather than a fit on nothing.
