@@ -487,6 +487,43 @@ def _evaluate_hybrid_per_fold(
                 # condition_suffix keeps each fold's cache file distinct.
                 tier='general',
                 condition_suffix=f'loo_{split_key}_fold{fold_idx}',
+                # ⛔ speed='fast' SINCE 2026-09-18, OWNER'S DECISION.
+                #
+                # Nothing precomputes this. The comment above says why: these
+                # Buchwald datasets have no shared precompute, and the per-fold
+                # condition_suffix makes every fold its own search identity. So
+                # every one of these is built live inside the job and there is
+                # no stored full grid to miss by asking for a shorter one.
+                #
+                # The multiplier is the fold count. A leave-one-component-out
+                # split is one fold per component: 23 additives, 15 aryl
+                # halides, 4 ligands and 3 bases, so 45 folds per dataset where
+                # an ordinary run has 5, across 2 datasets. At the full grid
+                # that was about 44 million model fits.
+                #
+                # Full is 5 allocation methods x 3 importance methods x 4
+                # representation counts x 8 budgets x 17 (model, evaluator)
+                # pairs = 8,160 configurations. Fast is 3 x 1 x 2 x 8 x 9 = 432,
+                # so about 44 million model fits becomes about 2.3 million.
+                #
+                # ⛔ THE FULL 19x APPLIES HERE, unlike c13. This call passes no
+                # models= argument, and the filter that drops xgboost and svm
+                # under fast runs only when models is None
+                # (find_best_hybrid.py:8221-8232). c13 hands its search an
+                # explicit list, so fast leaves its model axis alone and it gets
+                # 9x; this one gets the whole cut.
+                #
+                # ⛔ internal_evaluators=_eval_list above is explicit, so fast
+                # does not shorten THAT axis. The cut comes from the allocation
+                # methods, the importance methods, the representation counts and
+                # the model list.
+                #
+                # ⛔ IT OVERLAPS WITH adaptive_pruning=0.25 BELOW. Pruning votes
+                # on the allocation axis, and fast searches 3 allocation methods
+                # instead of 5, so there is less for the vote to act on. Neither
+                # is broken by the other; they are two levers on one axis and
+                # this is recorded so a later reader does not add a third.
+                speed='fast',
                 adaptive_pruning=0.25,
                 **_smoke_imp,
                 **_pkw,
