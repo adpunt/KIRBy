@@ -389,6 +389,18 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
                    for i in range(NFOLDS)]
     fold_pool_full = [fold_ranked[i][:POOL_MAX] for i in range(NFOLDS)]
     fold_target = [fold_ranked[i][0] for i in range(NFOLDS)]
+    # RANK 2, PER FOLD. Added 2026-09-18. Every delta in this file is against
+    # the rank-1 base representation that fold's own training rows picked, so
+    # the file never says how far ahead of second place that pick was. An arm
+    # that beats rank 1 and not rank 2 has beaten one of two representations
+    # that were level, not "the best base representation".
+    #
+    # 0 new model fits: rep_native and rep_r2 already hold every
+    # representation's per-fold held-out scores, and this reads the second
+    # entry of a list that is already sorted per fold.
+    fold_target_2 = [(fold_ranked[i][1] if len(fold_ranked[i]) > 1 else None)
+                     for i in range(NFOLDS)]
+    _has_rank2 = all(r is not None for r in fold_target_2)
 
     # The target's score is that fold's HELD-OUT score for the rep its own
     # training rows picked — the pick and the grade never share a row.
@@ -399,6 +411,12 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
         target_oof[va] = rep_oof[fold_target[i]][va]
     tR2 = np.array(target_r2_pf)
     tNat = np.array(target_native_pf)
+    # Same construction for rank 2: the pick comes from that fold's training
+    # rows and the grade from the fold it never saw.
+    tR2_2 = (np.array([rep_r2[fold_target_2[i]][1][i] for i in range(NFOLDS)])
+             if _has_rank2 else None)
+    tNat_2 = (np.array([rep_native[fold_target_2[i]][1][i] for i in range(NFOLDS)])
+              if _has_rank2 else None)
 
     mout["target"] = {
         "picked_per_fold": True,
@@ -411,6 +429,17 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
         "whole_data_best_rep": ranked_whole[0],
         "folds_agreeing_with_whole_data": int(
             sum(1 for r in fold_target if r == ranked_whole[0])),
+        # The runner-up per fold, and its held-out scores. A small gap to it
+        # means "best base representation" is not stable on this dataset.
+        "second_rep_per_fold": fold_target_2,
+        "second_native_per_fold": ([round(float(x), 5) for x in tNat_2]
+                                   if _has_rank2 else None),
+        "second_r2_per_fold": ([round(float(x), 5) for x in tR2_2]
+                               if _has_rank2 else None),
+        "gap_r2_rank1_minus_rank2_mean": (float(np.mean(tR2 - tR2_2))
+                                          if _has_rank2 else None),
+        "gap_native_rank1_minus_rank2_mean": (
+            float(np.mean(gs * (tNat - tNat_2))) if _has_rank2 else None),
     }
     mout["fold_ranking"] = {str(i): fold_ranked[i] for i in range(NFOLDS)}
     mout["pool_full_per_fold"] = {str(i): fold_pool_full[i] for i in range(NFOLDS)}
@@ -421,7 +450,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
         dR2 = r2 - tR2
         dNat = gs * (nat - tNat)
         ci95, p_boot = boot_ci(cfg.get("oof"), target_oof)
-        return {
+        out = {
             "r2_mean": float(np.mean(r2)),
             "r2_delta_mean": float(np.mean(dR2)),
             "r2_delta_per_fold": [round(float(x), 5) for x in dR2],
@@ -433,6 +462,16 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
             "nfeat": round(cfg["nfeat"], 1),
             "scheme": cfg["scheme"], "mech": cfg["mech"], "N": cfg["N"], "B": cfg["B"],
         }
+        # Against rank 2 as well. Added 2026-09-18; every key above is
+        # unchanged and still measured against rank 1.
+        if _has_rank2:
+            _dR2_2 = r2 - tR2_2
+            _dNat_2 = gs * (nat - tNat_2)
+            out["r2_delta_mean_vs_rank2"] = float(np.mean(_dR2_2))
+            out["r2_folds_won_vs_rank2"] = int(np.sum(_dR2_2 > 0))
+            out["native_delta_mean_vs_rank2"] = float(np.mean(_dNat_2))
+            out["native_folds_won_vs_rank2"] = int(np.sum(_dNat_2 > 0))
+        return out
 
     def global_sel(pool_by_fold, slots_by_fold, B):
         """Weighted-global: glue each rep's top-slots candidate cols, one global

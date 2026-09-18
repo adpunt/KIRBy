@@ -124,6 +124,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, run_nested_cv,
+    top_base_reps,
     FULL_BUDGETS,
 )
 
@@ -517,6 +518,10 @@ def run(data, config, output_dir, dataset_name):
     lower = bool(result.lower_is_better)
     by_model_budget = {}
     summary = {}
+    # {model: [rank-2 representation name per outer fold]}. NOT stored inside
+    # by_model_budget[model]: that dict is iterated with sorted(..., key=int)
+    # at the printing loop below, so a key that is not a budget raises there.
+    rank2_by_model = {}
 
     for model, per_budget in (result.by_model_budget or {}).items():
         entry = (result.by_model or {}).get(model, {}) or {}
@@ -524,6 +529,46 @@ def run(data, config, output_dir, dataset_name):
         rows, curve = _summarise_model(per_budget, base_folds, lower,
                                        min_train_rows)
         by_model_budget[model] = {str(b): r for b, r in rows.items()}
+
+        # THE SAME CURVE AGAINST THE RANK-2 BASE REPRESENTATION. Added
+        # 2026-09-18. `delta_vs_best_single` is measured against rank 1 only,
+        # so a budget that beats rank 1 and loses to rank 2 reads as a win.
+        # This adds the second curve; every existing key is untouched and still
+        # measured against rank 1.
+        #
+        # 0 new model fits. top_base_reps reads each outer fold's stored inner
+        # search, and the rank-2 representation's held-out score for that fold
+        # is already in result.baselines_by_model.
+        #
+        # ⛔ ONE DIRECTION CAVEAT, UNRESOLVED. Nested CV picks rank 1 using the
+        # `_baselines_lower_is_better` parameter; top_base_reps resolves the
+        # direction from the stored search. The two agree on a builtin metric
+        # under a non-blend objective, which is every c33 run today, and
+        # disagree under a blend. c33 runs no blend, so this is recorded rather
+        # than guarded.
+        rank2_folds, rank2_rep_per_fold = [], []
+        _inner = getattr(result, 'inner_searches', None) or []
+        _bbm = (getattr(result, 'baselines_by_model', None) or {}).get(model, {})
+        for i, _isearch in enumerate(_inner):
+            _rep = None
+            try:
+                _sel = top_base_reps(_isearch, model, n=2, require_full=False,
+                                     context=f'c33 {dataset_name} fold {i}')
+                if len(_sel['selected']) > 1:
+                    _rep = _sel['selected'][1]['rep']
+            except Exception:
+                _rep = None
+            rank2_rep_per_fold.append(_rep)
+            _fs = (_bbm.get(_rep) or {}).get('fold_scores') if _rep else None
+            rank2_folds.append(_fs[i] if (_fs and i < len(_fs)) else None)
+
+        if any(v is not None for v in rank2_folds):
+            for b, r in rows.items():
+                _d, _pf, _n = _paired_delta(r.get('fold_scores'), rank2_folds,
+                                            lower)
+                by_model_budget[model][str(b)]['delta_vs_rank2_single'] = _d
+                by_model_budget[model][str(b)]['delta_vs_rank2_n_paired'] = _n
+            rank2_by_model[model] = rank2_rep_per_fold
 
         picked = _picked_budgets(entry)
         picked_modal = _modal(picked)
@@ -562,6 +607,9 @@ def run(data, config, output_dir, dataset_name):
                 else bool(picked_modal > min_train_rows)),
             'honest_at_picked_budget': honest_at_picked,
             'overfit_gap': overfit_gap,
+            # Which representation was second best on each outer fold, for the
+            # delta_vs_rank2_single curve added beside the rank-1 one.
+            'rank2_rep_per_fold': rank2_by_model.get(model),
             # The gap is only worth reading if it is bigger than the amount the
             # folds themselves move by at the picked budget.
             'picked_budget_per_fold_delta_std': (

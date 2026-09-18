@@ -22,6 +22,7 @@ from experiments._shared import (
     compute_intrinsic_dimensionality,
     find_best_hybrid,
     extract_top3_base_reps,
+    select_model_rep_pairs,
     INTERNAL_EVALUATORS,
     get_best_search_for_downstream,
     build_honest_rescore_input,
@@ -289,6 +290,26 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 if top3:
                     print(f"    {subpop_name} Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
+                # ADDED 2026-09-18, beside top3 rather than instead of it.
+                # `top3` is 3 base representations ranked for rf alone, and it
+                # does not say so in the key it is stored under. `sel` is the
+                # top 2 base representations AND the top 2 hybrids for EVERY
+                # downstream model, each row carrying the model it belongs to.
+                #
+                # 0 new model fits: both halves read rows the search stored.
+                #
+                # top3 is left in place and still written, so `delta_budget` at
+                # c07:296-306 and `config_differs` at c07:453-457 keep reading
+                # the winner they read today and nothing on disk moves.
+                sel = None
+                try:
+                    sel = select_model_rep_pairs(
+                        search, n_base=2, n_hybrids=2, require_full=False,
+                        context=f'c07 {dataset_name}/{partition_name}/{subpop_name}')
+                except Exception as _e:
+                    print(f"    {subpop_name}: top-2 selection unavailable "
+                          f"({type(_e).__name__}: {_e})")
+
                 # Pick the best result across all models. Skip NaN-scored
                 # models (otherwise NaN can "win" by accident when iterated
                 # first — NaN comparisons are always False).
@@ -430,7 +451,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'best': best_config,
                 'best_by_model': best_by_model,
                 'baselines': search.baselines if (best_config and search is not None) else {},
+                # Ranked for rf alone. The name does not say so; it is kept
+                # for the readers that already parse it.
                 'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+                # Top 2 base representations and top 2 hybrids PER downstream
+                # model, each row naming its model. Added 2026-09-18.
+                'top2_pairs_by_model': (sel['pairs'] if sel else []),
                 'all_rows_bp_scores': all_rows_bp_scores,
                 'all_rows_bp_fold_scores': all_rows_bp_fold_scores,
                 # Per-model honest re-score inputs (per-fold, both arms). Exact
