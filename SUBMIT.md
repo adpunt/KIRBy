@@ -40,12 +40,28 @@ already stored. That is why the chain exists: link 1 gets as far as it gets,
 link 2 resumes exactly there, and a link with nothing left exits in minutes.
 Over-chaining costs a queue slot. Under-chaining leaves work undone.
 
-**2. The experiment jobs read your code when they start, not when you submit.**
-They are queued without naming experiments, so each runs whatever
-`SINGLE_DATASET_EXPERIMENTS` holds at the moment it starts —
-`noise_helpers.py`, `complexity_helpers.py`, `similarity_helpers.py`. Add an
-experiment to that list, delete one, or edit any experiment file, and every
-queued job picks the change up. **No resubmission.**
+**2. Python is read when the job starts. The shell scripts are not.**
+
+`sbatch` copies the shell script into SLURM's own store at submit time. So
+editing `run_precompute_dataset.sh` or `submit_dataset.sh` changes nothing for a
+job already queued — it will run the copy it was submitted with. See exactly
+what a queued job will run:
+
+```bash
+scontrol write batch_script <jobid> -
+```
+
+Everything that copy then *invokes* is read from disk at run time. So:
+
+| edit | reaches queued jobs? |
+|---|---|
+| `SINGLE_DATASET_EXPERIMENTS` in the three `*_helpers.py` | **yes** |
+| any experiment file (`n07.py`, `c11.py`, …) | **yes** |
+| `precompute_hybrids.py`, `find_best_hybrid.py`, `_shared.py` | **yes** |
+| `run_precompute_dataset.sh`, `submit_dataset.sh` | **no** — resubmit to change those |
+
+Adding or dropping an experiment therefore needs no resubmission. Changing which
+passes or which speed a precompute job uses does.
 
 **3. Do not change what identifies a stored result while jobs are queued.** The
 metric, the fold split, the seed, the representation pool, `n_folds`. Those are
