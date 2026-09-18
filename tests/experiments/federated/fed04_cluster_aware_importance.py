@@ -361,8 +361,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    Cluster {s} top 5: {', '.join(_top)}")
 
         # ── Phase 4: Cluster-conditional hybrid ──────────────────────────
+        # THREE arms, not two. The two that were here answer a question with
+        # two things moving at once:
+        #   global            — all training rows, ONE feature set for all.
+        #   cluster_model     — this cluster's rows only, its OWN features.
+        # A cluster's rows are a fifth of the fold and FLuID's classifier puts
+        # every fit through RandomUnderSampler first, so on caco2 the
+        # per-cluster forests trained on 58 to 596 rows against roughly a
+        # thousand for the global one (measured 2026-09-18, all five folds).
+        # Whatever the gap between those two arms is, most of it is the row
+        # count, and the experiment reads it as the features.
+        #   cluster_features  — ALL training rows, this cluster's features.
+        # The third arm holds the rows fixed and varies only the feature set,
+        # which is the question fed04 exists to ask. cluster_features minus
+        # global is the value of choosing features per region; cluster_model
+        # minus cluster_features is what fitting on one region's rows costs.
         per_cluster_models = {}
+        per_cluster_models_allrows = {}
         per_cluster_fis = {}
+        per_cluster_fit_rows = {}
         for s in range(1, K + 1):
             fi = feature_infos.get(s)
             if fi is None:
@@ -372,7 +389,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             clf = fit_fed_classifier(
                 fed_model, X_s[idx], y_train[idx], seed=fed_seed)
             per_cluster_models[s] = clf
+            # Same features, every training row.
+            per_cluster_models_allrows[s] = fit_fed_classifier(
+                fed_model, X_s, y_train, seed=fed_seed)
             per_cluster_fis[s] = fi
+            # How many rows each arm actually fitted on, AFTER the
+            # under-sampler, so the row-count confound is in the file rather
+            # than only in this comment.
+            _na = int(y_train[idx].sum())
+            per_cluster_fit_rows[s] = {
+                'n_cluster_rows': int(len(idx)),
+                'n_cluster_rows_after_undersample': 2 * min(
+                    _na, int(len(idx)) - _na),
+                'n_all_train_rows': int(len(y_train)),
+                'n_all_train_rows_after_undersample': 2 * min(
+                    int(y_train.sum()), int(len(y_train) - y_train.sum())),
+            }
 
         # Predict: use ORIGINAL FLuID cluster assignments for test molecules
         # (test_silo was computed earlier in this fold from the original
@@ -390,29 +422,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         y_pred_global = clf_global.predict(X_global_test)
         y_prob_global = clf_global.predict_proba(X_global_test)[:, 1]
 
-        # Per-cluster prediction using original cluster assignments
-        y_pred_conditional = y_pred_global.copy()
-        y_prob_conditional = y_prob_global.copy()
-        fallback_mask = np.ones(len(test_idx), dtype=bool)
-        for i in range(len(test_idx)):
-            cluster = test_silo[i]
-            if cluster in per_cluster_models and cluster in per_cluster_test_X:
-                model = per_cluster_models[cluster]
-                X_i = per_cluster_test_X[cluster][[i]]
-                y_pred_conditional[i] = model.predict(X_i)[0]
-                proba = model.predict_proba(X_i)
-                y_prob_conditional[i] = proba[0, 1] if proba.shape[1] == 2 else 0.5
-                fallback_mask[i] = False
+        # Route each held-out molecule to its own cluster, twice: once to the
+        # model fitted on that cluster's rows, once to the model fitted on
+        # every training row. Same routing, same features, different training
+        # set — so the two differ by the row count and nothing else.
+        def _route(models):
+            y_p = y_pred_global.copy()
+            y_q = y_prob_global.copy()
+            miss = np.ones(len(test_idx), dtype=bool)
+            for i in range(len(test_idx)):
+                cluster = test_silo[i]
+                if cluster in models and cluster in per_cluster_test_X:
+                    mdl = models[cluster]
+                    X_i = per_cluster_test_X[cluster][[i]]
+                    y_p[i] = mdl.predict(X_i)[0]
+                    proba = mdl.predict_proba(X_i)
+                    y_q[i] = proba[0, 1] if proba.shape[1] == 2 else 0.5
+                    miss[i] = False
+            return y_p, y_q, miss
+
+        y_pred_conditional, y_prob_conditional, fallback_mask = _route(
+            per_cluster_models)
+        y_pred_featonly, y_prob_featonly, _ = _route(
+            per_cluster_models_allrows)
         n_fallback = int(fallback_mask.sum())
         if n_fallback > 0:
             print(f"  {n_fallback} test samples used global fallback")
 
         conditional_metrics = compute_clf_metrics(
             y_test, y_pred_conditional, y_prob_conditional)
+        featonly_metrics = compute_clf_metrics(
+            y_test, y_pred_featonly, y_prob_featonly)
         global_metrics = compute_clf_metrics(
             y_test, y_pred_global, y_prob_global)
-        print(f"  Cluster-conditional MCC={conditional_metrics['mcc']:.3f} | "
-              f"Global hybrid MCC={global_metrics['mcc']:.3f}")
+        print(f"  MCC — per-cluster features + per-cluster rows "
+              f"{conditional_metrics['mcc']:.3f} | per-cluster features + ALL "
+              f"rows {featonly_metrics['mcc']:.3f} | global features + all "
+              f"rows {global_metrics['mcc']:.3f}")
 
         # ── Phase 5: Smooth factor sweep ─────────────────────────────────
         smooth_sweep = {}
@@ -471,7 +517,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'vs_global': cluster_vs_global,
             }),
             'cluster_conditional_hybrid': convert_numpy(conditional_metrics),
+            'cluster_features_all_rows': convert_numpy(featonly_metrics),
             'global_hybrid': convert_numpy(global_metrics),
+            'per_cluster_fit_rows': convert_numpy(per_cluster_fit_rows),
             'smooth_factor_sweep': smooth_sweep,
             'n_fallback': n_fallback,
         })
@@ -495,6 +543,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for m in metric_keys}
     glob_agg = {m: {'mean': _mean_metric(fold_records, 'global_hybrid', m),
                     'std': _std_metric(fold_records, 'global_hybrid', m)}
+                for m in metric_keys}
+    feat_agg = {m: {'mean': _mean_metric(fold_records,
+                                         'cluster_features_all_rows', m),
+                    'std': _std_metric(fold_records,
+                                       'cluster_features_all_rows', m)}
                 for m in metric_keys}
 
     stability_vals = [r['profile_stability'].get('mean_spearman') for r in fold_records]
@@ -612,6 +665,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'folds': fold_records,
         'aggregate': {
             'cluster_conditional_hybrid': cond_agg,
+            'cluster_features_all_rows': feat_agg,
             'global_hybrid': glob_agg,
             'mean_profile_stability': mean_stability,
             'mean_profile_stability_null': mean_stability_null,
@@ -632,8 +686,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Profile stability (mean): {_stab_str}")
     print(f"  Same number over a RANDOM partition of the same cluster sizes: "
           f"{_null_str}")
-    print(f"  Conditional MCC: {cond_agg['mcc']['mean']:.3f} ± {cond_agg['mcc']['std']:.3f}")
-    print(f"  Global MCC:      {glob_agg['mcc']['mean']:.3f} ± {glob_agg['mcc']['std']:.3f}")
+    print(f"  MCC, per-cluster features + per-cluster rows: "
+          f"{cond_agg['mcc']['mean']:.3f} ± {cond_agg['mcc']['std']:.3f}")
+    print(f"  MCC, per-cluster features + ALL training rows: "
+          f"{feat_agg['mcc']['mean']:.3f} ± {feat_agg['mcc']['std']:.3f}")
+    print(f"  MCC, global features + all training rows:      "
+          f"{glob_agg['mcc']['mean']:.3f} ± {glob_agg['mcc']['std']:.3f}")
+    print(f"  choosing features per region is worth "
+          f"{feat_agg['mcc']['mean'] - glob_agg['mcc']['mean']:+.4f} MCC; "
+          f"fitting on one region's rows costs "
+          f"{cond_agg['mcc']['mean'] - feat_agg['mcc']['mean']:+.4f}")
     print(f"  Smooth factor -> mean pairwise Spearman over {N_FOLDS} folds:")
     for _k, _v in smooth_factor_stability.items():
         _m = 'n/a' if _v['mean'] is None else f"{_v['mean']:.3f}"
