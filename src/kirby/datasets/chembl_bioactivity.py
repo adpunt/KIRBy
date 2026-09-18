@@ -107,7 +107,18 @@ def _standardize_and_inchikey(smiles_series):
     canon = []
     ikeys = []
     for smi in smiles_series:
-        mol = Chem.MolFromSmiles(smi) if smi else None
+        # ⛔ A MISSING SMILES ARRIVES AS float('nan'), NOT AS None OR ''.
+        # `if smi` is TRUE for nan, so the bare truthiness test handed a float
+        # to RDKit and MolFromSmiles raised TypeError -- "No registered
+        # converter was able to produce a C++ rvalue of type basic_string ...
+        # from this Python object of type float". That killed the whole call
+        # rather than dropping the one record, so a single blank SMILES in a
+        # 12,010-record ChEMBL pull stopped the pull being usable at all.
+        # Found 2026-09-18 running _probe_chembl_herg.py on the cached
+        # CHEMBL240 IC50 records. A record with no structure is dropped the
+        # same way an unparseable one already was.
+        mol = (Chem.MolFromSmiles(smi)
+               if isinstance(smi, str) and smi.strip() else None)
         if mol is None:
             canon.append(None)
             ikeys.append(None)
