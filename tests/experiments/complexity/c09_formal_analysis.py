@@ -369,7 +369,7 @@ def _run_information_retention(data, budgets, dataset_name=None,
         # files; pick winner across common downstream models for this budget.
         bp = None
         best_score = None
-        for cand_model in ['rf', 'svm', 'lightgbm', 'mlp']:
+        for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
             try:
                 _s, _m = get_best_search_for_downstream(
                     reps, labels, groups,
@@ -575,7 +575,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         # Pool helper picks best (tier, aug_cond) across common models for this budget.
         bp = None
         best_score = None
-        for cand_model in ['rf', 'svm', 'lightgbm', 'mlp']:
+        for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
             try:
                 _s, _m = get_best_search_for_downstream(
                     reps, labels, groups,

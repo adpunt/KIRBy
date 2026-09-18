@@ -24,7 +24,7 @@ SKIP_EXISTING="${SKIP_EXISTING:-1}"
 SKIP_ARG=""
 [ "$SKIP_EXISTING" = "1" ] && SKIP_ARG="--skip-existing"
 BASE_REPS="${BASE_REPS:-esm2,ablang2,prot_t5,esm3,mint,saprot,antiberty,blosum,aac}"
-MODELS="${MODELS:-rf,mlp}"
+MODELS="${MODELS:-rf,dnn}"
 
 # Ordered by how many antibodies each one needs predicted, cheapest first, so an
 # interrupted session keeps as many finished datasets as possible. The Jain

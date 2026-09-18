@@ -323,9 +323,16 @@ SELF_LOADING_EXPERIMENTS = {
 # error bars (the published wave had a single seed → no variance). Silos stay 5.
 
 # FLuID's algorithm NAMES (must match FLuID.create_classifier exactly):
-# 'rf' + 'xgb' are FLuID's internal/teacher families, 'mlp' is the student.
+# 'rf' + 'xgb' are FLuID's internal/teacher families, and the student was
+# FLuID's 'mlp'.
 # (FLuID also exposes nb/svm/svml/knn/gp/dt/ab — not used here.)
-FED_MODELS = ['rf', 'xgb', 'mlp']
+#
+# ⛔ THE STUDENT IS dnn SINCE 2026-09-18, OWNER'S DECISION. mlp was cut from
+# the suite: it did not perform and it was slow. It also never had a recipe to
+# read — mlp was never scored by any search, so all five federated files fell
+# to a hardcoded recipe on the mlp third of every sweep and did not record it.
+# dnn is scored by every search, so that third now reads a real recipe.
+FED_MODELS = ['rf', 'xgb', 'dnn']
 # 3-seed sweep for error bars (user decision 2026-06-04). Silos stay at 5.
 FED_SEEDS = [0, 1, 2]
 
@@ -334,7 +341,7 @@ FED_SEEDS = [0, 1, 2]
 # FLuID names on the FLuID teacher/student side, map to KIRBy names whenever a
 # swept model is handed to a KIRBy call (get_best_search_for_downstream,
 # federated_feature_selection, downstream_model=...).
-_FED_TO_KIRBY_MODEL = {'rf': 'rf', 'xgb': 'xgboost', 'mlp': 'mlp'}
+_FED_TO_KIRBY_MODEL = {'rf': 'rf', 'xgb': 'xgboost', 'dnn': 'dnn'}
 
 
 def fed_to_kirby_model(fed_model):
@@ -380,7 +387,8 @@ def make_fed_classifier(algorithm, seed=0):
     """Return an UNFITTED classifier sourced DIRECTLY from Lhasa's
     FLuID.create_classifier (FLuID.py:85-107) — no re-declared hyperparameters,
     so it can never drift from FLuID — with random_state overridden to `seed`
-    for the seed sweep. `algorithm` uses FLuID's own names ('rf','xgb','mlp').
+    for the seed sweep. `algorithm` uses FLuID's names for the two teachers
+    ('rf','xgb') and KIRBy's name for the student ('dnn').
 
     Requires FLuID importable; the whole federated suite already does.
     """
@@ -429,11 +437,15 @@ def make_fed_regressor(algorithm, seed=0):
     if algorithm == 'xgb':
         from xgboost import XGBRegressor
         return XGBRegressor(objective='reg:squarederror', random_state=seed)
-    if algorithm == 'mlp':
-        from sklearn.neural_network import MLPRegressor
-        return MLPRegressor(
-            alpha=1, max_iter=1000, hidden_layer_sizes=(40, 40),
-            random_state=seed)
+    if algorithm == 'dnn':
+        # Was FLuID's MLPRegressor(alpha=1, hidden_layer_sizes=(40, 40),
+        # max_iter=1000) until 2026-09-18. It is now KIRBy's own dnn, the same
+        # estimator every search scores, so the recipe this arm reads and the
+        # model it fits are the same family. Settings are dnn's own defaults
+        # (src/kirby/models/dnn.py): (256, 128, 64), dropout 0.2, lr 1e-3,
+        # 200 epochs, batch 256, patience 20.
+        from kirby.models.dnn import DNNRegressor
+        return DNNRegressor(random_state=seed)
     raise ValueError(
         f"Unknown federated model '{algorithm}'. Expected one of {FED_MODELS}.")
 

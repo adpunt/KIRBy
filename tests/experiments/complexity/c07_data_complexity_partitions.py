@@ -67,7 +67,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     # 'all_rows_bp_scores' are not held-out scores.
     all_rows_blueprints = {}
     full_augs_all = data.get('augmentations')
-    for cand_model in ['rf', 'svm', 'lightgbm', 'mlp']:
+    for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
         try:
             _s_fd, _m_fd = get_best_search_for_downstream(
                 reps, labels, groups,

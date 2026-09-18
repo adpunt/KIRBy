@@ -80,7 +80,7 @@ submit() {
         --mem="${MEM}" \
         ${GRES_ARG} \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/structural_geometry_survey.py ${dataset} --base-reps ${BASE_REPS} --models rf,mlp --output ${OUTPUT}/ ${extra} ${STDERR_FILTER}" \
+        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/structural_geometry_survey.py ${dataset} --base-reps ${BASE_REPS} --models rf,dnn --output ${OUTPUT}/ ${extra} ${STDERR_FILTER}" \
         | awk '{print $4}')
     echo "  $J  ${name}  (${MEM}, ${WALL}, ${GPU:-no GPU})"
 }

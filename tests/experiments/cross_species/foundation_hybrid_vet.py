@@ -18,7 +18,7 @@ Per-target evaluation:
                            dataset per PIPELINE_READINESS_TODO.md)
       --preset mid     -> REPS_TOP_TIER_ANY (11 reps; Top Tier on ≥1 dataset)
       --preset full    -> REPS_GENERAL_TIER (18 reps; union of General Tier)
-  - Baselines per (rep × target): rf, xgboost, lightgbm, mlp
+  - Baselines per (rep × target): rf, xgboost, lightgbm, dnn
     (the standard kirby survey subset, sourced via
     kirby.find_best_hybrid.get_model so model defs match the rest of the
     pipeline. Ridge intentionally excluded — see feedback_no_ridge.)
@@ -164,7 +164,7 @@ def evaluate_one_rep_model(X, y, groups, model, n_folds):
     }
 
 
-BASELINE_MODELS = ['rf', 'xgboost', 'lightgbm', 'mlp']
+BASELINE_MODELS = ['rf', 'xgboost', 'lightgbm', 'dnn']
 
 
 def build_baseline_models(n_samples: int, task_type: str = 'regression'):

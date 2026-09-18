@@ -66,7 +66,7 @@ from kirby.hybrid import create_hybrid, apply_feature_selection
 # Fixed downstream model set for PT-Rep experiments (roadmap §5 Phase 1) —
 # chosen on performance + runtime; deliberately not bound to the codebase's
 # size-based auto-selection.
-DOWNSTREAM_MODELS_PT = ['rf', 'lightgbm', 'svm', 'mlp']
+DOWNSTREAM_MODELS_PT = ['rf', 'lightgbm', 'svm', 'dnn']
 
 ALL_CONDITIONS = ['A', 'B', 'F', 'G', 'H']
 CONDITION_NAMES = {

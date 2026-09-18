@@ -2795,12 +2795,12 @@ def get_model_family_variants(
         from sklearn.ensemble import RandomForestClassifier as _RF
         from sklearn.linear_model import LogisticRegression as _Logit
         from sklearn.neighbors import KNeighborsClassifier as _KNN
-        from sklearn.neural_network import MLPClassifier as _MLP
+        from kirby.models.dnn import DNNClassifier as _NN
     else:
         from sklearn.ensemble import RandomForestRegressor as _RF
         from sklearn.linear_model import Lasso
         from sklearn.neighbors import KNeighborsRegressor as _KNN
-        from sklearn.neural_network import MLPRegressor as _MLP
+        from kirby.models.dnn import DNNRegressor as _NN
 
     families = {
         'RF': [
@@ -2815,11 +2815,22 @@ def get_model_family_variants(
             ('k=5', lambda: _KNN(n_neighbors=5, n_jobs=-1), 3),
             ('k=1', lambda: _KNN(n_neighbors=1, n_jobs=-1), 4),
         ],
-        'MLP': [
-            ('16', lambda: _MLP(hidden_layer_sizes=(16,), random_state=42, max_iter=500), 1),
-            ('64', lambda: _MLP(hidden_layer_sizes=(64,), random_state=42, max_iter=500), 2),
-            ('128,64', lambda: _MLP(hidden_layer_sizes=(128, 64), random_state=42, max_iter=500), 3),
-            ('256,128,64', lambda: _MLP(hidden_layer_sizes=(256, 128, 64), random_state=42, max_iter=500), 4),
+        # The neural family. It was sklearn's MLP at four widths until
+        # 2026-09-18, when the owner cut mlp from the suite: it did not perform
+        # and it was slow. The same four widths are now built from KIRBy's own
+        # dnn (src/kirby/models/dnn.py), which is the neural model every search
+        # scores, so this family and the search agree on what a neural model is.
+        # Everything but the width is dnn's default: dropout 0.2, lr 1e-3, 200
+        # epochs, batch 256, patience 20.
+        #
+        # ⛔ THE FAMILY KEY CHANGED FROM 'MLP' TO 'DNN'. c06 keys its results by
+        # family name, so a stored c06 result under 'MLP' was produced by a
+        # different estimator and is not comparable to one under 'DNN'.
+        'DNN': [
+            ('16', lambda: _NN(hidden_sizes=(16,), random_state=42), 1),
+            ('64', lambda: _NN(hidden_sizes=(64,), random_state=42), 2),
+            ('128,64', lambda: _NN(hidden_sizes=(128, 64), random_state=42), 3),
+            ('256,128,64', lambda: _NN(hidden_sizes=(256, 128, 64), random_state=42), 4),
         ],
     }
 

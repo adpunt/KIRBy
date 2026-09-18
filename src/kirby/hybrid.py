@@ -2975,9 +2975,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                 m = CNNRegressor(epochs=50, patience=10)
             m.fit(X_train_scaled, y_train)
         except Exception as _cnn_err:
-            _announce_evaluator_fallback('cnn', 'mlp', _cnn_err)
+            _announce_evaluator_fallback('cnn', 'dnn', _cnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='mlp',
+                                        internal_evaluator='dnn',
                                         return_predictions=return_predictions,
                                         graded_predictions_for_clf=graded_predictions_for_clf,
                                         graded_out=graded_out)
@@ -3011,9 +3011,9 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                 m = BNNRegressor(epochs=50, patience=10, mc_samples=5)
             m.fit(X_train_scaled, y_train)
         except Exception as _bnn_err:
-            _announce_evaluator_fallback('bnn', 'mlp', _bnn_err)
+            _announce_evaluator_fallback('bnn', 'dnn', _bnn_err)
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='mlp',
+                                        internal_evaluator='dnn',
                                         return_predictions=return_predictions,
                                         graded_predictions_for_clf=graded_predictions_for_clf,
                                         graded_out=graded_out)
