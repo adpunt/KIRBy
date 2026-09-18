@@ -403,26 +403,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _label_sd = float(_params[1])
             n_splits = config.get('n_splits', 5) if config else 5
             n_splits = max(2, n_splits)
-            # ⛔ THIS ONE FIT MUST NOT INHERIT THE SUITE'S THREAD COUNT.
-            # The surrogate reads KIRBY_LGBM_THREADS, and the noise
-            # experiments set it to 1 for a measured reason: on the narrow
-            # partitions oof_predict usually runs on, one thread is 346x
-            # faster than every core (core._lgb_threads records 250 rows x 4
-            # features at 0.41s against 138.5s). X_concat is the opposite
-            # case -- every loaded representation glued together, which is
-            # 16,405 features on herg_ki and 16,285 on caco2 -- and the same
-            # docstring records 5,000 rows x 200 features taking 139.6s on one
-            # thread. One count cannot serve both callers, so the widest fit
-            # in the suite says what it needs instead of inheriting it.
+            # ⛔ DO NOT RAISE THE THREAD COUNT HERE. Tried on 2026-09-18 and
+            # it SEGFAULTS: torch links libiomp5 and LightGBM links libomp,
+            # and a multi-threaded LightGBM fit in a process that has already
+            # started torch's pool kills it with no traceback
+            # (project_fold_hook_and_lgbm_segfault_2026_09_02). This process
+            # has imported torch long before it gets here. KIRBY_LGBM_THREADS
+            # is the switch, it is set to 1 locally for that reason, and this
+            # fit inherits it.
+            #
+            # What that costs, measured here: this is the widest matrix
+            # anything in the suite fits -- every loaded representation glued
+            # together, 16,405 features on herg_ki against 1,412 molecules --
+            # and one LightGBM at 600 trees over 5 folds took more than 14
+            # minutes at 1.5 GB resident on one thread. The fix is the
+            # dimension cap NOISE_AUDIT_2026_09_10.md asks for at n14:399,
+            # NOT more threads, and it is a change to what the residual spread
+            # is measured on, so it is not made here.
+            #
+            # 11 features per molecule is also a regime where the surrogate can
+            # memorise, which biases the residual spread DOWN and makes the
+            # labels read cleaner than they are. The width is printed so that
+            # is visible beside the number.
             _w = int(X_concat.shape[1])
-            _stage0_jobs = -1 if _w > 500 else int(
-                os.environ.get('KIRBY_LGBM_THREADS', '-1'))
+            print(f"  Stage-0 feature space: {_w} features over "
+                  f"{len(labels)} molecules (every representation "
+                  f"concatenated, no dimension cap)")
             stage0 = stage0_diagnostics(
-                X_concat, y_pos, groups, n_splits=n_splits, splitter=cv_split,
-                params={'n_jobs': _stage0_jobs})
-            print(f"  Stage-0 feature space: {_w} features "
-                  f"(every representation concatenated), LightGBM n_jobs="
-                  f"{_stage0_jobs}")
+                X_concat, y_pos, groups, n_splits=n_splits, splitter=cv_split)
             stage0 = _rescale_stage0(stage0, _params)
             print(f"  Stage-0: resid_sd={stage0['resid_sd_label_units']:.3f} "
                   f"label units (={stage0['log_resid_sd']:.3f} SDs of a "
