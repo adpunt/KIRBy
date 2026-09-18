@@ -472,6 +472,31 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     for candidate_model in _candidates:
         try:
             _extra = {'condition_suffix': condition_suffix} if condition_suffix else {}
+            # ⛔ speed='fast' SINCE 2026-09-18, OWNER'S DECISION.
+            #
+            # Every search c13 runs is built live. Each condition carries a
+            # condition_suffix -- "with representation r" against "without" --
+            # so each is a distinct search identity that no precompute covers.
+            # There is no stored grid to miss by asking for a shorter one.
+            #
+            # Full is 5 allocation methods x 3 importance methods x 4
+            # representation counts x 8 budgets x 17 (model, evaluator) pairs =
+            # 8,160 configurations per search. c13 runs 24 of them per dataset
+            # at 4 pool subjects, and up to 75 if every candidate
+            # representation builds, so it was about 19 million model fits per
+            # dataset.
+            #
+            # ⛔ THIS DOES NOT SHORTEN THE MODEL LIST. The filter that drops
+            # xgboost and svm under fast runs only when models=None
+            # (find_best_hybrid.py:8221-8232), and _candidates above is an
+            # explicit list. So the (model, evaluator) pair count stays at 17
+            # and the grid lands at 2,160 configurations, not 432 -- about 9
+            # times fewer, not 19. Shortening _candidates as well would take it
+            # the rest of the way, and that is a decision about which models
+            # c13 reports, not a compute setting.
+            #
+            # Nothing c13 reads is lost: it takes best_config and its
+            # score_mean, and a fast search produces both.
             s, m = get_best_search_for_downstream(
                 reps, labels, groups,
                 downstream_model=candidate_model, budget=None,
@@ -479,6 +504,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                 dataset_name=dataset_name,
                 task_type=task_type, metric=metric_name,
                 return_fitted=True,
+                speed='fast',
                 **_extra)
         except Exception as e:
             _dropped.append((candidate_model, f'{type(e).__name__}: {e}'))
