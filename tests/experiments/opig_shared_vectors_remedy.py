@@ -649,7 +649,8 @@ def main():
     args.models = ([m.strip() for m in args.models.split(',') if m.strip()]
                    if args.models else None)
     if args.smoke:
-        args.budgets = args.budgets or [25]
+        from experiments._shared import smoke_budgets
+        args.budgets = args.budgets or smoke_budgets()
         args.n_outer_folds = min(args.n_outer_folds, 2)
 
     from experiments._shared import load_data, get_config

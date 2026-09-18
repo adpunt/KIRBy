@@ -350,7 +350,8 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     # rf-only evaluator, cheap lightgbm_gain importance) so the on-demand search
     # finishes on tiny local subsets. No-op when the env var is unset, so server
     # runs use FULL_BUDGETS + the full evaluator/importance tiers unchanged.
-    _smoke_search = ({'budgets': [25], 'internal_evaluators': ['rf'],
+    from experiments._shared import smoke_budgets
+    _smoke_search = ({'budgets': smoke_budgets(), 'internal_evaluators': ['rf'],
                       'importance_methods': ['lightgbm_gain']}
                      if os.environ.get('KIRBY_SMOKE_N', '').strip()
                      else {})

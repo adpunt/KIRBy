@@ -494,7 +494,8 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         # search finishes on tiny local subsets. No-op when the env var is unset,
         # so server runs use FULL_BUDGETS + INTERNAL_EVALUATORS unchanged.
         _is_smoke = bool(os.environ.get('KIRBY_SMOKE_N', '').strip())
-        _smoke_search = ({'budgets': [25], 'importance_methods': ['lightgbm_gain']}
+        from experiments._shared import smoke_budgets
+        _smoke_search = ({'budgets': smoke_budgets(), 'importance_methods': ['lightgbm_gain']}
                          if _is_smoke else {})
         _eval_list = ['rf'] if _is_smoke else INTERNAL_EVALUATORS
         # In smoke mode skip the augmentation pool: passing augmentations adds
