@@ -15,9 +15,18 @@ bash tests/slurm_scripts/submit_everything.sh --dry-run   # look
 bash tests/slurm_scripts/submit_everything.sh             # then type y
 ```
 
-That queues, for every dataset: four 12-hour precompute jobs chained one after
-another, then one job per experiment category depending on the last of them.
-41 datasets, 287 jobs.
+That queues five families, all dependency-linked so nothing runs before the
+searches it reads exist:
+
+| family | jobs | waits for |
+|---|--:|---|
+| precompute | 4 chained links per dataset | the previous link, and any job already queued for that dataset |
+| complexity, similarity, noise | 1 each per dataset | that dataset's last link |
+| federated | 1 each on `lhasa_herg`, `caco2`, `logd` | the same |
+| opig | 13, one per script | the last link of every dataset that script reads |
+
+41 datasets, 288 jobs. Framework and `similarity_metrics/` are deliberately not
+in it — they are not part of this run.
 
 Nothing else needs submitting. Everything below is why, and what to change.
 
