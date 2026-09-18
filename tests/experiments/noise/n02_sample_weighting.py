@@ -784,11 +784,63 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             model_hybrid_w = results['hybrid'][model_name].get('weighted_mean', float('nan'))
             model_hybrid_delta = results['hybrid'][model_name].get('delta', float('nan'))
 
+        # ── The two subtractions this file used to leave to the reader ──
+        # EXPERIMENTS_FINALIZED.md records both as "never computed". Neither
+        # costs a model fit: every number in them is already above.
+        #
+        # A delta is weighted minus unweighted, so on rmse the improvement is
+        # NEGATIVE and on spearman it is positive. `gain` flips that once, so a
+        # positive gain always means the weights helped, whatever the metric.
+        def _gain(delta):
+            if delta is None or np.isnan(delta):
+                return float('nan')
+            return -float(delta) if lower_is_better else float(delta)
+
+        _best_rep_name = top3[0][0] if top3 else None
+        _best_rep_gain = _gain(top3[0][3]) if top3 else float('nan')
+        _hybrid_gain = _gain(model_hybrid_delta)
+        # Question 2 of this file: does the improvement differ between an
+        # individual representation and the hybrid? Positive means the weights
+        # bought the hybrid more than they bought the best single
+        # representation for this model.
+        _hyb_minus_base = (_hybrid_gain - _best_rep_gain
+                           if not (np.isnan(_hybrid_gain)
+                                   or np.isnan(_best_rep_gain))
+                           else float('nan'))
+
+        # Question 3: do cliff-aware weights beat plain neighbour-agreement
+        # weights ON THE HYBRID? What was stored is the cliff-aware arm against
+        # the UNWEIGHTED hybrid; the question asks for it against the
+        # neighbour-agreement arm, which is that number minus 'delta'.
+        _ca = (results.get('hybrid_cliff_aware', {})
+               .get(model_name, {}).get('delta_vs_unweighted', float('nan')))
+        _ca_gain = _gain(_ca)
+        _ca_minus_neighbour = (_ca_gain - _hybrid_gain
+                               if not (np.isnan(_ca_gain)
+                                       or np.isnan(_hybrid_gain))
+                               else float('nan'))
+
         results['per_model_top3'][model_name] = {
             'top3': [(n, uw, w, d) for n, uw, w, d in top3],
             'hybrid_unweighted': model_hybrid_uw,
             'hybrid_weighted': model_hybrid_w,
             'hybrid_delta': model_hybrid_delta,
+            # Positive = the weights helped, whatever the metric's direction.
+            'weighting_gain_hybrid': _hybrid_gain,
+            'weighting_gain_best_base_rep': _best_rep_gain,
+            'best_base_rep': _best_rep_name,
+            'hybrid_gain_minus_best_base_gain': _hyb_minus_base,
+            'cliff_aware_gain': _ca_gain,
+            'cliff_aware_minus_neighbour_agreement': _ca_minus_neighbour,
+            'gains_note': (
+                'A gain is how much the metric improved when the weights were '
+                'applied, sign-normalised so positive always means they '
+                'helped. hybrid_gain_minus_best_base_gain is the hybrid\'s '
+                'gain minus the gain on the best-scoring single '
+                'representation for this model. '
+                'cliff_aware_minus_neighbour_agreement is the cliff-aware '
+                'arm\'s gain minus the neighbour-agreement arm\'s, both on '
+                'the hybrid.'),
         }
 
         print(f"\n  {model_name}:")
@@ -796,6 +848,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {rn:<20} uw={uw:.4f}, w={w:.4f} (delta={d:+.4f})")
         print(f"    {'HYBRID':<20} uw={model_hybrid_uw:.4f}, w={model_hybrid_w:.4f} "
               f"(delta={model_hybrid_delta:+.4f})")
+        print(f"    weighting helped the hybrid by {_hybrid_gain:+.4f} "
+              f"{metric_name} and {_best_rep_name} by {_best_rep_gain:+.4f}; "
+              f"hybrid minus best single representation "
+              f"{_hyb_minus_base:+.4f}")
+        print(f"    cliff-aware weights minus neighbour-agreement weights, on "
+              f"the hybrid: {_ca_minus_neighbour:+.4f} {metric_name}")
 
     # `top3` inside the loop above held whichever model iterated last (ridge,
     # since model_factories is insertion-ordered ['rf','xgboost','lightgbm',
