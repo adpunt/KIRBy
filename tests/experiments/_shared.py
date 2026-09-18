@@ -6541,6 +6541,807 @@ def get_best_for_downstream(search, downstream_model, budget=None):
 
 
 # =============================================================================
+# SHARED TOP-N SELECTION
+#
+# The shape the owner asked for: for each downstream model, the top 2 base
+# representations and the top 2 hybrids, so 5 downstream models * (2 + 2) = 20
+# model-and-representation pairs. The 2026-09-18 compute audit read all 77
+# experiment files and found no file producing that shape, and found 27 distinct
+# ranking rules in use, 22 of them written inside one experiment file.
+#
+# All four functions below are pure lookups over a SearchResult that is already
+# in hand. They cost 0 new model fits: every number they read was written by the
+# search that produced the SearchResult. They never call find_best_hybrid, never
+# build an estimator, never open the result database. If a ranking cannot be
+# answered from the stored rows the function raises (require_full=True, the
+# default) or reports the shortfall with its counts.
+#
+# The one cost that is NOT zero sits one step earlier and belongs to the caller:
+# there is no SearchResult on disk (find_best_hybrid.py:9150-9153), so a caller
+# holding none has to call find_best_hybrid(cache=True). On a fully warm dataset
+# that is 0 fits; on a cold one it is the whole search.
+# =============================================================================
+
+# What makes two hybrid rows the same configuration. 'tune' is in here on
+# purpose: it is stamped on a freshly computed row (find_best_hybrid.py:5175)
+# and is NOT restored by _db_row_to_result (:5839-5883), so leaving it out lets
+# a tuned and an untuned run of the same 7 other fields collapse into one entry
+# with whichever score sorted better.
+_HYBRID_IDENTITY_FIELDS = ('allocation_method', 'importance_method', 'budget',
+                           'internal_evaluator', 'step_size', 'rep_count',
+                           'rep_subset', 'tune')
+
+
+def _sel_context(context):
+    """Trailing ' [<context>]' for an error message, or ''."""
+    return f" [{context}]" if context else ""
+
+
+def _sel_base_direction(search, context=None):
+    """Direction of the numbers in search.baselines, plus where it came from.
+
+    Base representation scores stay in the DATASET's own metric, so the metric
+    name is authoritative: object_direction reads BUILTIN_METRICS by name first
+    and falls back to the stored flag only when the name is not a builtin
+    (_shared.py:1531). find_best_hybrid.py:8717 keeps the baselines at the
+    dataset metric's direction while :8726 overwrites SearchResult
+    .lower_is_better to False under a blend objective containing prediction,
+    because the winner is then scored on a correlation -- so on an rmse dataset
+    under such a blend the stored flag reads False while baselines still hold
+    rmse, and sorting by the stored flag puts the WORST representation first.
+    c02_complexity_grid.py:257 has exactly that shape today.
+
+    'disagrees_with_stored_flag' is the only visible signature of a blend
+    search: SearchResult carries no `objective` field, so nothing else in the
+    stored object says which case it is in. UNVERIFIED whether any submit script
+    in this repo currently passes a blend objective.
+    """
+    lower = object_direction(search, f'the SearchResult passed to a top-N '
+                                     f'selector{_sel_context(context)}')
+    name = getattr(search, 'metric_name', None)
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    source = 'metric_name' if name in BUILTIN_METRICS else 'stored_flag'
+    stored = getattr(search, 'lower_is_better', None)
+    return {
+        'lower_is_better': bool(lower),
+        'source': source,
+        'disagrees_with_stored_flag': (stored is not None
+                                       and bool(stored) != bool(lower)),
+    }
+
+
+def _sel_hybrid_direction(search, context=None):
+    """Direction of the score_mean values in search.all_results.
+
+    NOT object_direction, and this is the one place in these four functions
+    where the metric name must not win. _aggregate_results ranks all_results
+    with _score_to_comparable(r['score_mean'], lower_is_better) -- so the stored
+    flag IS the direction of those numbers by construction, whatever the metric
+    name says. Under a blend objective containing prediction, find_best_hybrid
+    overwrites lower_is_better to False (:8726) while metric_name stays the
+    dataset metric string, so resolving from the name here would hand back the
+    worst hybrid. That is the mirror image of the defect the 2026-09-10
+    metric-direction audit fixed on the baselines side.
+
+    There is no "raise when the flag is None" branch, because the dataclass
+    default is `lower_is_better: bool = False` (find_best_hybrid.py:1537): a
+    SearchResult that never set it reads False rather than None, so such a
+    branch would be dead code. The disagreement with the metric name is
+    recorded instead.
+    """
+    stored = getattr(search, 'lower_is_better', None)
+    if stored is None:
+        raise ValueError(
+            f"the SearchResult carries lower_is_better=None, so the direction "
+            f"of its all_results scores is unknown{_sel_context(context)}")
+    try:
+        by_name = object_direction(search, 'a SearchResult')
+    except ValueError:
+        by_name = None
+    return {
+        'lower_is_better': bool(stored),
+        'source': 'stored_flag',
+        'disagrees_with_metric_name': (by_name is not None
+                                       and bool(by_name) != bool(stored)),
+    }
+
+
+def _sel_tie_at_cut(ranked, n, name_of):
+    """{'score', 'kept', 'dropped'} when the cut at n fell inside a tie, else None.
+
+    A tie at the cut means the last slot was decided by the name tie-break and
+    not by a measurement. Baseline scores are rounded to 4 decimals at
+    find_best_hybrid.py:5524, which manufactures exact ties, so this is not a
+    theoretical case.
+    """
+    if n <= 0 or len(ranked) <= n:
+        return None
+    edge = ranked[n - 1][0]
+    if ranked[n][0] != edge:
+        return None
+    return {
+        'score': edge,
+        'kept': [name_of(e) for e in ranked[:n] if e[0] == edge],
+        'dropped': [name_of(e) for e in ranked[n:] if e[0] == edge],
+    }
+
+
+def top_base_reps(search, downstream_model, n=2, *,
+                  rule='whole_dataset', held_out_fold=None, drop_folds=(),
+                  only=None, exclude_reps=(), max_features=None,
+                  require_full=True, context=None):
+    """Top `n` base representations for ONE downstream model. 0 new model fits.
+
+    `downstream_model` is required and has no default. extract_top3_base_reps
+    (_shared.py:809) defaults to 'rf' and 24 of its 26 caller files take that
+    default, so those files report one ranking by one downstream model and then
+    compare it against hybrids chosen for other downstream models. This one
+    makes the caller name the model. It is a DOWNSTREAM model -- one of
+    DOWNSTREAM_MODELS (_shared.py:539: rf, xgboost, svm, dnn, lightgbm), the
+    model scored at the end -- never an internal evaluator, which is the model
+    used inside the search to pick features (INTERNAL_EVALUATORS, :806).
+
+    rule='whole_dataset' reads search.baselines[rep][downstream_model]: one
+    number per representation, the search's own mean over its folds
+    (find_best_hybrid.py:5524-5525). A representation picked this way was picked
+    with the held-out molecules in view, so reporting that same number as a
+    result is selection-optimistic.
+    rule='other_folds' reads search.baseline_fold_scores[rep][downstream_model]
+    (find_best_hybrid.py:1561) and means over every fold except `held_out_fold`,
+    which removes that optimism. The return says which rule produced the numbers
+    in 'score_basis'; no results file in the repo records that today.
+
+    max_features bars a representation wider than the limit from selection while
+    still measuring and reporting it, with its feature count written into the
+    return. That is n07_remediation.py:494-499's rule made shared.
+
+    require_full=True (the default) raises ValueError when fewer than `n`
+    representations carry a usable score. The error names the dataset, the
+    downstream model, n asked, n returned, how many representations were seen,
+    how many were scored, and the per-reason drop counts.
+    """
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}{_sel_context(context)}")
+    if rule not in ('whole_dataset', 'other_folds'):
+        raise ValueError(f"rule must be 'whole_dataset' or 'other_folds', got "
+                         f"{rule!r}{_sel_context(context)}")
+    if rule == 'other_folds' and held_out_fold is None:
+        raise ValueError(f"rule='other_folds' needs held_out_fold: the fold "
+                         f"being predicted, which is left out of the mean"
+                         f"{_sel_context(context)}")
+
+    # Imported rather than re-listed, so a fourth non-score key added at
+    # find_best_hybrid.py:2370 is excluded here with one edit and not two.
+    # Currently ('dimension', 'dimension_scored', '_secondary'); the first two
+    # hold FEATURE COUNTS, so a caller naming one of them as the downstream
+    # model would rank representations by width.
+    from kirby.find_best_hybrid import _BASELINE_NON_SCORE_KEYS
+    if downstream_model in _BASELINE_NON_SCORE_KEYS or \
+            str(downstream_model).startswith('_'):
+        raise ValueError(
+            f"{downstream_model!r} is not a downstream model: it is one of the "
+            f"non-score keys stored inside baselines[rep] "
+            f"({', '.join(_BASELINE_NON_SCORE_KEYS)}), and two of those are "
+            f"feature counts{_sel_context(context)}")
+
+    direction = _sel_base_direction(search, context)
+    lower = direction['lower_is_better']
+    baselines = getattr(search, 'baselines', {}) or {}
+    fold_scores_all = getattr(search, 'baseline_fold_scores', {}) or {}
+    only_set = None if only is None else {str(r) for r in only}
+    excl_set = {str(r) for r in (exclude_reps or ())}
+
+    dropped = {'no_score_for_model': [], 'nan': [], 'underscore_key': [],
+               'excluded_by_caller': [], 'not_in_only': [],
+               'too_wide': [], 'no_fold_scores': []}
+    ranked = []          # list of (sort_score, rep_name, entry_dict)
+    n_scored = 0
+
+    for rep_name, model_scores in baselines.items():
+        if str(rep_name).startswith('_'):
+            # '_secondary' and friends are not representations.
+            dropped['underscore_key'].append(rep_name)
+            continue
+        if not isinstance(model_scores, dict):
+            dropped['no_score_for_model'].append(rep_name)
+            continue
+
+        # The three non-score keys inside baselines[rep] -- 'dimension',
+        # 'dimension_scored', '_secondary' (_BASELINE_NON_SCORE_KEYS,
+        # find_best_hybrid.py:2370) -- can never enter a ranking here, because
+        # this reads one named key and never iterates the dict. 'dimension' and
+        # 'dimension_scored' are FEATURE COUNTS: iterating picks up 500 features
+        # as if it were a score, which beats every r2 under max().
+        dim = model_scores.get('dimension')
+        dim_scored = model_scores.get('dimension_scored')
+
+        if rule == 'whole_dataset':
+            raw = model_scores.get(downstream_model)
+            n_folds_used = None
+        else:
+            per_fold = (fold_scores_all.get(rep_name) or {}).get(downstream_model)
+            if per_fold is None:
+                dropped['no_fold_scores'].append(rep_name)
+                continue
+            raw, n_folds_used = _other_fold_mean(per_fold, held_out_fold,
+                                                 drop_folds)
+
+        if raw is None:
+            # A downstream model over its _max_samples limit
+            # (find_best_hybrid.py:2969-2978) or in a registered skip policy
+            # (:2841-2848) has no key under ANY representation, so this list
+            # comes back holding every representation and n_reps_scored is 0.
+            dropped['no_score_for_model'].append(rep_name)
+            continue
+        try:
+            score = float(raw)
+        except (TypeError, ValueError):
+            dropped['nan'].append(rep_name)
+            continue
+        if not np.isfinite(score):
+            # A NaN compares False against everything and wins max() outright
+            # (find_best_hybrid.py:7412-7416), so it never reaches the sort.
+            dropped['nan'].append(rep_name)
+            continue
+
+        n_scored += 1  # it HAS a usable score; the bars below are selection bars
+
+        if only_set is not None and rep_name not in only_set:
+            dropped['not_in_only'].append(rep_name)
+            continue
+        if rep_name in excl_set:
+            dropped['excluded_by_caller'].append(rep_name)
+            continue
+        if max_features is not None and dim is not None and dim > max_features:
+            # Measured and reported, barred from selection, feature count kept.
+            dropped['too_wide'].append((rep_name, int(dim)))
+            continue
+
+        ranked.append((score, str(rep_name), {
+            'rep': rep_name,
+            'score': score,
+            'dimension': (int(dim) if dim is not None else None),
+            'dimension_scored': (int(dim_scored) if dim_scored is not None
+                                 else None),
+            # A representation wider than HIGH_DIM_FILTER_THRESHOLD is scored on
+            # 500 features (200 under 1000 molecules) by a per-fold LightGBM
+            # filter, and the width actually scored is recorded beside it
+            # (find_best_hybrid.py:5355-5365). The score itself carries no mark.
+            'scored_at_full_width': (dim_scored is None),
+            'n_folds_used': n_folds_used,
+        }))
+
+    # Sort key is a total order: the signed score, then the representation name
+    # ascending. No dict insertion order anywhere -- for baselines that order is
+    # the representation BUILD order, which differs between a fresh search and
+    # one whose per-representation cache files were warm, so it is not
+    # reproducible across two runs. The name is.
+    ranked.sort(key=lambda e: ((e[0] if lower else -e[0]), e[1]))
+
+    tie_at_cut = _sel_tie_at_cut(ranked, n, lambda e: e[1])
+    selected = []
+    for i, (score, rep_name, entry) in enumerate(ranked[:n]):
+        entry = dict(entry)
+        entry['rank'] = i + 1
+        entry['tied_with'] = [o[1] for o in ranked
+                              if o[0] == score and o[1] != rep_name]
+        selected.append(entry)
+
+    basis = ('whole_dataset_mean' if rule == 'whole_dataset'
+             else f'other_folds_mean(held_out={held_out_fold})')
+    out = {
+        'kind': 'base_rep',
+        'downstream_model': downstream_model,
+        'dataset_name': getattr(search, 'dataset_name', None),
+        'metric_name': getattr(search, 'metric_name', None),
+        'direction': direction,
+        'score_basis': basis,
+        'ranked_on': ("the search's own mean over its folds, one number per "
+                      "representation -- the same folds the selection is then "
+                      "compared on"
+                      if rule == 'whole_dataset' else
+                      "the mean over every fold except the held-out one"),
+        'n_requested': n,
+        'n_returned': len(selected),
+        'complete': len(selected) >= n,
+        'selected': selected,
+        'n_reps_in_baselines': len(baselines),
+        'n_reps_scored_for_model': n_scored,
+        'dropped': dropped,
+        'tie_at_cut': tie_at_cut,
+        'shortfall_reason': None,
+        'context': context,
+    }
+    if not out['complete']:
+        out['shortfall_reason'] = (
+            f"dataset {out['dataset_name']}: asked for {n} base "
+            f"representations for downstream model {downstream_model}, got "
+            f"{len(selected)}; {len(baselines)} representations in baselines, "
+            f"{n_scored} carry a usable score for that model; dropped "
+            f"{ {k: len(v) for k, v in dropped.items() if v} }"
+            f"{_sel_context(context)}")
+        if require_full:
+            raise ValueError(out['shortfall_reason'])
+    return out
+
+
+def top_hybrids(search, downstream_model, n=2, *, budget=None,
+                rule='whole_dataset', held_out_fold=None, drop_folds=(),
+                require_n_folds=None, require_full=True, context=None):
+    """Top `n` hybrid configurations for ONE downstream model. 0 new model fits.
+
+    Reads search.all_results (find_best_hybrid.py:1536) and nothing else. It
+    does NOT read best_by_model, best_by_model_budget, best_by_budget,
+    best_by_dimension or performance_matrix: each of those holds exactly one row
+    per key, so none of them can answer a top-2 question.
+
+    There is no fallback to another downstream model, at any point.
+    get_best_for_downstream (_shared.py:6475) has a five-level chain whose last
+    level returns the best blueprint from ANY downstream model (:6532-6539), so
+    a top-2 built out of two calls to it can put another model's configuration
+    inside a list labelled for this one, without saying so.
+
+    What this cannot see: all_results holds only the configurations the search
+    actually evaluated. Adaptive pruning drops configurations at each checkpoint
+    budget and again at the end of fold 0 (find_best_hybrid.py:5975-5990,
+    :6990-7000), and the cut-after-fold-0 rows are filed under a rep_subset
+    prefix chosen so no search matches them (PRUNED_FOLD0_SUBSET, :5708, :7030).
+    "Top 2 hybrids" is top 2 of the survivors, not top 2 of the grid.
+    """
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}{_sel_context(context)}")
+    if rule not in ('whole_dataset', 'other_folds'):
+        raise ValueError(f"rule must be 'whole_dataset' or 'other_folds', got "
+                         f"{rule!r}{_sel_context(context)}")
+    if rule == 'other_folds' and held_out_fold is None:
+        raise ValueError(f"rule='other_folds' needs held_out_fold"
+                         f"{_sel_context(context)}")
+
+    from kirby.find_best_hybrid import PRUNED_FOLD0_SUBSET
+
+    direction = _sel_hybrid_direction(search, context)
+    lower = direction['lower_is_better']
+    rows = list(getattr(search, 'all_results', None) or [])
+
+    counts = {'n_rows_total': len(rows), 'n_rows_for_model': 0,
+              'n_rows_other_model': 0, 'n_rows_dropped_nan': 0,
+              'n_rows_dropped_pruned_fold0': 0,
+              'n_rows_dropped_wrong_budget': 0,
+              'n_rows_dropped_wrong_fold_count': 0,
+              'n_rows_missing_tune': 0,
+              'n_duplicate_identities_collapsed': 0}
+
+    by_identity = {}   # identity tuple -> (score, ident_str, entry, position)
+    for pos, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        if row.get('model') != downstream_model:
+            counts['n_rows_other_model'] += 1
+            continue
+        sub = row.get('rep_subset')
+        if isinstance(sub, str) and sub.startswith(PRUNED_FOLD0_SUBSET):
+            # These carry ONE fold score and are deliberately filed so no search
+            # can match them (find_best_hybrid.py:7031-7043).
+            counts['n_rows_dropped_pruned_fold0'] += 1
+            continue
+        counts['n_rows_for_model'] += 1
+        if budget is not None and row.get('budget') != budget:
+            counts['n_rows_dropped_wrong_budget'] += 1
+            continue
+
+        if rule == 'whole_dataset':
+            raw = row.get('score_mean')
+            n_folds_used = row.get('n_folds_scored')
+        else:
+            raw, n_folds_used = _other_fold_mean(row.get('fold_scores'),
+                                                 held_out_fold, drop_folds)
+        try:
+            score = float(raw)
+        except (TypeError, ValueError):
+            counts['n_rows_dropped_nan'] += 1
+            continue
+        if not np.isfinite(score):
+            # A NaN row STAYS in all_results: the _finite filter at
+            # find_best_hybrid.py:7404-7421 restricts only the argmax views, so
+            # this function has to drop it itself.
+            counts['n_rows_dropped_nan'] += 1
+            continue
+
+        n_scored = row.get('n_folds_scored')
+        if require_n_folds is not None and n_scored != require_n_folds:
+            # Two configurations compared on different fold counts are not
+            # comparable; c14_cross_domain_summary.py:157 does exactly that.
+            counts['n_rows_dropped_wrong_fold_count'] += 1
+            continue
+
+        # rep_count is NOT restored to the top level by _db_row_to_result
+        # (find_best_hybrid.py:5839-5883); it survives only inside the pickled
+        # Blueprint (Blueprint.rep_count, :1436). A freshly computed row carries
+        # it (:7033). rep_count_source makes a mixed-provenance ranking visible.
+        bp = row.get('blueprint')
+        if 'rep_count' in row:
+            rep_count, rc_source = row.get('rep_count'), 'row'
+        elif getattr(bp, 'rep_count', None) is not None:
+            rep_count, rc_source = getattr(bp, 'rep_count'), 'blueprint'
+        else:
+            rep_count, rc_source = None, 'unknown'
+
+        # 'tune' is stamped on a freshly computed row (:5175) and absent from a
+        # database-read one. It is part of the identity, so a tuned and an
+        # untuned run of the same 7 other fields do not collapse into one.
+        if 'tune' in row:
+            tune, tune_source = bool(row.get('tune')), 'row'
+        else:
+            tune, tune_source = None, 'missing'
+            counts['n_rows_missing_tune'] += 1
+
+        ident = (row.get('allocation_method'), row.get('importance_method'),
+                 row.get('budget'), row.get('internal_evaluator'),
+                 row.get('step_size'), rep_count,
+                 row.get('rep_subset', 'all'), tune)
+        ident_str = '/'.join('None' if v is None else str(v) for v in ident)
+
+        entry = {
+            'score_mean': score,
+            'score_std': row.get('score_std'),
+            'fold_scores': row.get('fold_scores'),
+            'n_folds_scored': n_scored,
+            'n_folds_asked': row.get('n_folds_asked'),
+            'n_folds_used': n_folds_used,
+            'n_features': row.get('n_features'),
+            'model': row.get('model'),
+            'allocation_method': row.get('allocation_method'),
+            'importance_method': row.get('importance_method'),
+            'budget': row.get('budget'),
+            'internal_evaluator': row.get('internal_evaluator'),
+            'step_size': row.get('step_size'),
+            'rep_count': rep_count,
+            'rep_count_source': rc_source,
+            'rep_subset': row.get('rep_subset', 'all'),
+            'tune': tune,
+            'tune_source': tune_source,
+            'time_seconds': row.get('time_seconds'),
+            'blueprint': bp,
+            'identity': dict(zip(_HYBRID_IDENTITY_FIELDS, ident)),
+            'label': ident_str,
+        }
+
+        # Collapse duplicate identities BEFORE the cut. Without this a
+        # refinement row and a checkpoint-reload row describing the same
+        # configuration can fill both hybrid slots, and the grid reads as two
+        # hybrids when it is one. Ties inside a collapse keep the smaller
+        # time_seconds, then the earlier position in all_results.
+        prev = by_identity.get(ident)
+        if prev is None:
+            by_identity[ident] = (score, ident_str, entry, pos)
+        else:
+            counts['n_duplicate_identities_collapsed'] += 1
+            p_score, _, p_entry, p_pos = prev
+            better = (score < p_score) if lower else (score > p_score)
+            if not better and score == p_score:
+                p_t = p_entry.get('time_seconds')
+                t = entry.get('time_seconds')
+                if t is not None and p_t is not None and t < p_t:
+                    better = True
+            if better:
+                by_identity[ident] = (score, ident_str, entry, pos)
+
+    # A search mixing rows that carry 'tune' with rows that do not cannot be
+    # de-duplicated honestly: the same configuration appears under two
+    # identities, one keyed True/False and one keyed None. Raise rather than
+    # key on None. A search where NO row carries 'tune' (every row read back
+    # from the result database) is unambiguous within itself, so it is reported
+    # in ranked_over and in notes instead of raising.
+    notes = []
+    if counts['n_rows_missing_tune']:
+        _with_tune = {k[:-1] for k in by_identity if k[-1] is not None}
+        _without = {k[:-1] for k in by_identity if k[-1] is None}
+        _clash = sorted(str(k) for k in (_with_tune & _without))
+        if _clash:
+            raise ValueError(
+                f"all_results mixes rows that carry 'tune' with rows that do "
+                f"not, for {len(_clash)} configuration(s) that are otherwise "
+                f"identical (downstream model {downstream_model}). "
+                f"_db_row_to_result (find_best_hybrid.py:5839-5883) does not "
+                f"restore 'tune', so keying on None would merge a tuned and an "
+                f"untuned run. First clash: {_clash[0]}{_sel_context(context)}")
+    if counts['n_rows_missing_tune']:
+        notes.append(
+            f"{counts['n_rows_missing_tune']} of "
+            f"{counts['n_rows_for_model']} configurations for downstream model "
+            f"{downstream_model} carry no 'tune' field, so they were read back "
+            f"from the result database; whether they were tuned is not recorded")
+
+    ranked = sorted(by_identity.values(),
+                    key=lambda e: ((e[0] if lower else -e[0]), e[1]))
+    tie_at_cut = _sel_tie_at_cut([(e[0], e[1]) for e in ranked], n,
+                                 lambda e: e[1])
+    selected = []
+    for i, (score, ident_str, entry, _pos) in enumerate(ranked[:n]):
+        entry = dict(entry)
+        entry['rank'] = i + 1
+        entry['tied_with'] = [o[1] for o in ranked
+                              if o[0] == score and o[1] != ident_str]
+        selected.append(entry)
+
+    if selected:
+        _folds = {e.get('n_folds_scored') for e in selected}
+        if len(_folds) > 1:
+            notes.append(f"the selected configurations were scored on "
+                         f"different fold counts: {sorted(str(f) for f in _folds)}")
+
+    basis = ('whole_dataset_mean' if rule == 'whole_dataset'
+             else f'other_folds_mean(held_out={held_out_fold})')
+    counts['fold0_pruned'] = getattr(search, 'fold0_pruned', None)
+    counts['note'] = ("all_results holds only the configurations the search "
+                      "evaluated -- adaptive pruning drops configurations at "
+                      "each checkpoint budget and again at the end of fold 0")
+    out = {
+        'kind': 'hybrid',
+        'downstream_model': downstream_model,
+        'dataset_name': getattr(search, 'dataset_name', None),
+        'metric_name': getattr(search, 'metric_name', None),
+        'direction': direction,
+        'score_basis': basis,
+        'budget': budget,
+        'n_requested': n,
+        'n_returned': len(selected),
+        'complete': len(selected) >= n,
+        'selected': selected,
+        'ranked_over': counts,
+        'tie_at_cut': tie_at_cut,
+        'notes': notes,
+        'shortfall_reason': None,
+        'context': context,
+    }
+    if not out['complete']:
+        out['shortfall_reason'] = (
+            f"dataset {out['dataset_name']}: asked for {n} hybrid "
+            f"configurations for downstream model {downstream_model}, got "
+            f"{len(selected)}; all_results holds "
+            f"{counts['n_rows_for_model']} configuration(s) scored with that "
+            f"downstream model and {counts['n_rows_other_model']} scored with "
+            f"other downstream models; dropped "
+            f"{ {k: v for k, v in counts.items() if k.startswith('n_rows_dropped') and v} }"
+            f"{_sel_context(context)}")
+        if require_full:
+            raise ValueError(out['shortfall_reason'])
+    return out
+
+
+def rank_downstream_models_by_base_reps(search, n_models=2, *, top_k=3,
+                                        models=None, min_reps=None,
+                                        rule='whole_dataset',
+                                        held_out_fold=None, drop_folds=(),
+                                        require_full=True, context=None):
+    """Top `n_models` downstream models by the MEAN of their top `top_k` base
+    representation scores. 0 new model fits -- it is `len(models)` passes over
+    search.baselines, through top_base_reps, so the direction rule, the
+    missing-score rule and the tie-break cannot diverge from the base selector.
+
+    The owner's rule is the mean of the top 3. n07_remediation.py:487-488 ranks
+    downstream models by each model's SINGLE best representation (_best at
+    :484-485). On a dataset where one model has one very strong representation
+    and a weak rest, the two rules name different models. top_k=1 reproduces
+    n07's rule; the default 3 implements the owner's.
+
+    It does not perform the cut. 'selected' holds the models kept, 'not_kept'
+    holds every other eligible model WITH its mean so the size of the gap being
+    discarded is on the page, and 'ineligible' holds models with fewer than
+    `min_reps` scored representations, each with its reason. A mean over 2
+    representation scores and a mean over 3 are different quantities, so a model
+    short of `min_reps` is not ranked on a shorter mean.
+
+    The means are in the dataset's own metric (SearchResult.metric_name,
+    find_best_hybrid.py:1537), so they are comparable only within one dataset.
+    """
+    models = list(models) if models is not None else list(DOWNSTREAM_MODELS)
+    if min_reps is None:
+        min_reps = top_k
+    direction = _sel_base_direction(search, context)
+    lower = direction['lower_is_better']
+
+    entries = []
+    ineligible = []
+    per_model = {}
+    for m in models:
+        sel = top_base_reps(search, m, top_k, rule=rule,
+                            held_out_fold=held_out_fold, drop_folds=drop_folds,
+                            require_full=False, context=context)
+        per_model[m] = sel
+        reps = [(e['rep'], e['score']) for e in sel['selected']]
+        if len(reps) < min_reps:
+            ineligible.append({
+                'downstream_model': m,
+                'n_reps_scored': sel['n_reps_scored_for_model'],
+                'n_reps_ranked': len(reps),
+                # A downstream model over its max-samples limit
+                # (find_best_hybrid.py:2969-2978) or in a registered skip policy
+                # (:2841-2848) has no key in baselines[rep] for ANY
+                # representation, so this is 0. Ranking an empty mean last would
+                # be a claim that the model lost, and it never ran.
+                'reason': (f"{sel['n_reps_scored_for_model']} representation(s) "
+                           f"carry a score for downstream model {m}; "
+                           f"{min_reps} were needed for the mean"),
+            })
+            continue
+        mean_score = float(np.mean([s for _, s in reps]))
+        entries.append((mean_score, str(m), {
+            'downstream_model': m,
+            'mean_score': mean_score,
+            'n_reps_used': len(reps),
+            'reps': reps,
+        }))
+
+    entries.sort(key=lambda e: ((e[0] if lower else -e[0]), e[1]))
+    tie_at_cut = _sel_tie_at_cut([(e[0], e[1]) for e in entries], n_models,
+                                 lambda e: e[1])
+    selected = []
+    for i, (_score, _name, entry) in enumerate(entries[:n_models]):
+        entry = dict(entry)
+        entry['rank'] = i + 1
+        selected.append(entry)
+    not_kept = [dict(e[2]) for e in entries[n_models:]]
+
+    # Under a geometry objective find_best_hybrid computes ONE score per
+    # representation and writes the same number under every downstream model key
+    # (find_best_hybrid.py:5465-5489), so every model has the identical ranked
+    # list and the identical mean, and the order is decided entirely by the
+    # model-name tie-break. Detected, not hidden.
+    _lists = [tuple(e[2]['reps']) for e in entries]
+    all_identical = bool(len(_lists) > 1 and len(set(_lists)) == 1)
+
+    out = {
+        'kind': 'downstream_model',
+        'dataset_name': getattr(search, 'dataset_name', None),
+        'metric_name': getattr(search, 'metric_name', None),
+        'direction': direction,
+        'score_basis': (per_model[models[0]]['score_basis'] if models else None),
+        'mean_is_over': (f"the mean of each downstream model's top {top_k} "
+                         f"base-representation scores, in "
+                         f"{getattr(search, 'metric_name', None)}"),
+        'n_requested': n_models,
+        'n_returned': len(selected),
+        'complete': len(selected) >= n_models,
+        'selected': selected,
+        'not_kept': not_kept,
+        'ineligible': ineligible,
+        'all_models_identical': all_identical,
+        'per_model': per_model,
+        'tie_at_cut': tie_at_cut,
+        'shortfall_reason': None,
+        'context': context,
+    }
+    if not out['complete']:
+        out['shortfall_reason'] = (
+            f"dataset {out['dataset_name']}: asked for {n_models} downstream "
+            f"models ranked by the mean of their top {top_k} base "
+            f"representations, ranked {len(entries)} of {len(models)}; "
+            f"{len(ineligible)} had fewer than {min_reps} scored "
+            f"representations{_sel_context(context)}")
+        if require_full:
+            raise ValueError(out['shortfall_reason'])
+    return out
+
+
+def select_model_rep_pairs(search, models=None, n_base=2, n_hybrids=2, *,
+                           budget=None, rule='whole_dataset',
+                           held_out_fold=None, drop_folds=(),
+                           max_features=None, require_full=True, context=None):
+    """The owner's grid: for each downstream model, the top `n_base` base
+    representations and the top `n_hybrids` hybrids. 0 new model fits.
+
+    With the default DOWNSTREAM_MODELS (_shared.py:539, five names) and 2 and 2,
+    that is 5 * (2 + 2) = 20 model-and-representation pairs. 'n_pairs' counts
+    the rows of the comparison, one per (downstream model, slot).
+    'n_distinct_units' counts the separate things that have to be BUILT: one
+    representation chosen by three downstream models is three rows and one unit.
+    'collapsed' names every unit that two or more downstream models picked.
+
+    Both halves come from ONE SearchResult, so the base representations and the
+    hybrids are in the same metric. Calling top_base_reps and top_hybrids
+    separately on two different searches is possible and nothing checks it.
+    """
+    models = list(models) if models is not None else list(DOWNSTREAM_MODELS)
+    per_model = {}
+    pairs = []
+    shortfalls = []
+    distinct = {}
+
+    for m in models:
+        base = top_base_reps(search, m, n_base, rule=rule,
+                             held_out_fold=held_out_fold, drop_folds=drop_folds,
+                             max_features=max_features,
+                             require_full=False, context=context)
+        hyb = top_hybrids(search, m, n_hybrids, budget=budget, rule=rule,
+                          held_out_fold=held_out_fold, drop_folds=drop_folds,
+                          require_full=False, context=context)
+        per_model[m] = {'base': base, 'hybrid': hyb}
+        for sel in (base, hyb):
+            if sel['shortfall_reason']:
+                shortfalls.append(sel['shortfall_reason'])
+            if sel['tie_at_cut']:
+                shortfalls.append(
+                    f"{m}/{sel['kind']}: the cut fell inside a tie at "
+                    f"{sel['tie_at_cut']['score']} -- kept "
+                    f"{sel['tie_at_cut']['kept']}, dropped "
+                    f"{sel['tie_at_cut']['dropped']}, decided by name and not "
+                    f"by a measurement")
+        for e in base['selected']:
+            unit = ('base', e['rep'])
+            row = {'downstream_model': m, 'kind': 'base',
+                   'rank_within_model': e['rank'], 'unit_id': unit,
+                   'label': e['rep'], 'score': e['score']}
+            pairs.append(row)
+            distinct.setdefault(unit, []).append(row)
+        for e in hyb['selected']:
+            unit = ('hybrid', tuple(e['identity'][k]
+                                    for k in _HYBRID_IDENTITY_FIELDS))
+            row = {'downstream_model': m, 'kind': 'hybrid',
+                   'rank_within_model': e['rank'], 'unit_id': unit,
+                   'label': e['label'], 'score': e['score_mean']}
+            pairs.append(row)
+            distinct.setdefault(unit, []).append(row)
+
+    n_possible = len(models) * (n_base + n_hybrids)
+    out = {
+        'dataset_name': getattr(search, 'dataset_name', None),
+        'metric_name': getattr(search, 'metric_name', None),
+        'models': models,
+        'n_base': n_base,
+        'n_hybrids': n_hybrids,
+        'n_pairs_possible': n_possible,
+        'n_pairs': len(pairs),
+        'n_missing': n_possible - len(pairs),
+        'complete': len(pairs) == n_possible,
+        'pairs': pairs,
+        'distinct_units': distinct,
+        'n_distinct_units': len(distinct),
+        'collapsed': [{'unit_id': u, 'label': rows[0]['label'],
+                       'chosen_by': [(r['downstream_model'], r['kind'],
+                                      r['rank_within_model']) for r in rows]}
+                      for u, rows in distinct.items() if len(rows) > 1],
+        'per_model': per_model,
+        'shortfalls': shortfalls,
+        'context': context,
+    }
+    if require_full and not out['complete']:
+        raise ValueError(
+            f"dataset {out['dataset_name']}: asked for {n_possible} "
+            f"model-and-representation pairs ({len(models)} downstream models "
+            f"* ({n_base} base representations + {n_hybrids} hybrids)), got "
+            f"{len(pairs)}. " + ' | '.join(shortfalls) + _sel_context(context))
+    return out
+
+
+def selection_diff(selection, previous):
+    """One line: what a file's old rule picked against what a selector picks.
+
+    `previous` is the list of names the experiment selected before. For a base
+    representation selection the names are representation names; for a hybrid
+    selection they are the identity labels. Written so a migration shows up in
+    review as a stated reordering instead of a silent one.
+    """
+    if selection.get('kind') == 'base_rep':
+        new = [e['rep'] for e in selection['selected']]
+    elif selection.get('kind') == 'hybrid':
+        new = [e['label'] for e in selection['selected']]
+    else:
+        new = [e['downstream_model'] for e in selection['selected']]
+    prev = list(previous or [])
+    replaced = [x for x in prev if x not in new]
+    added = [x for x in new if x not in prev]
+    if not replaced and not added:
+        moved = sum(1 for i, x in enumerate(new)
+                    if i < len(prev) and prev[i] != x)
+        return (f"same {len(new)} selected, {moved} moved position: "
+                f"{prev} -> {new}")
+    return (f"was {prev} -> now {new}; {len(replaced)} replaced "
+            f"({replaced}), {len(added)} new ({added})")
+
+
+
+# =============================================================================
 # OPTUNA HP TUNING
 # =============================================================================
 
