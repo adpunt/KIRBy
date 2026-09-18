@@ -1220,7 +1220,28 @@ narrowed 2026-09-12. `n09` and `n12` were the other two and now average three (�
 `n15` still runs one. Three draws is three times the noise-dependent fits, which for
 `n15` means three times its inside-the-experiment searches.
 
-**15. HALF BUILT 2026-09-16 — the experiment exists, the loader change does not. See §14.**
+**15. CLOSED 2026-09-18 — measured, and declined on the number. See §14.11.**
+
+The probe ran. hERG IC50 does not carry enough real disagreement to be worth the fetch
+and the loader change. 9,802 compounds, 861 measured in more than one document, and the
+spread within a compound across documents has a **median of 0.000 log units** — most
+pairs of laboratories reported the same number. 64 compounds of 9,802 disagree by more
+than 1 log unit. n17 needs three or more measurements to grade at all, so the usable
+pool is smaller again.
+
+bindingdb_kd already runs n17 on 845 gradable pairs. Adding hERG IC50 would add one
+dataset in which the quantity being measured barely exists.
+
+⛔ ONE PART OF ITEM 15 IS WORTH TAKING AND COSTS NOTHING. The probe counted the curator
+flag: **301 records carry a `data_validity_comment`, on 215 molecules** — 293 "Outside
+typical range" and 8 "Potential transcription error". A human has already marked those
+rows wrong, so that is real label noise needing no replicates. Step 3 of the four in
+§14.6 is what exposes it, and it is already free: the count is 301 both before and after
+the fetch filter, so `data_validity_comment__isnull: true` is removing nothing. n22
+already reads this flag.
+
+Steps 1, 2 and 4 buy 64 genuinely disagreeing compounds. That is the trade, and it was
+declined.
 
 What is built: `n17_replicate_removal.py`, which trains on one real measurement per entity
 and grades on the mean of that entity's others. No noise is injected anywhere.
@@ -1964,6 +1985,40 @@ written by an earlier session. I ran it on 2026-09-16 and it could not complete.
 **ChEMBL's API is returning HTTP 500 on every endpoint, including its own status page.**
 That is their outage, not a problem with the query. The probe retries six times and then
 stops. It should be run again when the API is back, and it needs no changes.
+
+### 14.11 The probe ran — 2026-09-18
+
+`_probe_chembl_herg.py`, on a cached pull of 12,010 CHEMBL240 IC50 records. ChEMBL's API
+is partly back: the main pull came from cache and one sub-query
+(`kept_by_the_fetch`) still returned HTTP 500 through all six retries, so that one figure
+is missing and nothing here depends on it. Full output:
+`tests/results/noise/_probe_chembl_herg/CHEMBL240_IC50.json`.
+
+| | compounds |
+|---|---|
+| total | 9,802 |
+| more than one record | 1,218 |
+| more than one document | 861 |
+| more than one assay | 1,065 |
+
+Spread of pActivity within a compound, across documents: median **0.000**, mean 0.181,
+90th percentile 0.672 log units, and 64 compounds over 1 log unit. Across records:
+median 0.001, mean 0.193, 69 over 1 log unit. Within one assay, over 199 compounds:
+median 0.083, mean 0.147, 1 over 1 log unit.
+
+The median of 0.000 across documents is the number that decided it. Two laboratories
+measuring the same compound usually published the same value, so there is very little
+real disagreement for a removal experiment to work on.
+
+Lhasa overlap, for whoever asks next: Lhasa holds 12,155 molecules, 5,166 of this pull's
+compounds are among them, and 430 of those carry more than one document.
+
+⛔ A BUG WAS FIXED TO GET THIS FAR. `_standardize_and_inchikey`
+(src/kirby/datasets/chembl_bioactivity.py:110) tested `if smi` before handing the string
+to RDKit. A missing SMILES arrives from pandas as `float('nan')`, which is truthy, so
+RDKit received a float and raised TypeError — killing the whole call rather than dropping
+the one record. One blank SMILES made a 12,010-record pull unusable. A record with no
+structure is now dropped the same way an unparseable one already was.
 
 ### 14.7 First run on bindingdb_kd — WITHDRAWN 2026-09-16, see §14.10
 
