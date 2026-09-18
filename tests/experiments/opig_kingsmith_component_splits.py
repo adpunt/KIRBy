@@ -458,7 +458,8 @@ def _evaluate_hybrid_per_fold(
             # (full budgets/tiers) when the env var is unset, so server runs and
             # the precompute cache key are unchanged.
             _is_smoke = bool(os.environ.get('KIRBY_SMOKE_N', '').strip())
-            _smoke_budgets = [25] if _is_smoke else FULL_BUDGETS
+            from experiments._shared import smoke_budgets
+            _smoke_budgets = smoke_budgets() if _is_smoke else FULL_BUDGETS
             _eval_list = ['rf'] if _is_smoke else INTERNAL_EVALUATORS
             _smoke_imp = ({'importance_methods': ['lightgbm_gain']}
                           if _is_smoke else {})

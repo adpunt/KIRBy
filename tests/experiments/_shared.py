@@ -3570,6 +3570,29 @@ def _require_task_type(data: dict, source: str) -> str:
     return tt
 
 
+def smoke_budgets(default=(25,)) -> list:
+    """The feature budgets a smoke run searches over, from KIRBY_SMOKE_BUDGETS.
+
+    Nine call sites across the opig files wrote the literal [25]. A single
+    budget of 25 features is a real handicap against a base representation
+    scored on all of its own: antiberty_cdr is 512 features wide, so a hybrid
+    capped at 25 loses on width before it loses on method, and the delta cannot
+    be read. This makes that one number a knob without touching nine files.
+
+    KIRBY_SMOKE_BUDGETS is a comma-separated list, e.g. '100,200,500'. Unset or
+    unparseable gives 25, which is what every one of those call sites did.
+    """
+    import os as _os
+    raw = _os.environ.get('KIRBY_SMOKE_BUDGETS', '').strip()
+    if not raw:
+        return list(default)
+    try:
+        vals = [int(v) for v in raw.split(',') if v.strip()]
+    except ValueError:
+        return list(default)
+    return vals or list(default)
+
+
 def _smoke_subsample(data: dict) -> dict:
     """Test-only row cap, gated behind the KIRBY_SMOKE_N env var (default off).
 
@@ -4697,6 +4720,27 @@ def decoy_counts(augmentation_info):
     return {'noise': _n(NOISE_DONOR), 'echo': _n(ECHO_DONOR)}
 
 
+def fold_hybrid_scoring_kwargs(blueprint, *, model=None, metric_fn=None,
+                               lower_is_better=None):
+    """The model/metric arguments build_fold_hybrid will accept for this recipe.
+
+    A recipe searched under a geometry objective fits no downstream model, and
+    build_fold_hybrid raises when model or metric_fn arrives with one. Every
+    caller that rebuilds recipes from both search families hands its arguments
+    through here: for a predictive recipe they come back unchanged, for a
+    geometry recipe an empty dict comes back instead.
+
+    Without this the caller passes a model to a geometry recipe, the raise is
+    swallowed by the caller's per-fold except, and every similarity-family arm
+    is written out as not computed on every fold.
+    """
+    from kirby.find_best_hybrid import _is_geometry_objective
+    if _is_geometry_objective(getattr(blueprint, 'objective', None)):
+        return {}
+    return {'model': model, 'metric_fn': metric_fn,
+            'lower_is_better': lower_is_better}
+
+
 def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
                       augmentations_train=None, augmentations_val=None,
                       budget_override=None, aug_per_source_budget=None,
@@ -5150,6 +5194,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         # capped runs on the standard (non-distance) lineage only. Distance
         # precompute doesn't emit capped (no consumer needs it). Above
         aug_conditions.append('capped')   # gate removed 2026-08-27
+    aug_conditions = _local_aug_conditions(aug_conditions)
 
     results = PrecomputeResults()
     t_start = time.time()
@@ -5575,6 +5620,28 @@ def resolve_pool_subset(pool_subset):
 UNCAPPED_SKIP_DATASETS = frozenset({'bindingdb_kd', 'kiba'})
 
 
+def _local_aug_conditions(conditions):
+    """Cut the augmentation conditions to KIRBY_LOCAL_AUG_CONDITIONS when it is set.
+
+    Unset — the cluster — this returns `conditions` unchanged. It exists for a
+    laptop run: an 'uncapped' or 'capped' configuration-fold costs about eight
+    model fits where 'none' costs one, so the two augmented conditions are what
+    makes a local precompute take hours per dataset.
+
+    ⛔ This is a COST cut for a smoke run, not a finding about augmentation.
+    Anything run with it set cannot say which augmentation condition wins.
+
+    Both places that name the conditions call this, so what the precompute
+    BUILDS and what an experiment ASKS the pool for stay the same list — they
+    have disagreed before and neither side said so.
+    """
+    want = os.environ.get('KIRBY_LOCAL_AUG_CONDITIONS')
+    if not want:
+        return conditions
+    keep = {p.strip() for p in want.split(',') if p.strip()}
+    return [c for c in conditions if c in keep] or ['none']
+
+
 def _pool_conditions(distance, augmentations, dataset_name=None):
     """The (tier, aug_condition, augmentations) members of the pool.
 
@@ -5595,13 +5662,15 @@ def _pool_conditions(distance, augmentations, dataset_name=None):
         pool = [('general_distance', 'none', None)]
         if has_augs and not _no_uncapped:
             pool.append(('general_distance', 'uncapped', augmentations))
-        return pool
+        _keep = set(_local_aug_conditions([c for _t, c, _a in pool]))
+        return [m for m in pool if m[1] in _keep]
     pool = [('general', 'none', None)]
     if has_augs:
         if not _no_uncapped:
             pool.append(('general', 'uncapped', augmentations))
         pool.append(('general', 'capped', augmentations))
-    return pool
+    _keep = set(_local_aug_conditions([c for _t, c, _a in pool]))
+    return [m for m in pool if m[1] in _keep]
 
 
 def _resolve_pool_objectives(pool_subset, objective):
@@ -8363,3 +8432,35 @@ def get_config(args) -> dict:
     config['distance_metric'] = set_distance_metric(
         getattr(args, 'distance_metric', None) or DEFAULT_DISTANCE_METRIC)
     return config
+
+
+# =============================================================================
+# LOCAL-RUN GRID OVERRIDES
+# =============================================================================
+# Last thing this module does, so the names below are the ones every experiment
+# imports. With no KIRBY_LOCAL_* variable set this is a no-op and a cluster run
+# is unchanged. See tests/experiments/_local_grid.py.
+from experiments import _local_grid as _lg  # noqa: E402
+
+_LOCAL_GRID = _lg.apply()
+if _LOCAL_GRID:
+    from kirby.find_best_hybrid import (  # noqa: F811
+        DEFAULT_INTERNAL_EVALUATORS as _DIE)
+    _b = _lg._ints('KIRBY_LOCAL_BUDGETS')
+    if _b:
+        FULL_BUDGETS = _b
+        DISTANCE_BUDGETS = [x for x in _b if x <= max(DISTANCE_BUDGETS)] or _b
+    INTERNAL_EVALUATORS = list(_DIE)
+    _m = _LOCAL_GRID.get('auto_selected_models')
+    if _m:
+        DOWNSTREAM_MODELS = list(_m)
+        # DISTANCE_MODELS is built from DOWNSTREAM_MODELS higher up this file,
+        # before this block runs, so it still named all six. The distance-tier
+        # precompute passes it to find_best_hybrid by name, and a named model
+        # is not filtered by tier — so the six would be scored where the local
+        # grid asked for one. Rebuild it from the cut list.
+        DISTANCE_MODELS = list(DOWNSTREAM_MODELS) + ['knn']
+    # The distance tier's whole point is that a recipe is scored by predicting
+    # each molecule from its neighbours, so knn stays as its internal evaluator
+    # even when the downstream list is cut to two.
+    DISTANCE_EVALUATORS = ['knn']

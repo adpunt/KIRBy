@@ -111,7 +111,9 @@ def _smoke_search_kwargs():
     # deeplift+treeshap, which compute SHAP over the (here 5600-dim) features
     # per fold and dominate the smoke wall time. lightgbm_gain still produces a
     # real per-rep importance ranking so the hybrid pipeline is exercised.
-    return {'speed': 'full', 'budgets': [25], 'internal_evaluators': ['rf'],
+    from experiments._shared import smoke_budgets
+    return {'speed': 'full', 'budgets': smoke_budgets(),
+            'internal_evaluators': ['rf'],
             'importance_methods': ['lightgbm_gain']}
 
 
