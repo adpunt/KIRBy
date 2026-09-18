@@ -65,10 +65,17 @@ p = 'tests/results/comparisons/opig_shared_vectors_census.json'
 if not os.path.exists(p):
     print(f'     no {p}'); raise SystemExit
 blob = json.load(open(p))
-metas = blob.get('meta') if isinstance(blob, dict) else None
-if metas is None and isinstance(blob, dict):
-    metas = [v for v in blob.values() if isinstance(v, list)]
-    metas = metas[0] if metas else []
+# The census writes its per-dataset block under 'per_dataset'. Asking for
+# 'meta' and then falling back to "the first value that is a list" picked
+# 'per_representation' instead -- one entry per (dataset, representation),
+# none of which carries cache_matches_the_code. Every one printed
+# 'freshness NOT RUN', 47 lines on 4 datasets, while the check had in fact
+# run. Read the key by name, and say so if it is missing.
+metas = blob.get('per_dataset') if isinstance(blob, dict) else None
+if metas is None:
+    print('     no per_dataset block in the census JSON -- '
+          'it was written by an older version of the census')
+    raise SystemExit
 for m in (metas or []):
     if not isinstance(m, dict):
         continue
