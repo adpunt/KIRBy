@@ -47,16 +47,45 @@ PY
 
 run_freshness() {
     echo "=============== does the cache match the code ==============="
-    echo "  NO grep this time — chemberta is the one being looked for, and a"
+    echo "  NO grep this time — chembert is the one being looked for, and a"
     echo "  filter on 'pdv' would hide it."
+    echo "  ⛔ chembert (256 features) is NOT chemberta (384). chembert is what"
+    echo "     adme_hlm, herg_ki, logd and qm9 carry; chemberta is in qm9 alone."
     python tests/experiments/opig_shared_vectors_census.py \
         --datasets caco2 herg_ki logd adme_mdr1 --check-freshness 200
     echo
     echo "  Read every 'CACHED MATRIX NO LONGER MATCHES THE CODE' line above."
     echo "  pdv on caco2/herg_ki was fixed 2026-09-18 and should NOT appear."
-    echo "  chemberta on herg_ki and logd is the open question: the memory note"
-    echo "  says 130 of 1,412 molecules share a row on herg_ki and 709 of 5,028"
-    echo "  on logd where the cache claims none."
+    echo
+    echo "  ⛔ AN ABSENT WARNING IS NOT A PASS. A representation the check never"
+    echo "     rebuilt produces no line either way. What was actually COVERED:"
+    python - <<'PY'
+import json, os
+p = 'tests/results/comparisons/opig_shared_vectors_census.json'
+if not os.path.exists(p):
+    print(f'     no {p}'); raise SystemExit
+blob = json.load(open(p))
+metas = blob.get('meta') if isinstance(blob, dict) else None
+if metas is None and isinstance(blob, dict):
+    metas = [v for v in blob.values() if isinstance(v, list)]
+    metas = metas[0] if metas else []
+for m in (metas or []):
+    if not isinstance(m, dict):
+        continue
+    ds = m.get('dataset', '?')
+    checks = m.get('cache_matches_the_code')
+    if not checks:
+        print(f'     {ds:12s} freshness NOT RUN')
+        continue
+    ok = [r for r, v in checks.items() if isinstance(v, dict) and v.get('matches') is True]
+    bad = [r for r, v in checks.items() if isinstance(v, dict) and v.get('matches') is False]
+    skip = [r for r, v in checks.items() if not isinstance(v, dict) or v.get('matches') is None]
+    print(f'     {ds:12s} matched {len(ok)}: {", ".join(sorted(ok))}')
+    if bad:
+        print(f'     {ds:12s} ⛔ STALE {len(bad)}: {", ".join(sorted(bad))}')
+    if skip:
+        print(f'     {ds:12s} not checked {len(skip)}: {", ".join(sorted(skip))}')
+PY
 }
 
 run_nested() {
