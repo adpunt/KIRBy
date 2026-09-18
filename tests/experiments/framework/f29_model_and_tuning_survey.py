@@ -73,8 +73,12 @@ DATASETS = {
     'logd':                   'rmse',
 }
 
+# mlp left this list on 2026-09-18 when the owner cut it from the suite: it did
+# not perform and it was slow. dnn is the neural model the survey carries. The
+# survey is 9 models now, not 10; a row already on disk under 'mlp' was measured
+# and stays readable, it just gains no new rows.
 MODELS = ['ridge', 'rf', 'lightgbm', 'catboost', 'xgboost',
-          'dnn', 'mlp', 'gp', 'knn', 'cnn']
+          'dnn', 'gp', 'knn', 'cnn']
 
 N_OUTER_FOLDS = 5
 N_TUNE_FOLDS = 3

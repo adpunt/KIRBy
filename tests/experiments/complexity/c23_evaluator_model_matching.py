@@ -16,12 +16,12 @@ Design: For each downstream model and each internal evaluator setting, run
 Conditions:
     A_matched:      evaluator = downstream model type (rf->rf, xgb->xgb, etc.)
     B_slight_off:   evaluator from a similar model family
-                    (rf->lightgbm, lightgbm->rf, dnn->mlp).
+                    (rf->lightgbm, lightgbm->rf, dnn->dnn_small).
     C_strong_off:   evaluator from a very different family
                     (rf->svm, lightgbm->svm, dnn->knn).
-    D_nn_size:      NN size mismatches (mlp->dnn). Does not run while mlp is
-                    outside the study's downstream set; the loop skips any
-                    pair whose downstream model is not in MATCH_TABLE.
+    D_nn_size:      NN size mismatch, dnn scored by a wider dnn
+                    (dnn->dnn_wide). The loop skips any pair whose downstream
+                    model is not in MATCH_TABLE.
     E_quick_set:    evaluator always from {rf, lightgbm, xgboost}
 
 Reports the held-out score delta (matched - mismatched), paired per outer
@@ -71,18 +71,32 @@ MATCH_TABLE = {
     'lightgbm':  ('lightgbm','rf',         'svm'),
     'xgboost':   ('xgboost', 'lightgbm',   'svm'),
     'svm':       ('svm',     'gp',         'lightgbm'),
-    'dnn':       ('dnn',     'mlp',        'knn'),
+    # The near-family evaluator for dnn was sklearn's mlp until 2026-09-18,
+    # when mlp was cut from the suite. It is now the same network at (64, 32).
+    # That is a closer neighbour than mlp ever was: mlp differed from dnn in the
+    # optimiser, the early-stopping rule and the initialisation as well as the
+    # width, so the B_slight_off delta for dnn mixed four changes together.
+    'dnn':       ('dnn',     'dnn_small',  'knn'),
 }
 
 # NN size mismatch pairs — Condition D.
-# ('dnn', 'mlp') removed: it would produce the exact cache key already covered
-# by ABC B_slight_off for dnn (MATCH_TABLE['dnn'][1] == 'mlp'), giving a
-# duplicate score column with no extra information.
-# mlp left the downstream set on 2026-09-04 (tier 'extra'), so this pair does
-# not run — the condition D loop skips any downstream model not in
-# MATCH_TABLE. Put mlp back in MATCH_TABLE and it runs again.
+#
+# It was ('mlp', 'dnn') — a small sklearn network downstream, scored by this
+# repository's larger one. It never ran: mlp left the downstream set on
+# 2026-09-04 and the loop below skips any downstream model not in MATCH_TABLE.
+# mlp was cut from the suite entirely on 2026-09-18.
+#
+# The question it asked stands, and dnn can ask it on its own. dnn is downstream
+# at its shipped (256, 128, 64) and is scored by a dnn at (512, 256, 128). One
+# thing differs between the two networks, the width, where mlp against dnn
+# differed in four.
+#
+# This is NOT the same cell as B_slight_off for dnn. B scores the same
+# downstream network with a SMALLER evaluator at (64, 32); D scores it with a
+# LARGER one. The two are mirrored, so the neural row now reads capacity in both
+# directions rather than one.
 NN_PAIRS = [
-    ('mlp', 'dnn'),   # small NN downstream, large NN evaluator
+    ('dnn', 'dnn_wide'),   # shipped NN downstream, wider NN evaluator
 ]
 
 # Quick default set — Condition E

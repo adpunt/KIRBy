@@ -2920,6 +2920,48 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
             return (-np.inf, None) if return_predictions else -np.inf
 
+    elif internal_evaluator in ('dnn_small', 'dnn_wide'):
+        # THE SAME NETWORK AT TWO OTHER SIZES. Added 2026-09-18 so the neural
+        # capacity question c23 asks can be asked in dnn alone. It used to be
+        # asked as mlp against dnn — sklearn's MLPRegressor against this one —
+        # which confounded the size with the implementation: a different
+        # optimiser, a different early-stopping rule and a different
+        # initialisation, all moving at once with the width. mlp was cut from the
+        # suite on 2026-09-18, and these two are what replaced it.
+        #
+        #   dnn_small  (64, 32)             smaller than the shipped evaluator
+        #   dnn        (256, 128, 64)       the shipped one, the branch below
+        #   dnn_wide   (512, 256, 128)      larger
+        #
+        # Everything but the width is dnn's own default: dropout 0.2, lr 1e-3,
+        # 200 epochs, batch 256, patience 20.
+        #
+        # ⛔ PURELY ADDITIVE. Neither name is in any default evaluator list, so
+        # no search selects one and no cache key on disk changes. An experiment
+        # asks for them by name. The widths match f31's dnn arms, so an f31
+        # result and a c23 result are talking about the same two networks.
+        _sizes = {'dnn_small': (64, 32), 'dnn_wide': (512, 256, 128)}
+        _hidden = _sizes[internal_evaluator]
+        try:
+            from kirby.models.dnn import DNNRegressor, DNNClassifier
+        except ImportError as _e:
+            _refuse_missing_evaluator_library(internal_evaluator, 'torch', _e)
+        try:
+            if is_classification:
+                m = DNNClassifier(hidden_sizes=_hidden)
+            else:
+                m = DNNRegressor(hidden_sizes=_hidden)
+            m.fit(X_train_scaled, y_train)
+        except Exception as _dnn_err:
+            # Same rule as the shipped dnn branch below: a failed fit on THESE
+            # rows falls back to rf and says so.
+            _announce_evaluator_fallback(internal_evaluator, 'rf', _dnn_err)
+            return _evaluate_allocation(X_train, X_val, y_train, y_val,
+                                        internal_evaluator='rf',
+                                        return_predictions=return_predictions,
+                                        graded_predictions_for_clf=graded_predictions_for_clf,
+                                        graded_out=graded_out)
+
     elif internal_evaluator == 'dnn':
         try:
             # The import is separated from the fit on purpose. A missing torch
@@ -3027,9 +3069,11 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 
     else:
         raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
-                         f"Use 'rf', 'xgboost', 'lightgbm', 'mlp', 'svm', 'gp', "
-                         f"'knn', 'catboost', 'dnn', 'cnn', 'ngboost', 'bnn', "
-                         f"or a callable that returns an sklearn-compatible model.")
+                         f"Use 'rf', 'xgboost', 'lightgbm', 'svm', 'gp', "
+                         f"'knn', 'catboost', 'dnn', 'dnn_small', 'dnn_wide', "
+                         f"'cnn', 'ngboost', 'bnn', 'mlp' (cut from the suite "
+                         f"2026-09-18, still built when named), or a callable "
+                         f"that returns an sklearn-compatible model.")
 
     # Common ending: compute predictions and score from the fitted model
     try:
