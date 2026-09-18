@@ -53,7 +53,8 @@ EXPECTED = {
     # here, so every noise job was scored against five experiments it does not
     # run. n06 and n14 through n20 were never added.
     'noise': ['c10', 'n01', 'n02', 'n06', 'n07', 'n09', 'n11', 'n12', 'n13',
-              'n14', 'n15', 'n16', 'n17', 'n18', 'n19', 'n20'],
+              'n14', 'n15', 'n16', 'n17', 'n18', 'n19', 'n20', 'n21', 'n22',
+              'n23'],
     'federated': ['fed01', 'fed02', 'fed03', 'fed04', 'fed05'],
 }
 
@@ -111,6 +112,9 @@ DIR_MAP = {
         'n18': 'n18_clean_the_real_labels',
         'n19': 'n19_measurement_count',
         'n20': 'n20_clean_before_search',
+        'n21': 'n21_neighbour_distance',
+        'n22': 'n22_curator_flag',
+        'n23': 'n23_uncertainty_cleaning',
     },
     'federated': {
         'fed01': 'fed01_noise_heterogeneity',

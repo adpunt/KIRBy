@@ -53,7 +53,7 @@ rebuilt per fold. That is n19's two-space treatment, added here on 2026-09-17.
 Until then this file read `sorted(reps)[0]` and every number in it came from
 whichever representation sorted first, with nothing in the output saying so.
 
-The base representation is still one matrix and it is still the first by name,
+The base representation is still one matrix, now chosen by pick_noise_base_rep,
 but it is now written to `base_rep` and read against the hybrid rather than
 standing alone.
 
@@ -96,6 +96,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    pick_noise_base_rep,
 )
 # One per-fold hybrid build, shared with n17 and n19. It lived in n19 until
 # 2026-09-17.
@@ -245,10 +246,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     flag_rates = list(kwargs.get('flag_rates') or FLAG_RATES)
     detectors = list(kwargs.get('detectors') or DETECTORS)
-    # The base space exists to be the thing the hybrid is read against, so it is
-    # the first representation by name and is RECORDED rather than chosen. Until
-    # 2026-09-17 it was the only space and the result file did not name it.
-    base_rep_name = kwargs.get('base_rep') or sorted(reps)[0]
+    # The base space exists to be the thing the hybrid is read against, and it
+    # is RECORDED rather than left implicit. Until 2026-09-17 it was the only
+    # space and the result file did not name it.
+    # pick_noise_base_rep, not sorted(reps)[0]. The alphabetical pick is the
+    # fallback that function was written to replace: it makes the control arm a
+    # matter of spelling, and it can hand the control slot to a structure-tuned
+    # sim_* recipe, which is a treatment this study built. n11, n17 and n21
+    # already call it; these four did not. Changed 2026-09-18.
+    base_rep_name = (kwargs.get('base_rep')
+                     or pick_noise_base_rep(reps, dataset_name))
     X_source = reps[base_rep_name]
 
     results = {
@@ -361,7 +368,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── What each downstream model would have picked for itself ──
     # Added 2026-09-18, ADDITIVE. Nothing above or below moves: `base_rep` is
-    # still the first representation by name, `spaces_run` is still the same 2
+    # still the one pick_noise_base_rep names, `spaces_run` is still the same 2
     # spaces, the hybrid is still the 1 recipe fetched for
     # downstream_models[0], and every fold-win count in 'per_space' is still
     # measured in those 2 spaces. These 4 keys sit beside them.
@@ -683,7 +690,7 @@ def main():
                         help='Comma-separated shares of rows to treat as suspect')
     parser.add_argument('--base-rep', type=str, default=None,
                         help='Which representation is the base space. Default: '
-                             'the first by name, and it is recorded either way')
+                             'pick_noise_base_rep\'s, and it is recorded either way')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)

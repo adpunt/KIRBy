@@ -157,6 +157,18 @@ REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'quantile_clip')
 # suite. The inner split is group-aware wherever the caller has scaffold groups.
 REPAIR_OOF_SPLITS = 5
 
+# The smallest clean-to-noisy gap a recovery PERCENTAGE may divide by, as a
+# fraction of the clean score's own magnitude. Same rule and same number as
+# n11 (n11_estimation_remediation_grid.GAP_MIN_FRAC), and it is here for the
+# same reason: recovery divides by (clean - noisy), so when the injected noise
+# barely moved the model that denominator is a rounding error and the ratio
+# explodes. tests/results/noise/n07_remediation/buchwald_hartwig.json on disk
+# has a gap of 0.224 rmse against a clean score of 14.35 -- 1.6% -- and reports
+# recoveries of +350% and -474% off it. Below the floor the recovery is NaN
+# and the reason is written to results['recovery_undefined'], which is what the
+# sign guard beside it already does.
+GAP_MIN_FRAC = 0.02
+
 
 # The private `_inject_noise` this module used to carry has been deleted. It picked a
 # `fraction` of rows at random and gave each of them Gaussian noise at 0.3 of the label
@@ -1729,17 +1741,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      if not (np.isnan(r_clean) or np.isnan(r_noisy))
                      else float('nan'))
             r_hurt = (r_gap < 0) if lower_is_better else (r_gap > 0)
+            r_floor = (max(1e-10, GAP_MIN_FRAC * abs(r_clean))
+                       if not np.isnan(r_clean) else 1e-10)
             row = {}
             for strategy in strategies:
                 if strategy in ('no_noise', 'noisy_baseline'):
                     continue
                 sc_ = strat_rows.get(strategy, {}).get('score', float('nan'))
                 if (not np.isnan(sc_) and not np.isnan(r_gap)
-                        and abs(r_gap) > 1e-10 and r_hurt):
+                        and abs(r_gap) > r_floor and r_hurt):
                     row[strategy] = float((sc_ - r_noisy) / r_gap * 100)
                 else:
                     row[strategy] = float('nan')
-            if not np.isnan(r_gap) and not r_hurt:
+            if not np.isnan(r_gap) and r_hurt and abs(r_gap) <= r_floor:
+                results.setdefault('recovery_undefined', {})[
+                    f'{m_name}/{rep_name}'] = (
+                    f'the injected noise moved this model on this '
+                    f'representation by {abs(r_gap):.6g} {metric_name}, which '
+                    f'is under {GAP_MIN_FRAC:.0%} of its clean score '
+                    f'({r_clean:.6g}); a percentage of that is a percentage '
+                    f'of a rounding error')
+            elif not np.isnan(r_gap) and not r_hurt:
                 results.setdefault('recovery_undefined', {})[
                     f'{m_name}/{rep_name}'] = (
                     f'noise did not degrade this model on this representation: '
@@ -1796,8 +1818,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # that helped reads as negative recovery. buchwald_hartwig.json on disk
         # has exactly that. Report NaN and say why instead.
         _hurt = (ref_gap < 0) if lower_is_better else (ref_gap > 0)
+        _floor = (max(1e-10, GAP_MIN_FRAC * abs(ref_clean))
+                  if not np.isnan(ref_clean) else 1e-10)
         if (not np.isnan(s) and not np.isnan(ref_gap)
-                and abs(ref_gap) > 1e-10 and _hurt):
+                and abs(ref_gap) > _floor and _hurt):
             recovery[key] = float((s - ref_noisy) / ref_gap * 100)
         else:
             recovery[key] = float('nan')
@@ -1805,6 +1829,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 results.setdefault('recovery_undefined', {})[key] = (
                     f'noise did not degrade this reference: clean={ref_clean:.6g}, '
                     f'noisy={ref_noisy:.6g}, lower_is_better={lower_is_better}')
+            elif not np.isnan(ref_gap) and abs(ref_gap) <= _floor:
+                results.setdefault('recovery_undefined', {})[key] = (
+                    f'the injected noise moved this reference by '
+                    f'{abs(ref_gap):.6g} {metric_name}, under '
+                    f'{GAP_MIN_FRAC:.0%} of its clean score ({ref_clean:.6g}); '
+                    f'a percentage of that is a percentage of a rounding error')
 
     # Best strategy must be reported within a single denominator class —
     # hybrid recoveries use the hybrid (clean, noisy) baseline while per-rep

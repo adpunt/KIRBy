@@ -153,6 +153,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream, make_nearest_neighbors,
+    pick_noise_base_rep,
 )
 from experiments.dataset_policy import (
     noise_levels, noise_groups_for, noise_dose_units,
@@ -401,7 +402,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
             f"{sorted(model_factories)}.")
 
-    base_rep_name = kwargs.get('base_rep') or sorted(reps)[0]
+    # pick_noise_base_rep, not sorted(reps)[0]. The alphabetical pick is the
+    # fallback that function was written to replace: it makes the control arm a
+    # matter of spelling, and it can hand the control slot to a structure-tuned
+    # sim_* recipe, which is a treatment this study built. n11, n17 and n21
+    # already call it; these four did not. Changed 2026-09-18.
+    base_rep_name = (kwargs.get('base_rep')
+                     or pick_noise_base_rep(reps, dataset_name))
     noise_groups = noise_groups_for(data)[0]
     arms = _arms(drop_shares, move_strengths, move_methods)
 

@@ -120,6 +120,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    pick_noise_base_rep,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
 from experiments.noise.n17_replicate_removal import (
@@ -622,14 +623,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Which representation the base space is. The pool's own preference order is
     # for injected-noise experiments picking one fixed matrix; here the base
     # space exists to be the thing the hybrid is read against, so it is the
-    # first representation by name and is recorded rather than chosen.
-    base_rep_name = kwargs.get('base_rep') or sorted(reps)[0]
+    # representation pick_noise_base_rep names, and is recorded on the result.
+    # pick_noise_base_rep, not sorted(reps)[0]. The alphabetical pick is the
+    # fallback that function was written to replace: it makes the control arm a
+    # matter of spelling, and it can hand the control slot to a structure-tuned
+    # sim_* recipe, which is a treatment this study built. n11, n17 and n21
+    # already call it; these four did not. Changed 2026-09-18.
+    base_rep_name = (kwargs.get('base_rep')
+                     or pick_noise_base_rep(reps, dataset_name))
     results['base_rep'] = base_rep_name
     print(f"  base representation: {base_rep_name}")
 
     # ── What each downstream model would have picked for itself ──
     # Added 2026-09-18, ADDITIVE. Nothing above or below moves: `base_rep` is
-    # still the first representation by name, `spaces_run` is still the same 2
+    # still the one pick_noise_base_rep names, `spaces_run` is still the same 2
     # spaces, the hybrid is still the 1 recipe fetched for
     # downstream_models[0], and every paired fold count, mean gain and spread
     # in 'per_draw' and 'summary' is still measured in those 2 spaces. These 4
