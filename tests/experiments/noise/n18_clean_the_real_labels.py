@@ -115,6 +115,40 @@ CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth')
 # to the share it corrupted; nobody can do that here, so it is swept.
 FLAG_RATES = (0.05, 0.10, 0.20)
 
+# ⛔ TWO OF THE FOUR CLEANUPS DO NOT READ THE FLAG RATE ON A REGRESSION SET.
+# Read out of n07.cleaned_training_set on 2026-09-18:
+#   remove        thresholds at the (1 - rate) quantile        -- reads it
+#   knn_smooth    thresholds at the same quantile              -- reads it
+#   downweight    weights_from_scores(scores, strength=1.0),
+#                 which takes no threshold at all              -- does NOT
+#   label_smooth  on a CLASSIFICATION set it thresholds; on a
+#                 REGRESSION set it calls smooth_by_scores with
+#                 method='proportional' over every row         -- clf only
+#
+# Two things went wrong because nothing recorded that. The cheaper one is
+# compute: a rate-blind cleanup was handed an identical cleaned column three
+# times and a model was fitted on it three times -- 4 of every 12 cleanup fits
+# per (space, detector, model) per fold.
+#
+# The one that matters is the headline. `settings_scored` counts one setting
+# per (detector, flag rate, model), so a rate-blind cleanup's single setting
+# was counted three times and a rate-reading cleanup's three settings were
+# counted three times, and "won a majority in 8 of 12 settings" meant two
+# different things depending on which cleanup it was said about. A rate-blind
+# cleanup is now scored once, at the first rate, and the other two rates are
+# absent rather than duplicated.
+def reads_flag_rate(cleanup, is_clf):
+    """Does this cleanup's cleaned training set depend on the flag rate?"""
+    if cleanup in ('remove', 'knn_smooth'):
+        return True
+    if cleanup == 'downweight':
+        return False
+    if cleanup == 'label_smooth':
+        return bool(is_clf)
+    # An unknown cleanup is assumed to read it: scoring it at every rate is
+    # wasteful, scoring it at one and calling that the whole sweep is wrong.
+    return True
+
 # Which per-molecule suspicion score decides what gets flagged. Swept, because
 # "did cleaning help" is a question about the whole cleanup and the detector is
 # part of it.
@@ -267,6 +301,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'models': downstream_models,
         'cleanups': list(CLEANUPS),
         'flag_rates': flag_rates,
+        'cleanups_that_read_the_flag_rate': [
+            c for c in CLEANUPS if reads_flag_rate(c, is_clf)],
+        'flag_rate_note': (
+            'A cleanup absent from cleanups_that_read_the_flag_rate produces '
+            'the same cleaned training set at every rate, so it is scored once '
+            'at the first rate and the other rates carry '
+            'not_scored_at_this_rate rather than a duplicate of that score. '
+            'The setting counts in the summary count it once for that reason.'),
         'detectors': detectors,
         'claim_scope': (
             'No noise is injected. The uncleaned model trains on the labels as '
@@ -510,6 +552,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         acc[space][detector][rate][mname]['no_cleaning'].append(
                             base_score[mname])
                         for cleanup in CLEANUPS:
+                            # A cleanup that does not read the rate produces
+                            # one cleaned column, so it is scored at the first
+                            # rate and left absent at the others rather than
+                            # fitted on the same column twice more. See
+                            # reads_flag_rate.
+                            if (not reads_flag_rate(cleanup, is_clf)
+                                    and rate != flag_rates[0]):
+                                continue
                             # noise_fraction is the share of rows flagged. n07
                             # reads it as the share it corrupted; here nothing
                             # was corrupted, so it is only how suspicious we
@@ -545,6 +595,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     row = {'no_cleaning_mean': float(np.nanmean(base))
                            if base.size else float('nan')}
                     for cleanup in CLEANUPS:
+                        if (not reads_flag_rate(cleanup, is_clf)
+                                and rate != flag_rates[0]):
+                            # Not scored here on purpose; the number is under
+                            # the first rate and is the same number.
+                            row[cleanup] = {
+                                'not_scored_at_this_rate': True,
+                                'reason': (f'{cleanup} does not read the flag '
+                                           f'rate on this task type, so its '
+                                           f'one score is under rate '
+                                           f'{flag_rates[0]}'),
+                                'folds_won': 0, 'folds_scored': 0,
+                                'mean_gain': float('nan'), 'fold_gains': [],
+                                'spread_over_folds': float('nan'),
+                                'cleaned_mean': float('nan'),
+                            }
+                            continue
                         got = np.asarray(cell[cleanup], dtype=float)
                         wins = [_won(c, b, lower_is_better)
                                 for c, b in zip(got, base)]
@@ -603,6 +669,12 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name):
                         continue
                     for m in models:
                         cell = blk['per_model'][m][cleanup]
+                        # A rate a rate-blind cleanup was not scored at is not
+                        # a setting. Counting it would make "won a majority in
+                        # N of M settings" mean one thing for `remove` and
+                        # another for `downweight`.
+                        if cell.get('not_scored_at_this_rate'):
+                            continue
                         if cell['folds_scored'] == 0:
                             continue
                         rows.append({
