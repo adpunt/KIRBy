@@ -524,6 +524,21 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     target_r2_pf = rep_r2[best_rep][1]
     target_oof = rep_oof[best_rep]
 
+    # RANK 2, BESIDE RANK 1. Added 2026-09-18. Every arm in this file is
+    # measured against the single best base representation, so the file never
+    # says how far ahead of SECOND place the winner was. That distance is what
+    # decides whether beating rank 1 is a real result or a coin toss between
+    # two representations that score the same.
+    #
+    # 0 new model fits: rep_native and rep_r2 already hold every
+    # representation's per-fold scores, and this reads the second entry of a
+    # list that is already sorted.
+    #
+    # Nothing existing moves. "target" keeps rank 1 and every delta below is
+    # still computed against it; the rank-2 deltas are added under their own
+    # keys.
+    second_rep = ranked[1] if len(ranked) > 1 else None
+
     mout["target"] = {
         "best_rep": best_rep, "width": rep_width[best_rep],
         "native_score_mean": rep_native[best_rep][0],
@@ -532,6 +547,19 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         "r2_per_fold": [round(x, 5) for x in target_r2_pf],
         "rep_ranking_top12": [(r, round(rep_native[r][0], 5), round(rep_r2[r][0], 5),
                                rep_width[r]) for r in ranked[:12]],
+        # The runner-up, and the gap to it in both metrics. A small gap means
+        # "best base representation" is not a stable thing to be measured
+        # against on this dataset.
+        "second_rep": second_rep,
+        "second_native_score_mean": (rep_native[second_rep][0]
+                                     if second_rep else None),
+        "second_r2_score_mean": (rep_r2[second_rep][0] if second_rep else None),
+        "gap_native_rank1_minus_rank2": (
+            float(gs * (rep_native[best_rep][0] - rep_native[second_rep][0]))
+            if second_rep else None),
+        "gap_r2_rank1_minus_rank2": (
+            float(rep_r2[best_rep][0] - rep_r2[second_rep][0])
+            if second_rep else None),
     }
     mout["pools"] = {str(p): pools[p] for p in POOLS}
     mout["pool_widths"] = {rn: rep_width[rn] for rn in P}
@@ -823,6 +851,9 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # ======================================================================
     tR2 = np.array(target_r2_pf)
     tNat = np.array(target_native_pf)
+    # The rank-2 representation's per-fold scores, for the second delta pair.
+    tR2_2 = np.array(rep_r2[second_rep][1]) if second_rep else None
+    tNat_2 = np.array(rep_native[second_rep][1]) if second_rep else None
 
     def summarize(cfg):
         r2 = np.array(cfg["r2_pf"])
@@ -847,6 +878,16 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
             "native_delta_mean_vs_trainpick": float(np.mean(dNattp)),
             "nfeat": round(cfg["nfeat"], 1),
         }
+        # Against the RANK-2 base representation, added 2026-09-18. An arm that
+        # beats rank 1 on most folds but not rank 2 has not beaten "the best
+        # base representation"; it has beaten one of two that were level.
+        if tR2_2 is not None:
+            _dR2_2 = r2 - tR2_2
+            _dNat_2 = gs * (nat - tNat_2)
+            s["r2_delta_mean_vs_rank2"] = float(np.mean(_dR2_2))
+            s["r2_folds_won_vs_rank2"] = int(np.sum(_dR2_2 > 0))
+            s["native_delta_mean_vs_rank2"] = float(np.mean(_dNat_2))
+            s["native_folds_won_vs_rank2"] = int(np.sum(_dNat_2 > 0))
         for k in ("origin_counts", "pool_slots_mean", "pool_slots_std",
                   "pool", "pool_total", "candidate_pool_size", "equal_cap_N",
                   "matched_pool_total_mult", "quota_per_rep", "total_pool_width",

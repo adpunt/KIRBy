@@ -158,10 +158,34 @@ def summarise_one(dataset_name, block):
                          else max(base_means, key=base_means.get))
         else:
             best_base = None
+        # THE TOP 2 BASE REPRESENTATIONS, NOT JUST THE TOP 1. Added 2026-09-18.
+        # Each scaffold representation is reported against the single best base
+        # representation, so a scaffold representation that beats rank 1 and
+        # loses to rank 2 reads as a clean win over the base pool.
+        #
+        # 0 new model fits: `means` is read straight out of
+        # block['baselines_by_model'], which the nested CV already wrote. This
+        # ranks it here rather than calling the shared selector in _shared.py,
+        # because summarise_one is handed the serialised block and no
+        # SearchResult -- the ranking rule is the same, score first and
+        # representation name to break a tie.
+        _ordered = sorted(base_means.items(),
+                          key=lambda kv: ((kv[1] if lower_is_better else -kv[1]),
+                                          kv[0]))
+        top2_base = [{'rep': r, 'mean': m, 'rank': i + 1}
+                     for i, (r, m) in enumerate(_ordered[:2])]
         per_model[model] = {
             'scaffold': {r: means.get(r) for r in SCAFFOLD_REPS},
             'best_base_rep': best_base,
             'best_base_mean': base_means.get(best_base) if best_base else None,
+            # Rank 1 and rank 2 of the base pool, and the gap between them. A
+            # small gap means "the best base representation" is not a stable
+            # thing for a scaffold representation to be measured against.
+            'top2_base_reps': top2_base,
+            'base_rank1_minus_rank2': (
+                abs(top2_base[0]['mean'] - top2_base[1]['mean'])
+                if len(top2_base) > 1 else None),
+            'n_base_reps_ranked': len(base_means),
             'scaffold_rank': {
                 r: (1 + sum(1 for v in means.values()
                             if (v < means[r] if lower_is_better

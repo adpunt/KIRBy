@@ -47,6 +47,7 @@ from experiments._shared import (
     find_best_hybrid, create_hybrid, apply_feature_selection,
     get_best_for_downstream, get_best_search_for_downstream,
     build_honest_rescore_input, honest_rescore, hr_exclude_folds,
+    top_base_reps, top_hybrids,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
 )
 from kirby.hybrid import apply_augmentation_selection
@@ -178,6 +179,34 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                     # every pick is one fold and there is nothing left for the
                     # pool helper's whole-dataset label to describe.
                 }
+                # ADDED 2026-09-18. c03 named no base representation at all:
+                # every row above describes the winning hybrid, and the
+                # `baselines` dump at c03:362 is unranked and covers one
+                # reference model. These two keys name the top 2 base
+                # representations and the top 2 hybrids for THIS downstream
+                # model, read out of the search that is already in hand.
+                #
+                # 0 new model fits. Both read rows the search already stored.
+                #
+                # 'budget', 'score' and 'dim' above are untouched, so the
+                # correlation at c03:472 keeps reading the same rank-1 row it
+                # reads today. Nothing already in a c03 result file moves.
+                try:
+                    _base = top_base_reps(
+                        search_m, model_name, 2, require_full=False,
+                        context=f'c03 {ds_name}/{model_name}')
+                    _hyb = top_hybrids(
+                        search_m, model_name, 2, require_full=False,
+                        context=f'c03 {ds_name}/{model_name}')
+                    per_model[model_name]['top2_base_reps'] = [
+                        (e['rep'], e['score']) for e in _base['selected']]
+                    per_model[model_name]['top2_hybrids'] = [
+                        {'label': e['label'], 'score_mean': e['score_mean'],
+                         'budget': e['budget'], 'n_features': e['n_features']}
+                        for e in _hyb['selected']]
+                except Exception as _e:
+                    print(f"    {model_name}: top-2 selection unavailable "
+                          f"({type(_e).__name__}: {_e})")
                 _pm = per_model[model_name]
                 print(f"    {model_name:<10} budget={_pm['budget']} "
                       f"{metric_name_ds}={_pm['score']:.4f} "
