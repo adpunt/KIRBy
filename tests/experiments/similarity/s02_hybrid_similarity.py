@@ -44,6 +44,7 @@ from experiments._shared import (
     flatten_fold_weights, extract_top3_base_reps,
     cv_split, fold_reselection, build_fold_hybrid,
     hr_exclude_folds, MAIN_MODELS_WITH_KNN, FULL_BUDGETS,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
@@ -395,6 +396,85 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
         cell['top3_base_reps'] = [(n, s) for n, s in top3]
         cell['top3_base_reps_metric'] = cell['hybrid_search_metric']
         cell['top3_base_reps_family'] = cell['hybrid_family']
+
+    # --- Top-2 rows, added 2026-09-18 beside the top-3 above -----------------
+    # Every key written below is new. Nothing above or below it is read, moved
+    # or recomputed, and all four helpers read rows this search already stored,
+    # so the cell costs 0 new model fits.
+    #
+    # WHY IT IS HERE. extract_top3_base_reps above ranks by downstream model
+    # 'rf' whatever model the cell asked the pool for, while every SAC number in
+    # this file is a distance statistic over the features of the recipe that won
+    # for 'knn'. The ranking printed above and the hybrid scored below were
+    # therefore two different downstream models, and nothing in the result file
+    # said so. The rows below name 'knn', the model this cell's pool lookup
+    # asked for.
+    #
+    # require_full=False on every call: a stored search that never scored a
+    # downstream model returns a short list instead of raising. A raise here
+    # would lose every SAC number the cell has already computed, so each call is
+    # wrapped as well and a failure prints and leaves the key absent.
+    _sel_ctx = (f"s02/{dataset_name}/"
+                f"{'general_distance' if distance else 'general'}/"
+                f"budget={budget} features")
+    try:
+        cell['top2_base_reps'] = top_base_reps(
+            search, _SAC_MODEL_KEY, 2, require_full=False, context=_sel_ctx)
+    except Exception as e:
+        print(f"    top2_base_reps not added: {type(e).__name__}: {e}")
+    try:
+        # budget=budget, so these are the best two configurations at THIS
+        # cell's budget in features and not the best two across all eight
+        # budgets — which is a different pair, and the cell is one budget.
+        cell['top2_hybrids'] = top_hybrids(
+            search, _SAC_MODEL_KEY, 2, budget=budget, require_full=False,
+            context=_sel_ctx)
+    except Exception as e:
+        print(f"    top2_hybrids not added: {type(e).__name__}: {e}")
+    try:
+        # All six downstream models the pool search scored, not knn alone:
+        # MAIN_MODELS_WITH_KNN is what get_fitted_pool_hybrid was given above,
+        # so the models axis is reported at the width it was searched at.
+        # 6 downstream models * (2 representations + 2 hybrids) = 24 rows.
+        cell['top2_pairs_by_model'] = select_model_rep_pairs(
+            search, models=MAIN_MODELS_WITH_KNN, n_base=2, n_hybrids=2,
+            budget=budget, require_full=False, context=_sel_ctx)
+    except Exception as e:
+        print(f"    top2_pairs_by_model not added: {type(e).__name__}: {e}")
+    # The hybrid against TWO reference numbers rather than one, per downstream
+    # model: the mean of the representations that actually fed it — read off
+    # allocation_per_fold, so a representation given 0 features is excluded —
+    # and the best single representation for that model. Positive means the
+    # hybrid is better on either metric direction.
+    #
+    # hybrid= is passed rather than left to default. hybrid_deltas with
+    # hybrid=None reaches _shared.py:7432, which reads a key 'row' off the entry
+    # top_hybrids returns; top_hybrids builds that entry at _shared.py:7043-7068
+    # and it carries no 'row', so the default path raises KeyError on every
+    # call and no delta would ever be recorded. The rank-1 entry handed in below
+    # carries the two keys hybrid_deltas then reads, 'score_mean' and
+    # 'blueprint'. Both calls read stored rows: 0 new model fits.
+    #
+    # One try per downstream model, so a model with no stored hybrid does not
+    # cost the other five their entry. The keys are downstream model names; this
+    # dict is new and nothing iterates it.
+    _deltas = {}
+    for _m in MAIN_MODELS_WITH_KNN:
+        try:
+            _top1 = top_hybrids(search, _m, 1, budget=budget,
+                                require_full=False, context=_sel_ctx)
+            if not _top1['selected']:
+                print(f"    hybrid_deltas for downstream model {_m} not added: "
+                      f"{_top1['shortfall_reason']}")
+                continue
+            _deltas[_m] = hybrid_deltas(search, _m,
+                                        hybrid=_top1['selected'][0],
+                                        budget=budget, context=_sel_ctx)
+        except Exception as e:
+            print(f"    hybrid_deltas for downstream model {_m} not added: "
+                  f"{type(e).__name__}: {e}")
+    if _deltas:
+        cell['hybrid_deltas_by_model'] = _deltas
 
     # Hybrid unweighted (same for all weight methods -- only compute once)
     D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)

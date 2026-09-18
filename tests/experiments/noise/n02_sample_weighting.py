@@ -85,6 +85,20 @@ from experiments._shared import (
     extract_top3_base_reps,
 )
 
+# 2026-09-18, owner's instruction: the top 2 rows go in everywhere as an extra,
+# and nothing already reported changes. These three read rows the search already
+# stored and fit no model, so they cost 0 new model fits.
+#
+# hybrid_deltas is imported under an alias because run() binds a local list
+# named hybrid_deltas (the per-model weighted-minus-unweighted deltas it counts
+# for the summary line). A plain import would make every mention of that name
+# inside run() the local list, and the call below would raise UnboundLocalError.
+from experiments._shared import (
+    top_base_reps as shared_top_base_reps,
+    top_hybrids as shared_top_hybrids,
+    hybrid_deltas as shared_hybrid_deltas,
+)
+
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 
 
@@ -433,6 +447,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # avoid the 2026-04-21 cache-collision pattern.
     bp_by_model = {}
     aug_by_model = {}
+    # 2026-09-18: keep each model's winning SearchResult, not just the recipe
+    # object taken out of it. Without it the top-2 block at the end of run()
+    # had only the rf search to read, and it would have reported rf's stored
+    # rows under all five downstream model names.
+    search_by_model = {}
     # 2026-09-12, owner's decision: n02's pool subset includes similarity
     # hybrids, so each model's hybrid can come from either family. Record the
     # family per model — two models in the same run can land in different
@@ -458,6 +477,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         pass
                 bp_by_model[_mname] = _bp
                 aug_by_model[_mname] = _aug_cond
+                if _search is not None:
+                    search_by_model[_mname] = _search
                 # Every eligible family's own best sits beside the winner,
                 # because the pool refuses to rank the two against each other
                 # when their metric names differ.
@@ -858,6 +879,91 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"metric {pool_metric_name!r} — not the dataset's metric "
               f"({metric_name}). The predictive family's own top-3 is in "
               f"results['top3_base_reps_predictive'].")
+
+    # =========================================================================
+    # 2026-09-18, owner's instruction: the top 2 rows as an extra, and the two
+    # hybrid deltas. Added beside the existing keys. Nothing above is
+    # recomputed and no representation is dropped from anything above: the
+    # per_rep loop still scores every representation the run was given.
+    # =========================================================================
+    # What was absent. results['per_model_top3'] ranks representations by n02's
+    # OWN unweighted score over n02's folds, and results['hybrid'] carries one
+    # hybrid per downstream model whose only companion number is its own
+    # weighted-minus-unweighted delta. Neither says how that hybrid stands
+    # against the representations that fed it. A reader wanting that had to
+    # re-open the stored search by hand.
+    #
+    # Each downstream model is read out of ITS OWN search — the same one that
+    # gave that model its blueprint above. Two models in one run can land in
+    # different search families, and their stored scores are then in different
+    # units, so one search read under five model names would mix them.
+    #
+    # Every call below reads rows the search already stored. 0 new model fits.
+    # require_full=False everywhere: a downstream model the search never scored
+    # gives a short list with a shortfall_reason instead of raising and killing
+    # the run.
+    results['top2_base_reps'] = {}
+    results['top2_hybrids'] = {}
+    results['hybrid_deltas_by_model'] = {}
+    for _mname in model_factories:
+        _msearch = search_by_model.get(_mname)
+        if _msearch is None:
+            continue
+        try:
+            results['top2_base_reps'][_mname] = shared_top_base_reps(
+                _msearch, _mname, n=2, require_full=False,
+                context=f'n02/{dataset_name}/{_mname}')
+        except Exception as _exc:
+            print(f"  WARNING: top-2 base representations failed for {_mname} "
+                  f"({type(_exc).__name__}: {_exc}); "
+                  f"results['top2_base_reps'] carries no entry for it.")
+        # No budget= filter. n02 fetched its searches with budget=None, so the
+        # stored rows span several budgets and filtering to one would report
+        # the top 2 of a slice while calling it the top 2. Each selected entry
+        # carries its own 'budget' field.
+        _top2_hyb = None
+        try:
+            _top2_hyb = shared_top_hybrids(
+                _msearch, _mname, n=2, require_full=False,
+                context=f'n02/{dataset_name}/{_mname}')
+            results['top2_hybrids'][_mname] = _top2_hyb
+        except Exception as _exc:
+            print(f"  WARNING: top-2 hybrids failed for {_mname} "
+                  f"({type(_exc).__name__}: {_exc}); "
+                  f"results['top2_hybrids'] carries no entry for it.")
+        # The hybrid is passed in by hand. Called with hybrid=None,
+        # hybrid_deltas reads _picked['selected'][0]['row'] (_shared.py:7432),
+        # and the entry top_hybrids builds (_shared.py:7043) has no 'row' key,
+        # so that path raises KeyError before it reaches either delta. The
+        # entry itself carries 'score_mean' and 'blueprint', which is what
+        # hybrid_deltas reads off the hybrid.
+        try:
+            if _top2_hyb and _top2_hyb['selected']:
+                results['hybrid_deltas_by_model'][_mname] = shared_hybrid_deltas(
+                    _msearch, _mname, hybrid=_top2_hyb['selected'][0],
+                    context=f'n02/{dataset_name}/{_mname}')
+        except Exception as _exc:
+            print(f"  WARNING: hybrid deltas failed for {_mname} "
+                  f"({type(_exc).__name__}: {_exc}); "
+                  f"results['hybrid_deltas_by_model'] carries no entry for it.")
+    # delta_vs_source_mean is the hybrid against the mean of the base
+    # representations that actually fed it, read off Blueprint.
+    # allocation_per_fold so a representation given 0 features is left out.
+    # delta_vs_best_rep is the hybrid against the single best base
+    # representation for that downstream model. Positive = the hybrid is
+    # better, whichever way the metric runs. Both are in the units the search
+    # stored, which for a model whose recipe came from the similarity family is
+    # not the dataset's metric — results['pool_selection']['by_model'] says
+    # which model is which.
+    for _mname, _d in results['hybrid_deltas_by_model'].items():
+        # delta_vs_best_rep is None when no base representation carries a score
+        # for that downstream model; hybrid_deltas says so in its 'notes'.
+        _vb = _d['delta_vs_best_rep']
+        print(f"    {_mname}: hybrid vs mean of its "
+              f"{_d['n_source_reps']} source representations "
+              f"{_d['delta_vs_source_mean']:+.4f}, vs best single "
+              f"representation ({_d['best_rep']}) "
+              + (f"{_vb:+.4f}" if _vb is not None else "not defined"))
 
     return make_structured_output(
         experiment_id='n02',

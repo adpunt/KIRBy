@@ -121,6 +121,9 @@ from experiments._shared import (
     get_best_search_for_downstream,
     fold_reselection, classify_rep_tier,
     INTERNAL_EVALUATORS,
+    # Added 2026-09-18 for the top-2 block at the end of run(). All four read
+    # rows the search already stored: 0 new model fits.
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from kirby.find_best_hybrid import (
     find_best_hybrid, nested_cv_cache_namespace, DEFAULT_N_FOLDS,
@@ -1391,6 +1394,72 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("    This pipeline precomputes reps, i.e. the BATCH regime.")
 
     top3 = extract_top3_base_reps(last_search) if last_search is not None else []
+
+    # ---- Top 2 per downstream model, and the hybrid's two deltas. ----------
+    # Added 2026-09-18. 'top3_base_reps' above ranks representations under one
+    # downstream model only: extract_top3_base_reps defaults to 'rf'. Every arm
+    # in `results` is scored under each of the models this run was handed, so
+    # that one ranking named a representation chosen by a model the arm beside
+    # it was not using. These four keys name, per downstream model, the top 2
+    # base representations, the top 2 hybrid configurations, the 2-and-2 grid as
+    # flat rows, and the hybrid's two reference deltas.
+    #
+    # 0 new model fits. All four helpers read rows `last_search` already holds
+    # in search.baselines and search.all_results.
+    #
+    # `last_search` is ONE search object. Under recipe_search='per_fold' it is
+    # whichever outer fold's search assigned it last, which is the same object
+    # 'top3_base_reps' is read from — so these keys describe that fold's search,
+    # not all n_out of them. 'top2_read_from_search' records which.
+    #
+    # Nothing above is touched: 'results', 'head_to_head', 'break_even',
+    # 'fold_reselection', 'search_cost_model_fits' and 'top3_base_reps' hold the
+    # same values they held before this block existed.
+    top2_base_reps, top2_hybrids = {}, {}
+    hybrid_deltas_by_model, top2_pairs_by_model = {}, []
+    if last_search is not None:
+        for _m in models:
+            _ctx = f'c11 {dataset_name}/{_m}'
+            try:
+                # require_full=False: a downstream model this search never
+                # scored comes back as a short list instead of raising, which
+                # would take the whole c11 run down at the last line.
+                _b = top_base_reps(last_search, _m, 2, require_full=False,
+                                   context=_ctx)
+                top2_base_reps[_m] = [(e['rep'], e['score'])
+                                      for e in _b['selected']]
+                _h = top_hybrids(last_search, _m, 2, require_full=False,
+                                 context=_ctx)
+                # Scalars only. The 'blueprint' each selected row carries is a
+                # Blueprint object; the recipe it holds is already named by
+                # 'label', and which representations actually fed the hybrid is
+                # reported by hybrid_deltas under 'source_reps'.
+                top2_hybrids[_m] = [
+                    {'label': e['label'], 'score_mean': e['score_mean'],
+                     'budget': e['budget'], 'n_features': e['n_features'],
+                     'rep_count': e['rep_count'],
+                     'n_folds_scored': e['n_folds_scored']}
+                    for e in _h['selected']]
+                if _h['selected']:
+                    # hybrid= is passed rather than left None: the None branch
+                    # of hybrid_deltas reads ['row'] off a top_hybrids entry and
+                    # top_hybrids builds no 'row' key, so it raises KeyError.
+                    # The rank-1 entry carries 'score_mean' and 'blueprint',
+                    # which is what hybrid_deltas reads.
+                    hybrid_deltas_by_model[_m] = hybrid_deltas(
+                        last_search, _m, hybrid=_h['selected'][0], context=_ctx)
+            except Exception as _e:
+                print(f"    {_m}: top-2 / hybrid deltas unavailable "
+                      f"({type(_e).__name__}: {_e})")
+        try:
+            _sel = select_model_rep_pairs(
+                last_search, models=list(models), n_base=2, n_hybrids=2,
+                require_full=False, context=f'c11 {dataset_name}')
+            top2_pairs_by_model = _sel['pairs']
+        except Exception as _e:
+            print(f"    top-2 pair grid unavailable "
+                  f"({type(_e).__name__}: {_e})")
+
     return {
         'results': results,
         'n_reps': n_reps,
@@ -1401,6 +1470,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'metric_name': metric_name,
         'n_inner_folds': n_in,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # Added 2026-09-18, beside 'top3_base_reps' and not in place of it.
+        # Keyed by downstream model name. A downstream model this search never
+        # scored gets an empty list here and no entry at all in
+        # 'hybrid_deltas_by_model'. 0 new model fits.
+        'top2_base_reps': top2_base_reps,
+        'top2_hybrids': top2_hybrids,
+        # One flat row per (downstream model, slot): 5 models * (2 base
+        # representations + 2 hybrids) = 20 rows when every slot is filled.
+        'top2_pairs_by_model': top2_pairs_by_model,
+        # Two deltas per downstream model, both POSITIVE when the hybrid wins:
+        # 'delta_vs_source_mean' against the mean of the base representations
+        # that were given a non-zero number of features, 'delta_vs_best_rep'
+        # against the single best base representation for that model.
+        'hybrid_deltas_by_model': hybrid_deltas_by_model,
+        # Which search the four keys above were read from: under
+        # recipe_search='per_fold' that is one outer fold's search, not all of
+        # them. The same object 'top3_base_reps' is read from.
+        'top2_read_from_search': ("one outer fold's search"
+                                  if recipe_search == 'per_fold'
+                                  else 'the whole-dataset search'),
         # Existing contract - hybrid vs best single rep. UNCHANGED.
         'fold_reselection': {
             'lower_is_better': bool(lower_is_better),

@@ -32,6 +32,7 @@ from experiments._shared import (
     build_fold_hybrid, get_precomputed_search, get_best_for_downstream,
     get_best_search_for_downstream,
     build_fold_reselection_input,
+    top_base_reps, top_hybrids, hybrid_deltas,
 )
 
 
@@ -179,6 +180,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # block['candidates_by_model'], block['baselines_by_model'],
         # block['lower_is_better']).
         'fold_reselection_by_budget': {},
+        # --- Added 2026-09-18, beside the five arms; nothing above changed. ---
+        # This file reported one number per arm (depth_1, depth_2, depth_3,
+        # uniform_all, natural) and nothing about the individual
+        # representations. So a depth_1 arm that drew its features from a weak
+        # representation and one that drew them from the best of the N in `reps`
+        # produced the same-looking row, and rep_ranking_full_data above ranks by
+        # summed lightgbm importance on the whole dataset, which is not a score
+        # in the dataset's metric. These three keep the top 2 by MEASURED score.
+        #
+        # Keyed by budget, because this experiment runs one search per budget
+        # and the winner can differ between budgets.
+        #
+        # They live at the top level and NOT inside per_budget[budget]:
+        # firstpass_notready.py:686 reads per_budget and :691-693 treats every
+        # key inside per_budget[budget] as an arm carrying a 'score', so a key
+        # added there would be read as a sixth arm and enter the depth-vs-
+        # diversity count.
+        #
+        # All three read rows the search already stored. 0 new model fits,
+        # 0 new folds, 0 new representations built.
+        # Top 2 base representations by the search's own mean over its folds,
+        # downstream model 'rf'. {budget: top_base_reps(...) output}.
+        'top2_base_reps_by_budget': {},
+        # Top 2 hybrid recipes at that budget, downstream model 'rf'.
+        # {budget: top_hybrids(...) output}.
+        'top2_hybrids_by_budget': {},
+        # The two reference numbers for the top hybrid at that budget:
+        # delta_vs_source_mean and delta_vs_best_rep. {budget: hybrid_deltas(...)}.
+        'hybrid_deltas_by_budget': {},
     }
 
     # Per-budget blueprint discovery via pool helper (best (tier, aug_cond)
@@ -247,6 +277,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     build_fold_reselection_input(search))
             except Exception as e:
                 print(f"  WARNING: fold_reselection build failed: {e}")
+
+        # --- Top 2 rows and the two deltas (see the keys declared above) ---
+        # downstream_model='rf': every arm below fits a RandomForest (_RF), and
+        # the search above was asked for 'rf'. A top 2 taken under another
+        # downstream model would not be on the same footing as the five arm
+        # scores this file prints.
+        # require_full=False: a search that scored fewer than 2 representations
+        # or fewer than 2 recipes for 'rf' returns a short list with a
+        # shortfall_reason instead of raising, which would otherwise end the
+        # budget sweep partway through and leave the remaining budgets unrun.
+        if search is not None:
+            _top_hyb = None
+            try:
+                results['top2_base_reps_by_budget'][budget] = convert_numpy(
+                    top_base_reps(search, 'rf', 2, require_full=False,
+                                  context=f'c18 {dataset_name} budget={budget}'))
+            except Exception as e:
+                print(f"    WARNING: top 2 base representations failed: {e}")
+            try:
+                _top_hyb = top_hybrids(
+                    search, 'rf', 2, budget=budget, require_full=False,
+                    context=f'c18 {dataset_name} budget={budget}')
+                results['top2_hybrids_by_budget'][budget] = convert_numpy(_top_hyb)
+            except Exception as e:
+                print(f"    WARNING: top 2 hybrid recipes failed: {e}")
+            try:
+                # `hybrid=` is passed rather than left to default. With
+                # hybrid=None, hybrid_deltas picks its own top recipe and reads
+                # ['row'] off the selected entry (_shared.py:7432), and the
+                # entry top_hybrids builds (_shared.py:7043-7066) carries no
+                # 'row' key, so that path raises KeyError. The entry itself
+                # carries score_mean and blueprint, which is everything the two
+                # deltas are computed from.
+                if _top_hyb is not None and _top_hyb['selected']:
+                    results['hybrid_deltas_by_budget'][budget] = convert_numpy(
+                        hybrid_deltas(
+                            search, 'rf', hybrid=_top_hyb['selected'][0],
+                            budget=budget,
+                            context=f'c18 {dataset_name} budget={budget}'))
+            except Exception as e:
+                print(f"    WARNING: the two hybrid deltas failed: {e}")
 
         fold_scores = {}  # {condition_name: [per_fold_scores]}
 

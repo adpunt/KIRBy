@@ -114,6 +114,10 @@ from experiments._shared import (
     get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
     extract_top3_base_reps, DOWNSTREAM_MODELS_NOISE,
     fold_reselection, build_fold_reselection_input,
+    # 2026-09-18, owner's instruction: the top 2 rows go in everywhere as an
+    # extra, and nothing already reported changes. All three read rows the
+    # per-model searches already stored and fit no model: 0 new model fits.
+    top_base_reps, top_hybrids, hybrid_deltas,
 )
 from kirby.utils.noise_estimation import (
     ActivityCliffAwareEstimator, GaussianProcessEstimator,
@@ -1179,6 +1183,94 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         {f for _folds in reselection_block['exclude_folds_by_model'].values()
          for f in _folds})
     results['fold_reselection'] = reselection_block
+
+    # =========================================================================
+    # 2026-09-18, owner's instruction: the top 2 rows as an extra, and the two
+    # hybrid deltas. Added beside the existing keys. Nothing above is
+    # recomputed, and no representation and no downstream model is dropped from
+    # anything above: rank_models_and_reps still fits every downstream model on
+    # every representation, and the four cleanups that fit no model still run on
+    # every representation.
+    # =========================================================================
+    # What was absent. results['model_rep_ranking'] ranks representations by a
+    # score n07 measured itself on the uncorrupted activity values, and
+    # results['fold_reselection'] hands a reader the raw per-fold rows to
+    # re-pick from. Neither one states, per downstream model, which two
+    # representations and which two hybrid configurations the stored search
+    # ranked first, or what the chosen hybrid is worth against them. A reader
+    # wanting that had to re-open the search by hand.
+    #
+    # Read out of search_by_model — each downstream model's OWN search, the one
+    # that gave it its blueprint. Two models here can draw from different search
+    # families, and their stored scores are then in different units;
+    # reselection_block['metric_by_model'] says which model is in which.
+    #
+    # No width ceiling is applied to this ranking. The
+    # max_cleanup_features ceiling above governs which representations may carry
+    # the three model-fitting cleanups, not which the search ranked first, so a
+    # representation barred there still appears here with its own feature count
+    # in 'dimension'.
+    #
+    # No budget= filter either. get_best_search_for_downstream was called above
+    # with this run's budget, but the search it hands back stores rows at
+    # several budgets, and filtering to one would report the top 2 of a slice
+    # while calling it the top 2. Each selected hybrid entry carries its own
+    # 'budget', in features.
+    #
+    # require_full=False everywhere: a downstream model the search never scored
+    # yields a short list with a shortfall_reason instead of raising and killing
+    # the run.
+    results['top2_base_reps'] = {}
+    results['top2_hybrids'] = {}
+    results['hybrid_deltas_by_model'] = {}
+    for _m, _s in search_by_model.items():
+        _ctx = f'n07/{dataset_name}/{_m}'
+        try:
+            results['top2_base_reps'][_m] = top_base_reps(
+                _s, _m, n=2, require_full=False, context=_ctx)
+        except Exception as _exc:
+            print(f"  WARNING: top-2 base representations failed for {_m} "
+                  f"({type(_exc).__name__}: {_exc}); "
+                  f"results['top2_base_reps'] carries no entry for it.")
+        _top2_hyb = None
+        try:
+            _top2_hyb = top_hybrids(_s, _m, n=2, require_full=False,
+                                    context=_ctx)
+            results['top2_hybrids'][_m] = _top2_hyb
+        except Exception as _exc:
+            print(f"  WARNING: top-2 hybrids failed for {_m} "
+                  f"({type(_exc).__name__}: {_exc}); "
+                  f"results['top2_hybrids'] carries no entry for it.")
+        # The hybrid is passed in by hand. Called with hybrid=None,
+        # hybrid_deltas reads _picked['selected'][0]['row'] (_shared.py:7432),
+        # and the entry top_hybrids builds (_shared.py:7043) has no 'row' key,
+        # so that path raises KeyError before it reaches either delta. That
+        # entry does carry 'score_mean' and 'blueprint', which is what
+        # hybrid_deltas reads off the hybrid it is given.
+        try:
+            if _top2_hyb and _top2_hyb['selected']:
+                results['hybrid_deltas_by_model'][_m] = hybrid_deltas(
+                    _s, _m, hybrid=_top2_hyb['selected'][0], context=_ctx)
+        except Exception as _exc:
+            print(f"  WARNING: hybrid deltas failed for {_m} "
+                  f"({type(_exc).__name__}: {_exc}); "
+                  f"results['hybrid_deltas_by_model'] carries no entry for it.")
+    # delta_vs_source_mean is the hybrid against the mean of the base
+    # representations that actually fed it, read off
+    # Blueprint.allocation_per_fold so a representation given 0 features is
+    # left out. delta_vs_best_rep is the hybrid against the single best base
+    # representation for that downstream model. Positive = the hybrid is
+    # better, whichever way the metric runs. Both are in the units the search
+    # stored, which is not the dataset's metric for a model listed in
+    # reselection_block['models_not_in_dataset_metric'].
+    for _m, _d in results['hybrid_deltas_by_model'].items():
+        # delta_vs_best_rep is None when no base representation carries a score
+        # for that downstream model; hybrid_deltas says so in its 'notes'.
+        _vb = _d['delta_vs_best_rep']
+        print(f"    {_m}: hybrid vs mean of its {_d['n_source_reps']} source "
+              f"representations {_d['delta_vs_source_mean']:+.4f}, vs best "
+              f"single representation ({_d['best_rep']}) "
+              + (f"{_vb:+.4f}" if _vb is not None else "not defined"))
 
     # --- Hybrid conditions: per-model ---
     # Loop order is (model × fold × seed × strategy) so the per-(fold, seed)

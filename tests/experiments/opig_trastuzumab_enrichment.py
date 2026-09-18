@@ -67,6 +67,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
     fold_reselection, build_fold_reselection_input, hr_exclude_folds,
+    select_model_rep_pairs, top_hybrids, hybrid_deltas,
 )
 
 # =============================================================================
@@ -635,6 +636,14 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     hybrid_search_meta = None
     reselection_block = None
     reselection_result = None
+    # Two additions read off the SAME SearchResult the block below builds, both
+    # from rows the search already stored: 0 new model fits for either. Until
+    # now the only ranking this file kept was extract_top3_base_reps, which
+    # reports 3 representations ranked by one downstream model (rf) while the
+    # supervised table below scores every representation on all 5 of
+    # MODELS_LIST, so 4 of the 5 models had no ranking recorded at all.
+    top2_pairs_by_model = None
+    hybrid_deltas_by_model = None
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -688,6 +697,77 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
                       f"best_single={r['best_single_reselected']:.4f}  "
                       f"delta_mean_of_folds={r['delta_mean_of_folds']:+.4f} "
                       f"over {r['n_paired_folds']} paired folds{flag}")
+
+            _ctx = 'opig_trastuzumab_enrichment/tz_her2_binary'
+
+            # Top 2 base representations and top 2 hybrid configurations for
+            # each of the 5 downstream models in MODELS_LIST, beside the table
+            # below and not in place of it — every representation is still
+            # scored on every model. require_full=False because this search ran
+            # with downstream_model='rf': a model it never scored returns a
+            # short list here instead of raising and taking the hybrid block
+            # with it.
+            try:
+                _pairs = select_model_rep_pairs(
+                    search, models=MODELS_LIST, n_base=2, n_hybrids=2,
+                    require_full=False, context=_ctx)
+                # Blueprint carries the per-fold selected feature indices, one
+                # array per representation per fold. Dropped here so the saved
+                # JSON holds each configuration's identity and score and not
+                # those index arrays.
+                for _blk in _pairs['per_model'].values():
+                    for _e in _blk['hybrid']['selected']:
+                        _e.pop('blueprint', None)
+                top2_pairs_by_model = _pairs
+                print(f"  top-2 grid: {_pairs['n_pairs']} of "
+                      f"{_pairs['n_pairs_possible']} rows "
+                      f"({len(MODELS_LIST)} downstream models × "
+                      f"(2 base representations + 2 hybrid configurations)), "
+                      f"{_pairs['n_distinct_units']} distinct things to build")
+            except Exception as e:
+                print(f"  top-2 grid failed: {e}")
+
+            # Each model's best hybrid against TWO reference numbers rather
+            # than one: the mean AUC of the base representations the budget
+            # actually gave features to (a representation allocated 0 features
+            # is excluded), and the AUC of the best single base representation
+            # for that model. Positive = the hybrid is higher. Both are the
+            # search's own mean over its search folds, so they are selection-
+            # optimistic in the same way search_best_cv_auc below is; the
+            # held-out comparison is reselected_comparison.
+            #
+            # hybrid= is passed explicitly. Called as hybrid_deltas(search,
+            # model) the function reads ['row'] off a top_hybrids entry
+            # (_shared.py:7432) and top_hybrids writes no 'row' key into that
+            # entry (_shared.py:7048-7066) — run here 2026-09-18 against a stub
+            # search, it raised KeyError: 'row'. The entry itself carries the
+            # score_mean and blueprint the function reads.
+            _deltas = {}
+            for _mn in MODELS_LIST:
+                try:
+                    _top1 = top_hybrids(search, _mn, 1, require_full=False,
+                                        context=_ctx)
+                    if not _top1['selected']:
+                        continue
+                    _deltas[_mn] = hybrid_deltas(
+                        search, _mn, hybrid=_top1['selected'][0], context=_ctx)
+                except Exception as e:
+                    print(f"  hybrid deltas ({_mn}) failed: {e}")
+            if _deltas:
+                hybrid_deltas_by_model = _deltas
+                for _mn, _d in sorted(_deltas.items()):
+                    _br = _d['best_rep']
+                    _brs = ('—' if _d['best_rep_score'] is None
+                            else f"{_d['best_rep_score']:.4f}")
+                    _dbr = ('—' if _d['delta_vs_best_rep'] is None
+                            else f"{_d['delta_vs_best_rep']:+.4f}")
+                    print(f"  deltas × {_mn:8s} hybrid={_d['hybrid_score']:.4f} auc"
+                          f"  vs mean of the {_d['n_source_reps']} "
+                          f"representations that fed it "
+                          f"({_d['source_mean']:.4f} auc): "
+                          f"{_d['delta_vs_source_mean']:+.4f}"
+                          f"  vs best single representation {_br} "
+                          f"({_brs} auc): {_dbr}")
         if _meta is not None and _meta.get('score_mean') is not None:
             hybrid_search_meta = {
                 # The search's own winning mean, kept ONLY as a search
@@ -818,6 +898,15 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         # binder enrichment, one block per top fraction. This is the file's
         # question 3; reselected_comparison above is in AUROC and does not answer it.
         'enrichment_comparison': _paired_enrichment_delta(results),
+        # Top 2 base representations + top 2 hybrid configurations per
+        # downstream model, keyed under 'per_model'. New key, nothing above
+        # reads it, and the supervised table is untouched.
+        'top2_pairs_by_model': top2_pairs_by_model,
+        # One entry per downstream model, each holding delta_vs_source_mean and
+        # delta_vs_best_rep in auc. Keys are downstream model names only — no
+        # note or count key is mixed in, so anything that loops this dict loops
+        # models.
+        'hybrid_deltas_by_model': hybrid_deltas_by_model,
     }
 
 

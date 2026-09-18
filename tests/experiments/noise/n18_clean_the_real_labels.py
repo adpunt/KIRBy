@@ -95,6 +95,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 # One per-fold hybrid build, shared with n17 and n19. It lived in n19 until
 # 2026-09-17.
@@ -164,6 +165,57 @@ def _won(cleaned, base, lower_is_better):
     if not (np.isfinite(cleaned) and np.isfinite(base)):
         return None
     return bool(cleaned < base) if lower_is_better else bool(cleaned > base)
+
+
+def _drop_blueprint(obj):
+    """Strip the pickled Blueprint out of the top-2 blocks before they are saved.
+
+    It does serialise -- convert_numpy routes it through Blueprint.to_dict
+    (find_best_hybrid.py:1438) -- but it carries kept_augmentations, which is
+    one list of feature indices per fold per donor representation, and every
+    recipe field on it (allocation method, importance method, budget, internal
+    evaluator, step size, representation count) is already a key of the entry
+    it hangs off. Which representations actually fed a configuration is
+    recorded by hybrid_deltas under 'source_reps'.
+    """
+    if isinstance(obj, dict):
+        return {k: _drop_blueprint(v) for k, v in obj.items()
+                if k != 'blueprint'}
+    if isinstance(obj, list):
+        return [_drop_blueprint(v) for v in obj]
+    return obj
+
+
+def _print_deltas(deltas_by_model, models, metric_name):
+    """The top configuration against its two reference numbers, per model.
+
+    Two numbers and not one, because they answer different questions. The first
+    is the configuration against the MEAN of the representations the budget
+    actually gave features to, read off Blueprint.allocation_per_fold, so a
+    representation given 0 features is not in that mean. The second is it
+    against the single best base representation for the same downstream model.
+    A configuration can win the first and lose the second.
+    """
+    if not deltas_by_model:
+        return
+    print(f"\n  TOP HYBRID vs TWO REFERENCE NUMBERS ({metric_name}, "
+          f"+ means the hybrid won):")
+    for m in models:
+        hd = deltas_by_model.get(m)
+        if not hd:
+            continue
+        dsm, dbr = hd.get('delta_vs_source_mean'), hd.get('delta_vs_best_rep')
+        src_mean, n_src = hd.get('source_mean'), hd.get('n_source_reps')
+        best_rep, best_sc = hd.get('best_rep'), hd.get('best_rep_score')
+        left = (f"vs the mean of the {n_src} representations that fed it "
+                f"({src_mean:.4f}): {dsm:+.4f}"
+                if dsm is not None and src_mean is not None
+                else "vs the mean of its source representations: --")
+        right = (f"vs the best single representation {best_rep} "
+                 f"({best_sc:.4f}): {dbr:+.4f}"
+                 if dbr is not None and best_sc is not None
+                 else "vs the best single representation: --")
+        print(f"    {m}: {left}; {right}")
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -255,6 +307,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # a representation set, an allocation method, an importance method, a budget
     # and an internal evaluator -- and the features are rebuilt per fold below.
     bp = None
+    # Bound before the try so the top-2 block below can test it. Until
+    # 2026-09-18 nothing read `search` and an exception here left the name
+    # unbound; reading it would have raised UnboundLocalError on the one path
+    # this file is built to survive -- a dataset the precompute never covered.
+    search = None
     try:
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,
@@ -301,6 +358,78 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"budget {results['hybrid_budget']}, searched under objective "
               f"{meta['objective']} (pool subset {meta['pool_subset']})")
     results['spaces_run'] = list(spaces)
+
+    # ── What each downstream model would have picked for itself ──
+    # Added 2026-09-18, ADDITIVE. Nothing above or below moves: `base_rep` is
+    # still the first representation by name, `spaces_run` is still the same 2
+    # spaces, the hybrid is still the 1 recipe fetched for
+    # downstream_models[0], and every fold-win count in 'per_space' is still
+    # measured in those 2 spaces. These 4 keys sit beside them.
+    #
+    # What was absent without them: this file scores 5 downstream models on 1
+    # base representation and 1 hybrid recipe, and the result file recorded
+    # neither which representations nor which configurations the other 4
+    # downstream models rank highest. A reader could not tell whether a model
+    # lost because the cleanup did nothing or because it was scored on another
+    # model's recipe.
+    #
+    # 0 new model fits. All four read rows the search already stored:
+    # search.baselines for the representations, search.all_results for the
+    # configurations.
+    results['top2_base_reps'] = {}
+    results['top2_hybrids'] = {}
+    results['top2_pairs_by_model'] = {}
+    results['hybrid_deltas_by_model'] = {}
+    if search is None:
+        results['top2_unavailable_reason'] = (
+            'the pool returned no SearchResult, so there are no stored rows to '
+            'rank. Every cleanup number in this file stands.')
+    else:
+        for _m in downstream_models:
+            # require_full=False: a downstream model this search never scored
+            # comes back a short list carrying its own shortfall_reason,
+            # instead of raising and losing every cleanup number below it.
+            try:
+                results['top2_base_reps'][_m] = top_base_reps(
+                    search, _m, 2, require_full=False)
+            except Exception as _e:
+                print(f"  top-2 base representations for {_m} unavailable: "
+                      f"{type(_e).__name__}: {_e}")
+            _th = None
+            try:
+                _th = top_hybrids(search, _m, 2, require_full=False)
+                results['top2_hybrids'][_m] = _drop_blueprint(_th)
+            except Exception as _e:
+                print(f"  top-2 hybrid configurations for {_m} unavailable: "
+                      f"{type(_e).__name__}: {_e}")
+            # The rank-1 configuration is handed over explicitly. Called with
+            # hybrid=None, hybrid_deltas picks its own and reads it as
+            # _picked['selected'][0]['row'] (_shared.py:7432); a selected entry
+            # from top_hybrids carries no 'row' key, so that path raises
+            # KeyError('row'). Read in _shared.py this session. The entry does
+            # carry 'score_mean' and 'blueprint', which is all hybrid_deltas
+            # reads off the configuration it is given.
+            if _th and _th['selected']:
+                try:
+                    results['hybrid_deltas_by_model'][_m] = hybrid_deltas(
+                        search, _m, hybrid=_th['selected'][0])
+                except Exception as _e:
+                    print(f"  hybrid deltas for {_m} unavailable: "
+                          f"{type(_e).__name__}: {_e}")
+        # The same grid in one block: per downstream model, 2 base
+        # representations and 2 hybrid configurations, plus 'n_distinct_units'
+        # -- how many separate things would have to be BUILT once one
+        # representation picked by three downstream models is counted once.
+        try:
+            results['top2_pairs_by_model'] = _drop_blueprint(
+                select_model_rep_pairs(search, models=list(downstream_models),
+                                       n_base=2, n_hybrids=2,
+                                       require_full=False))
+        except Exception as _e:
+            print(f"  top-2 model-and-representation grid unavailable: "
+                  f"{type(_e).__name__}: {_e}")
+        _print_deltas(results['hybrid_deltas_by_model'], downstream_models,
+                      metric_name)
 
     # {space: {detector: {flag_rate: {model: {cleanup: [per-fold score]}}}}}
     acc = {s: {d: {r: {m: {c: [] for c in ('no_cleaning',) + CLEANUPS}

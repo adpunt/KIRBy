@@ -119,6 +119,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
 from experiments.noise.n17_replicate_removal import (
@@ -405,6 +406,57 @@ def _fit_and_score(factory, X_tr, y_tr, X_va, y_va, metric_fn, weights):
         return None, f'{type(exc).__name__}: {exc}'
 
 
+def _drop_blueprint(obj):
+    """Strip the pickled Blueprint out of the top-2 blocks before they are saved.
+
+    It does serialise -- convert_numpy routes it through Blueprint.to_dict
+    (find_best_hybrid.py:1438) -- but it carries kept_augmentations, which is
+    one list of feature indices per fold per donor representation, and every
+    recipe field on it (allocation method, importance method, budget, internal
+    evaluator, step size, representation count) is already a key of the entry
+    it hangs off. Which representations actually fed a configuration is
+    recorded by hybrid_deltas under 'source_reps'.
+    """
+    if isinstance(obj, dict):
+        return {k: _drop_blueprint(v) for k, v in obj.items()
+                if k != 'blueprint'}
+    if isinstance(obj, list):
+        return [_drop_blueprint(v) for v in obj]
+    return obj
+
+
+def _print_deltas(deltas_by_model, models, metric_name):
+    """The top configuration against its two reference numbers, per model.
+
+    Two numbers and not one, because they answer different questions. The first
+    is the configuration against the MEAN of the representations the budget
+    actually gave features to, read off Blueprint.allocation_per_fold, so a
+    representation given 0 features is not in that mean. The second is it
+    against the single best base representation for the same downstream model.
+    A configuration can win the first and lose the second.
+    """
+    if not deltas_by_model:
+        return
+    print(f"\n  TOP HYBRID vs TWO REFERENCE NUMBERS ({metric_name}, "
+          f"+ means the hybrid won):")
+    for m in models:
+        hd = deltas_by_model.get(m)
+        if not hd:
+            continue
+        dsm, dbr = hd.get('delta_vs_source_mean'), hd.get('delta_vs_best_rep')
+        src_mean, n_src = hd.get('source_mean'), hd.get('n_source_reps')
+        best_rep, best_sc = hd.get('best_rep'), hd.get('best_rep_score')
+        left = (f"vs the mean of the {n_src} representations that fed it "
+                f"({src_mean:.4f}): {dsm:+.4f}"
+                if dsm is not None and src_mean is not None
+                else "vs the mean of its source representations: --")
+        right = (f"vs the best single representation {best_rep} "
+                 f"({best_sc:.4f}): {dbr:+.4f}"
+                 if dbr is not None and best_sc is not None
+                 else "vs the best single representation: --")
+        print(f"    {m}: {left}; {right}")
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N19: the measurement count and the measurement spread as weight and as shrinkage."""
     print("\n" + "=" * 70)
@@ -516,6 +568,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # entity rows below.
     augmentations = data.get('augmentations')
     bp = None
+    # Bound before the try so the top-2 block below can test it. Until
+    # 2026-09-18 nothing read `search` and an exception here left the name
+    # unbound; reading it would have raised UnboundLocalError on the one path
+    # this file is built to survive -- a dataset the precompute never covered.
+    search = None
     try:
         search, meta = get_best_search_for_downstream(
             reps, labels, data.get('groups'),
@@ -569,6 +626,84 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     base_rep_name = kwargs.get('base_rep') or sorted(reps)[0]
     results['base_rep'] = base_rep_name
     print(f"  base representation: {base_rep_name}")
+
+    # ── What each downstream model would have picked for itself ──
+    # Added 2026-09-18, ADDITIVE. Nothing above or below moves: `base_rep` is
+    # still the first representation by name, `spaces_run` is still the same 2
+    # spaces, the hybrid is still the 1 recipe fetched for
+    # downstream_models[0], and every paired fold count, mean gain and spread
+    # in 'per_draw' and 'summary' is still measured in those 2 spaces. These 4
+    # keys sit beside them.
+    #
+    # What was absent without them: this file scores up to 5 downstream models
+    # on 1 base representation and 1 hybrid recipe, and the result file
+    # recorded neither which representations nor which configurations the other
+    # 4 rank highest. 'gain_by_space' compares a weighting's gain in the base
+    # representation against its gain in the hybrid, and for 4 of the 5 models
+    # that hybrid was chosen for a different model.
+    #
+    # 0 new model fits. All four read rows the search already stored:
+    # search.baselines for the representations, search.all_results for the
+    # configurations.
+    #
+    # They go at the TOP level of `results`, never inside 'per_draw', which is
+    # keyed by str(draw) and read back by _fold_scores (:773) as
+    # results['per_draw'].values() -- a non-draw entry there would be walked as
+    # a draw block.
+    results['top2_base_reps'] = {}
+    results['top2_hybrids'] = {}
+    results['top2_pairs_by_model'] = {}
+    results['hybrid_deltas_by_model'] = {}
+    if search is None:
+        results['top2_unavailable_reason'] = (
+            'the pool returned no SearchResult, so there are no stored rows to '
+            'rank. Every condition number in this file stands.')
+    else:
+        for _m in downstream_models:
+            # require_full=False: a downstream model this search never scored
+            # comes back a short list carrying its own shortfall_reason,
+            # instead of raising before the first draw has run.
+            try:
+                results['top2_base_reps'][_m] = top_base_reps(
+                    search, _m, 2, require_full=False)
+            except Exception as _e:
+                print(f"  top-2 base representations for {_m} unavailable: "
+                      f"{type(_e).__name__}: {_e}")
+            _th = None
+            try:
+                _th = top_hybrids(search, _m, 2, require_full=False)
+                results['top2_hybrids'][_m] = _drop_blueprint(_th)
+            except Exception as _e:
+                print(f"  top-2 hybrid configurations for {_m} unavailable: "
+                      f"{type(_e).__name__}: {_e}")
+            # The rank-1 configuration is handed over explicitly. Called with
+            # hybrid=None, hybrid_deltas picks its own and reads it as
+            # _picked['selected'][0]['row'] (_shared.py:7432); a selected entry
+            # from top_hybrids carries no 'row' key, so that path raises
+            # KeyError('row'). Read in _shared.py this session. The entry does
+            # carry 'score_mean' and 'blueprint', which is all hybrid_deltas
+            # reads off the configuration it is given.
+            if _th and _th['selected']:
+                try:
+                    results['hybrid_deltas_by_model'][_m] = hybrid_deltas(
+                        search, _m, hybrid=_th['selected'][0])
+                except Exception as _e:
+                    print(f"  hybrid deltas for {_m} unavailable: "
+                          f"{type(_e).__name__}: {_e}")
+        # The same grid in one block: per downstream model, 2 base
+        # representations and 2 hybrid configurations, plus 'n_distinct_units'
+        # -- how many separate things would have to be BUILT once one
+        # representation picked by three downstream models is counted once.
+        try:
+            results['top2_pairs_by_model'] = _drop_blueprint(
+                select_model_rep_pairs(search, models=list(downstream_models),
+                                       n_base=2, n_hybrids=2,
+                                       require_full=False))
+        except Exception as _e:
+            print(f"  top-2 model-and-representation grid unavailable: "
+                  f"{type(_e).__name__}: {_e}")
+        _print_deltas(results['hybrid_deltas_by_model'], downstream_models,
+                      metric_name)
 
     # Models that refused a per-molecule weight, discovered by being refused
     # rather than assumed. Written to the result file so a missing cell in a

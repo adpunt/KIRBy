@@ -104,6 +104,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy, cv_split, get_domain_metric,
     get_model_factories, DOWNSTREAM_MODELS_NOISE, build_fold_hybrid,
     get_best_search_for_downstream, make_nearest_neighbors,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from kirby.hybrid import compute_feature_importance
 from kirby.utils.noise_estimation import weights_from_scores
@@ -606,6 +607,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # the subset that admits searches run under objective='similarity'.
     include_hybrid = bool(kwargs.get('include_hybrid', True))
     bp = None
+    # The SearchResult the recipe came out of, kept so the top-2 block at the
+    # end of run() can read the rows it already holds. Before this it was
+    # dropped at the end of the try below, and the only way to report a second
+    # base representation or a second hybrid recipe was a second pool lookup,
+    # which on a cold cache is a full search. Held, it costs 0 model fits.
+    # Stays None under --no-hybrid, where no pool lookup happens at all.
+    pool_search = None
     hybrid_meta = {'present': False, 'blueprint_is_clean_label': True}
     if not include_hybrid:
         hybrid_meta['absent_because'] = 'include_hybrid=False was passed'
@@ -617,6 +625,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=augmentations, dataset_name=dataset_name,
                 task_type=task_type, data=data,
                 pool_subset='predictive_and_similarity')
+            pool_search = search
             bp = meta['best_config']['blueprint'] if meta else None
             if bp is None:
                 hybrid_meta['absent_because'] = (
@@ -869,6 +878,98 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             clean, noisy, det_ap, det_pk, rep_score, zero_imp_builds,
             counts, errors, provenance, lower_is_better))
         print(f"    [{time.time() - t_level:.0f}s]")
+
+    # ── the top 2, added beside what is already reported ───────────────────
+    # Added 2026-09-18, owner's instruction: the top 2 rows everywhere as an
+    # extra, changing nothing that is already reported. Nothing above moves.
+    # The run still scores every space in `specs` -- 13 under the defaults --
+    # over every level, fold, draw, detector and k value, and 'per_level' and
+    # 'summary' hold the numbers they held before this block existed.
+    #
+    # WHAT THESE ARE A RANKING OF, AND WHAT THEY ARE NOT. They read the pool
+    # search the hybrid recipe came from. n21 does not build its distances from
+    # that search: `base_rep` is picked by name at pick_noise_base_rep above,
+    # and the 8 importance-weighted spaces, the forest proximity and every
+    # repaired fit are all computed on that one representation. So these keys
+    # say what the pool search scored each representation at, per downstream
+    # model, and they do not change which representation n21 measured.
+    #
+    # What was absent without them: the file named one base representation and
+    # one hybrid recipe and reported no score for any other, so a reader could
+    # not tell a comparator ahead by a clear margin from one ahead in the
+    # fourth decimal.
+    #
+    # 0 new model fits. All four helpers read rows the search already holds in
+    # search.baselines and search.all_results.
+    top2_base_reps, top2_hybrids = {}, {}
+    hybrid_deltas_by_model, top2_pairs_by_model = {}, []
+    if pool_search is not None:
+        for _m in downstream_models:
+            _ctx = f'n21 {dataset_name}/{_m}'
+            try:
+                # require_full=False: this search was fetched for
+                # downstream_models[0] only, so a model it never scored comes
+                # back as a short list instead of raising at the last line of a
+                # run that has already spent every fit it was going to spend.
+                _b = top_base_reps(pool_search, _m, 2, require_full=False,
+                                   context=_ctx)
+                top2_base_reps[_m] = [(e['rep'], e['score'])
+                                      for e in _b['selected']]
+                _h = top_hybrids(pool_search, _m, 2, require_full=False,
+                                 context=_ctx)
+                # Scalars only. Each selected row also carries a Blueprint
+                # object, and this dict is written to JSON by
+                # save_experiment_results. The recipe is already named by
+                # 'label', and which representations fed it is reported by
+                # hybrid_deltas under 'source_reps'.
+                top2_hybrids[_m] = [
+                    {'label': e['label'], 'score_mean': e['score_mean'],
+                     'budget': e['budget'], 'n_features': e['n_features'],
+                     'rep_count': e['rep_count'],
+                     'n_folds_scored': e['n_folds_scored']}
+                    for e in _h['selected']]
+                if _h['selected']:
+                    # hybrid= is passed rather than left None: the None branch
+                    # of hybrid_deltas reads ['row'] off a top_hybrids entry,
+                    # and top_hybrids builds no 'row' key, so it raises
+                    # KeyError. The rank-1 entry carries 'score_mean' and
+                    # 'blueprint', which is what hybrid_deltas reads.
+                    hybrid_deltas_by_model[_m] = hybrid_deltas(
+                        pool_search, _m, hybrid=_h['selected'][0], context=_ctx)
+            except Exception as _e:
+                print(f"    {_m}: top-2 / hybrid deltas unavailable "
+                      f"({type(_e).__name__}: {_e})")
+        try:
+            _sel = select_model_rep_pairs(
+                pool_search, models=list(downstream_models), n_base=2,
+                n_hybrids=2, require_full=False,
+                context=f'n21 {dataset_name}')
+            top2_pairs_by_model = _sel['pairs']
+        except Exception as _e:
+            print(f"    top-2 pair grid unavailable "
+                  f"({type(_e).__name__}: {_e})")
+
+    # New keys, keyed by downstream model name. A downstream model this search
+    # never scored gets an empty list here and no entry in
+    # 'hybrid_deltas_by_model'. Read by nothing else in the repository:
+    # noise_ceiling_analyse._read_n21 reads 'per_level' alone.
+    results['top2_base_reps'] = top2_base_reps
+    results['top2_hybrids'] = top2_hybrids
+    # One flat row per (downstream model, slot): 5 downstream models x
+    # (2 base representations + 2 hybrids) = 20 rows when every slot is filled.
+    results['top2_pairs_by_model'] = convert_numpy(top2_pairs_by_model)
+    # Two deltas per downstream model, both POSITIVE when the hybrid is better:
+    # 'delta_vs_source_mean' against the mean of the base representations the
+    # budget gave a non-zero number of features, 'delta_vs_best_rep' against the
+    # single best base representation for that model.
+    results['hybrid_deltas_by_model'] = convert_numpy(hybrid_deltas_by_model)
+    results['top2_read_from'] = (
+        'the pool search that chose the hybrid recipe, fetched once for '
+        f'downstream model {downstream_models[0]}. The distances n21 measured '
+        f'are built on {base_rep_name}, which was picked by name and not by '
+        'this ranking.'
+        if pool_search is not None else
+        'no pool search was held: ' + str(hybrid_meta.get('absent_because')))
 
     results['summary'] = _summarise(results, specs, metrics, detectors,
                                     k_values, importance_methods, exponents,

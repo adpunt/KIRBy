@@ -66,6 +66,7 @@ from experiments._shared import (
     extract_top3_base_reps, resolve_pruning_kwargs,
     FULL_BUDGETS, INTERNAL_EVALUATORS,
     fold_reselection, hr_direction, hr_exclude_folds,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 
 # =============================================================================
@@ -269,6 +270,121 @@ def _summarize_hybrid_scores(r2_scores, rmse_scores, spearman_scores):
     }
 
 
+def _top2_selection_from_search(search, model_names, context):
+    """Top-2 rows and the two hybrid deltas off one fold's search. 0 new fits.
+
+    Additive, added 2026-09-18. The baseline arm below still scores every
+    representation in `reps` against every model in MODELS_LIST, and the
+    per-fold hybrid still runs on every fold. Nothing here feeds
+    results[...], print_analysis or fold_reselection.
+
+    All four selectors read rows the search already stored, so this costs 0
+    new model fits.
+
+    What was absent before it: extract_top3_base_reps names 3 base
+    representations by one downstream model, random forest, on fold 0, and the
+    line is printed and dropped. No ranking was recorded for the other 4
+    downstream models, and none at all for the hybrid configurations the search
+    scored.
+
+    `search` is fold 0's search, built on fold 0's TRAIN rows only, so every
+    number here is a training-fold number and not a held-out one. The held-out
+    hybrid-versus-best-single comparison stays where it is, in
+    reselected_comparison.
+
+    require_full=False everywhere. A downstream model this search never scored
+    comes back as a short list carrying its own shortfall_reason, instead of
+    raising and taking the fold loop with it. Every call is wrapped: this file
+    ran before these keys existed and has to keep running if they fail.
+
+    Returns None when nothing could be computed.
+    """
+    block = {}
+    try:
+        # 'rf' is the downstream model this file pulls its FittedResult from
+        # (fold_search.fitted_results.get('rf')) and the model
+        # extract_top3_base_reps ranks by, so the two are the same quantity at
+        # two depths.
+        block['top2_base_reps'] = top_base_reps(
+            search, 'rf', 2, require_full=False, context=context)
+    except Exception as _e:
+        print(f"    top2_base_reps not added: {type(_e).__name__}: {_e}")
+    try:
+        # budget=None: the best 2 configurations over every budget the search
+        # ran, not within one budget in features. The find_best_hybrid call
+        # above passes the whole budget list, so cutting per budget here would
+        # name a pair this experiment never used.
+        block['top2_hybrids'] = top_hybrids(
+            search, 'rf', 2, require_full=False, context=context)
+    except Exception as _e:
+        print(f"    top2_hybrids not added: {type(_e).__name__}: {_e}")
+    try:
+        # models=list(model_names) is the models dict this file actually built
+        # factories for, which get_model_factories can shorten at small sample
+        # counts - these properties are 94 to 242 antibodies. Passing it rather
+        # than the default keeps the models axis at the width this file scores
+        # at. MODELS_LIST is 5 downstream model names (DOWNSTREAM_MODELS holds
+        # rf, xgboost, svm, dnn, lightgbm and none of them is the 'gp' the
+        # comprehension drops), so 5 * (2 representations + 2 hybrids) = 20
+        # rows when every model survives get_model_factories.
+        block['top2_pairs_by_model'] = select_model_rep_pairs(
+            search, models=list(model_names), n_base=2, n_hybrids=2,
+            require_full=False, context=context)
+    except Exception as _e:
+        print(f"    top2_pairs_by_model not added: {type(_e).__name__}: {_e}")
+
+    # Two reference numbers for the rank-1 hybrid per downstream model, not
+    # one:
+    #   delta_vs_source_mean - against the MEAN of the base representations the
+    #     budget split actually gave features to, read off
+    #     Blueprint.allocation_per_fold, so a representation given 0 features
+    #     on every fold is out of that mean.
+    #   delta_vs_best_rep - against the single best base representation for
+    #     that same downstream model.
+    # Positive means the hybrid is better, on either metric direction.
+    #
+    # hybrid= is passed rather than left to default. hybrid_deltas with
+    # hybrid=None reads _picked['selected'][0]['row'] at _shared.py:7432, and
+    # the entry top_hybrids builds (_shared.py:7043-7066) carries no 'row' key
+    # - both read in this session. The rank-1 entry passed in below carries
+    # 'score_mean' and 'blueprint', the only two keys hybrid_deltas reads off
+    # it.
+    #
+    # One try per downstream model, so a model with no stored hybrid
+    # configuration does not cost the others their entry. The keys are
+    # downstream model names; this dict is new and nothing iterates it.
+    deltas = {}
+    for m in model_names:
+        try:
+            top1 = top_hybrids(search, m, 1, require_full=False,
+                               context=f'{context}/deltas/{m}')
+            if not top1['selected']:
+                print(f"    hybrid_deltas for downstream model {m} not added: "
+                      f"{top1['shortfall_reason']}")
+                continue
+            deltas[m] = hybrid_deltas(search, m, hybrid=top1['selected'][0],
+                                      context=f'{context}/deltas/{m}')
+        except Exception as _e:
+            print(f"    hybrid_deltas for downstream model {m} not added: "
+                  f"{type(_e).__name__}: {_e}")
+    if deltas:
+        block['hybrid_deltas_by_model'] = deltas
+        # delta_vs_best_rep is None when no base representation carries a score
+        # for that downstream model, so it is formatted only after the None
+        # test - a format spec on None raises TypeError, and this print sits
+        # outside the try above.
+        for m, d in sorted(deltas.items()):
+            dsm = d['delta_vs_source_mean']
+            dbr = d['delta_vs_best_rep']
+            print(f"    deltas x {m:8s}  hybrid={d['hybrid_score']:.4f}"
+                  f"  minus the mean of the {d['n_source_reps']} "
+                  f"representations that fed it: "
+                  f"{'-' if dsm is None else format(dsm, '+.4f')}"
+                  f"  minus the best representation ({d['best_rep']}): "
+                  f"{'-' if dbr is None else format(dbr, '+.4f')}")
+    return block or None
+
+
 def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
                               fold_splits, models, pruning_mode='default_pruning'):
     """Build the KIRBy hybrid PER FOLD (train-only) and score the held-out fold.
@@ -280,10 +396,17 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
     train hybrid and score the held-out fold. This replaces the old full-data
     hybrid build (which leaked selection into every fold's score).
 
-    Returns (rep_results, dim_estimate, top3_first_fold, fold_spearman_by_model)
-    where fold_spearman_by_model = {model: [per_fold_held_out_rho, ...]} feeds
-    the fold_reselection candidate arm. Returns (None, 0, None, {}) if every fold
-    failed.
+    Returns (rep_results, dim_estimate, top3_first_fold, fold_spearman_by_model,
+    top2_first_fold) where fold_spearman_by_model = {model: [per_fold_held_out_rho,
+    ...]} feeds the fold_reselection candidate arm. Returns
+    (None, 0, None, {}, top2_first_fold) if every fold failed.
+
+    top2_first_fold was added 2026-09-18 beside top3_first_fold, off the same
+    fold-0 search and costing 0 new model fits. It is a 5th return value rather
+    than an entry in rep_results: rep_results is keyed by downstream model name
+    and evaluate_property writes it straight into results['kirby_hybrid']
+    ['models'], which print_analysis reads with max() over every value's
+    ['spearman']['mean'].
     """
     from kirby.find_best_hybrid import find_best_hybrid
     from kirby.hybrid import (apply_feature_selection,
@@ -292,6 +415,9 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
     per_model = {m: {'r2': [], 'rmse': [], 'spearman': []} for m in models}
     dims = []
     top3_first_fold = None
+    # Filled from fold 0's search, the same search top3_first_fold reads.
+    # Stays None when fold 0's find_best_hybrid raised.
+    top2_first_fold = None
     src_reps = base_reps if base_reps else {}
     has_aug = bool(aug_dict)
 
@@ -349,6 +475,8 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
 
         if fold_idx == 0 and fold_search is not None:
             top3_first_fold = extract_top3_base_reps(fold_search)
+            top2_first_fold = _top2_selection_from_search(
+                fold_search, list(models), f'{prop_name}/fold{fold_idx}')
 
         fitted = (fold_search.fitted_results.get('rf')
                   if fold_search is not None else None)
@@ -424,7 +552,7 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
                 per_model[model_name]['spearman'].append(np.nan)
 
     if not dims:
-        return None, 0, top3_first_fold, {}
+        return None, 0, top3_first_fold, {}, top2_first_fold
 
     rep_results = {}
     fold_spearman_by_model = {}
@@ -435,7 +563,8 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
             s['r2'], s['rmse'], s['spearman'])
         fold_spearman_by_model[model_name] = s['spearman']
 
-    return rep_results, int(np.mean(dims)), top3_first_fold, fold_spearman_by_model
+    return (rep_results, int(np.mean(dims)), top3_first_fold,
+            fold_spearman_by_model, top2_first_fold)
 
 
 def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruning'):
@@ -513,7 +642,7 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
     # ===== Hybrid arm: build PER FOLD (train-only), score held-out =====
     # Replaces the old full-data hybrid build (which selected features on all
     # rows, then scored the same rows — selection leakage in every fold).
-    hybrid_results, hybrid_dim, top3, hybrid_fold_scores = (
+    hybrid_results, hybrid_dim, top3, hybrid_fold_scores, top2_block = (
         _evaluate_hybrid_per_fold(
             prop_name, base_for_search, aug_dict, labels, grp,
             fold_splits, models, pruning_mode=pruning_mode))
@@ -604,6 +733,15 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
         # A reader feeds this straight to experiments._shared.fold_reselection.
         'fold_reselection': reselection_block,
         'reselected_comparison': reselected_comparison,
+        # Beside 'results', never inside it: print_analysis loops
+        # results.items() and reads rep_data['models'] for every value, so an
+        # entry there with no 'models' key raises KeyError and takes the whole
+        # cross-property table with it. print_analysis and
+        # print_reselection_analysis read this dict by name only -
+        # 'n_samples', 'results', 'fold_reselection',
+        # 'reselected_comparison' - so this key is printed by nothing and
+        # saved to the JSON. None when fold 0's search did not run.
+        'top2_selection': top2_block,
     }
 
 

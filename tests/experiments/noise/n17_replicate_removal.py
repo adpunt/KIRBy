@@ -120,6 +120,9 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
+    # The top-2 selectors and the two hybrid deltas, added 2026-09-18. All four
+    # read rows the search already stored and fit nothing.
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
 # One per-fold hybrid build, shared with n18 and n19. It lived in n19 until
@@ -353,6 +356,131 @@ def build_arm(arm, X_train, y_train, scores, true_spread_train, n_flag, rng):
     raise ValueError(f"unknown arm {arm!r}")
 
 
+def _top2_and_deltas(search, models, where):
+    """The top 2 base representations, the top 2 hybrids and the two hybrid
+    deltas, per downstream model. 0 new model fits.
+
+    Added 2026-09-18 on the owner's instruction: the top 2 go in beside what
+    this file already reports, and nothing already reported moves. The six keys
+    returned here are new and nothing reads them -- not the summary, not the
+    printed output, not any other experiment.
+
+    Every selector reads rows the search already stored: baselines[rep][model]
+    (find_best_hybrid.py:5524-5525) and all_results (:1536). Nothing is fitted,
+    so the whole block costs 0 model fits and only dict passes in wall-clock
+    time. select_model_rep_pairs walks those same two structures a second time,
+    which is why it is called rather than reassembled from the per-model
+    results above it.
+
+    require_full=False on every call. A downstream model the search never
+    scored -- svm past its 10,000-molecule cap (find_best_hybrid.py:2969-2978),
+    or one a registered skip policy dropped (:2841-2848) -- then comes back as
+    a short list carrying its own shortfall_reason. Under the default True it
+    raises ValueError instead, which would end a run that has already spent
+    hours of fits, for the sake of an extra.
+
+    `hybrid=` is handed to hybrid_deltas rather than left to its default. The
+    default path reads `_picked['selected'][0]['row']` (_shared.py:7432) and
+    the rows top_hybrids builds carry no 'row' key (_shared.py:7043-7066), so
+    the default raises KeyError. The row passed in is that same top-ranked one,
+    and it carries the 'score_mean' and 'blueprint' hybrid_deltas reads.
+
+    'blueprint' is dropped from every stored row. A Blueprint is the whole
+    recipe (find_best_hybrid.py:1344) and save_experiment_results json.dumps
+    this dict (_shared.py:8021), so leaving the object in would write a full
+    recipe into each of the 4 rows per downstream model.
+    """
+    def _no_blueprint(rows):
+        return [{k: v for k, v in r.items() if k != 'blueprint'} for r in rows]
+
+    block = {
+        'top2_extra_new_model_fits': 0,
+        'top2_base_reps': {},
+        'top2_hybrids': {},
+        'top2_pairs_by_model': {},
+        'hybrid_deltas_by_model': {},
+        'top2_extra_failures': {},
+    }
+
+    for m in models:
+        ctx = '{}/{}'.format(where, m)
+        try:
+            _b = top_base_reps(search, m, n=2, require_full=False, context=ctx)
+            block['top2_base_reps'][m] = {
+                'selected': _no_blueprint(_b['selected']),
+                'n_returned': _b['n_returned'],
+                'n_reps_in_baselines': _b['n_reps_in_baselines'],
+                'n_reps_scored_for_model': _b['n_reps_scored_for_model'],
+                'score_basis': _b['score_basis'],
+                'tie_at_cut': _b['tie_at_cut'],
+                'shortfall_reason': _b['shortfall_reason'],
+            }
+        except Exception as exc:
+            block['top2_extra_failures']['top_base_reps/%s' % m] = \
+                '%s: %s' % (type(exc).__name__, exc)
+            print(f"    top-2 base representations skipped for {m}: "
+                  f"{type(exc).__name__}: {exc}")
+
+        _h = None
+        try:
+            _h = top_hybrids(search, m, n=2, require_full=False, context=ctx)
+            block['top2_hybrids'][m] = {
+                'selected': _no_blueprint(_h['selected']),
+                'n_returned': _h['n_returned'],
+                'score_basis': _h['score_basis'],
+                'ranked_over': _h['ranked_over'],
+                'tie_at_cut': _h['tie_at_cut'],
+                'notes': _h['notes'],
+                'shortfall_reason': _h['shortfall_reason'],
+            }
+        except Exception as exc:
+            _h = None
+            block['top2_extra_failures']['top_hybrids/%s' % m] = \
+                '%s: %s' % (type(exc).__name__, exc)
+            print(f"    top-2 hybrids skipped for {m}: "
+                  f"{type(exc).__name__}: {exc}")
+
+        # The two reference numbers for this model's top-ranked hybrid: against
+        # the mean of the representations the recipe's per-fold budget split
+        # actually gave features to, and against that model's single best base
+        # representation. Positive means the hybrid is better, on either metric
+        # direction. A representation listed in the recipe but given 0 features
+        # on every fold is left out of the first one.
+        try:
+            if _h is not None and _h['selected']:
+                block['hybrid_deltas_by_model'][m] = hybrid_deltas(
+                    search, m, hybrid=_h['selected'][0], context=ctx)
+        except Exception as exc:
+            block['top2_extra_failures']['hybrid_deltas/%s' % m] = \
+                '%s: %s' % (type(exc).__name__, exc)
+            print(f"    hybrid deltas skipped for {m}: "
+                  f"{type(exc).__name__}: {exc}")
+
+    # The same two selectors again, across every downstream model at once, for
+    # the counts that exist only across models: how many of the 4 rows per
+    # model came back, and which representations or recipes two models both
+    # picked. 'per_model' is deliberately not kept -- it is those same rows a
+    # second time, with the Blueprint objects still in them.
+    try:
+        _p = select_model_rep_pairs(search, models=list(models), n_base=2,
+                                    n_hybrids=2, require_full=False,
+                                    context=where)
+        block['top2_pairs_by_model'] = {
+            'pairs': _p['pairs'],
+            'n_pairs': _p['n_pairs'],
+            'n_pairs_possible': _p['n_pairs_possible'],
+            'n_distinct_units': _p['n_distinct_units'],
+            'collapsed': _p['collapsed'],
+            'shortfalls': _p['shortfalls'],
+        }
+    except Exception as exc:
+        block['top2_extra_failures']['select_model_rep_pairs'] = \
+            '%s: %s' % (type(exc).__name__, exc)
+        print(f"    top-2 grid skipped: {type(exc).__name__}: {exc}")
+
+    return block
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N17: removal on real repeat-measurement disagreement."""
     print("\n" + "=" * 70)
@@ -479,6 +607,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # budget and an internal evaluator -- and the features are rebuilt per fold
     # on the entity rows below.
     bp = None
+    # Bound before the try, because the assignment below is inside it: when the
+    # lookup raised, `search` stayed undefined and reading it afterwards was an
+    # UnboundLocalError rather than a None. Added 2026-09-18 with the top-2
+    # block, which reads it.
+    search = None
     try:
         search, meta = get_best_search_for_downstream(
             reps, labels, data.get('groups'),
@@ -528,6 +661,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['spaces_run'] = list(spaces)
     print(f"  spaces: {len(spaces)} — {', '.join(spaces)}")
     print(f"  models: {', '.join(downstream_models)}")
+
+    # ── Top-2 rows and the two hybrid deltas, beside what is reported ──
+    # Owner's instruction 2026-09-18: add the top 2 as an extra and change
+    # nothing already reported. Every existing key above is untouched, the six
+    # arms still run in every representation the caller loaded, and 'base_reps'
+    # still names all of them.
+    #
+    # These rankings come out of the stored search, NOT out of this
+    # experiment's own arms. The search scored representations on the full
+    # labels; n17 scores its arms on one measurement per entity against the
+    # consensus of the rest. They are different quantities and nothing here
+    # mixes them.
+    #
+    # The search was fetched with downstream_model=downstream_models[0], but
+    # search.baselines and search.all_results carry a score under every
+    # downstream model the search scored, so the selectors read the rest out of
+    # the same object. 0 new model fits: the 4,950 downstream fits this file
+    # costs are unchanged.
+    if search is not None:
+        results.update(_top2_and_deltas(
+            search, list(downstream_models), f'n17/{dataset_name}'))
+    else:
+        results['top2_extra_absent_reason'] = (
+            'the pool lookup returned no SearchResult, so there are no stored '
+            'rows to rank and no baseline scores to difference against')
 
     # ── The experiment ──
     for draw in range(n_draws):

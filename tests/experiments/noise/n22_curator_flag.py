@@ -105,7 +105,8 @@ from experiments._shared import (  # noqa: E402
     save_experiment_results, convert_numpy,
     make_cv_splitter,
     extract_top3_base_reps, pick_noise_base_rep, get_domain_metric,
-    POOL_SUBSETS,
+    POOL_SUBSETS, DOWNSTREAM_MODELS,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from kirby.utils.noise_estimation import get_noise_estimator  # noqa: E402
 
@@ -481,6 +482,95 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
     results['comparator_space'] = base_rep
     results['space_provenance'] = convert_numpy(space_provenance)
+
+    # ── the top 2, added beside what is already reported ───────────────────
+    # Added 2026-09-18, owner's instruction: the top 2 rows everywhere as an
+    # extra, changing nothing that is already reported. Nothing above moves.
+    # 'comparator_space' is still the first of 'top3_base_reps', the hybrid
+    # arms are still one recipe per objective family, and every average
+    # precision below is computed in exactly the spaces it was computed in
+    # before this block existed.
+    #
+    # What was absent without it: 'top3_base_reps' is one ranking by rf
+    # (extract_top3_base_reps defaults to 'rf'), rounded to 4 decimals, and the
+    # file reported no score for any other downstream model. A tie at the top
+    # of that rf ranking changes the comparator representation and every
+    # average precision in the file with it, and nothing recorded how close
+    # rank 2 sat or how the other 4 downstream models ranked the same
+    # representations.
+    #
+    # 0 new model fits, and no detector fits either. All four helpers read rows
+    # the pool search already holds in search.baselines and search.all_results.
+    # n22 fits no downstream model at all; these numbers come from the search
+    # that chose the hybrid recipe, in that search's own metric
+    # ('hybrid_metric' above), not in average precision against the flag.
+    top2_base_reps, top2_hybrids = {}, {}
+    hybrid_deltas_by_model, top2_pairs_by_model = {}, []
+    if search is not None:
+        for _m in DOWNSTREAM_MODELS:
+            _ctx = f'n22 {dataset_name}/{_m}'
+            try:
+                # require_full=False: the pool lookup asked for rf, so a
+                # downstream model this search never scored comes back as a
+                # short list instead of raising and taking the run down.
+                _b = top_base_reps(search, _m, 2, require_full=False,
+                                   context=_ctx)
+                top2_base_reps[_m] = [(e['rep'], e['score'])
+                                      for e in _b['selected']]
+                _h = top_hybrids(search, _m, 2, require_full=False,
+                                 context=_ctx)
+                # Scalars only. Each selected row also carries a Blueprint
+                # object and this dict is written to JSON. The recipe is named
+                # by 'label'; which representations fed it is reported by
+                # hybrid_deltas under 'source_reps'.
+                top2_hybrids[_m] = [
+                    {'label': e['label'], 'score_mean': e['score_mean'],
+                     'budget': e['budget'], 'n_features': e['n_features'],
+                     'rep_count': e['rep_count'],
+                     'n_folds_scored': e['n_folds_scored']}
+                    for e in _h['selected']]
+                if _h['selected']:
+                    # hybrid= is passed rather than left None: the None branch
+                    # of hybrid_deltas reads ['row'] off a top_hybrids entry,
+                    # and top_hybrids builds no 'row' key, so it raises
+                    # KeyError. The rank-1 entry carries 'score_mean' and
+                    # 'blueprint', which is what hybrid_deltas reads.
+                    hybrid_deltas_by_model[_m] = hybrid_deltas(
+                        search, _m, hybrid=_h['selected'][0], context=_ctx)
+            except Exception as _e:
+                print(f"  {_m}: top-2 / hybrid deltas unavailable "
+                      f"({type(_e).__name__}: {_e})")
+        try:
+            _sel = select_model_rep_pairs(
+                search, models=list(DOWNSTREAM_MODELS), n_base=2, n_hybrids=2,
+                require_full=False, context=f'n22 {dataset_name}')
+            top2_pairs_by_model = _sel['pairs']
+        except Exception as _e:
+            print(f"  top-2 pair grid unavailable "
+                  f"({type(_e).__name__}: {_e})")
+
+    # New keys, keyed by downstream model name, beside 'top3_base_reps' and not
+    # in place of it. A downstream model the search never scored gets an empty
+    # list and no entry in 'hybrid_deltas_by_model'. Nothing else reads them:
+    # _smoke_n22.py indexes 'per_space', 'average_precision_ranking',
+    # 'n_records_flagged' and 'n_records', and noise_ceiling_analyse lists n22
+    # under NOT_A_SWEEP and reads no key of it.
+    results['top2_base_reps'] = convert_numpy(top2_base_reps)
+    results['top2_hybrids'] = convert_numpy(top2_hybrids)
+    # One flat row per (downstream model, slot): 5 downstream models x
+    # (2 base representations + 2 hybrids) = 20 rows when every slot is filled.
+    results['top2_pairs_by_model'] = convert_numpy(top2_pairs_by_model)
+    # Two deltas per downstream model, both POSITIVE when the hybrid is better:
+    # 'delta_vs_source_mean' against the mean of the base representations the
+    # budget gave a non-zero number of features, 'delta_vs_best_rep' against the
+    # single best base representation for that model.
+    results['hybrid_deltas_by_model'] = convert_numpy(hybrid_deltas_by_model)
+    results['top2_read_from'] = (
+        'the pool search that chose the hybrid recipe, fetched for downstream '
+        'model rf. Its scores are in that search\'s own metric, not in average '
+        'precision against the curator flag.'
+        if search is not None else
+        'no search: the pool lookup returned none, so no ranking was read')
 
     # ── score every record, inside its own fold ──
     splitter, use_groups = make_cv_splitter(N_FOLDS, search_groups,

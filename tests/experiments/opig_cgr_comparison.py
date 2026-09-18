@@ -73,6 +73,7 @@ from experiments._shared import (
     _cache_rep, _fitted_to_feature_info,
     fold_reselection, build_fold_reselection_input,
     hr_exclude_folds,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 
 # =============================================================================
@@ -428,6 +429,111 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
                   f"best_single={r['best_single_reselected']:.4f}  "
                   f"delta={r['delta']:+.4f}{flag}")
 
+    # --- top-2 rows and the two hybrid deltas, added 2026-09-18 -------------
+    # Additive. This function still searches the pool it was handed — 17
+    # representations for SMILES-only and 20 for SMILES+CGR on a full run —
+    # and 'baselines' below still reports every one of them. The individual
+    # evaluation in evaluate_dataset still scores every representation against
+    # all 5 downstream models in MODELS_LIST. Nothing here feeds
+    # delta_by_model, which is still built from reselected_comparison.
+    #
+    # All four selectors read rows this search already stored, so the whole
+    # block costs 0 new model fits. It runs once per pool, so twice per
+    # dataset.
+    #
+    # What was absent before it: 'top3_base' holds 3 representations ranked by
+    # random forest alone, and nothing recorded a ranking for the other 4
+    # downstream models or for the hybrid configurations at all.
+    #
+    # require_full=False everywhere. A downstream model this search never
+    # scored comes back as a short list carrying its own shortfall_reason,
+    # instead of raising and losing the pool's whole result.
+    _sel_ctx = f'opig_cgr_comparison/{dataset_name}/{safe_suffix}'
+    top2_block = {}
+    if search is not None:
+        try:
+            # 'rf' is the downstream model this search was asked for
+            # (downstream_model='rf' above) and the model top3_base ranks by,
+            # so the two are the same quantity to two depths.
+            top2_block['top2_base_reps'] = top_base_reps(
+                search, 'rf', 2, require_full=False, context=_sel_ctx)
+        except Exception as _e:
+            print(f"    top2_base_reps not added: {type(_e).__name__}: {_e}")
+        try:
+            # budget=None: the best 2 configurations over every budget the
+            # search ran, not within one budget in features. The search above
+            # passes budget=None, so cutting per budget here would name a pair
+            # this experiment never used.
+            top2_block['top2_hybrids'] = top_hybrids(
+                search, 'rf', 2, require_full=False, context=_sel_ctx)
+        except Exception as _e:
+            print(f"    top2_hybrids not added: {type(_e).__name__}: {_e}")
+        try:
+            # 5 downstream models in MODELS_LIST * (2 representations +
+            # 2 hybrids) = 20 rows per pool. models=MODELS_LIST rather than
+            # the default, so the models axis is reported at the width this
+            # file scores at.
+            top2_block['top2_pairs_by_model'] = select_model_rep_pairs(
+                search, models=MODELS_LIST, n_base=2, n_hybrids=2,
+                require_full=False, context=_sel_ctx)
+        except Exception as _e:
+            print(f"    top2_pairs_by_model not added: "
+                  f"{type(_e).__name__}: {_e}")
+
+        # Two reference numbers for the rank-1 hybrid per downstream model,
+        # not one:
+        #   delta_vs_source_mean — against the MEAN of the base
+        #     representations the budget split actually gave features to, read
+        #     off Blueprint.allocation_per_fold, so a representation given 0
+        #     features on every fold is out of that mean.
+        #   delta_vs_best_rep — against the single best base representation
+        #     for that same downstream model.
+        # Positive means the hybrid is better. The metric here is rmse
+        # (metric='rmse' in the search call above), where lower wins, and
+        # hybrid_deltas takes the direction off the stored search rather than
+        # off the metric name.
+        #
+        # hybrid= is passed rather than left to default. hybrid_deltas with
+        # hybrid=None reads _picked['selected'][0]['row'] at _shared.py:7432,
+        # and the entry top_hybrids builds (_shared.py:7043-7066) carries no
+        # 'row' key — both read in this session. The rank-1 entry passed in
+        # below carries 'score_mean' and 'blueprint', the only two keys
+        # hybrid_deltas reads off it.
+        #
+        # One try per downstream model, so a model with no stored hybrid
+        # configuration does not cost the other 4 their entry. The keys are
+        # downstream model names; this dict is new and nothing iterates it.
+        _deltas = {}
+        for _m in MODELS_LIST:
+            try:
+                _top1 = top_hybrids(search, _m, 1, require_full=False,
+                                    context=f'{_sel_ctx}/deltas/{_m}')
+                if not _top1['selected']:
+                    print(f"    hybrid_deltas for downstream model {_m} not "
+                          f"added: {_top1['shortfall_reason']}")
+                    continue
+                _deltas[_m] = hybrid_deltas(
+                    search, _m, hybrid=_top1['selected'][0],
+                    context=f'{_sel_ctx}/deltas/{_m}')
+            except Exception as _e:
+                print(f"    hybrid_deltas for downstream model {_m} not "
+                      f"added: {type(_e).__name__}: {_e}")
+        if _deltas:
+            top2_block['hybrid_deltas_by_model'] = _deltas
+            # delta_vs_best_rep is None when no base representation carries a
+            # score for that downstream model, so it is formatted only after
+            # the None test — a format spec on None raises TypeError, and this
+            # print sits outside the try above.
+            for _m, _d in sorted(_deltas.items()):
+                _dsm = _d['delta_vs_source_mean']
+                _dbr = _d['delta_vs_best_rep']
+                print(f"    deltas × {_m:8s}  hybrid={_d['hybrid_score']:.4f}"
+                      f"  minus the mean of the {_d['n_source_reps']} "
+                      f"representations that fed it: "
+                      f"{'—' if _dsm is None else format(_dsm, '+.4f')}"
+                      f"  minus the best representation ({_d['best_rep']}): "
+                      f"{'—' if _dbr is None else format(_dbr, '+.4f')}")
+
     return {
         'n_reps': len(pool_reps),
         'rep_names': sorted(pool_reps.keys()),
@@ -446,6 +552,14 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         # The computed leave-one-fold-out numbers for this pool. The CGR delta
         # is taken from here, not from hybrid_eval.
         'reselected_comparison': hr,
+        # Beside the pool's own numbers, never inside them. Every reader of
+        # this dict asks for a named key — evaluate_dataset reads
+        # 'reselected_comparison' and writes 'cgr_selection',
+        # extract_cgr_selection_info reads 'selected_reps', print_analysis
+        # reads 'n_reps', 'hybrid_eval' and 'cgr_selection' — so nothing
+        # iterates it and this key is read by nothing. None when the search
+        # returned nothing to rank.
+        'top2_selection': (top2_block or None),
     }
 
 
