@@ -5552,25 +5552,54 @@ def resolve_pool_subset(pool_subset):
     return objectives, name
 
 
-def _pool_conditions(distance, augmentations):
+# ⛔ THE TWO DATASETS THE PRECOMPUTE REFUSES TO BUILD 'uncapped' FOR.
+#
+# This list MUST equal UNCAPPED_SKIP_DATASETS in tests/precompute_hybrids.py.
+# That file drops every 'uncapped' condition for them — a cost decision of
+# 2026-06-21, because both are drug-target sets near 50,000 rows and
+# `general/none` alone measured about 4 days on bindingdb_kd.
+#
+# _pool_conditions asked for 'uncapped' on every dataset with no exception, so
+# on these two every experiment asked the pool for a search nobody had built.
+# It either found nothing, or cold-built inside the experiment's own job the
+# very thing the cost decision existed to avoid. The two halves of one decision
+# disagreed and neither said so.
+#
+# The owner's call, 2026-09-18: stop asking rather than pay the days. An
+# experiment on kiba or bindingdb_kd now runs on 'none' and 'capped', and the
+# returned metadata says which conditions the pool held.
+#
+# Two demo sets are in precompute_hybrids.py's list as well and are NOT here:
+# gb_demo_coding_vs_intergenomic_seqs and gb_demo_human_or_worm are demos, not
+# part of the suite, so nothing reads a pool for them.
+UNCAPPED_SKIP_DATASETS = frozenset({'bindingdb_kd', 'kiba'})
+
+
+def _pool_conditions(distance, augmentations, dataset_name=None):
     """The (tier, aug_condition, augmentations) members of the pool.
 
-    Unchanged from what get_best_search_for_downstream built inline: one
-    10-rep pool ('general', or 'general_distance' for the distance lineage),
-    'none' always, plus 'uncapped' and — on the main lineage only — 'capped'
-    when augmentation representations were passed. This has to match what the
-    precompute EMITS or the lookup misses and the experiment cold-builds the
-    search live.
+    One 10-rep pool ('general', or 'general_distance' for the distance
+    lineage), 'none' always, plus 'uncapped' and — on the main lineage only —
+    'capped' when augmentation representations were passed. This has to match
+    what the precompute EMITS or the lookup misses and the experiment
+    cold-builds the search live.
+
+    dataset_name is what lets it match: a dataset in UNCAPPED_SKIP_DATASETS gets
+    no 'uncapped' member, because the precompute builds none for it. Passing
+    None keeps every condition, which is the old behaviour for any caller that
+    does not know its dataset.
     """
     has_augs = bool(augmentations)
+    _no_uncapped = dataset_name in UNCAPPED_SKIP_DATASETS
     if distance:
         pool = [('general_distance', 'none', None)]
-        if has_augs:
+        if has_augs and not _no_uncapped:
             pool.append(('general_distance', 'uncapped', augmentations))
         return pool
     pool = [('general', 'none', None)]
     if has_augs:
-        pool.append(('general', 'uncapped', augmentations))
+        if not _no_uncapped:
+            pool.append(('general', 'uncapped', augmentations))
         pool.append(('general', 'capped', augmentations))
     return pool
 
@@ -5754,7 +5783,7 @@ def get_best_search_for_downstream(
 
     # One 10-rep pool (tier 'general'); the 'top' tier is retired (2026-08-24).
     # The same (tier, aug_condition) members are asked of every eligible family.
-    base_pool = _pool_conditions(distance, augmentations)
+    base_pool = _pool_conditions(distance, augmentations, dataset_name)
     pool = [(tier, aug_cond, augs, obj)
             for obj in objectives
             for tier, aug_cond, augs in base_pool]
@@ -6089,7 +6118,7 @@ def get_fold_pool_recipes(
     objectives, pool_subset_name = _resolve_pool_objectives(
         pool_subset, objective)
 
-    base_pool = _pool_conditions(distance, augmentations)
+    base_pool = _pool_conditions(distance, augmentations, dataset_name)
     pool = [(tier, aug_cond, augs, obj)
             for obj in objectives
             for tier, aug_cond, augs in base_pool]

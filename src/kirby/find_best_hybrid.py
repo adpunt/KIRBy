@@ -1571,6 +1571,29 @@ class SearchResult:
     tune: bool = False
     tune_n_iter: int = 20
     tune_knn_k: bool = False
+    # ⛔ WHICH TRAINING LABEL COLUMN THIS SEARCH WAS BUILT ON. Added 2026-09-18,
+    # owner's decision.
+    #
+    # 8 hex of the column, the same digest the tier already rides on (:8492 for
+    # an explicit train_labels=, :8536 for a label_noise= spec). None on a
+    # search over the dataset's own labels, and on every pickle written before
+    # this field existed.
+    #
+    # WHY IT IS HERE. n15 compares a hybrid searched on clean labels against one
+    # searched on noisy labels, and its whole answer is the gap between them. It
+    # draws its own noisy column and trains on it; the search derives its own
+    # from the same spec. Those two have to be the same column or the two arms
+    # are not comparable — and nothing could check it, because the engine's
+    # column was never returned. noisy_labels_hash's docstring
+    # (kirby/noise_spec.py:474) says "Experiments assert this against the value
+    # the cached search was built under"; no experiment could, and none did.
+    #
+    # It is NOT noisy_labels_hash: that is sha1 of shape, dtype and bytes
+    # truncated to 16, and this is _hash_bytes(_canonical_bytes(...)) formatted
+    # as 016x and truncated to 8. A caller compares this against
+    # SearchResult.train_labels_id of another search, or recomputes it with the
+    # same two helpers. Comparing it to noisy_labels_hash would always differ.
+    train_labels_id: Optional[str] = None
     # True when the search filtered its own candidate list using fold 0's
     # scores (mid-flight tail drops at the schedule's checkpoints, and the
     # end-of-fold-0 strategy prune). Fold 0's held-out hybrid score is then
@@ -8449,6 +8472,10 @@ def _find_best_hybrid_inner(
     # top_distance, so this needs no schema change.
     _noise_id: Optional[str] = None
     _train_labels: Optional[np.ndarray] = None
+    # None unless one of the two branches below sets it: a search over the
+    # dataset's own labels has no separate training column to identify.
+    _train_labels_id = None
+
     if score_on_noisy_labels and label_noise is None and train_labels is None:
         raise ValueError(
             "find_best_hybrid: score_on_noisy_labels=True needs label_noise or "
@@ -8491,6 +8518,7 @@ def _find_best_hybrid_inner(
         # else in any cache key could tell the two apart.
         _label_col_id = f'{_hash_bytes(_canonical_bytes(_train_labels)):016x}'[:8]
         _noise_id = f'trainlabels__lb{_label_col_id}'
+        _train_labels_id = _label_col_id
         if tier:
             tier = f'{tier}__trainlabels__lb{_label_col_id}'
         if score_on_noisy_labels:
@@ -8535,6 +8563,7 @@ def _find_best_hybrid_inner(
         # and on the per-representation and per-fold filenames.
         _label_col_id = f'{_hash_bytes(_canonical_bytes(_train_labels)):016x}'[:8]
         _noise_id = f'{label_noise.spec_id}__lb{_label_col_id}'
+        _train_labels_id = _label_col_id
         if tier:
             tier = f'{label_noise.tier_name(tier)}__lb{_label_col_id}'
         if score_on_noisy_labels:
@@ -9180,6 +9209,9 @@ def _find_best_hybrid_inner(
         tune=bool(tune),
         tune_n_iter=int(tune_n_iter),
         tune_knn_k=bool(tune_knn_k),
+        # 8 hex of the training label column, or None when the search ran on
+        # the dataset's own labels. n15 asserts its drawn column against this.
+        train_labels_id=_train_labels_id,
         fold0_pruned=bool(_fold0_pruned),
     )
 

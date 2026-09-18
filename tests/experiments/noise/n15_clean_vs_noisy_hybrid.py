@@ -82,10 +82,13 @@ SCOPE / CAVEATS (read first).
     compare this column to the one find_best_hybrid derived inside the noisy
     search — that column is built on the engine's label_noise branch and is not
     returned on the SearchResult, so there is nothing here to compare it to.
-    'checked_against_search_column': False in the output says so on every cell.
-    Closing that needs the engine to expose its derived column or its digest.
-    Before 2026-09-18 nothing was checked at all and an earlier docstring
-    claimed otherwise.
+    ⛔ THAT GAP IS CLOSED, the same day. SearchResult gained train_labels_id,
+    the 8-hex digest of the column the search was built on, and n15 recomputes
+    its own with the engine's helpers and raises when the two differ.
+    'checked_against_search_column' is True on every cell whose search carries
+    the field; it stays False on a search pickled before the field existed,
+    which is not the same as a failed check. Before 2026-09-18 nothing was
+    checked at all and an earlier docstring claimed otherwise.
   - This is a comparison of BLUEPRINTS, not of hybrid-vs-base. Both arms are hybrids.
 
 Usage:
@@ -434,6 +437,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 reps, labels, groups, augmentations, config, data,
                 dataset_name, task_type, model_name, spec=spec,
                 search_settings=search_settings)
+
+            # ⛔ THE CHECK THE WHOLE FILE RESTED ON AND COULD NOT MAKE.
+            # Added 2026-09-18, once SearchResult gained train_labels_id.
+            #
+            # n15 draws y_noisy_full above and trains on it. The noisy search
+            # derives its OWN column from the same spec, inside the engine. If
+            # those two are not the same column, the recipe this arm reports was
+            # chosen on labels this run never trains on, and oracle_advantage —
+            # the number n11 and n12's warnings depend on — is the gap between
+            # two things that were never comparable.
+            #
+            # Nothing compared them until now. n15 wrote noisy_labels_hash into
+            # its own output and compared it to nothing, and the engine's column
+            # was not returned, so there was nothing to compare it TO.
+            # SearchResult.train_labels_id (find_best_hybrid.py) is that column's
+            # 8-hex digest, the same one the tier rides on.
+            #
+            # It is recomputed here with the engine's own two helpers rather
+            # than with noisy_labels_hash, which is a different function over a
+            # different byte layout and would never match.
+            _engine_id = getattr(noisy_search, 'train_labels_id', None)
+            if _engine_id is not None:
+                from kirby.find_best_hybrid import (_hash_bytes as _hb,
+                                                    _canonical_bytes as _cb)
+                _ours = f'{_hb(_cb(np.asarray(y_noisy_full).ravel())):016x}'[:8]
+                if _ours != _engine_id:
+                    raise RuntimeError(
+                        f"n15 {sid}/{model_name}: the noisy column this run "
+                        f"trains on ({_ours}) is not the column the noisy "
+                        f"search was built on ({_engine_id}). The recipe this "
+                        f"arm reports was chosen on labels that are not these, "
+                        f"so oracle_advantage would be the gap between two arms "
+                        f"that never saw the same data.")
+                results.setdefault('noisy_labels_checked', {}).setdefault(
+                    sid, {})['checked_against_search_column'] = True
+                results['noisy_labels_checked'][sid]['engine_train_labels_id'] = \
+                    _engine_id
 
             if clean_bp is None or noisy_bp is None:
                 print(f"  {model_name}: skipped "
