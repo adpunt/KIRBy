@@ -7,11 +7,12 @@ because it was fit to raw performance, partly re-encoded baseline skill.
 
 Everything here operates on the *retention* curve ret(x) = perf(x) / perf(0),
 so every config starts at 1.0 and the summaries describe degradation SHAPE,
-decoupled from how good the model was to begin with. Only meaningful when the
-baseline clears a skill threshold (see ROBUSTNESS_BASELINE_THRESHOLD); below
-that the curve is noise on noise.
+decoupled from how good the model was to begin with. A clean score at or below
+zero is always refused, because retention divides by it: see robustness_metrics.
+An optional `baseline_threshold` floor sits above that for callers that ask.
 
-Ported verbatim from qsar_qm_models so the two repos compute identical numbers.
+Ported from qsar_qm_models. NO LONGER identical to that copy: the zero rule in
+robustness_metrics landed here on 2026-09-18 and not there.
 `x` is the noise axis (sigma for regression additive noise, flip_prob for
 classification label noise); `perf` is the matched performance (R2, accuracy,
 AUROC, ...). Requires >= 4 points spanning a nonzero range including x=0.
@@ -81,11 +82,19 @@ def robustness_metrics(x, perf, baseline_threshold=ROBUSTNESS_BASELINE_THRESHOLD
     `lower_is_better` orients the curve for error metrics (RMSE/MAE): the
     retention is inverted (base/perf) so 1.0 still means "no degradation".
 
-    The `baseline_threshold` skill gate is a floor on a higher-is-better
-    baseline (R2>0.3, or accuracy/AUROC floors passed by the caller). For
-    lower-is-better metrics there is no universal skill floor, so the gate is
-    skipped and only base>0 (finite) is required. NOTE: whether/what floor to
-    apply for error-metric baselines is an open methodology question.
+    A clean score at or below zero is ALWAYS refused, on either direction and
+    whatever `baseline_threshold` says. Retention divides by that score, so a
+    negative one flips the sign of the whole curve: a representation that scores
+    -0.154 spearman clean and climbs to -0.005 under noise has got BETTER, and
+    the ratio reports it as a clean decay with auc_norm 0.4346. A score of
+    exactly zero makes the division undefined. Owner's decision 2026-09-18:
+    drop those curves, and keep no other floor. Measured on ginkgo_hic, where
+    `aac` is in the signed-off pool and scores -0.154 clean.
+
+    `baseline_threshold` is the older skill floor, kept as opt-in for the
+    callers that pass one deliberately -- phase4_analysis passes its own
+    accuracy and AUROC floors. It applies to higher-is-better curves only, and
+    c10 passes None so no floor beyond the zero rule reaches the noise suite.
     """
     x = np.asarray(x, dtype=float)
     perf = np.asarray(perf, dtype=float)
@@ -100,15 +109,20 @@ def robustness_metrics(x, perf, baseline_threshold=ROBUSTNESS_BASELINE_THRESHOLD
     base = float(at_zero[0])
     if not np.isfinite(base):
         return out
-    # baseline_threshold=None turns the skill gate off for every metric, which
-    # is what c10 passes since 2026-09-10: applying a floor on one side of the
-    # direction and not the other meant the rmse datasets admitted every
-    # representation while the spearman and auc ones dropped any representation
-    # under 0.3, so the two were ranked under different admission rules.
-    if lower_is_better:
-        if base <= 0:
-            return out
-    elif baseline_threshold is not None and base <= baseline_threshold:
+    # The zero rule, both directions, not optional. Everything below divides by
+    # `base`; at or under zero that division either flips the curve's sign or is
+    # undefined. The lower-is-better side has refused base <= 0 since this file
+    # was written -- an error metric cannot be negative and a zero error is a
+    # perfect model -- and the higher-is-better side now refuses it too.
+    if base <= 0:
+        return out
+    # The older skill floor, higher-is-better only, and only when a caller asks
+    # for one. c10 passes None: applying a floor on one side of the direction
+    # and not the other meant the rmse datasets admitted every representation
+    # while the spearman ones dropped any representation under 0.3, so the two
+    # were ranked under different admission rules.
+    if (not lower_is_better and baseline_threshold is not None
+            and base <= baseline_threshold):
         return out
 
     out['auc_norm'] = auc_norm(x, perf, base, lower_is_better)
