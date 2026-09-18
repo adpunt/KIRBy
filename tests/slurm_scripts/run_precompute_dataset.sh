@@ -158,6 +158,15 @@ has_pass() { [[ " ${PASSES} " == *" $1 "* ]]; }
 # The other three passes STAY, and each for a reason:
 #   sim    n13 sets POOL_SUBSET='predictive_and_similarity' and it is NOT in the
 #          nucleotide skip list, so it does read the similarity searches.
+#
+#          ⛔ KEPT BY THE OWNER, 2026-09-18. DO NOT CUT IT. It was put to her
+#          that the June skip list ("the similarity premise is unreliable for
+#          sequence embeddings", 2026-06-10) predates n13's similarity arm
+#          (2026-09-12) by three months, so n13's absence from that list is an
+#          omission rather than a judgement -- and that the arm is the same
+#          nearest-neighbour construct the list exists to exclude. Her answer
+#          was to keep it. Do not re-raise this and do not drop `sim` from the
+#          nucleotide passes.
 #   dist   c03 reads the distance pool and complexity is not skipped at all --
 #          all 20 of its experiments run on nucleotide.
 #   ridge  c16 reads it, same reason.
