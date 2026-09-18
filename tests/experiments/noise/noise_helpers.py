@@ -144,7 +144,33 @@ SINGLE_DATASET_EXPERIMENTS = [
 #
 # ONE noise_seed. The blueprint should not swing with the random draw; if it does,
 # that is itself the finding, and it is what the clean-vs-noisy experiment measures.
-NOISY_SEARCH_LEVELS = (0.0, 0.15, 0.3)
+# ⛔ THE WHOLE SHARED GRID SINCE 2026-09-18, OWNER'S DECISION.
+#
+# This was (0.0, 0.15, 0.3) — the bottom three of the six every other noise
+# experiment sweeps. n15 measures how much a hybrid gains from having been
+# searched on the clean labels, and n11 and n12 carry ORACLE-BIASED warnings
+# that only come off if that gain is near zero. Measuring it at 0.0, 0.15 and
+# 0.3 and not at 0.5, 0.75 and 1.0 answered the question exactly where the
+# corruption is mildest and left it open where it is worst — which is where an
+# oracle head start would be largest.
+#
+# It is not a constant any more. The grid differs by task type: regression
+# sweeps (0.0, 0.15, 0.3, 0.5, 0.75, 1.0) and classification (0.0, 0.05, 0.1,
+# 0.2, 0.3, 0.4), because on a classification dataset the level is a flip rate
+# and 1.0 would inverst every label. noisy_search_specs reads
+# dataset_policy.noise_levels() so n15's numbers can be read straight against
+# every other noise experiment's.
+#
+# ⛔ WHAT IT COSTS. Every level is an extra RECIPE SEARCH per arm, not an extra
+# round of model fits, because n15 searches inside the experiment. Draws go
+# from 7 (one at level 0.0 plus three at each of two levels) to 16 (one plus
+# three at each of five) on a regression dataset, so about 2.3 times the
+# searches. The fast tier and the aggressive pruning schedule in n15 are what
+# absorb it.
+#
+# Kept as the name every reader knows, now a fallback for a caller that names
+# no task type.
+NOISY_SEARCH_LEVELS = (0.0, 0.15, 0.3, 0.5, 0.75, 1.0)
 NOISY_SEARCH_SEED = 0  # kept for readers; the sweep uses NOISY_SEARCH_SEEDS below
 
 
@@ -174,8 +200,18 @@ def noisy_search_specs(task_type: str, noise_seeds=None):
     from kirby.noise_spec import default_spec
     is_clf = (task_type == 'classification')
     seeds = tuple(NOISY_SEARCH_SEEDS if noise_seeds is None else noise_seeds)
+    # The shared grid for THIS task type, so n15's levels line up with every
+    # other noise experiment's and the numbers can be read against each other.
+    # Falls back to the module constant if the policy cannot answer.
+    try:
+        from experiments.dataset_policy import noise_levels as _policy_levels
+        levels = tuple(_policy_levels(None, is_clf=is_clf))
+    except Exception:
+        levels = NOISY_SEARCH_LEVELS
+    if not levels:
+        levels = NOISY_SEARCH_LEVELS
     out = []
-    for lvl in NOISY_SEARCH_LEVELS:
+    for lvl in levels:
         lvl_seeds = seeds if (lvl > 0 or is_clf) else seeds[:1]
         for sd in lvl_seeds:
             out.append(default_spec(is_clf=is_clf, target_effective_noise=lvl,

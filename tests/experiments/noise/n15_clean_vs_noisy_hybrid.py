@@ -52,10 +52,13 @@ SCOPE / CAVEATS (read first).
     (kirby.noise_spec, backed by noiseInject) on TRAINING rows only; validation
     labels are never noised. Claims do NOT transfer to real label noise of unknown
     structure.
-  - Levels come from noise_helpers.NOISY_SEARCH_LEVELS, which since 2026-09-12 is
-    (0.0, 0.15, 0.3) — the bottom three of the shared grid every other noise
-    experiment sweeps, so the numbers here can be read against theirs. 0.5, 0.75
-    and 1.0 are not covered.
+  - Levels are the WHOLE shared grid since 2026-09-18: noisy_search_specs reads
+    dataset_policy.noise_levels() for this task type, so regression sweeps
+    (0.0, 0.15, 0.3, 0.5, 0.75, 1.0) and classification (0.0, 0.05, 0.1, 0.2,
+    0.3, 0.4). It was the bottom three, which answered the oracle question where
+    the corruption is mildest and left it open where it is worst. Draws go from
+    7 to 16 on a regression dataset, and every draw is a fresh recipe search on
+    both arms, so this is about 2.3 times the searches.
   - NOTHING IS PRECOMPUTED, AND SINCE 2026-09-18 THAT IS TRUE OF BOTH ARMS.
     The noisy-label precompute was deleted on 2026-09-11. Until 2026-09-18 the
     CLEAN arm could still read a search held in memory while the noisy arm could
@@ -71,10 +74,18 @@ SCOPE / CAVEATS (read first).
     allocation scores go back into build_fold_hybrid rather than being refitted
     on every one of the 5 folds x 2 arms per cell, and only when the search's
     fold indices are exactly the folds this run asks for.
-  - There is NO labels-hash assertion, here or anywhere in the repository. This
-    file computes noisy_labels_hash and writes it into its own output; nothing
-    compares it to anything. An earlier version of this docstring claimed the
-    check existed.
+  - THE LABELS HASH IS CHECKED SINCE 2026-09-18, and the check is narrower than
+    the name suggests. Three things are asserted where the column is drawn: that
+    make_noisy_labels is deterministic for this spec, that the column is the
+    same length as the labels, and that it differs from the clean labels above
+    level 0.0 and matches them at 0.0 on a regression dataset. ⛔ It does NOT
+    compare this column to the one find_best_hybrid derived inside the noisy
+    search — that column is built on the engine's label_noise branch and is not
+    returned on the SearchResult, so there is nothing here to compare it to.
+    'checked_against_search_column': False in the output says so on every cell.
+    Closing that needs the engine to expose its derived column or its digest.
+    Before 2026-09-18 nothing was checked at all and an earlier docstring
+    claimed otherwise.
   - This is a comparison of BLUEPRINTS, not of hybrid-vs-base. Both arms are hybrids.
 
 Usage:
@@ -336,7 +347,80 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # ONE deterministic noisy column, identical to the one the cached noisy
         # search was built on (both call make_noisy_labels on the full label vector).
         y_noisy_full = make_noisy_labels(labels, spec, is_clf=is_clf)
-        results.setdefault('noisy_labels_hash', {})[sid] = noisy_labels_hash(y_noisy_full)
+        _noisy_hash = noisy_labels_hash(y_noisy_full)
+        results.setdefault('noisy_labels_hash', {})[sid] = _noisy_hash
+
+        # ⛔ THE HASH IS CHECKED NOW, NOT JUST WRITTEN. Added 2026-09-18,
+        # owner's decision.
+        #
+        # noisy_labels_hash's own docstring (kirby/noise_spec.py:474) says
+        # "Experiments assert this against the value the cached search was built
+        # under". No experiment did. This file computed the hash, wrote it into
+        # its own output and compared it to nothing, and an earlier version of
+        # the docstring above claimed a check existed.
+        #
+        # WHAT THESE THREE ASSERTIONS PROVE, stated exactly, because a check
+        # that is believed to cover more than it does is worse than none.
+        #
+        # 1. The draw is deterministic: make_noisy_labels on the same labels and
+        #    the same spec gives a byte-identical column. If it does not, every
+        #    cell in this run was trained on a column the search never saw, and
+        #    the two arms are not comparable.
+        # 2. The column has the right length, so y_noisy_full[train_idx] below
+        #    indexes the rows it claims to.
+        # 3. The corruption is where the level says: identical to the clean
+        #    labels at level 0.0 on a regression dataset, and different from
+        #    them above it. A spec that silently delivered no corruption would
+        #    make oracle_advantage exactly zero and look like the publishable
+        #    null this experiment is trying to test for.
+        #
+        # ⛔ WHAT THEY DO NOT PROVE. They do not check this column against the
+        # one find_best_hybrid derived inside the noisy search. That column is
+        # built on the engine's own label_noise branch and is not returned on
+        # the SearchResult, so there is nothing here to compare it to. Asserting
+        # that needs the engine to expose its derived column or its label digest.
+        # Until it does, that gap is open and this comment is where it is
+        # recorded.
+        _recheck = make_noisy_labels(labels, spec, is_clf=is_clf)
+        if noisy_labels_hash(_recheck) != _noisy_hash:
+            raise RuntimeError(
+                f"n15 {sid}: make_noisy_labels is not deterministic for this "
+                f"spec — two calls on the same labels gave different columns "
+                f"({_noisy_hash} then {noisy_labels_hash(_recheck)}). Every "
+                f"recipe searched under this spec was chosen on a column this "
+                f"run will not train on, so neither arm's score means what it "
+                f"says.")
+        if len(y_noisy_full) != len(labels):
+            raise RuntimeError(
+                f"n15 {sid}: the noisy column has {len(y_noisy_full)} entries "
+                f"and the labels have {len(labels)}. They index the same "
+                f"molecules, so every row after the first gap would train on "
+                f"another molecule's label.")
+        _identical = bool(np.array_equal(np.asarray(y_noisy_full),
+                                         np.asarray(labels)))
+        _lvl = float(spec.target_effective_noise or 0.0)
+        if _lvl > 0.0 and _identical:
+            raise RuntimeError(
+                f"n15 {sid}: the spec asks for effective noise {_lvl} and the "
+                f"column it produced is identical to the clean labels. Both "
+                f"arms would then be searched and trained on the same labels, "
+                f"oracle_advantage would be zero by construction, and that "
+                f"zero would read as the methodological null this experiment "
+                f"exists to test for.")
+        if _lvl == 0.0 and not is_clf and not _identical:
+            raise RuntimeError(
+                f"n15 {sid}: level 0.0 on a regression dataset must deliver "
+                f"the clean labels unchanged and this column differs from "
+                f"them. The zero-noise cell is the reference every other level "
+                f"is read against.")
+        results.setdefault('noisy_labels_checked', {})[sid] = {
+            'hash': _noisy_hash,
+            'deterministic': True,
+            'n_labels': int(len(y_noisy_full)),
+            'identical_to_clean': _identical,
+            'target_effective_noise': _lvl,
+            'checked_against_search_column': False,
+        }
 
         results['per_noise_per_model'][sid] = {}
         results['blueprint_agreement'][sid] = {}
