@@ -20,6 +20,7 @@ from experiments._shared import (
     get_domain_metric, convert_numpy, get_model_factories,
     build_fold_hybrid, build_fold_reselection_input, fold_reselection,
     hr_exclude_folds,
+    top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 from experiments.dataset_policy import (
@@ -398,6 +399,45 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             if s is None:
                 continue
             cells[(strategy, float(level))] = _reselected_cell(s)
+
+    # ── THE TOP 2 BASE REPRESENTATIONS AND THE TOP 2 HYBRIDS ──────────────
+    # Added 2026-09-18. Additive: every key below this block is untouched and
+    # every number c10 already reports is unchanged. All four helpers read rows
+    # the search already stored, so this costs 0 new model fits.
+    #
+    # One entry per (noise strategy, noise level), because c10 runs one search
+    # per cell and the ranking can move as the labels get noisier — which is
+    # the thing c10 exists to measure. c10 searches with models=['rf'] (:311),
+    # so rf is the only downstream model any of these can rank.
+    #
+    # hybrid_deltas carries the two reference numbers: the hybrid against the
+    # mean of the base representations that fed it, and against the best base
+    # representation for rf.
+    results['top2_by_cell'] = {}
+    for _key, _s in _searches.items():
+        if _s is None:
+            continue
+        _cell = {}
+        try:
+            _b = top_base_reps(_s, 'rf', 2, require_full=False,
+                               context=f'c10 {dataset_name} {_key}')
+            _cell['top2_base_reps'] = [(e['rep'], e['score'])
+                                       for e in _b['selected']]
+            _h = top_hybrids(_s, 'rf', 2, require_full=False,
+                             context=f'c10 {dataset_name} {_key}')
+            _cell['top2_hybrids'] = [
+                {'label': e['label'], 'score_mean': e['score_mean'],
+                 'budget': e['budget'], 'n_features': e['n_features']}
+                for e in _h['selected']]
+            if _h['selected']:
+                _cell['hybrid_deltas'] = {
+                    k: v for k, v in hybrid_deltas(
+                        _s, 'rf', hybrid=_h['selected'][0]['row'],
+                        context=f'c10 {dataset_name} {_key}').items()
+                    if k != 'notes' or v}
+        except Exception as _e:
+            _cell['error'] = f'{type(_e).__name__}: {_e}'
+        results['top2_by_cell'][str(_key)] = _cell
 
     results['search_failures'] = search_failures
     _any_cell = next(iter(cells.values()), None)
