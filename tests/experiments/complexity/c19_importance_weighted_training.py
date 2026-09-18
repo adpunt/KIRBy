@@ -150,22 +150,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     input_spaces = {}
 
     augmentations = data.get('augmentations')
-    hybrid_bp = None
-    try:
-        _search, _meta = get_best_search_for_downstream(
-            reps, labels, groups, downstream_model='rf', budget=budget,
-            augmentations=augmentations,
-            data=data,
-            dataset_name=dataset_name,
-            task_type=task_type, metric=metric_name,
-        )
-        if _meta:
-            hybrid_bp = _meta['best_config']['blueprint']
-            input_spaces['hybrid'] = hybrid_bp
-        else:
-            print("  Hybrid recipe lookup returned nothing for this budget")
-    except Exception as e:
-        print(f"  Hybrid recipe lookup failed: {e}")
+    # ONE RECIPE PER DOWNSTREAM MODEL, NOT ONE FOR ALL THREE.
+    #
+    # ⛔ FIXED 2026-09-18. It asked the pool for downstream_model='rf' once and
+    # put that single recipe in input_spaces['hybrid'], and the model loop below
+    # then built the hybrid space from it for rf, lightgbm AND xgboost. So two
+    # of the three columns in every c19 result were measured on features chosen
+    # for a random forest. The stored search scores each downstream model
+    # separately and has a recipe for each, so the rf answer was never the one
+    # to use for the other two.
+    #
+    # The blueprint is per model now. `input_spaces['hybrid']` holds a dict from
+    # model name to blueprint, and the loop below picks the entry for the column
+    # it is building. A model the pool has no recipe for is dropped from the
+    # hybrid space rather than given another model's, and is named in the result
+    # under 'hybrid_recipe_missing'.
+    #
+    # This moves the lightgbm and xgboost columns of every c19 result already on
+    # disk. Those numbers were measured with rf's features; the new ones are not.
+    hybrid_bp_by_model = {}
+    hybrid_recipe_missing = []
+    for _m in models:
+        try:
+            _search, _meta = get_best_search_for_downstream(
+                reps, labels, groups, downstream_model=_m, budget=budget,
+                augmentations=augmentations,
+                data=data,
+                dataset_name=dataset_name,
+                task_type=task_type, metric=metric_name,
+            )
+            if _meta:
+                hybrid_bp_by_model[_m] = _meta['best_config']['blueprint']
+            else:
+                hybrid_recipe_missing.append(_m)
+                print(f"  Hybrid recipe lookup returned nothing for {_m} "
+                      f"at this budget")
+        except Exception as e:
+            hybrid_recipe_missing.append(_m)
+            print(f"  Hybrid recipe lookup failed for {_m}: {e}")
+    if hybrid_bp_by_model:
+        input_spaces['hybrid'] = hybrid_bp_by_model
+    if hybrid_recipe_missing:
+        print(f"  no hybrid column for: {sorted(hybrid_recipe_missing)}")
 
     print(f"  Input spaces: {list(input_spaces.keys())}")
     print(f"  Models: {list(models.keys())}")
@@ -178,13 +204,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # carries its own, and that is the one the fold matrices below are
         # built at, so both are stored.
         'budget': budget,
-        'recipe_budget': (int(hybrid_bp.budget)
-                          if getattr(hybrid_bp, 'budget', None) is not None
-                          else None),
+        # The recipe budget PER DOWNSTREAM MODEL. It was one number, read off
+        # the single rf recipe, back when one recipe served all three columns.
+        # Each model has its own recipe now and they need not agree, so a
+        # reader cannot be handed one number for all three.
+        'recipe_budget_by_model': {
+            _m: (int(_bp.budget) if getattr(_bp, 'budget', None) is not None
+                 else None)
+            for _m, _bp in hybrid_bp_by_model.items()
+        },
+        # Downstream models the pool had no recipe for at this budget. They
+        # have no hybrid column; their other spaces still ran.
+        'hybrid_recipe_missing': sorted(hybrid_recipe_missing),
         'conditions': conditions,
         # Which rows chose what. Every condition in a model's column shares one
         # feature set per fold, so the deltas between conditions — what c19
         # asks — are unaffected by the recipe having come from every row.
+        # Since 2026-09-18 that feature set is also built from the recipe the
+        # search chose for THAT model, not from rf's.
         'features_selected_on': "each fold's training rows",
         # Which model decided keep/drop inside each fold's build. It is the
         # same model the column is then scored with, one build per model.
@@ -213,11 +250,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _sample_X = next(iter(reps.values()))
     splits = list(cv_split(groups, n_folds, _sample_X, labels, mode=mode))
 
-    for space_name, blueprint in input_spaces.items():
+    for space_name, blueprint_or_map in input_spaces.items():
         print(f"\n  === {space_name} ===")
         space_results = {}
 
         for model_name, model_factory in models.items():
+            # The hybrid space carries one recipe PER downstream model; every
+            # other space is one blueprint shared by all of them.
+            if isinstance(blueprint_or_map, dict):
+                if model_name not in blueprint_or_map:
+                    continue
+                blueprint = blueprint_or_map[model_name]
+            else:
+                blueprint = blueprint_or_map
             # Build this space's features per fold, from the fold's training
             # rows, with the model this column is scored under. create_hybrid's
             # keep/drop test fits the model it is handed, so a single matrix

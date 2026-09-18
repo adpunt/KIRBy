@@ -163,6 +163,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Which importance method every arm at this budget ranked features with
         # (the search's own choice). Keyed by budget.
         'importance_method_by_budget': {},
+        # 'search' or 'fallback', per budget. Without it a stored
+        # 'lightgbm_gain' cannot be told apart from a failed pool lookup.
+        'importance_method_source_by_budget': {},
         'n_reps': n_reps,
         'rep_ranking_full_data': [(n, float(s)) for n, s in ranked_full],
         'per_budget': {},
@@ -202,14 +205,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # across representations. Without this the hand-built arms ranked by
         # lightgbm_gain while the search may have chosen deeplift or treeshap,
         # and the two differences moved together.
+        # ⛔ WHERE THE IMPORTANCE METHOD CAME FROM IS RECORDED SINCE 2026-09-18.
+        #
+        # This line read 'lightgbm_gain' whether the search had chosen
+        # lightgbm_gain or the pool lookup above had failed, and the result file
+        # stored the same string either way. So a c18 result showing
+        # lightgbm_gain could be the arms agreeing with the search, or it could
+        # be the run silently reinstating the exact confound the comment above
+        # says this lookup exists to remove -- and nothing on disk told the two
+        # apart. The failure printed a WARNING to the job log, which is not
+        # where anyone reads a result from.
+        #
+        # 'search' means the search chose it. 'fallback' means the lookup
+        # returned nothing or raised and the arms ran on the default anyway.
         fold_imp_method = 'lightgbm_gain'
+        fold_imp_source = 'fallback'
         if meta is not None:
             try:
                 fold_imp_method = meta['best_config']['blueprint'].importance_method
-            except Exception:
-                pass
-        print(f"    importance method for all arms: {fold_imp_method}")
+                fold_imp_source = 'search'
+            except Exception as _e:
+                print(f"    WARNING: the search's recipe carried no importance "
+                      f"method ({_e}); falling back")
+        if fold_imp_source == 'fallback':
+            print(f"    ⛔ importance method for all arms: {fold_imp_method} "
+                  f"— FALLBACK, not the search's choice. The depth arms and "
+                  f"the natural arm may now differ in two ways, not one.")
+        else:
+            print(f"    importance method for all arms: {fold_imp_method} "
+                  f"(from the search)")
         results['importance_method_by_budget'][budget] = fold_imp_method
+        results['importance_method_source_by_budget'][budget] = fold_imp_source
 
         # Persist the honest-rescore input built from the SEARCH itself (all
         # hybrid candidate recipes + per-rep baseline per-fold scores). Pure
