@@ -167,6 +167,36 @@ def sweep_points(fold_spread):
         else:
             for ranking, per_source, mult, fraction in product(
                     RANKINGS, PER_SOURCE_BUDGETS, MARGIN_MULTIPLES, FRACTIONS):
+                # ⛔ THE MARGIN IS DEAD WHENEVER A FRACTION IS SET. Skipped
+                # since 2026-09-18, owner's decision.
+                #
+                # The margin is how much better a block of donor features has
+                # to score than keeping none before it is admitted. A fraction
+                # says: do not run that test at all, just take the top
+                # round(fraction x width) by rank. hybrid.py:4111 states it --
+                # "margin is not consulted; the two settings are alternatives,
+                # not a stack" -- and hybrid.py:4366 repeats it for the capped
+                # path.
+                #
+                # So every (strategy, ranking, per-source budget, fraction)
+                # combination with a fraction set ran the 4 margin multiples as
+                # 4 IDENTICAL searches. They could not even share a cache: the
+                # condition suffix carries the margin, so each of the 4 paid a
+                # full run.
+                #
+                # 2 strategies x 4 rankings x 4 per-source budgets x 3 non-None
+                # fractions = 96 combinations, each wasting 3 of its 4 margin
+                # multiples: 288 duplicate sweep points of 516. The sweep is 228
+                # points now and nothing it measured is lost -- the margin axis
+                # is still swept in full on the 4 fraction=None combinations per
+                # (strategy, ranking, per-source budget), which is where it acts.
+                #
+                # This is not a cut for compute. The dropped points are
+                # DEGENERATE: they re-run a search whose every input the engine
+                # treats identically. That is one of the three stated reasons a
+                # cut is allowed.
+                if fraction is not None and mult != MARGIN_MULTIPLES[0]:
+                    continue
                 points.append({'augmentation_strategy': strategy,
                                'candidate_ranking': ranking,
                                'aug_per_source_budget': per_source,

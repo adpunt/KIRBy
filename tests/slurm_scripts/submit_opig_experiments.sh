@@ -79,9 +79,11 @@ fi
 # The census only. It reads the saved matrices and counts; it fits no model, so
 # it belongs in this batch like any other single job.
 #
-# ⛔ ITS COMPANION IS NOT HERE. opig_shared_vectors_remedy.py is 948 million
-# model fits per dataset at --speed full, which is an array across three stages,
-# not a --wrap. It has its own submitter:
+# ⛔ ITS COMPANION IS NOT HERE. opig_shared_vectors_remedy.py is about 218
+# million model fits per dataset at --speed full, which is an array across three
+# stages, not a --wrap. This line said 948 million until 2026-09-18: it doubled
+# the configuration count (the file pins rep_counts to [None]) and it counted
+# 516 sweep settings, 288 of which were duplicates. It has its own submitter:
 #     bash tests/slurm_scripts/submit_opig_shared_vectors.sh {census|spread|sweep}
 if [[ "$FILTER" == "all" || "$FILTER" == "shared_vectors" ]]; then
     submit shared_vectors_census 64G 04:00:00 short \
