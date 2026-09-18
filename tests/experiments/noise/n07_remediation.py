@@ -120,7 +120,7 @@ from experiments._shared import (
     top_base_reps, top_hybrids, hybrid_deltas,
 )
 from kirby.utils.noise_estimation import (
-    ActivityCliffAwareEstimator, GaussianProcessEstimator,
+    ESTIMATOR_REGISTRY, ActivityCliffAwareEstimator, GaussianProcessEstimator,
     QuantileForestEstimator, smooth_by_scores, weights_from_scores,
     clip_to_range,
 )
@@ -214,8 +214,33 @@ def _predict_for_metric(model, X, metric_name):
     return model.predict(X)
 
 
-def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
-    """Fit ActivityCliffAwareEstimator on (X_tr_s, y_tr) and return noise_scores_.
+# ⛔ WHICH DETECTOR DECIDES WHAT IS SUSPECT. Until 2026-09-18 this file fitted
+# ActivityCliffAwareEstimator and nothing else, in five places, with no name to
+# change and nothing to compare it against.
+#
+# Two things say that was the wrong one to be stuck with. It is the detector
+# n11, n13 and n06 CUT on 2026-09-12 for being neighbor_residual in a second
+# name -- measured again here on all three local datasets, Spearman 0.9843 to
+# 0.9888 over every molecule. And on n18, over the same molecules and folds,
+# swapping it for `cross_val` moved `downweight` from 4 of 4 settings winning a
+# majority to 9 of 12, and supplied the best setting for both cleanups that win.
+#
+# `cross_val` is a different kind of evidence: how badly a model trained on the
+# OTHER molecules predicts this label, out of fold on scaffold-disjoint folds,
+# rather than the label judged against its neighbours' labels.
+#
+# GRADED, not assumed. n07 injects the noise, so it knows which molecules were
+# corrupted, and it already grades a detector with noise_helpers.detection_scores.
+# Both names below are scored that way every fold -- two estimator fits and no
+# model fits -- so this run says which one FINDS the corrupted molecules while
+# DETECTOR says which one drove the cleanups.
+DETECTORS_GRADED = ('cross_val', 'activity_cliff_aware')
+DETECTOR = 'cross_val'
+
+
+def _compute_noise_scores(X_tr_s, y_tr, is_clf=False, detector=None,
+                          groups=None):
+    """Fit the named detector on (X_tr_s, y_tr) and return its noise scores.
 
     Hoisted out of _evaluate_fold so the caller can compute once per (fold,
     noise_seed) and reuse across the strategies that need it (every cleanup
@@ -229,8 +254,16 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
     by their range — meaningless on nominal labels). Mirrors the per-rep /
     hybrid is_clf threading audited as P0#1.
     """
+    import inspect
+    name = DETECTOR if detector is None else detector
     try:
-        est = ActivityCliffAwareEstimator(k=10, metric=None, is_clf=is_clf)
+        cls = ESTIMATOR_REGISTRY[name]
+        # Each estimator takes its own arguments. Handing every one `k` and
+        # `metric` is what kept CrossValResidualEstimator, which takes neither,
+        # out of this file and out of n18 (fixed there the same day).
+        offered = {'k': 10, 'metric': None, 'groups': groups, 'is_clf': is_clf}
+        accepts = set(inspect.signature(cls.__init__).parameters)
+        est = cls(**{k: v for k, v in offered.items() if k in accepts})
         est.fit(X_tr_s, y_tr)
         return est.noise_scores_
     except Exception as exc:
@@ -719,6 +752,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # How well the detector found the corrupted molecules, before any cleanup.
     # One reading per (fold, draw) per feature space. Owner's decision 2026-09-12.
     detection_acc = {}
+    # Keyed by detector name rather than by feature space: which name
+    # FOUND the corrupted molecules, against DETECTOR, which drove the
+    # cleanups. Both are graded in the corrupted-label space.
+    detection_by_detector = {}
+    # An empty `detection` block used to be unreadable: it looked the same
+    # whether the grading was never reached, the detector would not fit, or
+    # detection_scores declined because no molecule was corrupted. These say
+    # which. Counts of (fold, noise seed) passes, not of molecules.
+    detection_tally = {'reached': 0, 'detector_returned_none': 0,
+                       'scores_declined': 0, 'graded': 0,
+                       'fold_space_unavailable': 0}
 
     sample_X = next(iter(reps.values()))
 
@@ -1018,6 +1062,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Empty on a condition where every training molecule moves.
         'detection': {_sp: _mean_detection(_rows)
                       for _sp, _rows in detection_acc.items()},
+        # Every candidate detector graded against the molecules that really
+        # moved, in the corrupted-label space, before any cleanup ran. The
+        # cleanups ran under `detector_used` alone; this says whether that was
+        # the name that finds them. Costs one estimator fit per fold per extra
+        # name and no model fit.
+        'detection_by_detector': {_dn: _mean_detection(_rows)
+                                  for _dn, _rows in detection_by_detector.items()},
+        'detection_tally': detection_tally,
+        'detection_tally_note': (
+            'Counts of (fold, noise seed) passes. reached = got as far as the '
+            'grading; fold_space_unavailable = the per-draw feature space could '
+            'not be built, which skips the grading with everything else; '
+            'detector_returned_none = the estimator would not fit; '
+            'scores_declined = no molecule was corrupted, or every one was, so '
+            'average precision is undefined; graded = a number was recorded. '
+            'An empty detection block reads the same three ways without this.'),
+        'detector_used': DETECTOR,
+        'detectors_graded': list(DETECTORS_GRADED),
         # Scoping metadata: this experiment studies SYNTHETIC label noise
         # injected on the TRAINING labels only (the Outlier condition for
         # regression / random class flips for classification; validation
@@ -1346,6 +1408,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for fold_i, (train_idx, val_idx) in enumerate(
                 cv_split(groups, n_folds, sample_X, labels, mode=mode)):
             y_train_clean = labels[train_idx]
+            # This fold's scaffold groups, for a detector whose inner split has
+            # to stay scaffold-disjoint. Without them a molecule's
+            # scaffold-mates train the model that predicts it and its residual
+            # is small for a reason that has nothing to do with its label.
+            _groups_tr = (np.asarray(groups)[train_idx]
+                          if groups is not None else None)
             y_val = labels[val_idx]
 
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
@@ -1409,6 +1477,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # budget split are recomputed.
                 noisy_space = _fold_space(y_tr_noisy)
                 if noisy_space is None:
+                    # Everything below this line is skipped, including the
+                    # detection grading, so it is counted rather than lost.
+                    detection_tally['fold_space_unavailable'] += 1
                     continue
                 X_tr_n, X_va_n = noisy_space
 
@@ -1437,6 +1508,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # fraction, so a corrupted SUBSET exists and the question has an
                 # answer. It costs no model fit: the suspicion scores and the
                 # list of corrupted molecules are both already in memory.
+                # ⛔ EVERY CANDIDATE DETECTOR IS GRADED, not only the one that
+                # drove the cleanups. Added 2026-09-18. The cleanups are the
+                # expensive part and they run once, under DETECTOR; grading a
+                # second name costs one estimator fit per fold and no model fit
+                # at all, and it is the only way this file can say whether the
+                # detector it uses is the one that finds the corrupted
+                # molecules. Before today there was one hardcoded class and
+                # nothing to compare it with.
+                detection_tally['reached'] += 1
+                for _dname in DETECTORS_GRADED:
+                    if _dname == DETECTOR:
+                        _alt = noise_scores_noisy
+                    else:
+                        _alt = _compute_noise_scores(
+                            X_tr_n, y_tr_noisy, is_clf=is_clf,
+                            detector=_dname, groups=_groups_tr)
+                    if _alt is None:
+                        detection_tally['detector_returned_none'] += 1
+                        continue
+                    _d = detection_scores(_cmask, _alt, _spec.strategy)
+                    if _d is None:
+                        detection_tally['scores_declined'] += 1
+                        continue
+                    detection_tally['graded'] += 1
+                    detection_by_detector.setdefault(_dname, []).append(_d)
+
                 for _space_name, _ns_arr in (('noisy_space', noise_scores_noisy),
                                              ('clean_space', noise_scores_clean_space)):
                     if _ns_arr is None:
