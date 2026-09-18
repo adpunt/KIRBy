@@ -52,8 +52,11 @@ warnings.filterwarnings('ignore')
 import numpy as np
 
 STAMP = '20260918'
-POOL_DATASETS = ('adme_hlm', 'adme_mdr1', 'adme_rlm',
-                 'caco2', 'chembl_qsar', 'herg_ki')
+# pdv is in the `general` pool of these. chembl_qsar also carries it, and is
+# NOT here: it loads per target through kirby.datasets.chembl_qsar rather than
+# by name through load_data, so it has to be handled on its own. Name it with
+# --datasets once that path exists.
+POOL_DATASETS = ('adme_hlm', 'adme_mdr1', 'adme_rlm', 'caco2', 'herg_ki')
 
 
 def cache_root():
@@ -136,22 +139,31 @@ def quarantine(entries):
 
 
 def rebuild(datasets):
+    """Rebuild pdv per dataset. Returns (still_zscored, could_not_load).
+
+    ⛔ THESE TWO ARE NOT THE SAME THING and were one flag until 2026-09-18.
+    A dataset load_data cannot name at all (chembl_qsar loads per target, not by
+    name) raised, set the flag, and the run ended on "at least one came back
+    z-scored. STOP." while every dataset that DID rebuild had come back raw.
+    That reads as "the cleanup failed" when the cleanup worked.
+    """
     from experiments._shared import load_data
-    ok = True
+    still_zscored, could_not_load = [], []
     for ds in datasets:
         try:
             X = load_data(ds, rep_preset='full', rep_names=['pdv'])['reps']['pdv']
         except Exception as exc:
-            print(f'{ds:14s} REBUILD FAILED {type(exc).__name__}: {exc}')
-            ok = False
+            print(f'{ds:14s} COULD NOT LOAD — {type(exc).__name__}: {exc}')
+            could_not_load.append(ds)
             continue
         z = looks_zscored(X)
         means = [round(float(v), 2) for v in np.asarray(X).mean(axis=0)[:4]]
         verdict = ('⛔ STILL Z-SCORED — another cache layer served it'
                    if z else 'raw, as the code builds it')
         print(f'{ds:14s} {tuple(X.shape)}  first column means {means}   {verdict}')
-        ok = ok and not z
-    return ok
+        if z:
+            still_zscored.append(ds)
+    return still_zscored, could_not_load
 
 
 if __name__ == '__main__':
@@ -173,10 +185,17 @@ if __name__ == '__main__':
         quarantine(entries)
     if args.rebuild:
         print('\n--- rebuild ---')
-        good = rebuild(args.datasets)
-        print('\n' + ('every rebuild came back raw — safe to re-check freshness '
-                      'and then wipe the result databases'
-                      if good else
-                      '⛔ at least one came back z-scored. STOP. Do not delete any '
-                      'result database: a cache layer is still serving the old '
-                      'matrix and the rebuild has not happened.'))
+        still_zscored, could_not_load = rebuild(args.datasets)
+        print()
+        if still_zscored:
+            print(f'⛔ STOP. {", ".join(still_zscored)} came back z-scored, so a '
+                  f'cache layer is still serving the old matrix and the rebuild '
+                  f'has not happened. Do not delete any result database.')
+        else:
+            print('Every dataset that rebuilt came back raw. Re-check freshness, '
+                  'and if that is clean the result databases can go.')
+        if could_not_load:
+            print(f'\n{len(could_not_load)} could not be loaded at all and were '
+                  f'neither checked nor rebuilt: {", ".join(could_not_load)}. '
+                  f'That is separate from the z-score question and does not block '
+                  f'anything above.')
