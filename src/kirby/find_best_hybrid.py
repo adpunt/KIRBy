@@ -4447,6 +4447,39 @@ def _hash_feature_selection(feature_info: dict) -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
+def _reraise_if_environment(exc, where):
+    """Let a missing-library error out of a per-configuration handler.
+
+    ⛔ THE RULE, already stated for the dnn evaluator at hybrid.py:2925-2930:
+    "A missing library is an environment mistake and now stops the run; a failed
+    fit is still a fallback, because it is a property of those rows."
+
+    The search loop did not follow it. Its per-configuration handlers catch
+    Exception and DROP the configuration, which is right for a fit that blew up
+    on one fold's rows and wrong for an absent import — that fails every
+    configuration identically. Measured 2026-09-18: a run of
+    compare_nested_vs_reselection.py on a node without lightgbm caught the same
+    ImportError on every configuration of the grid, printed the traceback
+    thousands of times, produced zero rows and exited as though it had searched.
+    Under speed='fast' lightgbm_gain is the ONLY importance method, so not one
+    configuration could survive.
+
+    A per-configuration handler cannot tell those apart by itself. This can:
+    ImportError and ModuleNotFoundError are properties of the environment, never
+    of a configuration, so they stop the run where they are raised.
+    """
+    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+        raise RuntimeError(
+            f"{where}: {type(exc).__name__}: {exc}\n"
+            f"  A missing library is not a property of this configuration — it "
+            f"fails EVERY configuration in the grid identically. Stopping here "
+            f"rather than dropping {type(exc).__name__} once per configuration "
+            f"and finishing with no rows. Check the environment (on ARC: "
+            f"`. setup.sh`, and confirm the conda env is the one with the "
+            f"dependencies, not `base`)."
+        ) from exc
+
+
 def _evaluate_hybrid_config(
     base_reps: Dict[str, np.ndarray],
     labels: np.ndarray,
@@ -6248,6 +6281,8 @@ def _run_search(
                     if _ip is not None:
                         _save_cache_with_meta(_ip, _im, _imp_scores)
                 except Exception as e:
+                    _reraise_if_environment(
+                        e, f"importance pre-pass {imp_method} fold {fold_idx}")
                     if verbose:
                         print(f"    importance {imp_method} fold {fold_idx}: FAILED ({e})")
         if verbose:
@@ -7238,6 +7273,8 @@ def _run_search(
                 )
 
         except Exception as e:
+            _reraise_if_environment(
+                e, f"search configuration {model_name}/{alloc}/{imp}/b={bgt}")
             # Always printed, never verbose-gated. A configuration that raises
             # is DROPPED from the search — since 2026-09-10 that includes one
             # that lost a fold — so a quiet run would end with fewer
@@ -7449,6 +7486,8 @@ def _run_refinement_phase(
                         f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}"
                     )
             except Exception as e:
+                _reraise_if_environment(
+                    e, f"refine {model_name}/{r['allocation_method']}")
                 # Always printed, never verbose-gated — the same rule the main
                 # loop and the fold-0 pass follow. A configuration that raises
                 # is DROPPED, and since 2026-09-10 that includes one that lost
