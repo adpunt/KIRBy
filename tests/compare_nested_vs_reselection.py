@@ -70,6 +70,8 @@ def run(dataset_name, args):
     # 10-representation pool and the flag did nothing.
     _rep_names = ([r.strip() for r in args.reps.split(',') if r.strip()]
                   if args.reps else None)
+    _budgets = ([int(b.strip()) for b in args.budgets.split(',') if b.strip()]
+                if args.budgets else None)
     data = load_data(dataset_name, rep_names=_rep_names)
     reps = data['reps']
     labels = data['labels']
@@ -86,6 +88,7 @@ def run(dataset_name, args):
         'dataset': dataset_name,
         'n_molecules': int(len(labels)),
         'n_representations': len(reps),
+        'nested_budgets': _budgets,  # None = all 8 of FULL_BUDGETS
         'n_outer_folds': args.n_outer_folds,
         'nested_speed': 'fast',
         # Stated in the file so a reader of the JSON does not have to find this
@@ -108,6 +111,15 @@ def run(dataset_name, args):
         task_type=task_type,
         n_outer_folds=args.n_outer_folds,
         speed='fast',
+        # ⛔ THE BUDGET LIST IS WHAT THIS RUN COSTS. speed='fast' sweeps all 8
+        # entries of FULL_BUDGETS, up to 2000 features, and the widest fits
+        # dominate: a herg_ki run on ARC printed hybrids 1,757 and 1,778
+        # features wide. The configuration count is
+        # 3 allocation x 1 importance x 2 representation counts x len(budgets)
+        # x 9 (model, evaluator) pairs, so naming 3 budgets takes 432
+        # configurations to 162 AND drops the widest ones. None of this changes
+        # what is compared: both arms are re-picked on the same outer folds.
+        budgets=_budgets,
         verbose=args.verbose,
     )
     nested_seconds = time.time() - t0
@@ -242,6 +254,10 @@ if __name__ == '__main__':
     ap.add_argument('dataset')
     ap.add_argument('--reps', default=None)
     ap.add_argument('--n-outer-folds', type=int, default=5)
+    ap.add_argument('--budgets', default=None,
+                    help='comma-separated feature budgets for the nested '
+                         'arm, e.g. 50,200,500. Default: all 8 of '
+                         'FULL_BUDGETS, which is what makes this slow.')
     ap.add_argument('--output-dir', default='tests/results/nested_vs_reselection')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
