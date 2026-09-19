@@ -185,6 +185,14 @@ REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'quantile_clip')
 # suite. The inner split is group-aware wherever the caller has scaffold groups.
 REPAIR_OOF_SPLITS = 5
 
+# The most training molecules `gp_smooth` will fit a Gaussian process on.
+# n11 caps the same estimator at GP_MAX = 1000 for the same reason and this
+# path had no cap at all. Above it the target is refused with its reason on the
+# result rather than fitted on a subsample, because a target fitted on fewer
+# molecules is a different quantity and a cleanup silently aiming somewhere
+# else is worse than one that says it did not run.
+GP_SMOOTH_MAX_ROWS = 1000
+
 # The smallest clean-to-noisy gap a recovery PERCENTAGE may divide by, as a
 # fraction of the clean score's own magnitude. Same rule and same number as
 # n11 (n11_estimation_remediation_grid.GAP_MIN_FRAC), and it is here for the
@@ -300,8 +308,85 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False, detector=None,
         return None
 
 
+def correction_targets(X_tr_s, y_tr, groups=None, want=None):
+    """The three model-based corrections' targets, fitted ONCE.
+
+    ⛔ WHY THIS EXISTS. `oof_smooth`, `gp_smooth` and `quantile_clip` each fit a
+    model on part of the training rows and read a target off the rest, and each
+    one refitted it on EVERY call to cleaned_training_set. The target depends on
+    the features, the labels and the groups and on nothing else -- not on the
+    suspicion score, not on the strength, not on which downstream model is
+    about to be fitted. So a caller sweeping settings refits the same model for
+    every one of them.
+
+    In n18 that is 3 strength settings x 2 detectors x 2 models = 12 identical
+    fits per (fold, space) where 1 would do, for each of the three. The
+    Gaussian process is the one that hurts: it is cubic in the training rows
+    and fits REPAIR_OOF_SPLITS inner folds per call, so on herg_ki it was 60 GP
+    fits per (fold, space) against 5.
+
+    This is the same argument `_compute_noise_scores` carries for the DETECTOR
+    ("~4x wasted work per fold"), which was hoisted for it and not for these,
+    and it is what n11 already does with its EXTRA_TARGETS -- computed once per
+    (fold, draw, space) and handed to every estimator.
+
+    Returns {name: value} for the names in `want`, each None when its fit
+    failed, so a caller passes the dict straight to cleaned_training_set and a
+    failure drops that one cleanup rather than the fold.
+    """
+    want = set(want or ('oof', 'gp', 'quantile'))
+    out = {}
+    n_splits = min(REPAIR_OOF_SPLITS, len(y_tr))
+    if 'oof' in want:
+        try:
+            out['oof'] = oof_predict(X_tr_s, y_tr, groups, n_splits=n_splits)
+        except Exception as exc:
+            print(f"      oof target failed: {type(exc).__name__}: {exc}")
+            out['oof'] = None
+    if 'gp' in want:
+        try:
+            if len(y_tr) > GP_SMOOTH_MAX_ROWS:
+                # ⛔ A GAUSSIAN PROCESS IS CUBIC IN THE TRAINING ROWS AND THIS
+                # ONE HAS NO CAP. GaussianProcessEstimator takes no max_samples
+                # and runs n_restarts=3, so one call is three hyperparameter
+                # optimisations of an O(n^3) fit, REPAIR_OOF_SPLITS times over.
+                # n11 caps the same estimator at GP_MAX = 1000 and this path
+                # did not, which is why gp_smooth did not finish a fold on
+                # herg_ki's 1,130-molecule training blocks.
+                #
+                # Refusing is the honest move rather than subsampling: a target
+                # fitted on a subsample is a different quantity from one fitted
+                # on the fold, and a cleanup silently aiming at a different
+                # target is worse than a cleanup that says it did not run.
+                out['gp'] = None
+                out['gp_refused_because'] = (
+                    f'{len(y_tr)} training molecules is over '
+                    f'GP_SMOOTH_MAX_ROWS={GP_SMOOTH_MAX_ROWS}; a Gaussian '
+                    f'process is cubic in the rows and this one has no cap')
+            else:
+                est = GaussianProcessEstimator(n_folds=REPAIR_OOF_SPLITS,
+                                               groups=groups)
+                est.estimate(X_tr_s, y_tr)
+                out['gp'] = np.asarray(est.predictions_, dtype=float)
+        except Exception as exc:
+            print(f"      gp target failed: {type(exc).__name__}: {exc}")
+            out['gp'] = None
+    if 'quantile' in want:
+        try:
+            est = QuantileForestEstimator(n_folds=REPAIR_OOF_SPLITS,
+                                          groups=groups)
+            est.estimate(X_tr_s, y_tr)
+            out['quantile'] = (np.asarray(est.quantile_lo_, dtype=float),
+                               np.asarray(est.quantile_hi_, dtype=float))
+        except Exception as exc:
+            print(f"      quantile target failed: {type(exc).__name__}: {exc}")
+            out['quantile'] = None
+    return out
+
+
 def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
-                         is_clf=False, groups=None, strength=None):
+                         is_clf=False, groups=None, strength=None,
+                         targets=None):
     """What one of the cleanups hands the downstream fit, before any fit runs.
 
     Hoisted out of `_evaluate_fold` on 2026-09-17 so that `n20` can apply the
@@ -434,8 +519,10 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # molecules predicts for this one. The inner split is group-aware, so
         # no molecule's own scaffold family trains the model that predicts it
         # (kirby/utils/noisy_labels/core.py:127).
-        target = oof_predict(X_tr_s, y_tr, groups,
-                             n_splits=min(REPAIR_OOF_SPLITS, len(y_tr)))
+        target = (targets or {}).get('oof')
+        if target is None:
+            target = oof_predict(X_tr_s, y_tr, groups,
+                                 n_splits=min(REPAIR_OOF_SPLITS, len(y_tr)))
         y_smoothed = smooth_by_scores(y_tr, noise_scores, target,
                                       alpha=0.5, method='proportional')
         return {'X': X_tr_s, 'y': y_smoothed, 'sample_weight': None,
@@ -446,9 +533,12 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # process fitted on the other training molecules. GaussianProcessEstimator
         # already computed this on every call and kept it on the fitted object
         # as predictions_; nothing in this file read it before today.
-        est = GaussianProcessEstimator(n_folds=REPAIR_OOF_SPLITS, groups=groups)
-        est.estimate(X_tr_s, y_tr)
-        target = np.asarray(est.predictions_, dtype=float)
+        target = (targets or {}).get('gp')
+        if target is None:
+            est = GaussianProcessEstimator(n_folds=REPAIR_OOF_SPLITS,
+                                           groups=groups)
+            est.estimate(X_tr_s, y_tr)
+            target = np.asarray(est.predictions_, dtype=float)
         y_smoothed = smooth_by_scores(y_tr, noise_scores, target,
                                       alpha=0.5, method='proportional')
         return {'X': X_tr_s, 'y': y_smoothed, 'sample_weight': None,
@@ -462,10 +552,13 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # range is left exactly as it is; a label outside is pulled back onto
         # the edge it crossed. So this cleanup rewrites only the labels no
         # molecule like them carries, and the rest of the column is untouched.
-        est = QuantileForestEstimator(n_folds=REPAIR_OOF_SPLITS, groups=groups)
-        est.estimate(X_tr_s, y_tr)
-        y_clipped = clip_to_range(y_tr, est.quantile_lo_, est.quantile_hi_,
-                                  alpha=1.0)
+        _q = (targets or {}).get('quantile')
+        if _q is None:
+            est = QuantileForestEstimator(n_folds=REPAIR_OOF_SPLITS,
+                                          groups=groups)
+            est.estimate(X_tr_s, y_tr)
+            _q = (est.quantile_lo_, est.quantile_hi_)
+        y_clipped = clip_to_range(y_tr, _q[0], _q[1], alpha=1.0)
         return {'X': X_tr_s, 'y': y_clipped, 'sample_weight': None,
                 'keep': None, 'label_column': y_clipped}
 
@@ -633,7 +726,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                    noise_seed=42, precomputed_y_tr=None, noise_scores=None,
                    dataset_name=None, noise_level=0.5,
                    y_all=None, train_idx=None, train_groups=None,
-                   strength=None):
+                   strength=None, targets=None):
     """Evaluate a single remediation strategy on one fold.
 
     train_groups: one scaffold-group label per TRAINING row, forwarded to
@@ -705,7 +798,8 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
             cleaned = cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores,
                                            noise_fraction, is_clf=is_clf,
                                            groups=train_groups,
-                                           strength=strength)
+                                           strength=strength,
+                                           targets=targets)
             if cleaned is None:
                 # `remove` left under 10 training rows. Same fall-through as
                 # before: no score for this fold rather than a fit on nothing.
