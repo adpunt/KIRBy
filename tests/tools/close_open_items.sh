@@ -92,6 +92,14 @@ for m in (metas or []):
         print(f'     {ds:12s} ⛔ STALE {len(bad)}: {", ".join(sorted(bad))}')
     if skip:
         print(f'     {ds:12s} not checked {len(skip)}: {", ".join(sorted(skip))}')
+    # ⛔ AND THE ONES THE CHECKER CANNOT REBUILD AT ALL never reach
+    # cache_matches_the_code, so "matched 5" reads as "all 5 are fine" when the
+    # pool holds 10. Name them.
+    pool = m.get('representations_counted') or []
+    never = [r for r in pool if r not in checks]
+    if never:
+        print(f'     {ds:12s} NO BUILDER in the checker, never verifiable '
+              f'here ({len(never)}): {", ".join(sorted(never))}')
 PY
 }
 

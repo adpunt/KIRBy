@@ -116,21 +116,60 @@ def run(dataset_name, args):
         for m, e in (nested.by_model or {}).items()
     }
 
+    # ⛔ WRITE ARM 1 BEFORE ARM 2 RUNS. Added 2026-09-19 after a run on ARC
+    # spent 138.6 minutes on the nested arm, hit the wall in arm 2, and wrote
+    # nothing at all: the file was dumped once at the end, so a failure in the
+    # cheap arm threw away the expensive one.
+    _partial = os.path.join(args.output_dir, f'{dataset_name}.json')
+    os.makedirs(args.output_dir, exist_ok=True)
+    out['status'] = 'nested arm only — arm 2 has not run yet'
+    with open(_partial, 'w') as _f:
+        json.dump(convert_numpy(out), _f, indent=1, default=str)
+    print(f"        nested arm saved to {_partial}")
+
     # ---- arm 2: per-fold reselection over one whole-dataset search ---------
     print("\n  [2/2] per-fold reselection over one stored whole-dataset search")
     t0 = time.time()
-    search, meta = get_best_search_for_downstream(
-        reps, labels, groups,
-        downstream_model='rf', budget=None,
-        augmentations=augmentations,
-        data=data,
-        dataset_name=dataset_name,
-        task_type=task_type,
-    )
+    # ⛔ ARM 2 READS A STORED SEARCH. IT MUST NOT BUILD ONE.
+    # When nothing is stored, get_best_search_for_downstream falls through to a
+    # live find_best_hybrid at FULL speed — 8,160 configurations — which is not
+    # the quantity this arm is supposed to measure and does not finish inside a
+    # 4-hour wall. That is exactly what happened on ARC on 2026-09-19, on a
+    # dataset whose result database had just been deleted for the pdv rebuild.
+    # KIRBY_NO_COLD_SEARCH makes the engine refuse instead.
+    _prev_cold = os.environ.get('KIRBY_NO_COLD_SEARCH')
+    os.environ['KIRBY_NO_COLD_SEARCH'] = '0.5'
+    search = meta = None
+    try:
+        search, meta = get_best_search_for_downstream(
+            reps, labels, groups,
+            downstream_model='rf', budget=None,
+            augmentations=augmentations,
+            data=data,
+            dataset_name=dataset_name,
+            task_type=task_type,
+        )
+    except Exception as _exc:
+        print(f"        no stored search to read — {type(_exc).__name__}: "
+              f"{str(_exc)[:160]}")
+        out['reselection_skipped'] = (
+            f'{type(_exc).__name__}: {str(_exc)[:400]}. Arm 2 reads a stored '
+            f'search and refuses to build one. Fill this dataset\'s result '
+            f'database first, then re-run.')
+    finally:
+        if _prev_cold is None:
+            os.environ.pop('KIRBY_NO_COLD_SEARCH', None)
+        else:
+            os.environ['KIRBY_NO_COLD_SEARCH'] = _prev_cold
+
     resel = {}
     if search is None:
-        print("        no stored search for this dataset — reselection arm skipped")
-        out['reselection_skipped'] = 'no stored search'
+        print("        reselection arm skipped — nothing stored to read")
+        # Do NOT overwrite a reason the except block already wrote: that one
+        # names the engine's refusal and how far short the stored rows fell,
+        # and 'no stored search' says less.
+        out.setdefault('reselection_skipped',
+                       'no stored search for this dataset')
     else:
         block = build_fold_reselection_input(search)
         resel = fold_reselection(
