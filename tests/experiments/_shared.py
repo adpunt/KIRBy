@@ -6062,6 +6062,150 @@ def get_best_search_for_downstream(
     return search, metadata
 
 
+def pool_recipes_by_family(meta, space_for_family=None, eligible_families=None,
+                           prefix='hybrid_'):
+    """One recipe per search family the pool holds, and a reason for each family
+    that produced none.
+
+    This is n11's loop (n11_estimation_remediation_grid.py:731-762) lifted into
+    one place on 2026-09-19, when thirteen more experiments needed the same
+    thing and thirteen copies of it would have drifted. n11, n13, n18 and n21
+    keep their own copies and are untouched, so no number they have already
+    reported moves.
+
+    WHY A LOOP AND NOT `meta['best_config']`. POOL_SUBSETS names the families in
+    PREFERENCE order and get_best_search_for_downstream returns the FIRST family
+    that has an entry, because the two families' stored scores are in different
+    units — a predictive search's score is the dataset's own metric, a
+    similarity search's is the correlation between each held-out molecule's
+    activity and what its five nearest neighbours predict. A predictive recipe
+    almost always exists, so reading `meta['best_config']` alone gives the
+    predictive recipe and records that the other one existed. Every eligible
+    family's own best is in `meta['by_objective']`, which is what this reads.
+
+    ⛔ The two families are NOT ranked against each other here. Each becomes its
+    own feature space and each is scored by the experiment in the dataset's own
+    metric, which is the only comparison that is defined.
+
+    Args:
+        meta: the metadata dict from get_best_search_for_downstream, or None.
+        space_for_family: {family name: the result-file name of its space}.
+            None gives f'{prefix}{family}'. Pass the file's existing hybrid
+            space name for 'predictive' so nothing already reported is renamed.
+        eligible_families: the families the caller's pool subset named (i.e.
+            POOL_SUBSETS[subset]). A family in here that the pool returned
+            nothing for gets its own reason; a family NOT in here gets a
+            different one. None skips both.
+        prefix: used only when space_for_family has no entry for a family.
+
+    Returns:
+        (recipes, unavailable)
+
+        recipes: one dict per family that carries a usable recipe, in the
+        order the pool reported them (subset preference order):
+          {'space': str, 'objective': str, 'blueprint': Blueprint,
+           'tier': str, 'aug_condition': str, 'budget': int,
+           'allocation_method': str, 'importance_method': str,
+           'internal_evaluator': str, 'augmentation_strategy': str,
+           'search_score_mean': float, 'search_metric_name': str,
+           'search_lower_is_better': bool, 'is_pool_winner': bool}
+
+        unavailable: {space name: why it was not built}. Written to the result
+        file by the caller, so a space that is absent always carries a reason
+        rather than leaving a reader to work out whether it failed or was never
+        asked for.
+    """
+    def _name(fam):
+        if space_for_family and fam in space_for_family:
+            return space_for_family[fam]
+        return f'{prefix}{fam}'
+
+    recipes, unavailable = [], {}
+
+    if not meta:
+        for fam in (eligible_families or ()):
+            unavailable[_name(fam)] = (
+                'the precomputed pool returned no recipe for this dataset, so '
+                'no feature space could be built from any search family')
+        return recipes, unavailable
+
+    winner = meta.get('objective')
+    by_obj = meta.get('by_objective') or {}
+    if not by_obj:
+        # A metadata dict from before 'by_objective' existed, or a pool that
+        # returned one family and recorded nothing beside it. Its top-level
+        # fields ARE that one family's entry.
+        by_obj = {winner or 'predictive': {
+            'tier': meta.get('tier'),
+            'aug_condition': meta.get('aug_condition'),
+            'score_mean': meta.get('score_mean'),
+            'metric_name': meta.get('metric_name'),
+            'lower_is_better': meta.get('lower_is_better'),
+            'best_config': meta.get('best_config'),
+        }}
+
+    for fam, entry in by_obj.items():
+        bp = ((entry or {}).get('best_config') or {}).get('blueprint')
+        name = _name(fam)
+        if bp is None:
+            unavailable[name] = (
+                f'the {fam} family was in the pool but its winning '
+                f'configuration carried no blueprint, so its feature space '
+                f'could not be built')
+            continue
+        recipes.append({
+            'space': name,
+            'objective': fam,
+            'blueprint': bp,
+            'tier': entry.get('tier'),
+            'aug_condition': entry.get('aug_condition'),
+            'budget': int(getattr(bp, 'budget', 0) or 0),
+            'allocation_method': getattr(bp, 'allocation_method', None),
+            'importance_method': getattr(bp, 'importance_method', None),
+            'internal_evaluator': getattr(bp, 'internal_evaluator', None),
+            'augmentation_strategy': getattr(bp, 'augmentation_strategy', None),
+            'search_score_mean': entry.get('score_mean'),
+            'search_metric_name': entry.get('metric_name'),
+            'search_lower_is_better': entry.get('lower_is_better'),
+            'is_pool_winner': fam == winner,
+        })
+
+    for fam in (eligible_families or ()):
+        name = _name(fam)
+        if name in unavailable or any(r['space'] == name for r in recipes):
+            continue
+        unavailable[name] = (
+            f'the pool held no search under objective={fam} for this dataset, '
+            f'so the space whose features that search chose could not be built')
+
+    if eligible_families is not None and space_for_family:
+        for fam, name in space_for_family.items():
+            if fam in eligible_families:
+                continue
+            if name in unavailable or any(r['space'] == name for r in recipes):
+                continue
+            unavailable[name] = (
+                f'the {fam} family is not in the pool subset this run asked '
+                f'for, so its feature space was never requested')
+
+    return recipes, unavailable
+
+
+def describe_pool_family(family):
+    """One sentence saying what a search family chose its features for.
+
+    The result files say this in words rather than leaving 'similarity' to be
+    decoded. Same wording as n06's FEATURES_CHOSEN_BY.
+    """
+    return {
+        'predictive': 'prediction of the label',
+        'similarity': ("the distance between molecules: the features were "
+                       "chosen so that each molecule's activity is predicted "
+                       "by its five nearest neighbours in that distance, with "
+                       "no downstream model fitted at all"),
+    }.get(family, family)
+
+
 def _other_fold_mean(fold_scores, held_out_fold, drop_folds=()):
     """(mean over every OTHER fold, how many folds that was).
 

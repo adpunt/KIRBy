@@ -42,6 +42,17 @@ results['hybrid_family'], and every eligible family's own best is stored in
 results['pool_by_objective']. This is NOT the distance=True flag, which this
 file already passed and which is left exactly as it was.
 
+2026-09-19: both families are BUILT now, not only recorded. The per-fold pool
+read returns a flat 'hybrids' list in the subset's PREFERENCE order and this
+file took hybrids[0], which is the predictive family's entry on every dataset
+that has one — so the geometry family was read and never used. It now takes the
+top of each family's own list (by_objective[family]['hybrids']) per fold, and
+all four tasks run once per space. The four task keys — weighted_knn,
+weighted_gp, weighted_svr and qrasar — hold the predictive space and are
+unchanged; every space is under results['by_hybrid_space'][space], with its own
+recipes in results['hybrid_space_recipes'] and its per-fold read failures in
+results['hybrid_space_errors'].
+
 Top 2 of each arm, and the two deltas (2026-09-18, owner's decision: "I'll add
 the top 2 rows everywhere as an extra, change nothing that's already reported").
 Additive: four new TOP-LEVEL keys on `results`, no existing key changed, and the
@@ -85,6 +96,9 @@ from experiments._shared import (
     fold_hybrid_scoring_kwargs,
     get_precomputed_search, get_best_for_downstream, extract_top3_base_reps,
     get_best_search_for_downstream, get_fold_pool_recipes,
+    # One sentence saying what a search family chose its features for. Added
+    # 2026-09-19 with the second hybrid space.
+    describe_pool_family,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS, FULL_BUDGETS,
     flatten_fold_weights,
@@ -112,6 +126,14 @@ _FOLD_SEARCH_SEED = 42
 # predict each molecule's activity from its five nearest neighbours — as well
 # as the ones built under the predictive objective.
 _POOL_SUBSET = 'predictive_and_similarity'
+
+# Which result-file space each family of stored search is built into. The
+# predictive one is named 'hybrid' and its numbers fill the four unsuffixed
+# task keys, so nothing reported before 2026-09-19 moves.
+_SPACE_FOR_FAMILY = {
+    'predictive': 'hybrid',
+    'similarity': 'hybrid_similarity',
+}
 
 # One recipe per held-out fold: the pool's rank-1 hybrid for that fold.
 _N_POOL_HYBRIDS = 1
@@ -1251,6 +1273,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # a search that never saw fold i's rows.
     fold_blueprints = {}
     fold_recipes = {}
+    # {space: {fold: recipe}}, one space per family of stored search. The two
+    # unsuffixed dicts above hold the family the pool returned, which is the
+    # predictive one, so nothing they feed moves. Added 2026-09-19.
+    fold_blueprints_by_space = {}
+    fold_recipes_by_space = {}
+    pool_family_errors = {}
     pool_fold_errors = {}
     pool_fold_warnings = {}
     pool_fold0_pruned = None
@@ -1292,6 +1320,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 f'the pool held no kNN hybrid configuration under subset '
                 f'{_POOL_SUBSET}')
             continue
+
+        # ⛔ ONE RECIPE PER FAMILY, NOT THE FIRST OF THE LIST. Added 2026-09-19.
+        #
+        # `hybrids` is ordered by the subset's PREFERENCE order, so hybrids[0]
+        # is the predictive family's on every dataset that has one -- which is
+        # every dataset. From 2026-09-12 to 2026-09-19 this file asked for both
+        # families and built that one, and the other appeared only in
+        # 'pool_by_objective'. get_fold_pool_recipes already returns each
+        # family's own ranked list under by_objective[family]['hybrids'];
+        # this reads the top of each.
+        #
+        # It matters here because three of the four tasks turn on a distance
+        # between molecules -- the weighted k-nearest-neighbours fit, and the
+        # Gaussian-process and support-vector arms whose RBF kernel is a
+        # distance -- and the similarity search chooses features so that
+        # exactly that distance predicts activity from the five nearest
+        # neighbours. The fourth, q-RASAR, adds similarity-derived FEATURES
+        # rather than reweighting a distance.
+        for _fam, _fam_block in (pool.get('by_objective') or {}).items():
+            _fam_hybrids = (_fam_block or {}).get('hybrids') or []
+            _space = _SPACE_FOR_FAMILY.get(_fam, f'hybrid_{_fam}')
+            if not _fam_hybrids:
+                (pool_family_errors.setdefault(_space, {}))[f'fold{fold_i}'] = (
+                    f'the pool held no kNN hybrid configuration under '
+                    f'objective={_fam} on the other folds')
+                continue
+            _ftop = _fam_hybrids[0]
+            fold_blueprints_by_space.setdefault(_space, {})[fold_i] = \
+                _ftop['blueprint']
+            (fold_recipes_by_space.setdefault(_space, {}))[fold_i] = {
+                'objective': _ftop['objective'],
+                'tier': _ftop['tier'],
+                'aug_condition': _ftop['aug_condition'],
+                'allocation_method': _ftop['allocation_method'],
+                'importance_method': _ftop['importance_method'],
+                'internal_evaluator': _ftop['internal_evaluator'],
+                'budget': _ftop['budget'],
+                'metric_name': _ftop['metric_name'],
+                'lower_is_better': _ftop['lower_is_better'],
+                'score_other_folds': _ftop['score_other_folds'],
+                'n_other_folds': _ftop['n_other_folds'],
+            }
+
         top = hybrids[0]
         fold_blueprints[fold_i] = top['blueprint']
         fold_recipes[fold_i] = {
@@ -1449,56 +1520,110 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  [Precomputed fold importance for {len(fold_splits)} folds x "
           f"{len(reps)} reps in {time.time() - t_imp:.1f}s]")
 
-    # Task 1: Weighted kNN
-    t0 = time.time()
-    results['weighted_knn'] = _run_weighted_knn(
-        reps, labels, groups, config, fold_blueprints,
-        metric_fn, metric_name, lower_is_better,
-        augmentations=augmentations, task_type=task_type,
-        fold_splits=fold_splits, fold_importance=fold_importance,
-        hybrid_budgets=sweep_budgets)
-    print(f"  [Task 1 elapsed: {time.time() - t0:.1f}s]")
+    # The four tasks, once per hybrid space. Added 2026-09-19: the pool holds
+    # two families of stored search and this file built one of them. The four
+    # top-level keys keep the numbers they had -- they are the PREDICTIVE
+    # space, which is the family the pool returned on every run before today --
+    # and every space, that one included, is under 'by_hybrid_space'.
+    #
+    # The per-representation baselines inside each task do not depend on the
+    # recipe, so they are recomputed identically in each space; the hybrid arms
+    # are what differ.
+    _spaces_to_run = [sp for sp in (_SPACE_FOR_FAMILY.get('predictive'),
+                                    _SPACE_FOR_FAMILY.get('similarity'))
+                      if fold_blueprints_by_space.get(sp)]
+    results['hybrid_spaces_scored'] = list(_spaces_to_run)
+    results['hybrid_space_recipes'] = convert_numpy(fold_recipes_by_space)
+    results['hybrid_space_errors'] = pool_family_errors
+    results['hybrid_spaces_note'] = (
+        'One hybrid space per family of stored search. A predictive search '
+        "chose its features to predict the label; a similarity search chose "
+        "them so that each molecule's activity is predicted by its five "
+        'nearest neighbours in the distance those features define, and fits no '
+        'downstream model. Their stored search scores are in different units '
+        'and nothing here ranks one against the other. Every number under '
+        "'by_hybrid_space' is measured by this file on the same folds in the "
+        "dataset's own metric, so those ARE comparable. The four top-level "
+        'task keys hold the predictive space alone and are unchanged.')
+    results['by_hybrid_space'] = {}
+    _primary_space = _SPACE_FOR_FAMILY['predictive']
 
-    # Task 2: GP with importance-weighted RBF (regression only)
-    if is_clf:
-        print("\n  --- Task 2: GP --- SKIP (regression-only)")
-        results['weighted_gp'] = {'skipped': True, 'reason': 'classification'}
-    else:
+    for _space in _spaces_to_run:
+        _fold_bps = fold_blueprints_by_space[_space]
+        _space_out = {}
+        print(f"\n  ===== hybrid space {_space} =====")
+
+        # Task 1: Weighted kNN
         t0 = time.time()
-        results['weighted_gp'] = _run_weighted_gp(
-            reps, labels, groups, config, fold_blueprints,
-            metric_fn, metric_name, n_samples,
+        _space_out['weighted_knn'] = _run_weighted_knn(
+            reps, labels, groups, config, _fold_bps,
+            metric_fn, metric_name, lower_is_better,
+            augmentations=augmentations, task_type=task_type,
+            fold_splits=fold_splits, fold_importance=fold_importance,
+            hybrid_budgets=sweep_budgets)
+        print(f"  [Task 1 elapsed: {time.time() - t0:.1f}s]")
+
+        # Task 2: GP with importance-weighted RBF (regression only)
+        if is_clf:
+            print("\n  --- Task 2: GP --- SKIP (regression-only)")
+            _space_out['weighted_gp'] = {'skipped': True,
+                                         'reason': 'classification'}
+        else:
+            t0 = time.time()
+            _space_out['weighted_gp'] = _run_weighted_gp(
+                reps, labels, groups, config, _fold_bps,
+                metric_fn, metric_name, n_samples,
+                lower_is_better=lower_is_better,
+                augmentations=augmentations,
+                fold_splits=fold_splits, fold_importance=fold_importance,
+                hybrid_budgets=sweep_budgets)
+            print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
+
+        # Task 3: SVR with importance-weighted RBF (regression only)
+        if is_clf:
+            print("  --- Task 3: SVR --- SKIP (regression-only)")
+            _space_out['weighted_svr'] = {'skipped': True,
+                                          'reason': 'classification'}
+        else:
+            t0 = time.time()
+            _space_out['weighted_svr'] = _run_weighted_svr(
+                reps, labels, groups, config, _fold_bps,
+                metric_fn, metric_name, n_samples,
+                lower_is_better=lower_is_better,
+                augmentations=augmentations,
+                fold_splits=fold_splits, fold_importance=fold_importance,
+                hybrid_budgets=sweep_budgets)
+            print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
+
+        # Task 4: q-RASAR similarity-augmented features
+        t0 = time.time()
+        _space_out['qrasar'] = _run_qrasar(
+            reps, labels, groups, config, _fold_bps,
+            metric_fn, metric_name, task_type=task_type,
             lower_is_better=lower_is_better,
             augmentations=augmentations,
             fold_splits=fold_splits, fold_importance=fold_importance,
             hybrid_budgets=sweep_budgets)
-        print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
+        print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
 
-    # Task 3: SVR with importance-weighted RBF (regression only)
-    if is_clf:
-        print("  --- Task 3: SVR --- SKIP (regression-only)")
-        results['weighted_svr'] = {'skipped': True, 'reason': 'classification'}
-    else:
-        t0 = time.time()
-        results['weighted_svr'] = _run_weighted_svr(
-            reps, labels, groups, config, fold_blueprints,
-            metric_fn, metric_name, n_samples,
-            lower_is_better=lower_is_better,
-            augmentations=augmentations,
-            fold_splits=fold_splits, fold_importance=fold_importance,
-            hybrid_budgets=sweep_budgets)
-        print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
+        _space_out['built_under_objective'] = (
+            'predictive' if _space == _primary_space else 'similarity')
+        _space_out['features_chosen_by'] = describe_pool_family(
+            _space_out['built_under_objective'])
+        results['by_hybrid_space'][_space] = _space_out
+        if _space == _primary_space:
+            for _k in ('weighted_knn', 'weighted_gp', 'weighted_svr', 'qrasar'):
+                results[_k] = _space_out[_k]
 
-    # Task 4: q-RASAR similarity-augmented features
-    t0 = time.time()
-    results['qrasar'] = _run_qrasar(
-        reps, labels, groups, config, fold_blueprints,
-        metric_fn, metric_name, task_type=task_type,
-        lower_is_better=lower_is_better,
-        augmentations=augmentations,
-        fold_splits=fold_splits, fold_importance=fold_importance,
-        hybrid_budgets=sweep_budgets)
-    print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
+    # Every task key exists on every run, whatever the pool held, so a reader
+    # never has to tell an absent key from a skipped one.
+    for _k in ('weighted_knn', 'weighted_gp', 'weighted_svr', 'qrasar'):
+        results.setdefault(_k, {
+            'skipped': True,
+            'reason': (f'the pool gave no recipe under objective=predictive on '
+                       f'any fold, so the {_primary_space} space was not '
+                       f'built. Spaces scored: '
+                       f'{_spaces_to_run or "none"}.')})
 
     # -------------------------------------------------------------------------
     # HONEST (selection-corrected) RE-SCORES. Both blocks are kept OUT of the
@@ -1644,13 +1769,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'weighted_knn': _reselected_best_k_within_arm(
                 results['weighted_knn'], lower_is_better)
         }
+    # The same arithmetic in every other hybrid space. Pure arithmetic on the
+    # per-fold scores already stored: 0 new model fits. Added 2026-09-19 with
+    # the second space; the key above is unchanged and is still the predictive
+    # space's.
+    for _sp, _blk in (results.get('by_hybrid_space') or {}).items():
+        if isinstance(_blk.get('weighted_knn'), dict):
+            _blk['reselected_within_arm'] = {
+                'weighted_knn': _reselected_best_k_within_arm(
+                    _blk['weighted_knn'], lower_is_better)
+            }
 
     # Orient every stored delta so positive == improvement regardless of metric
     # direction (RMSE etc.). MUST run before _print_summary, which now treats
     # the stored deltas as already direction-corrected.
-    for _task_key in ('weighted_knn', 'weighted_gp', 'weighted_svr', 'qrasar'):
-        if isinstance(results.get(_task_key), dict):
-            _orient_deltas(results[_task_key], lower_is_better)
+    #
+    # ⛔ ONCE PER OBJECT. `results['weighted_knn']` and
+    # `results['by_hybrid_space']['hybrid']['weighted_knn']` are the SAME dict,
+    # and _orient_deltas negates in place -- orienting it twice would put every
+    # rmse delta back the way it came. Tracked by identity, so each task block
+    # is oriented exactly once whichever key reaches it first, and a space that
+    # this file scored but never filed at the top level is oriented too.
+    _TASK_KEYS = ('weighted_knn', 'weighted_gp', 'weighted_svr', 'qrasar')
+    _oriented = set()
+    for _blk in [results] + list((results.get('by_hybrid_space') or {}).values()):
+        for _task_key in _TASK_KEYS:
+            _t = _blk.get(_task_key)
+            if isinstance(_t, dict) and id(_t) not in _oriented:
+                _orient_deltas(_t, lower_is_better)
+                _oriented.add(id(_t))
     results['deltas_oriented'] = True  # positive delta == improvement everywhere
 
     # Summary

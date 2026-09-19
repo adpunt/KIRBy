@@ -79,6 +79,18 @@ the other: which family each model's recipe came from is written to
 eligible family's own best sits under `by_objective` there. This is NOT the
 `distance=True` flag; n07 does not pass it and that is unchanged.
 
+2026-09-19: both families are BUILT now, not only recorded. The pool names them
+in preference order and returns the first that has an entry, and a predictive
+recipe always exists, so between those two dates every strategy was measured in
+the prediction-built hybrid alone. Every strategy now runs once per (downstream
+model, hybrid space): 'hybrid' is the predictive recipe and the three
+`per_model_*` keys hold it unchanged, and every space is under the matching
+`*_by_space` keys. ⛔ `build_fold_hybrid` REFUSES a model and a metric alongside
+a geometry recipe, because create_hybrid fits no downstream model there;
+`_fold_space` passes both through `fold_hybrid_scoring_kwargs`, which returns
+nothing for such a recipe. Without that its own `except` would have swallowed
+the refusal and left the geometry space empty on every fold with nothing said.
+
 WHICH FEATURES THE CEILING IS MEASURED IN. Until 2026-09-11 the clean-label
 ceiling stayed in the clean-label feature space while every damaged arm had
 moved to the noisy one, so part of the gap a recovery percentage divides by was
@@ -112,6 +124,12 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
+    # A geometry recipe fits no downstream model and build_fold_hybrid refuses
+    # a model and a metric alongside one; this returns {} for such a recipe.
+    fold_hybrid_scoring_kwargs,
+    # One feature space per search family the pool holds, added 2026-09-19.
+    # n11's loop, in one place. See SPACE_FOR_FAMILY below.
+    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
     extract_top3_base_reps, DOWNSTREAM_MODELS_NOISE,
     fold_reselection, build_fold_reselection_input,
     # 2026-09-18, owner's instruction: the top 2 rows go in everywhere as an
@@ -125,6 +143,16 @@ from kirby.utils.noise_estimation import (
     clip_to_range,
 )
 from kirby.utils.noisy_labels import oof_predict
+
+# Which result-file space each family of stored search is built into. 'hybrid'
+# is the predictive one, and every key below that does not name a space holds
+# it, so nothing reported before 2026-09-19 moves. See the per-family loop in
+# run() for why one recipe is not enough.
+HYBRID_SPACE = 'hybrid'
+SPACE_FOR_FAMILY = {
+    'predictive': HYBRID_SPACE,
+    'similarity': 'hybrid_similarity',
+}
 
 
 # Multi-seed noise averaging. Each fold runs noise injection at multiple
@@ -798,6 +826,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # other — get_best_search_for_downstream returns the first family the
     # subset names when the metrics disagree, and says so in objective_choice.
     hybrid_family_by_model = {}
+    # Each model's own pool metadata, kept so the per-family loop below reads
+    # every family's best for that model and not only the one the pool returned.
+    meta_by_model = {}
     rf_search = None
     rf_meta = None
     for _mname in models_requested:
@@ -832,6 +863,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             bp_by_model[_mname] = _bp
             aug_by_model[_mname] = _aug_cond
             search_by_model[_mname] = _search
+            meta_by_model[_mname] = _meta
             blueprint_status[_mname] = 'ok'
             # Recorded per model, because each model resolves its own recipe
             # and the families can differ between them.
@@ -860,6 +892,58 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             blueprint_status[_mname] = (
                 f'fetch_raised: {type(_exc).__name__}: {_exc}')
             print(f"  WARNING: blueprint fetch failed for {_mname} ({_exc})")
+
+    # ── One recipe per (model, family), not one per model ─────────────────
+    # ⛔ Added 2026-09-19. POOL_SUBSETS names the two families in PREFERENCE
+    # order and the pool returns the first that has an entry, because their
+    # stored scores are in different units. A predictive recipe always exists,
+    # so from 2026-09-12 to 2026-09-19 this file asked for both families, built
+    # the predictive one and wrote the other into the result file as a score it
+    # never measured in.
+    #
+    # It matters here because three of the four older cleanups -- downweight,
+    # label_smooth and knn_smooth -- overwrite or reweight a label using its
+    # NEIGHBOURS' labels, and the similarity search chooses features so that
+    # exactly that distance predicts activity from the five nearest
+    # neighbours. DETECTOR itself is 'cross_val', an out-of-fold model
+    # residual, so the suspicion score is not a neighbour reading;
+    # activity_cliff_aware, graded beside it, is.
+    #
+    # HYBRID_SPACE is still the predictive recipe, so every number reported
+    # before 2026-09-19 still means what it meant.
+    recipes_for_model = {}
+    space_objective = {}
+    hybrid_spaces_unavailable = {}
+    # First per-fold build failure per space, filled by _fold_space below. A
+    # space whose every fold failed would otherwise leave no rows and no reason.
+    _fold_space_errors = {}
+    for _mname in models_requested:
+        _recipes, _unavail = pool_recipes_by_family(
+            meta_by_model.get(_mname), SPACE_FOR_FAMILY,
+            eligible_families=POOL_SUBSETS[POOL_SUBSET])
+        _per_space = {}
+        for _r in _recipes:
+            _r_bp = _r['blueprint']
+            _r_aug = _r['aug_condition'] or 'uncapped'
+            if getattr(_r_bp, 'augmentation_strategy', None) != _r_aug:
+                # Copy first, for the reason the per-model fetch above gives:
+                # the recipe object is shared with every other reader of the
+                # pool in this process.
+                try:
+                    _r_bp = copy.copy(_r_bp)
+                    _r_bp.augmentation_strategy = _r_aug
+                except Exception:
+                    pass
+            _per_space[_r['space']] = (_r_bp, _r_aug)
+            space_objective[_r['space']] = _r['objective']
+        recipes_for_model[_mname] = _per_space
+        if _unavail:
+            hybrid_spaces_unavailable[_mname] = _unavail
+    for _sp in sorted(space_objective):
+        print(f"  hybrid space {_sp}: family {space_objective[_sp]!r}")
+    for _mname, _unavail in hybrid_spaces_unavailable.items():
+        for _sp, _why in _unavail.items():
+            print(f"  {_mname}: no {_sp} space — {_why}")
 
     models_with_blueprint = [m for m in models_requested
                              if blueprint_status[m] == 'ok']
@@ -1169,6 +1253,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_strategy': {},
         # Canonical per-model results — every reader should prefer this.
         'per_model_per_strategy': {m: {} for m in bp_by_model},
+        # The same rows for EVERY hybrid space, keyed {space: {model: {...}}}.
+        # Added 2026-09-19 with the second space. The three keys without the
+        # suffix hold the predictive space alone and are unchanged.
+        'per_model_per_strategy_by_space': {},
+        'per_model_per_strategy_oracle_features_by_space': {},
+        'per_model_no_noise_clean_features_by_space': {},
+        # Why a space that was asked for produced nothing, per model, and the
+        # first per-fold build error per space.
+        'hybrid_spaces_unavailable': hybrid_spaces_unavailable,
+        'hybrid_space_build_errors': _fold_space_errors,
+        'hybrid_space_objective': dict(space_objective),
+        'hybrid_spaces_note': (
+            'One hybrid space per family of stored search, per downstream '
+            'model. A predictive search chose its features to predict the '
+            "label; a similarity search chose them so that each molecule's "
+            'activity is predicted by its five nearest neighbours in the '
+            'distance those features define, and fits no downstream model. '
+            'The two searches score their own candidates in different units '
+            'and nothing here ranks one against the other. Every score under '
+            "the '*_by_space' keys is measured by n07 itself in the dataset's "
+            'own metric, on the same folds and the same noise draws, so those '
+            'ARE comparable.'),
         # The same strategies measured in a feature space chosen from the CLEAN
         # labels, before the noise this experiment studies was injected. That
         # is what every score in this file used to be. It is kept as a named
@@ -1377,12 +1483,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # all 7 strategies. The previous (model × strategy × fold) order
     # recomputed those 4× per (fold, seed) — once per strategy that needed
     # noise_scores. The audit P1 perf-recompute fix.
-    for model_name, model_factory in model_factories.items():
-        if model_name not in bp_by_model:
-            continue
-        model_bp = bp_by_model[model_name]
-        model_aug_cond = aug_by_model[model_name]
+    # One pass per (downstream model, hybrid space). Flattened rather than
+    # nested so the body below is untouched. Added 2026-09-19: the pool holds
+    # two families of stored search and this file built one of them.
+    _model_space_passes = [
+        (_mn, _mf, _sp, _bp_, _aug_)
+        for _mn, _mf in model_factories.items() if _mn in bp_by_model
+        for _sp, (_bp_, _aug_) in recipes_for_model.get(_mn, {}).items()
+    ]
+    for (model_name, model_factory, space_name, model_bp,
+            model_aug_cond) in _model_space_passes:
         model_augs = augmentations if model_aug_cond != 'none' else None
+        # Under a geometry recipe create_hybrid fits no downstream model, and
+        # build_fold_hybrid REFUSES a model and a metric alongside one. Passing
+        # them anyway would raise inside _fold_space's except clause and the
+        # whole space would come back empty with nothing said. The shared
+        # helper returns {} for a geometry recipe and the three unchanged for a
+        # predictive one; the model instance is filled in per fold below.
+        _build_extra = fold_hybrid_scoring_kwargs(
+            model_bp, model=None, metric_fn=metric_fn,
+            lower_is_better=lower_is_better)
 
         # The three model-fitting cleanups run only under the downstream models
         # the ranking above kept. Every other model still gets the four older
@@ -1426,15 +1546,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             _mf=model_factory, _bp=model_bp):
                 """(X_train, X_val) standardised, features chosen from
                 y_for_features. Returns None when the build fails."""
+                _extra = dict(_build_extra)
+                if 'model' in _extra:
+                    _extra['model'] = _mf()
                 try:
                     X_tr_h, X_va_h, _fi = build_fold_hybrid(
                         _tr, _va, y_for_features, _bp,
                         augmentations_train=_ta, augmentations_val=_va_a,
                         groups=(groups[_tri] if groups is not None else None),
-                        model=_mf(),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
-                except Exception:
+                        **_extra)
+                except Exception as _exc:
+                    _fold_space_errors.setdefault(
+                        space_name, f'{type(_exc).__name__}: {_exc}')
                     return None
                 sc = StandardScaler()
                 return sc.fit_transform(X_tr_h), sc.transform(X_va_h)
@@ -1566,7 +1689,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # Aggregate per strategy. All strategies now use the iteration's
         # model, so model_used == model_name throughout.
-        print(f"\n  {model_name}/hybrid:")
+        print(f"\n  {model_name}/{space_name}:")
         for strategy in model_strategies:
             fold_scores = per_strategy_scores[strategy]
             score = float(np.mean(fold_scores)) if fold_scores else float('nan')
@@ -1583,24 +1706,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # recovery fraction can be checked for a space change between
                 # its top and its bottom without leaving the row.
                 'feature_space': 'noisy_per_fold',
-                'hybrid_family': hybrid_family_by_model.get(
-                    model_name, {}).get('objective'),
+                'hybrid_family': space_objective.get(space_name),
+                # Which hybrid space this row was measured in. One per family
+                # of stored search since 2026-09-19.
+                'space': space_name,
             }
-            results['per_model_per_strategy'][model_name][strategy] = entry
+            (results['per_model_per_strategy_by_space']
+                .setdefault(space_name, {})
+                .setdefault(model_name, {}))[strategy] = entry
+            if space_name == HYBRID_SPACE:
+                results['per_model_per_strategy'][model_name][strategy] = entry
 
             # Same strategy in the clean-label feature space.
             o_scores = per_strategy_scores_oracle[strategy]
             o_mean = float(np.mean(o_scores)) if o_scores else float('nan')
-            results['per_model_per_strategy_oracle_features'].setdefault(
-                model_name, {})[strategy] = {
-                    'score': o_mean,
-                    'n_folds': len(o_scores),
-                    'model_used': model_name,
-                    'fold_scores': [float(x) for x in o_scores],
-                    'feature_space': 'clean_labels',
-                    'hybrid_family': hybrid_family_by_model.get(
-                        model_name, {}).get('objective'),
-                }
+            _oracle_entry = {
+                'score': o_mean,
+                'n_folds': len(o_scores),
+                'model_used': model_name,
+                'fold_scores': [float(x) for x in o_scores],
+                'feature_space': 'clean_labels',
+                'hybrid_family': space_objective.get(space_name),
+                'space': space_name,
+            }
+            (results['per_model_per_strategy_oracle_features_by_space']
+                .setdefault(space_name, {})
+                .setdefault(model_name, {}))[strategy] = _oracle_entry
+            if space_name == HYBRID_SPACE:
+                results['per_model_per_strategy_oracle_features'].setdefault(
+                    model_name, {})[strategy] = _oracle_entry
             _gapstr = ('' if (np.isnan(o_mean) or np.isnan(score))
                        else f"  oracle_features={o_mean:.4f}")
             print(f"    {strategy:<18} {metric_name}={score:.4f} "
@@ -1611,15 +1745,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # counts one fit per (fold, noise seed).
         _cf_mean = (float(np.mean(clean_feature_ceiling_scores))
                     if clean_feature_ceiling_scores else float('nan'))
-        results['per_model_no_noise_clean_features'][model_name] = {
+        _ceiling_entry = {
             'score': _cf_mean,
             'n_folds': len(clean_feature_ceiling_scores),
             'model_used': model_name,
             'fold_scores': [float(x) for x in clean_feature_ceiling_scores],
             'feature_space': 'clean_labels',
-            'hybrid_family': hybrid_family_by_model.get(
-                model_name, {}).get('objective'),
+            'hybrid_family': space_objective.get(space_name),
+            'space': space_name,
         }
+        (results['per_model_no_noise_clean_features_by_space']
+            .setdefault(space_name, {}))[model_name] = _ceiling_entry
+        if space_name == HYBRID_SPACE:
+            results['per_model_no_noise_clean_features'][model_name] = \
+                _ceiling_entry
         print(f"    no_noise in clean-label features "
               f"{metric_name}={_cf_mean:.4f} "
               f"(n={len(clean_feature_ceiling_scores)})")

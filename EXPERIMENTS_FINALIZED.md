@@ -2225,6 +2225,8 @@ The augmentation flag, which lets features from other representations into the p
 
 **DECIDED — NOT YET IMPLEMENTED.** n02's pool subset includes similarity hybrids. Watch the recovery fraction: it divides by a clean-label ceiling, and a distance-built space is chosen without looking at labels, so a shortfall can read as a failed cleanup when the denominator moved.
 
+**IMPLEMENTED 2026-09-19 — and it was not implemented by the pool subset alone.** `POOL_SUBSETS['predictive_and_similarity']` names the two families in PREFERENCE order and `get_best_search_for_downstream` returns the FIRST that has an entry, because their stored scores are in different units — a predictive search's score is the dataset's own metric, a similarity search's is the correlation between each held-out molecule's activity and what its five nearest neighbours predict. A predictive recipe always exists. So from 2026-09-12 to 2026-09-19 this file asked for both families, built the predictive one, and wrote the other into the result file as a score nothing had measured in. Fixed: `pool_recipes_by_family` (`_shared.py`, n11's loop lifted into one place) turns the one pool lookup into one recipe per family, per downstream model, and conditions 3, 4 and 5 run once per space. `results['hybrid']` and `results['hybrid_cliff_aware']` hold the predictive space and are unchanged; `results['hybrid_by_space']` and `results['hybrid_cliff_aware_by_space']` hold every space. A family that produced no recipe is written to `results['hybrid_spaces_unavailable'][model][space]` with the reason. COST: the three hybrid conditions double — 5 folds x 5 models x 1 extra build per dataset, 25 more `build_fold_hybrid` calls, and no new search: the second recipe comes from the same pool lookup. The similarity search has to be on disk for the dataset; `noise_helpers.run_all` precomputes it once per dataset.
+
 **Still open — work, not a decision**
 
 - Same blueprint leak as n01: the hybrid's recipe and its rep_scores come from a whole-dataset search, so the hybrid arm is tuned and the base-representation arm is not. Commit `1e74b25` changed this without closing it: The rep_scores half is gone: build_fold_hybrid no longer falls back to blueprint.rep_scores, so each fold's budget split is scored on that fold's training rows. The recipe half stands.
@@ -2279,6 +2281,8 @@ were chosen by distance, and one base representation — the best by random fore
 off the same search, z-scored per fold on the training rows exactly as the
 hybrid arms are. The estimator list is imported from n11 so the two cannot
 drift.
+
+**The three spaces are real — checked 2026-09-19.** n06 was listed as a file that claimed a two-family comparison it never ran. It is not one. `_blueprint_for` is called once (n06:657), but n06:689 then loops over `meta['by_objective']`, takes each family's own recipe, and n06:703 puts each one into `spaces` as `hybrid_predictive` or `hybrid_similarity`; the build loop at n06:834 scores every space in the dict, fold by fold. A family whose best pool entry carries no recipe is written to `space_provenance[space]['unavailable']` with the reason (n06:692-695), and a family the subset does not name gets its own reason (n06:727-737). This went in with commit `df7c7fe` on 2026-09-12. What is NOT verified here: whether any n06 result file written before that date is still being read — none exists under `tests/experiments/results/` on this machine.
 
 **What comes out**
 
@@ -2372,6 +2376,8 @@ selects are per fold. Both are recorded under `space_provenance`.
 **Hybrids.** Reads five recipes, one per downstream model, all searched on clean labels, then builds the features itself. Any model with no stored recipe contributes no rows and is recorded as missing.
 
 **DECIDED — NOT YET IMPLEMENTED.** n07's pool subset includes similarity hybrids — three of its four remediation strategies overwrite or reweight a label using its neighbours' labels. Same denominator caution as n02, and sharper here: its clean ceiling and its corrupted arms already sit in two different feature sets.
+
+**IMPLEMENTED 2026-09-19 — and it was not implemented by the pool subset alone.** `POOL_SUBSETS['predictive_and_similarity']` names the two families in PREFERENCE order and `get_best_search_for_downstream` returns the FIRST that has an entry, because their stored scores are in different units — a predictive search's score is the dataset's own metric, a similarity search's is the correlation between each held-out molecule's activity and what its five nearest neighbours predict. A predictive recipe always exists. So from 2026-09-12 to 2026-09-19 this file asked for both families, built the predictive one, and wrote the other into the result file as a score nothing had measured in. Fixed the same way: one recipe per (downstream model, family), and the per-model loop is flattened to one pass per (model, space). The three `per_model_*` keys hold the predictive space and are unchanged; `per_model_per_strategy_by_space`, `per_model_per_strategy_oracle_features_by_space` and `per_model_no_noise_clean_features_by_space` hold every space. ⛔ One real hazard closed with it: `_fold_space` passed `model=`, `metric_fn=` and `lower_is_better=` to `build_fold_hybrid`, which REFUSES that pair under a geometry recipe — and its `except Exception: return None` would have swallowed the refusal and left the geometry space empty on every fold with nothing said. The three are dropped under a geometry recipe now, and the first failure per space is recorded in `results['hybrid_space_build_errors']`. COST: every strategy, every noise seed and every fold runs twice — with 5 models, 5 folds and 3 noise seeds that is 75 more `build_fold_hybrid` calls per dataset plus the fits over them. No new search.
 
 **Still open — work, not a decision**
 
@@ -2467,6 +2473,8 @@ Fit the ceiling once more inside each noise draw's own space. That space is alre
 
 **DECIDED — NOT YET IMPLEMENTED.** n11's pool subset includes similarity hybrids. This replaces the four-block stack it builds by hand today, putting the distance-based arm on the same budget, folds and importance machinery as the prediction arm it is compared against. Same denominator caution as n02.
 
+**ALREADY IMPLEMENTED — checked 2026-09-19.** `n11_estimation_remediation_grid.py:731-762` loops over every family `meta['by_objective']` reports and builds one space per family, and :329 passes each recipe's OWN objective to `create_hybrid`, so the allocators split the budget by the quantity that recipe's search ranked by. This is the loop the other files copy; `_shared.pool_recipes_by_family` is it lifted into one place on 2026-09-19, and n11 keeps its own copy so nothing it has reported moves.
+
 **Decision — mine.** Guard the two summary loops. Without it the grid runs for hours on a classification dataset and writes nothing at all.
 
 ## n12 — `noise/n12_importance_weighted_distance.py`
@@ -2503,6 +2511,8 @@ Fit the ceiling once more inside each noise draw's own space. That space is alre
 **Hybrids.** Reads one recipe for a random forest on the clean labels, then builds 30 feature matrices new. The matrix has to be rebuilt on each fold's training rows under that fold's noisy labels, because the importance scores that split the budget depend on those labels. Cost: 2,700 weighted random-forest fits and 30 builds.
 
 **DECIDED — NOT YET IMPLEMENTED.** n12's pool subset includes similarity hybrids. This is the clearest case in the noise suite: the file exists to ask which distance geometry makes neighbour-based noise estimation work, and every arm it compares is a geometry.
+
+**IMPLEMENTED 2026-09-19 — and it was not implemented by the pool subset alone.** `POOL_SUBSETS['predictive_and_similarity']` names the two families in PREFERENCE order and `get_best_search_for_downstream` returns the FIRST that has an entry, because their stored scores are in different units — a predictive search's score is the dataset's own metric, a similarity search's is the correlation between each held-out molecule's activity and what its five nearest neighbours predict. A predictive recipe always exists. So from 2026-09-12 to 2026-09-19 this file asked for both families, built the predictive one, and wrote the other into the result file as a score nothing had measured in. Fixed: one `_build_fold_shared` call per family per (noise level, fold), and the five conditions become eight — the two base ones, plus `hybrid_unweighted` / `hybrid_imp_base` / `hybrid_imp_own` in each hybrid space. The names under `hybrid_*` are the predictive recipe and are unchanged; the new ones are `hybrid_similarity_*`. The three summary flags and `best_k` / `best_importance_method` are still read over the five conditions this file had before, so those numbers do not move; the same answers for every space are under `answers_by_hybrid_space`, `per_k_avg_recovery_every_condition` and `per_method_avg_recovery_every_condition`. COST: 30 more hybrid builds per dataset (6 noise levels x 5 folds), and 3 more conditions x 3 estimators x 3 k values x 2 importance methods scored on each. No new search.
 
 **Still open — work, not a decision**
 
@@ -2552,6 +2562,8 @@ Agreed then, and here is what each half costs. Routing through build_fold_hybrid
 **Hybrids.** Reads six recipes and builds up to 4,500 feature matrices new. Both build paths run on each fold's training rows under that fold's noisy labels, so nothing carries across. On a regression dataset the cells are 10 shapes x 6 levels x 5 folds x 3 draws = 900. Cost is dominated by 32,400 neural-network trainings.
 
 **DECIDED — NOT YET IMPLEMENTED.** n13's pool subset includes similarity hybrids. Same consolidation as n11 — it carries the hand-built four-block stack today.
+
+**ALREADY IMPLEMENTED — checked 2026-09-19.** n13 builds one space per family, the same way n11 does.
 
 **Decision — mine.** Fix the summary tally so hybrid_sim stops counting as a baseline, then the bare create_hybrid. The tally recomputes from a stored file with no re-run.
 
@@ -2890,6 +2902,8 @@ Here is the whole file in plain language. For each of the 10 representations, s0
 
 **DECIDED — NOT YET IMPLEMENTED.** s02's pool subset includes similarity hybrids. Its question is whether a hybrid beats a single representation at predicting from five nearest neighbours, and until now every hybrid it could pick was built for prediction.
 
+**ALREADY IMPLEMENTED — checked 2026-09-19.** s02 does it differently from the noise files and correctly: it scores ONE CELL PER FAMILY, asking the pool for each family by name (`objective=<family>`), which makes the pool resolve that family's own winner rather than the subset's first. `families` defaults to `['predictive', 'similarity']` (s02:792). The cell kept under the budget key is picked on the HELD-OUT delta, not on the whole-dataset statistic — s02 records why at its own call site, with the caco2 numbers. s08 was fixed on 2026-09-19 by copying this.
+
 **Still open — work, not a decision**
 
 - The recorded blueprint is the best across ALL budgets while the scored matrix was built at budget 100 Commit `0ce7ab0` changed this without closing it: Worse than it was. The same best_by_model['knn'] blueprint is still written to the JSON at lines 454-455, and it is now ALSO what _cv_reselected_sac rebuilds every fold from (line 503).
@@ -3008,6 +3022,8 @@ Fair. Here is s03 in plain terms. The file asks one question: when the hybrid ke
 
 **DECIDED — NOT YET IMPLEMENTED.** s04 stops calling `get_fold_best_search`. It reads the pool instead — the best single representation plus the top three hybrids for its downstream model, chosen per fold from the other folds' scores. Similarity hybrids are in its subset.
 
+**ALREADY IMPLEMENTED — checked 2026-09-19.** s04 reads the pool per fold and keys its arms by (family, rank): `_seen.append((h['objective'], h['rank']))` at s04:318, and `_build_arm` uses that family's own recipe. Under 'predictive_and_similarity' that is three predictive slots plus three similarity slots, not three in total.
+
 **Still open — work, not a decision**
 
 - The per-fold scores fed to fold_reselection are the OVERALL fold metric, not the cliff metric `tests/experiments/similarity/s04_activity_cliffs.py:256`
@@ -3047,6 +3063,8 @@ Fair. Here is s03 in plain terms. The file asks one question: when the hybrid ke
 **Hybrids.** Builds its own today, one search per fold — 5 per dataset without an augmentation set, 10 with one. Each search scores 2,700 recipes: 6 downstream models x 6 budgets x 75 combinations. Under the decision below it reads the pool instead, with the winner re-picked per fold.
 
 **DECIDED — NOT YET IMPLEMENTED.** s05 stops calling `get_fold_best_search`. It reads the pool: best single representation plus the top three hybrids for its downstream model, chosen per fold from the other folds' scores. Similarity hybrids are in its subset.
+
+**ALREADY IMPLEMENTED — checked 2026-09-19.** s05 keys its arms by (family, rank) the same way s04 does: `arms.setdefault((h['objective'], h['rank']), {})[fold_i] = h`.
 
 **Still open — work, not a decision**
 
@@ -3088,6 +3106,8 @@ Fair. Here is s03 in plain terms. The file asks one question: when the hybrid ke
 **Hybrids.** Reads one hybrid for k-nearest-neighbours at budget 100 from the distance pool, then rebuilds features inside each fold. It also builds one matrix over all rows that it never uses — that one can go.
 
 **DECIDED — NOT YET IMPLEMENTED.** s06's pool subset includes similarity hybrids. Its headline is a negative — that distance does not track error. A negative measured in a space never built for distance is not yet that negative.
+
+**IMPLEMENTED 2026-09-19 — and it was not implemented by the pool subset alone.** `POOL_SUBSETS['predictive_and_similarity']` names the two families in PREFERENCE order and `get_best_search_for_downstream` returns the FIRST that has an entry, because their stored scores are in different units — a predictive search's score is the dataset's own metric, a similarity search's is the correlation between each held-out molecule's activity and what its five nearest neighbours predict. A predictive recipe always exists. So from 2026-09-12 to 2026-09-19 this file asked for both families, built the predictive one, and wrote the other into the result file as a score nothing had measured in. Fixed: the geometry family's own recipe is taken by name out of `meta['by_objective']['similarity']` and built as two more arms beside the existing ones — `hybrid_similarity` and `hybrid_similarity_weighted`, against `hybrid` and `hybrid_weighted`, which are unchanged. Both new arms are scored against the SAME two error vectors every other arm is scored against, so no extra model is fitted: one build and two neighbour searches per fold, plus one build and one random forest per fold in the conformal block. When the pool holds no similarity search the arms are absent and `results['hybrid_similarity_unavailable_reason']` says why. ⛔ On the headline: it is a negative — that distance does not track error — and it was measured in a space never built for distance. It now has a second number measured in a space that was.
 
 **Still open — work, not a decision**
 
@@ -3199,6 +3219,8 @@ off them.
 
 **DECIDED — NOT YET IMPLEMENTED.** s08's pool subset includes similarity hybrids. It claims the best number of features for similarity differs from the best for prediction; with only prediction-built hybrids on offer it compares a family against itself.
 
+**IMPLEMENTED 2026-09-19 — and it was not implemented by the pool subset alone.** `POOL_SUBSETS['predictive_and_similarity']` names the two families in PREFERENCE order and `get_best_search_for_downstream` returns the FIRST that has an entry, because their stored scores are in different units — a predictive search's score is the dataset's own metric, a similarity search's is the correlation between each held-out molecule's activity and what its five nearest neighbours predict. A predictive recipe always exists. So from 2026-09-12 to 2026-09-19 this file asked for both families, built the predictive one, and wrote the other into the result file as a score nothing had measured in. Fixed the way s02 does it, because s08 goes through `get_fitted_pool_hybrid` and needs a fitted matrix per family: each family is asked for BY NAME (`objective=<family>`), which makes the pool resolve that family's own winner rather than the subset's first. One cell per (budget, family). `results['budgets']` holds the predictive family and is unchanged, keyed by the number of features as before; `results['budgets_by_family'][family][budget]` holds every cell, and `results['family_unavailable']` names each budget a family could not supply. `top3_base_reps` is still read off the predictive search. COST: the whole sweep runs twice — 8 budgets x (1 full-data build + 5 fold builds + 6 models x 5 folds of fits) per extra family. No new search, if the similarity pass exists on disk. ⛔ `tests/precompute_hybrids.py` is where that pass has to exist for the similarity/ family; if it does not, the first experiment to ask pays for a full search inside its own job.
+
 **Still open — work, not a decision**
 
 - The docstring names get_hybrid_features_and_weights and 'RF R2 and kNN R2' Not closed: Half of it is now true: kNN is genuinely fitted. The rest is still wrong.
@@ -3284,6 +3306,8 @@ s08 fits 6 models inside every fold at every budget: rf, xgboost, svm, dnn, ligh
 **Hybrids.** Reads one recipe for k-nearest-neighbours from the distance pool, then rebuilds features from it.
 
 **DECIDED — NOT YET IMPLEMENTED.** s10's pool subset includes similarity hybrids.
+
+**IMPLEMENTED 2026-09-19 — and it was not implemented by the pool subset alone.** `POOL_SUBSETS['predictive_and_similarity']` names the two families in PREFERENCE order and `get_best_search_for_downstream` returns the FIRST that has an entry, because their stored scores are in different units — a predictive search's score is the dataset's own metric, a similarity search's is the correlation between each held-out molecule's activity and what its five nearest neighbours predict. A predictive recipe always exists. So from 2026-09-12 to 2026-09-19 this file asked for both families, built the predictive one, and wrote the other into the result file as a score nothing had measured in. Fixed: `get_fold_pool_recipes` already returns each family's own ranked list under `by_objective[family]['hybrids']`, and this file was reading `hybrids[0]` — the flat list in subset order, so the predictive family's entry on every dataset. It now takes the top of each family's list per fold, and all four tasks run once per space. The four task keys (`weighted_knn`, `weighted_gp`, `weighted_svr`, `qrasar`) hold the predictive space and are unchanged; `results['by_hybrid_space'][space]` holds every space. COST: the four tasks run twice — 8 widths x 5 folds of builds and fits per extra family. No new search. The per-representation baselines inside each task do not depend on the recipe and are recomputed identically in each space.
 
 **Still open — work, not a decision**
 
@@ -3427,6 +3451,8 @@ Two things go into the file whichever way it is read. The stacked space has no p
 **Hybrids.** Builds its own today, one search per outer fold on the distance settings — 5 per dataset without augmentation representations, 10 with them. Under the decision below it reads the pool instead, with the winner re-picked per fold. s13 is the clearest case for a distance-built hybrid: it never fits a model at all.
 
 **DECIDED — NOT YET IMPLEMENTED.** s13 stops calling `get_fold_best_search`. It reads the pool: best single representation plus the top three hybrids for its downstream model, chosen per fold from the other folds' scores. Similarity hybrids are in its subset, and s13 is the clearest case for them — it never fits a model at all.
+
+**ALREADY IMPLEMENTED — checked 2026-09-19.** s13 builds one space per (family, rank), named `hybrid_<family>_r<rank>`, from `pool['hybrids']` — which `get_fold_pool_recipes` fills from every family present, in subset order.
 
 **Still open — work, not a decision**
 

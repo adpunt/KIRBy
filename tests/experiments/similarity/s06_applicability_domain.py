@@ -56,6 +56,19 @@ subset here is therefore 'predictive_and_similarity' instead of the default
 `results['hybrid_family']`, and every eligible family's own best to
 `results['pool_by_objective']`, so the two are never read as one number.
 
+2026-09-19: the geometry family is BUILT now, not only recorded. The pool names
+the two families in preference order and returns the first that has an entry; a
+predictive recipe always exists, so between those two dates every arm here was
+measured in the prediction-built hybrid and the other family appeared only in
+`pool_by_objective`. Two arms are added -- `hybrid_similarity` and
+`hybrid_similarity_weighted`, built from the similarity family's own recipe
+taken by name. `hybrid` and `hybrid_weighted` are unchanged. Both new arms are
+scored against the SAME two error vectors as every other arm, so nothing extra
+is fitted in the correlation block: one build and two neighbour searches per
+fold. The conformal block adds one build and one random forest per fold. When
+the pool holds no similarity search the arms are absent and
+`results['hybrid_similarity_unavailable_reason']` says why.
+
 2026-09-12 (owner's decision): every representation and its importance-weighted
 twin are arms in every block, not only in the pooled correlation. The per-fold
 means, the neutral-model correlations (pooled and per-fold), the reliability
@@ -83,12 +96,20 @@ from experiments._shared import (
     get_best_for_downstream, extract_top3_base_reps,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+    # One sentence saying what a search family chose its features for. Added
+    # 2026-09-19 with the second hybrid arm.
+    describe_pool_family,
 )
 from experiments.similarity._summary_keys import (
     SELECTION_RULE as _SELECTION_RULE)
 # Default kNN budget for AD hybrid search (kept modest; AD is a diagnostic, not
 # a tuned downstream model).
 _DEFAULT_AD_BUDGET = 100
+
+# The two arms built from the similarity search's own recipe, added 2026-09-19.
+# 'hybrid' and 'hybrid_weighted' are the predictive ones and are unchanged.
+SIM_ARM = 'hybrid_similarity'
+SIM_ARM_W = 'hybrid_similarity_weighted'
 
 
 def _graded_clf_error(clf, X, y_true):
@@ -212,6 +233,59 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # rebuilds so they match the pooled meta.
         if bp is not None and _meta and 'aug_condition' in _meta:
             bp.augmentation_strategy = _meta['aug_condition']
+
+        # ⛔ THE GEOMETRY FAMILY'S OWN RECIPE, TAKEN BY NAME. Added 2026-09-19.
+        #
+        # POOL_SUBSETS names the two families in PREFERENCE order and the pool
+        # returns the first that has an entry. A predictive recipe always
+        # exists, so from 2026-09-12 to 2026-09-19 this file asked for both
+        # families, built the predictive one and wrote the other into
+        # 'pool_by_objective' as a score nothing had measured in.
+        #
+        # It matters here because the distance-error correlation and the
+        # reliability diagram are both built on one quantity: a molecule's mean
+        # distance to its k nearest TRAINING neighbours, in the space it is
+        # read in. The similarity search chooses features so that exactly that
+        # distance predicts activity from the five nearest neighbours. The
+        # conformal block is not a distance -- it is a prediction interval from
+        # a forest fitted on each arm's features -- so there the space changes
+        # what the forest is given rather than which neighbours are found.
+        #
+        # 'hybrid' and 'hybrid_weighted' are unchanged and still the predictive
+        # recipe. The two arms added are 'hybrid_similarity' and
+        # 'hybrid_similarity_weighted'.
+        _sim_entry = ((_meta or {}).get('by_objective') or {}).get('similarity')
+        bp_sim = ((_sim_entry or {}).get('best_config') or {}).get('blueprint')
+        if bp_sim is not None:
+            _sim_aug = _sim_entry.get('aug_condition')
+            if _sim_aug:
+                bp_sim.augmentation_strategy = _sim_aug
+            results['hybrid_similarity_available'] = True
+            results['hybrid_similarity_budget'] = getattr(bp_sim, 'budget', None)
+            results['hybrid_similarity_reps'] = sorted(
+                getattr(bp_sim, 'reps', []) or [])
+            results['hybrid_similarity_search_score_mean'] = _sim_entry.get(
+                'score_mean')
+            results['hybrid_similarity_search_metric_name'] = _sim_entry.get(
+                'metric_name')
+            results['hybrid_similarity_features_chosen_by'] = (
+                describe_pool_family('similarity'))
+            print(f"  Second hybrid arm: the similarity family's own recipe, "
+                  f"{results['hybrid_similarity_budget']} features, search "
+                  f"score {_sim_entry.get('score_mean')} in "
+                  f"{_sim_entry.get('metric_name')!r}")
+        else:
+            results['hybrid_similarity_available'] = False
+            results['hybrid_similarity_unavailable_reason'] = (
+                'the pool held no search under objective=similarity for this '
+                'dataset, so the arm whose features were chosen to make the '
+                'neighbour distance predictive could not be built. Every '
+                'other arm ran unchanged.'
+                if 'similarity' not in ((_meta or {}).get('by_objective') or {})
+                else 'the similarity family was in the pool but its winning '
+                     'configuration carried no blueprint.')
+            print(f"  no similarity-objective arm: "
+                  f"{results['hybrid_similarity_unavailable_reason']}")
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
@@ -351,6 +425,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      'hybrid': [], 'hybrid_weighted': []}
         fold_rhos_neutral = {cmp_rep: [], f'{cmp_rep}_weighted': [],
                              'hybrid': [], 'hybrid_weighted': []}
+        # The geometry family's own arms, when the pool held that family.
+        all_d_hybrid_sim = []
+        all_d_weighted_sim = []
+        if bp_sim is not None:
+            for _n in (SIM_ARM, SIM_ARM_W):
+                fold_rhos[_n] = []
+                fold_rhos_neutral[_n] = []
         # 2026-09-12 (owner's decision): every representation and its
         # importance-weighted twin are arms here too, not only in the pooled
         # block. Until now the per-fold block held four names and the
@@ -511,6 +592,53 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             dists_w, _ = nn_w.kneighbors(X_va_s * w)
             d_weighted = dists_w.mean(axis=1)
 
+            # The geometry family's own hybrid, same fold, same rows, same two
+            # distances. Its distances are scored against the SAME two error
+            # vectors every other arm is scored against, so nothing extra is
+            # fitted: one build and two neighbour searches per fold.
+            # fold_hybrid_scoring_kwargs drops the model, the metric and its
+            # direction under a geometry recipe, where build_fold_hybrid
+            # refuses the pair.
+            d_hybrid_sim = d_weighted_sim = None
+            if bp_sim is not None:
+                try:
+                    X_tr_h2, X_va_h2, feat_info2 = build_fold_hybrid(
+                        train_reps_h, val_reps_h, y_train, bp_sim,
+                        augmentations_train=aug_tr, augmentations_val=aug_va,
+                        groups=(groups[train_idx] if groups is not None
+                                else None),
+                        **fold_hybrid_scoring_kwargs(
+                            bp_sim, model=_rf_factory(), metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
+                    sc_h2 = StandardScaler()
+                    X_tr_s2 = sc_h2.fit_transform(X_tr_h2)
+                    X_va_s2 = sc_h2.transform(X_va_h2)
+                    w2 = np.nan_to_num(flatten_fold_weights(feat_info2), nan=0.0)
+                    w2 = np.sqrt(np.maximum(w2, 0))
+                    nn_h2 = make_nearest_neighbors(
+                        n_neighbors=min(k, len(y_train) - 1))
+                    nn_h2.fit(X_tr_s2)
+                    d_hybrid_sim = nn_h2.kneighbors(X_va_s2)[0].mean(axis=1)
+                    nn_w2 = make_nearest_neighbors(
+                        n_neighbors=min(k, len(y_train) - 1))
+                    nn_w2.fit(X_tr_s2 * w2)
+                    d_weighted_sim = nn_w2.kneighbors(
+                        X_va_s2 * w2)[0].mean(axis=1)
+                except Exception as exc:
+                    print(f"      {SIM_ARM} fold build failed: "
+                          f"{type(exc).__name__}: {exc}")
+                    d_hybrid_sim = d_weighted_sim = None
+                if d_hybrid_sim is not None:
+                    all_d_hybrid_sim.extend(d_hybrid_sim.tolist())
+                    all_d_weighted_sim.extend(d_weighted_sim.tolist())
+                else:
+                    # One entry per fold in every arm's list, so a fold that
+                    # failed here does not shift the other arms' folds.
+                    fold_rhos[SIM_ARM].append(float('nan'))
+                    fold_rhos[SIM_ARM_W].append(float('nan'))
+                    fold_rhos_neutral[SIM_ARM].append(float('nan'))
+                    fold_rhos_neutral[SIM_ARM_W].append(float('nan'))
+
             all_d_cmp.extend(d_cmp.tolist())
             all_d_cmp_w.extend(d_cmp_w.tolist())
             all_d_hybrid.extend(d_hybrid.tolist())
@@ -524,10 +652,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # against `errors_neutral` (RF fitted on concat features).
             # One loop for both blocks: the neutral-model block now carries the
             # weighted comparator too, so the two name the same arms.
-            for _name, _d in ((cmp_rep, d_cmp),
-                              (f'{cmp_rep}_weighted', d_cmp_w),
-                              ('hybrid', d_hybrid),
-                              ('hybrid_weighted', d_weighted)):
+            _fold_arms = [(cmp_rep, d_cmp),
+                          (f'{cmp_rep}_weighted', d_cmp_w),
+                          ('hybrid', d_hybrid),
+                          ('hybrid_weighted', d_weighted)]
+            if d_hybrid_sim is not None:
+                _fold_arms += [(SIM_ARM, d_hybrid_sim),
+                               (SIM_ARM_W, d_weighted_sim)]
+            for _name, _d in _fold_arms:
                 fold_rhos[_name].append(_fold_spearman(_d, errors))
                 fold_rhos_neutral[_name].append(
                     _fold_spearman(_d, errors_neutral))
@@ -556,6 +688,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid': float(rho_h),
             'hybrid_weighted': float(rho_w),
             'error_source': 'rf_fitted_on_hybrid_features',
+            'hybrid_note': (
+                "'hybrid' is built from the predictive search's recipe. "
+                "'hybrid_similarity', when present, is built from the "
+                "similarity search's own recipe: features chosen so that each "
+                "molecule's activity is predicted by its five nearest "
+                'neighbours in the distance they define. Both are scored here '
+                'against the same two error vectors, so they are comparable.'),
             'error_source_note': (
                 "the 'hybrid' and 'hybrid_weighted' distances here are measured "
                 "in the same feature space this error model was fitted on "
@@ -568,6 +707,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 "so cross-fold scale differences enter this rank ordering; "
                 "['per_fold_mean'] holds the within-fold version"),
         }
+
+        # The geometry family's pooled numbers, against the same errors.
+        if all_d_hybrid_sim and len(all_d_hybrid_sim) == len(all_errors):
+            _sim_d = np.array(all_d_hybrid_sim)
+            _sim_dw = np.array(all_d_weighted_sim)
+            corr_result[SIM_ARM] = float(spearmanr(_sim_d, all_errors)[0])
+            corr_result[SIM_ARM_W] = float(spearmanr(_sim_dw, all_errors)[0])
 
         # F05: per-fold means alongside the pooled values above.
         per_fold_mean = {
@@ -596,10 +742,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 neutral_per_fold[_name] = _m
                 neutral_per_fold[f'{_name}_n_folds'] = _n
                 neutral_per_fold[f'{_name}_per_fold'] = [float(v) for v in _vals]
+            _sim_neutral = {}
+            if (all_d_hybrid_sim
+                    and len(all_d_hybrid_sim) == len(all_errors_neutral)):
+                _sim_neutral = {
+                    SIM_ARM: float(spearmanr(np.array(all_d_hybrid_sim),
+                                             all_errors_neutral)[0]),
+                    SIM_ARM_W: float(spearmanr(np.array(all_d_weighted_sim),
+                                               all_errors_neutral)[0]),
+                }
             corr_result['neutral_model'] = {
                 cmp_rep: float(rho_c_n),
                 'hybrid': float(rho_h_n),
                 'hybrid_weighted': float(rho_w_n),
+                **_sim_neutral,
                 'error_source': 'rf_fitted_on_concat_features',
                 'error_source_note': (
                     'errors come from a model that never sees the hybrid feature '
@@ -662,6 +818,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              f'{cmp_rep}_weighted': all_d_cmp_w,
                              'hybrid': all_d_hybrid,
                              'hybrid_weighted': all_d_weighted}
+        if all_d_hybrid_sim:
+            _reliability_arms[SIM_ARM] = np.array(all_d_hybrid_sim)
+            _reliability_arms[SIM_ARM_W] = np.array(all_d_weighted_sim)
         for rname in reps:
             if all_d_per_rep[rname]:
                 _reliability_arms.setdefault(rname,
@@ -707,6 +866,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # interval, not only the comparator. One random forest per
             # representation per fold, plus the hybrid's.
             _conf_arms = list(reps) + ['hybrid']
+            if bp_sim is not None:
+                _conf_arms.append(SIM_ARM)
             conf_picp = {name: [] for name in _conf_arms}
             conf_mpiw = {name: [] for name in _conf_arms}
             alpha = 0.1
@@ -734,6 +895,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"{type(exc).__name__}: {exc}")
                     continue
 
+                # The geometry family's own recipe, same fold, same split.
+                X_hyb_sim_tr = X_hyb_sim_va = None
+                if bp_sim is not None:
+                    try:
+                        X_hyb_sim_tr, X_hyb_sim_va, _fi2 = build_fold_hybrid(
+                            train_reps_fold, val_reps_fold, y_train, bp_sim,
+                            augmentations_train=aug_tr_c,
+                            augmentations_val=aug_va_c,
+                            groups=(groups[train_idx] if groups is not None
+                                    else None),
+                            **fold_hybrid_scoring_kwargs(
+                                bp_sim, model=_rf_factory(),
+                                metric_fn=metric_fn,
+                                lower_is_better=lower_is_better))
+                    except Exception as exc:
+                        print(f"      AD calibration fold {SIM_ARM} build "
+                              f"failed: {type(exc).__name__}: {exc}")
+                        X_hyb_sim_tr = X_hyb_sim_va = None
+
                 # Split train into proper-train and calibration (group-aware)
                 train_groups = groups[train_idx] if groups is not None else None
                 if train_groups is not None and len(np.unique(train_groups)) >= 2:
@@ -750,6 +930,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     [(rname, reps[rname][train_idx], reps[rname][val_idx])
                      for rname in reps]
                     + [('hybrid', X_hybrid_tr, X_hybrid_va)]
+                    + ([(SIM_ARM, X_hyb_sim_tr, X_hyb_sim_va)]
+                       if X_hyb_sim_tr is not None else [])
                 ):
                     scaler = StandardScaler()
                     X_tr_all_s = scaler.fit_transform(X_tr_all)
@@ -810,7 +992,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 h = results['conformal']['hybrid']
                 _tighter = {}
                 for feat_name in _conf_arms:
-                    if feat_name == 'hybrid' or feat_name not in results['conformal']:
+                    if (feat_name in ('hybrid', SIM_ARM)
+                            or feat_name not in results['conformal']):
                         continue
                     c = results['conformal'][feat_name]
                     _tighter[feat_name] = bool(
