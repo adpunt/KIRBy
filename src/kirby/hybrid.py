@@ -41,6 +41,7 @@ Default configuration:
 """
 
 import os
+import sys
 from copy import deepcopy
 
 import numpy as np
@@ -73,11 +74,26 @@ def lgbm_n_jobs() -> int:
     Set KIRBY_LGBM_THREADS=1 to make a local run survivable. Leave it unset on
     the server, where there is one OpenMP runtime and nothing to work around —
     the default returned here is the same -1 that was hardcoded before.
+
+    KIRBY_LGBM_THREADS_IF_NO_TORCH names the thread count to use while torch has
+    not been imported into this process, and is ignored once it has. A run whose
+    representations all come off disk and whose importance method is
+    lightgbm_gain never imports torch, so it can fit at full width; the moment
+    anything does import torch — a dnn evaluator, deeplift, a fine-tuned
+    representation — this drops back to KIRBY_LGBM_THREADS for the rest of the
+    process. Unset, it changes nothing.
     """
     try:
-        return int(os.environ.get('KIRBY_LGBM_THREADS', '-1'))
+        configured = int(os.environ.get('KIRBY_LGBM_THREADS', '-1'))
     except ValueError:
-        return -1
+        configured = -1
+    wide = os.environ.get('KIRBY_LGBM_THREADS_IF_NO_TORCH')
+    if wide and 'torch' not in sys.modules:
+        try:
+            return int(wide)
+        except ValueError:
+            return configured
+    return configured
 
 
 # ============================================================================

@@ -34,6 +34,7 @@ from experiments._shared import (
     save_experiment_results, load_experiment_results,
     flatten_fold_weights, get_fold_pool_recipes,
     get_domain_metric, get_model_factories, build_fold_hybrid,
+    fold_hybrid_scoring_kwargs,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from experiments.similarity.similarity_helpers import identify_cliff_compounds
@@ -650,9 +651,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 train_reps_h, val_reps_h, yt, bp_fold,
                 augmentations_train=aug_tr, augmentations_val=aug_va,
                 groups=(groups[tr] if groups is not None else None),
-                model=_make_knn(len(yt)),
-                metric_fn=metric_fn,
-                lower_is_better=lower_is_better)
+                **fold_hybrid_scoring_kwargs(
+                    bp_fold, model=_make_knn(len(yt)),
+                    metric_fn=metric_fn, lower_is_better=lower_is_better))
             return X_tr_h, X_va_h, feat_info, bp_fold
 
         results['pool_hybrid_arms'] = {}

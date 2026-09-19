@@ -428,17 +428,33 @@ def space_specs(importance_methods, metrics, exponents,
             'which two molecules land in the same leaf'),
     }
     if include_hybrid:
-        for m in metrics:
-            specs[f'hybrid|{m}'] = {
-                'family': 'hybrid',
-                'distance_metric': m,
-                'importance_method': None,
-                'importance_exponent': None,
-                'convention_matches_metric': None,
-                'what_it_is': (
-                    f'the feature space the recipe built, z-scored, under a '
-                    f'{m} distance'),
-            }
+        # ⛔ TWO HYBRID DISTANCES, NOT ONE. This file's whole subject is which
+        # distance the neighbours are found in, and until 2026-09-19 its fourth
+        # distance was only ever the PREDICTION-built space. The pool is asked
+        # with pool_subset='predictive_and_similarity', but POOL_SUBSETS names
+        # the families in PREFERENCE order and the pool returns the first that
+        # has an entry, so the geometry family was recorded and never built.
+        #
+        # The geometry search picks features so that the distance they define
+        # predicts each molecule's activity from its five nearest neighbours --
+        # which is this experiment's question, asked at search time. Leaving it
+        # out meant the one candidate space built for the job was the one
+        # candidate space never measured.
+        for _fam, _what in (
+                ('hybrid', 'the feature space the PREDICTIVE recipe built'),
+                ('hybrid_similarity',
+                 'the feature space the SIMILARITY recipe built -- its '
+                 'features were chosen so that the distance they define '
+                 'predicts activity from the five nearest neighbours')):
+            for m in metrics:
+                specs[f'{_fam}|{m}'] = {
+                    'family': _fam,
+                    'distance_metric': m,
+                    'importance_method': None,
+                    'importance_exponent': None,
+                    'convention_matches_metric': None,
+                    'what_it_is': f'{_what}, z-scored, under a {m} distance',
+                }
     return specs
 
 
@@ -487,7 +503,7 @@ def _build_hybrid_space(train_reps, val_reps, y_noisy, bp, groups_train,
 
 def _spaces_for_pass(X_base_raw, X_base_std, y_noisy, is_clf, specs,
                      importance_methods, forest_kw, hybrid_X, errors,
-                     pass_key):
+                     pass_key, hybrid_sim_X=None):
     """Build every space this pass scores, once.
 
     Returns ({key: ('features', X, metric) or ('distance', D, None)},
@@ -533,12 +549,15 @@ def _spaces_for_pass(X_base_raw, X_base_std, y_noisy, is_clf, specs,
             errors[f'{pass_key}|forest_proximity'] = \
                 f'{type(exc).__name__}: {exc}'
 
-    if hybrid_X is not None:
+    for _fam, _X in (('hybrid', hybrid_X),
+                     ('hybrid_similarity', hybrid_sim_X)):
+        if _X is None:
+            continue
         sc = StandardScaler()
-        X_h_std = sc.fit_transform(hybrid_X)
+        _X_std = sc.fit_transform(_X)
         for key, spec in specs.items():
-            if spec['family'] == 'hybrid':
-                built[key] = ('features', X_h_std, spec['distance_metric'])
+            if spec['family'] == _fam:
+                built[key] = ('features', _X_std, spec['distance_metric'])
 
     return built, zero_importance
 
@@ -620,6 +639,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # the subset that admits searches run under objective='similarity'.
     include_hybrid = bool(kwargs.get('include_hybrid', True))
     bp = None
+    bp_sim = None
     # The SearchResult the recipe came out of, kept so the top-2 block at the
     # end of run() can read the rows it already holds. Before this it was
     # dropped at the end of the try below, and the only way to report a second
@@ -640,6 +660,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 pool_subset='predictive_and_similarity')
             pool_search = search
             bp = meta['best_config']['blueprint'] if meta else None
+            # The geometry family's own winner, taken by NAME. The pool returns
+            # one family by preference and names the rest under by_objective,
+            # so without this the fourth distance is only ever the
+            # prediction-built space -- see the two-hybrid note in _specs.
+            _by_obj = (meta.get('by_objective') or {}) if meta else {}
+            _sim = _by_obj.get('similarity') or {}
+            bp_sim = _sim.get('best_config', {}).get('blueprint')
+            hybrid_meta['similarity_present'] = bp_sim is not None
+            if bp_sim is None:
+                hybrid_meta['similarity_absent_because'] = (
+                    'the pool held no search under objective=similarity for '
+                    'this dataset'
+                    if 'similarity' not in _by_obj else
+                    'the similarity family was in the pool but its winning '
+                    'configuration carried no blueprint')
+            else:
+                hybrid_meta['similarity_score_mean'] = _sim.get('score_mean')
+                hybrid_meta['similarity_metric_name'] = _sim.get('metric_name')
+                hybrid_meta['similarity_note'] = (
+                    "Its features were chosen so that the distance they "
+                    "define predicts each molecule's activity from its five "
+                    "nearest neighbours. score_mean is that correlation, not "
+                    "the dataset's own metric.")
             if bp is None:
                 hybrid_meta['absent_because'] = (
                     'the precomputed pool returned no recipe for this dataset')
@@ -810,19 +853,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         errors[f'{pass_key}|noisy|{mn}'] = \
                             f'{type(exc).__name__}: {exc}'
 
-                hybrid_X = None
-                if hybrid_meta['present']:
-                    hybrid_X, why = _build_hybrid_space(
-                        train_reps, val_reps, y_noisy, bp, g_train,
+                # Both recipes, rebuilt on this fold under the corrupted
+                # labels. hybrid_for_fold reads the objective off the
+                # blueprint and drops the model and metric under a geometry
+                # one, so the same call serves both.
+                hybrid_X = hybrid_sim_X = None
+                for _fam, _bp in (('hybrid', bp),
+                                  ('hybrid_similarity', bp_sim)):
+                    if _bp is None:
+                        continue
+                    _X, why = _build_hybrid_space(
+                        train_reps, val_reps, y_noisy, _bp, g_train,
                         train_augs, val_augs,
                         model_factories[downstream_models[0]](),
                         metric_fn, lower_is_better)
-                    if hybrid_X is None:
-                        errors[f'{pass_key}|hybrid'] = why
+                    if _X is None:
+                        errors[f'{pass_key}|{_fam}'] = why
+                    elif _fam == 'hybrid':
+                        hybrid_X = _X
+                    else:
+                        hybrid_sim_X = _X
 
                 built, zero_imp = _spaces_for_pass(
                     X_base_raw, X_base_std, y_noisy, is_clf, specs,
-                    importance_methods, forest_kw, hybrid_X, errors, pass_key)
+                    importance_methods, forest_kw, hybrid_X, errors, pass_key,
+                    hybrid_sim_X=hybrid_sim_X)
                 for key in zero_imp:
                     zero_imp_builds[key] = zero_imp_builds.get(key, 0) + 1
 

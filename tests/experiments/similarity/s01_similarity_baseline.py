@@ -12,6 +12,7 @@ For each representation, compute distance matrix and measure:
 """
 import sys
 import os
+import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -27,6 +28,7 @@ from experiments.similarity.similarity_helpers import (
     run_antibody_cliff_analysis,
     similarity_activity_correlation_scalable, compute_sali_scalable,
     violation_rate_scalable, _pairwise_delta, _sample_offdiag_pairs,
+    sac_pair_sample, permuted_delta_ranks, sac_permutation_p,
 )
 
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -77,10 +79,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  n={n_samples} > S01_MAX_DENSE_N={S01_MAX_DENSE_N}: scalable "
               f"nearest-neighbor path (no dense n x n matrix).")
         per_rep_fn = _run_per_rep_scalable
+        _scalable = True
     else:
         per_rep_fn = _run_per_rep
+        _scalable = False
+
+    # The pairs and the 200 shuffled activity columns, once for the dataset.
+    # Neither depends on the representation, and rebuilding them inside each
+    # one is what made the shuffles expensive enough to hold the pair count
+    # down to a sample too small to separate two representations.
+    _t_null = time.time()
+    pairs = sac_pair_sample(n_samples, n_sample, scalable=_scalable)
+    perm_ranks = permuted_delta_ranks(labels, pairs[0], pairs[1],
+                                      is_clf=is_classification)
+    results['_sac_sampling'] = {
+        'n_pairs': int(len(pairs[0])),
+        'n_pairs_available': int(n_samples * (n_samples - 1) // 2),
+        'n_permutations': int(perm_ranks.shape[0]),
+        'note': ('every sac_rho below is one Spearman over these molecule '
+                 'pairs, and every sac_permutation_p counts these shuffles'),
+    }
+    print(f"\n  {len(pairs[0])} molecule pairs of "
+          f"{n_samples * (n_samples - 1) // 2}, and {perm_ranks.shape[0]} "
+          f"shuffled activity columns over them, built in "
+          f"{time.time() - _t_null:.1f}s")
+
     for rep_name, X in reps.items():
-        per_rep_fn(rep_name, X, labels, results, n_sample, is_classification)
+        per_rep_fn(rep_name, X, labels, results, n_sample, is_classification,
+                   pairs=pairs, perm_ranks=perm_ranks)
 
     # Summary table (both paths populate results identically)
     print("\n  Summary:")
@@ -132,7 +158,8 @@ def _violation_reference(labels, is_classification, scalable=False):
     return float(np.median(np.abs(y[triu_i] - y[triu_j])))
 
 
-def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
+def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
+                 pairs=None, perm_ranks=None):
     """Compute SAC / violation rate / SALI for one representation.
 
     Extracted unchanged from the original per-rep loop body so the large-n
@@ -143,18 +170,9 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
     print(f"\n  {rep_name} (dim={X.shape[1]}):")
     D = compute_distance_matrix(X, standardize=True)
 
-    # One pair sample for the real SAC and for all 200 shuffles.
-    # similarity_activity_correlation rebuilds np.triu_indices(n) and re-draws
-    # the same 5,000 pair indices under RandomState(42) on every call, so the
-    # loop below used to pay for that 201 times over to get one identical
-    # sample. Drawn here exactly as that helper draws it
-    # (similarity_helpers.py:100-107), so every number is unchanged. The
-    # scalable path already reused its pairs this way.
-    pair_i, pair_j = np.triu_indices(len(labels), k=1)
-    if len(pair_i) > n_sample:
-        _idx = np.random.RandomState(42).choice(len(pair_i), n_sample,
-                                                replace=False)
-        pair_i, pair_j = pair_i[_idx], pair_j[_idx]
+    # The pairs and the 200 shuffled activity columns come from run(), which
+    # builds them once for the dataset: neither depends on the representation.
+    pair_i, pair_j = pairs
     pair_dists = D[pair_i, pair_j]
     _rho, _p = spearmanr(
         pair_dists,
@@ -165,25 +183,24 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
     viol_ref = _violation_reference(labels, is_classification)
     sali = compute_sali(D, labels, is_clf=is_classification)
 
-    # Permutation test: is SAC significantly above random?
-    n_perm = 200
-    rng_perm = np.random.RandomState(42)
-    perm_sacs = []
-    for _ in range(n_perm):
-        y_perm = rng_perm.permutation(labels)
-        perm_rho, _ = spearmanr(
-            pair_dists,
-            _pairwise_delta(y_perm[pair_i], y_perm[pair_j],
-                            is_clf=is_classification))
-        perm_sacs.append(perm_rho)
-    perm_sacs = np.array(perm_sacs)
-    sac_perm_p = float(np.mean(np.abs(perm_sacs) >= abs(sac_rho)))
+    # Is that correlation distinguishable from a shuffled activity column?
+    sac_perm_p, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
 
     rep_result = {
         'dim': X.shape[1],
         'sac_rho': sac_rho,
         'sac_p': sac_p,
         'sac_permutation_p': sac_perm_p,
+        # How far a shuffled activity column got on these same pairs. Without
+        # it a reader cannot tell whether a difference between two
+        # representations' sac_rho is bigger than the noise: on a 1,412
+        # molecule dataset that spread is about 0.015, and raising the pair
+        # count barely moves it, because every pair is drawn from the same
+        # molecules.
+        'sac_permutation_null_sd': float(np.std(_perm_rhos))
+                                   if len(_perm_rhos) else float('nan'),
+        'sac_permutation_null_max_abs': float(np.max(np.abs(_perm_rhos)))
+                                        if len(_perm_rhos) else float('nan'),
         'sac_significant': sac_perm_p < 0.05,
         'violation_rate': viol,
         # The activity difference violation_rate thresholds on, so a reader can
@@ -203,7 +220,8 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification):
     results[rep_name] = rep_result
 
 
-def _run_per_rep_scalable(rep_name, X, labels, results, n_sample, is_classification):
+def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
+                          is_classification, pairs=None, perm_ranks=None):
     """Large-n version of _run_per_rep: the SAME three scores (SAC / violation
     rate / SALI) computed via a nearest-neighbor index + sampled pairs instead
     of a full n x n matrix, so it never OOMs. Used when n > S01_MAX_DENSE_N."""
@@ -214,23 +232,25 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample, is_classificat
     viol_ref = _violation_reference(labels, is_classification, scalable=True)
     sali = compute_sali_scalable(X, labels, is_clf=is_classification)
 
-    # Permutation test: reuse the SAME sampled pairs + distances, permute labels.
-    n_perm = 200
-    rng_perm = np.random.RandomState(42)
-    perm_sacs = []
-    for _ in range(n_perm):
-        y_perm = rng_perm.permutation(labels)
-        dy = _pairwise_delta(y_perm[pi], y_perm[pj], is_clf=is_classification)
-        perm_rho, _ = spearmanr(pair_dists, dy)
-        perm_sacs.append(perm_rho)
-    perm_sacs = np.array(perm_sacs)
-    sac_perm_p = float(np.mean(np.abs(perm_sacs) >= abs(sac_rho)))
+    # Same pairs, same 200 shuffled activity columns run() built for the
+    # dataset.
+    sac_perm_p, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
 
     rep_result = {
         'dim': X.shape[1],
         'sac_rho': sac_rho,
         'sac_p': sac_p,
         'sac_permutation_p': sac_perm_p,
+        # How far a shuffled activity column got on these same pairs. Without
+        # it a reader cannot tell whether a difference between two
+        # representations' sac_rho is bigger than the noise: on a 1,412
+        # molecule dataset that spread is about 0.015, and raising the pair
+        # count barely moves it, because every pair is drawn from the same
+        # molecules.
+        'sac_permutation_null_sd': float(np.std(_perm_rhos))
+                                   if len(_perm_rhos) else float('nan'),
+        'sac_permutation_null_max_abs': float(np.max(np.abs(_perm_rhos)))
+                                        if len(_perm_rhos) else float('nan'),
         'sac_significant': sac_perm_p < 0.05,
         'violation_rate': viol,
         # Same reference as the dense path records — see _violation_reference.

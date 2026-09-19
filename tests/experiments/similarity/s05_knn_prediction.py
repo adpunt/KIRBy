@@ -71,6 +71,7 @@ from experiments._shared import (
     save_experiment_results, get_fitted_hybrid, get_best_for_downstream,
     flatten_weights, flatten_fold_weights, make_cv_splitter,
     get_domain_metric, build_fold_hybrid,
+    fold_hybrid_scoring_kwargs,
     fold_reselection, get_fold_pool_recipes,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
     hr_exclude_folds,
@@ -438,9 +439,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             augmentations_val=aug_va,
             budget_override=budget,
             groups=(groups[train_idx] if groups is not None else None),
-            model=_make_knn(k, len(y_train)),
-            metric_fn=metric_fn,
-            lower_is_better=lower_is_better)
+            **fold_hybrid_scoring_kwargs(
+                blueprint, model=_make_knn(k, len(y_train)),
+                metric_fn=metric_fn, lower_is_better=lower_is_better))
         out = (X_tr_h, X_va_h, feat_info, blueprint)
         _fold_build_cache[cache_key] = out
         return out

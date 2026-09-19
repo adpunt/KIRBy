@@ -285,9 +285,31 @@ def setting_axis(cleanup, is_clf):
 DETECTORS = ('neighbor_residual', 'cross_val')
 DETECTOR_K = 10
 
-# Which feature space each cleanup is measured in. Both, always, unless the pool
-# returns no recipe -- then the base representation alone, and the result says so.
-SPACES = ('base', 'hybrid')
+# Which feature space each cleanup is measured in.
+#
+# ⛔ THE THIRD ONE IS THE POINT, AND IT WAS MISSING. This file asks the pool
+# with pool_subset='predictive_and_similarity', which reads as though both
+# families are being tested. They are not. POOL_SUBSETS names them in
+# PREFERENCE order and get_best_search_for_downstream returns the FIRST family
+# that has an entry, because the two score in units that cannot be compared --
+# one is the dataset's own metric, the other a correlation between each
+# held-out molecule's activity and what its five nearest neighbours predict. A
+# predictive recipe always exists, so the pool always returned it and the
+# similarity search only ever appeared in the metadata. Both n18 runs on
+# 2026-09-18 printed `searched under objective predictive`.
+#
+# That matters more here than anywhere else in the suite. Every detector in
+# this file scores a molecule by comparing it to its NEAREST NEIGHBOURS, so the
+# whole method rests on the distance those neighbours are found in. The
+# similarity-objective search picks features so that exactly that distance
+# predicts activity from the five nearest neighbours -- it is the feature space
+# built for the question this file asks -- and it was never measured in.
+#
+# 'hybrid' is the predictive recipe, unchanged, so every number reported before
+# today still means what it meant. 'hybrid_similarity' is the geometry one,
+# taken from meta['by_objective']['similarity']['best_config'], and is absent
+# with a stated reason when that family has no entry.
+SPACES = ('base', 'hybrid', 'hybrid_similarity')
 
 # Which searches the recipe may come from. Same as n02, n06, n07, n11, n12, n13,
 # n17 and n19 since 2026-09-12: a search whose features were chosen to predict
@@ -505,6 +527,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # a representation set, an allocation method, an importance method, a budget
     # and an internal evaluator -- and the features are rebuilt per fold below.
     bp = None
+    bp_sim = None
     # Bound before the try so the top-2 block below can test it. Until
     # 2026-09-18 nothing read `search` and an exception here left the name
     # unbound; reading it would have raised UnboundLocalError on the one path
@@ -555,6 +578,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  hybrid recipe: {len(results['hybrid_reps'])} representations, "
               f"budget {results['hybrid_budget']}, searched under objective "
               f"{meta['objective']} (pool subset {meta['pool_subset']})")
+
+        # ── The geometry recipe, taken by name and not by preference ──
+        # The pool returns one family and names the rest under by_objective.
+        # This reaches past that and takes the similarity family's own winner,
+        # so both are measured instead of one being measured and the other
+        # recorded. See the SPACES comment for why it matters here in
+        # particular.
+        _by_obj = meta.get('by_objective') or {}
+        _sim = _by_obj.get('similarity')
+        bp_sim = (_sim or {}).get('best_config', {}).get('blueprint')
+        if bp_sim is None:
+            spaces = tuple(x for x in spaces if x != 'hybrid_similarity')
+            results['hybrid_similarity_available'] = False
+            results['hybrid_similarity_unavailable_reason'] = (
+                'the pool held no search under objective=similarity for this '
+                'dataset, so the space whose features were chosen to make the '
+                'neighbour distance predictive could not be built. Every '
+                'cleanup still ran in the other spaces.'
+                if 'similarity' not in _by_obj else
+                'the similarity family was in the pool but its winning '
+                'configuration carried no blueprint.')
+            print(f"  no similarity-objective recipe; "
+                  f"{results['hybrid_similarity_unavailable_reason']}")
+        else:
+            results['hybrid_similarity_available'] = True
+            results['hybrid_similarity_budget'] = getattr(bp_sim, 'budget', None)
+            results['hybrid_similarity_reps'] = sorted(
+                getattr(bp_sim, 'reps', []) or [])
+            results['hybrid_similarity_score_mean'] = _sim.get('score_mean')
+            results['hybrid_similarity_metric_name'] = _sim.get('metric_name')
+            results['hybrid_similarity_note'] = (
+                "Its features were chosen so that the distance they define "
+                "predicts each molecule's activity from its five nearest "
+                "neighbours. Its score_mean is that correlation and is NOT in "
+                "the dataset's own metric, so it cannot be compared with the "
+                "predictive hybrid's. Every cleanup score measured IN it is in "
+                "the dataset's metric and is comparable with everything else "
+                "in this file.")
+            print(f"  similarity recipe: "
+                  f"{len(results['hybrid_similarity_reps'])} representations, "
+                  f"budget {results['hybrid_similarity_budget']}, scored "
+                  f"{_sim.get('score_mean')} under "
+                  f"{_sim.get('metric_name')}")
     results['spaces_run'] = list(spaces)
 
     # ── What each downstream model would have picked for itself ──
@@ -657,21 +723,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             scaler.fit_transform(np.asarray(X_source[train_idx],
                                             dtype=np.float64)),
             scaler.transform(np.asarray(X_source[val_idx], dtype=np.float64)))
-        if 'hybrid' in spaces:
+        _tr_reps = {k: np.asarray(v[train_idx], dtype=np.float64)
+                    for k, v in reps.items()}
+        _va_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
+                    for k, v in reps.items()}
+        # (space name, recipe). Both are rebuilt on this fold's training
+        # molecules at their UNCLEANED labels. hybrid_for_fold refuses the
+        # model and metric under a geometry recipe on its own -- it reads the
+        # objective off the blueprint -- so one call serves both.
+        for _sp, _bp in (('hybrid', bp), ('hybrid_similarity', bp_sim)):
+            if _sp not in spaces or _bp is None:
+                continue
             X_tr_h, X_va_h = hybrid_for_fold(
-                {k: np.asarray(v[train_idx], dtype=np.float64)
-                 for k, v in reps.items()},
-                {k: np.asarray(v[val_idx], dtype=np.float64)
-                 for k, v in reps.items()},
-                y_train, bp, g_tr,
+                _tr_reps, _va_reps, y_train, _bp, g_tr,
                 model_factories[downstream_models[0]](),
                 metric_fn, lower_is_better)
             if X_tr_h is None:
-                hybrid_failures.append(int(fold_i))
+                hybrid_failures.append({'fold': int(fold_i), 'space': _sp})
             else:
                 sc_h = StandardScaler()
-                fold_spaces['hybrid'] = (sc_h.fit_transform(X_tr_h),
-                                         sc_h.transform(X_va_h))
+                fold_spaces[_sp] = (sc_h.fit_transform(X_tr_h),
+                                    sc_h.transform(X_va_h))
 
         for space in spaces:
             if space not in fold_spaces:
@@ -746,9 +818,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if hybrid_failures:
         # Named rather than left as a shorter list of folds. Those folds still
         # carry every base-space number.
+        # One entry per (fold, space) that could not be built, so a geometry
+        # recipe failing on a fold is not confused with the predictive one
+        # failing on it. Those folds keep every number from the spaces that
+        # did build.
         results['folds_with_no_hybrid'] = hybrid_failures
-        print(f"  hybrid could not be built on folds {hybrid_failures}; "
-              f"their base-representation numbers stand")
+        print(f"  a hybrid space could not be built on "
+              f"{len(hybrid_failures)} (fold, space) pairs: "
+              f"{hybrid_failures}; the spaces that built keep their numbers")
 
     # ── Fold win counts, which are the headline ──
     for space in spaces:
@@ -879,20 +956,16 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name,
     # Does a cleanup sweep more settings where the features were chosen? Only
     # defined where both spaces ran.
     if 'hybrid' in spaces and 'base' in spaces:
+        # One entry per space that ran, rather than the two this block used to
+        # name. The third space -- the one whose features were chosen to make
+        # the neighbour distance predictive -- would otherwise be absent from
+        # the only table that puts the spaces side by side.
         out['sweeps_by_space'] = {
             c: {
-                'settings_winning_every_fold_in_base':
-                    out['per_space']['base']['per_cleanup'][c].get(
-                        'settings_winning_every_fold', 0),
-                'settings_winning_every_fold_in_hybrid':
-                    out['per_space']['hybrid']['per_cleanup'][c].get(
-                        'settings_winning_every_fold', 0),
-                'settings_scored_in_base':
-                    out['per_space']['base']['per_cleanup'][c].get(
-                        'settings_scored', 0),
-                'settings_scored_in_hybrid':
-                    out['per_space']['hybrid']['per_cleanup'][c].get(
-                        'settings_scored', 0),
+                f'{_k}_in_{_sp}': out['per_space'][_sp]['per_cleanup'][c].get(
+                    _k, 0)
+                for _sp in out['per_space']
+                for _k in ('settings_winning_every_fold', 'settings_scored')
             }
             for c in cleanups}
         out['sweeps_by_space_note'] = (

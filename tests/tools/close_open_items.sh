@@ -161,30 +161,49 @@ PY
 }
 
 run_f29() {
-    echo "=============== f29 needs its dnn and cnn rows re-run ==============="
-    echo
-    echo "  WHY. Until 2026-09-18 dnn and cnn carved their early-stopping"
-    echo "  holdout at random, not by scaffold group, so near-duplicate"
-    echo "  scaffolds sat on both sides and early stopping stopped too late."
-    echo "  Every f29 dnn and cnn score is at the wrong LEVEL — not"
-    echo "  contaminated, the carve is inside the training fold, but not"
-    echo "  comparable with the tree models beside it. f29's 'DNN wins 4/5'"
-    echo "  rests on those rows."
-    echo
-    echo "  f29 reads and writes NOTHING in result_db, searches/ or the hybrid"
-    echo "  caches — its own header says so — so there is nothing to delete."
-    echo
-    echo "  Re-run the two affected models on all five datasets:"
-    echo
-    echo "    sbatch --account=stat-ecr --partition=short,medium,long \\"
-    echo "           --time=12:00:00 --cpus-per-task=8 --mem=64G \\"
-    echo "           --job-name=f29_nn \\"
-    echo "           --wrap='cd /data/stat-ecr/scat9264/KIRBy && . setup.sh && \\"
-    echo "                   python tests/experiments/framework/f29_model_and_tuning_survey.py \\"
-    echo "                   --models dnn cnn --tag groupaware'"
-    echo
-    echo "  --tag groupaware keeps the new rows beside the old ones rather than"
-    echo "  overwriting them, so the size of the shift can be read off."
+    cat <<'TXT'
+=============== f29 needs its dnn and cnn rows re-run ===============
+
+  WHY. Until 2026-09-18 dnn and cnn carved their early-stopping holdout at
+  random, not by scaffold group, so near-duplicate scaffolds sat on both sides
+  and early stopping stopped too late. Every f29 dnn and cnn score is at the
+  wrong LEVEL — not contaminated, the carve is inside the training fold, but
+  not comparable with the tree models beside it. f29's "DNN wins 4/5" rests on
+  those rows.
+
+  f29 reads and writes NOTHING in result_db, searches/ or the hybrid caches —
+  its own header says so — so there is nothing to delete first.
+
+  ⛔ --arms default ONLY, and that is not a cut. Neither dnn nor cnn has an
+  entry in _HP_SEARCH_SPACES, so tuned_per_rep and tuned_per_model fit exactly
+  the same estimator as default and would store the same number three times.
+  Running one arm is a third of the work and loses nothing.
+
+  srun ONLY — a queued job waits about a week. One dataset per session, each
+  well inside a 4-hour wall. Run them in any order; each writes its own file.
+
+    for DS in tcga_brca_pam50 caco2 buchwald_hartwig flab_expression_koenig logd; do
+      srun --time=04:00:00 --cpus-per-task=8 --mem=64G --pty bash -c "
+        cd /data/stat-ecr/scat9264/KIRBy && . setup.sh &&
+        python tests/experiments/framework/f29_model_and_tuning_survey.py \
+          --datasets $DS --models dnn cnn --arms default --tag groupaware"
+    done
+
+  Ordered cheapest first from f29's own stored seconds-per-fit: tcga 1.22s,
+  caco2 3.78s, buchwald 5.88s, koenig 8.11s, logd 37.86s. logd is the one that
+  might not fit; if it runs out of wall, do it a fold at a time:
+
+    for F in 0 1 2 3 4; do
+      srun --time=04:00:00 --cpus-per-task=8 --mem=64G --pty bash -c "
+        cd /data/stat-ecr/scat9264/KIRBy && . setup.sh &&
+        python tests/experiments/framework/f29_model_and_tuning_survey.py \
+          --datasets logd --models dnn cnn --arms default \
+          --fold $F --tag groupaware_f$F"
+    done
+
+  --tag keeps the new rows beside the old ones rather than overwriting them, so
+  the size of the shift can be read rather than guessed.
+TXT
 }
 
 case "$WHAT" in

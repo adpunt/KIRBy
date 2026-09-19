@@ -79,6 +79,7 @@ from experiments._shared import (
     get_fitted_hybrid, get_fitted_pool_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
     apply_feature_selection, compute_feature_importance,
     get_domain_metric, get_model_factories, build_fold_hybrid,
+    fold_hybrid_scoring_kwargs,
     get_best_for_downstream, extract_top3_base_reps,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
@@ -380,9 +381,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     train_reps_h, val_reps_h, y_train, bp,
                     augmentations_train=aug_tr, augmentations_val=aug_va,
                     groups=(groups[train_idx] if groups is not None else None),
-                    model=_rf_factory(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
+                    **fold_hybrid_scoring_kwargs(
+                        bp, model=_rf_factory(), metric_fn=metric_fn,
+                        lower_is_better=lower_is_better))
 
                 # Importance weights for this fold (also weight the comparator)
                 # Same importance method the search used to build this
@@ -723,9 +724,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         train_reps_fold, val_reps_fold, y_train, bp,
                         augmentations_train=aug_tr_c, augmentations_val=aug_va_c,
                         groups=(groups[train_idx] if groups is not None else None),
-                        model=_rf_factory(),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
+                        **fold_hybrid_scoring_kwargs(
+                            bp, model=_rf_factory(), metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
                 except Exception as exc:
                     # N9: log the dropped fold so a thrown hybrid build is
                     # distinguishable from a genuinely skipped fold.

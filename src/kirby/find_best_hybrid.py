@@ -1734,6 +1734,12 @@ BUILTIN_METRICS = {
 #
 # The owner weighed both and cut it. Do not re-derive this.
 # ---------------------------------------------------------------------------
+# The alloc_cache key the per-fold representation ranking is filed under
+# when the objective is a geometry one. Not an evaluator name, so it can
+# never collide with the (fold, evaluator) and (fold, evaluator, metric)
+# keys the prediction pre-pass writes.
+_GEOMETRY_RANK_KEY = '__geometry_rank__'
+
 OBJECTIVE_PREDICTIVE = 'predictive'
 OBJECTIVE_SIMILARITY_SAC = 'similarity_sac'   # CUT — see the block above
 OBJECTIVE_SIMILARITY = 'similarity'
@@ -4760,21 +4766,32 @@ def _evaluate_hybrid_config(
         # given a per-fold ranking would quietly run on the whole pool and be
         # stored under N, which is the kind of row that cannot be spotted later.
         if rep_count is not None and rep_count < len(train_reps):
-            if not fold_alloc_scores:
+            # In geometry and blend mode fold_alloc_scores is None on purpose —
+            # the allocators compute their own scores live — so the ranking
+            # comes from the geometry score find_best_hybrid computed once per
+            # fold. It ranks only; the budget split is untouched.
+            _rank_scores = fold_alloc_scores
+            if not _rank_scores and alloc_cache is not None:
+                _rank_scores = alloc_cache.get((fold_idx, _GEOMETRY_RANK_KEY))
+            if not _rank_scores:
                 raise ValueError(
                     f"rep_count={rep_count} needs this fold's allocation scores "
                     f"to rank the representations, and none were available "
                     f"(fold {fold_idx}, evaluator {internal_evaluator}). The "
                     f"similarity objective and blended objectives deliberately "
-                    f"do not precompute them.")
+                    f"do not precompute them, and no geometry ranking was "
+                    f"computed for this fold either.")
             _ranked = sorted(train_reps,
-                             key=lambda r: fold_alloc_scores.get(r, float('-inf')),
+                             key=lambda r: _rank_scores.get(r, float('-inf')),
                              reverse=True)
             _keep = set(_ranked[:rep_count])
             train_reps = {k: v for k, v in train_reps.items() if k in _keep}
             val_reps = {k: v for k, v in val_reps.items() if k in _keep}
-            fold_alloc_scores = {k: v for k, v in fold_alloc_scores.items()
-                                 if k in _keep}
+            # None in geometry and blend mode, and it stays None: the
+            # allocators score the surviving representations live.
+            if fold_alloc_scores:
+                fold_alloc_scores = {k: v for k, v in fold_alloc_scores.items()
+                                     if k in _keep}
 
         # Persistent hybrid_eval cache — probe before compute.
         # Dedup applies when `alloc` is top_k and the predicted subset
@@ -6517,6 +6534,73 @@ def _run_search(
                   f"{len(_alloc_metrics)} metrics, "
                   f"{_n_alloc_cached} read from disk, "
                   f"evaluators: {sorted(_all_evaluator_names)})")
+
+    # ── Per-fold representation ranking for the rep_count axis, geometry mode ──
+    #
+    # Two things disagreed. The pass above is skipped under a geometry or
+    # blended objective on purpose, because the number it computes is a
+    # prediction score and those objectives split the budget by geometry
+    # instead. The rep_count axis then read the same empty cache, found
+    # nothing, and raised — so every configuration that asked for the N best
+    # representations failed on fold 0 while every whole-pool configuration
+    # ran. Under objective='similarity' with rep_counts [3, None] that is half
+    # the grid, on every dataset, and the failures are stored as rows rather
+    # than raising the run.
+    #
+    # The number rep_count needs is one score per representation on this fold,
+    # higher is better, and under a geometry objective that is the geometry
+    # score — the same quantity the allocators compute live, from the same
+    # function, on create_hybrid's own internal carve. It does not depend on
+    # the allocation method, the budget or the augmentation settings
+    # (hybrid.py:1674), so it is computed once per fold here.
+    #
+    # It is used for the ranking ONLY. fold_alloc_scores stays None in geometry
+    # mode, so the allocators still compute their own scores over whichever
+    # representations survive this restriction, and nothing about how the
+    # budget is split changes.
+    _needs_geom_rank = (_skip_alloc_precompute
+                        and any(rc is not None for rc in search_rep_counts))
+    if _needs_geom_rank:
+        _geom_t0 = time.time()
+        for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
+            fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
+            fold_train_labels = _train_label_src[train_idx]
+            if fold_reps and fold_idx in fold_reps:
+                for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
+                    fold_train_reps[rep_name] = ft_train
+            _tr_idx, _va_idx = _internal_carve(fold_idx, train_idx)
+            _train_labels = fold_train_labels[_tr_idx]
+            _val_labels = fold_train_labels[_va_idx]
+            _groups_val = (groups[train_idx][_va_idx]
+                           if groups is not None else None)
+            _row_index_val = (np.asarray(row_index)[train_idx][_va_idx]
+                              if row_index is not None else None)
+            _scores = {}
+            for rep_name, X_full in fold_train_reps.items():
+                X_tr = X_full[_tr_idx].copy()
+                X_va = X_full[_va_idx].copy()
+                X_tr, X_va, _ = _impute_nan(X_tr, X_va)
+                try:
+                    _scores[rep_name] = float(_evaluate_allocation(
+                        X_tr, X_va, _train_labels, _val_labels,
+                        internal_evaluator=explicit_evaluators[0]
+                        if explicit_evaluators else 'rf',
+                        objective=objective,
+                        is_clf=(task_type == 'classification'),
+                        groups_val=_groups_val,
+                        row_index_val=_row_index_val,
+                        structural_pairs=structural_pairs))
+                except Exception:
+                    # NaN, not 0.0, for the same reason the pass above uses it:
+                    # 0.0 is a real score and would still earn a rank.
+                    _scores[rep_name] = float('nan')
+            alloc_cache[(fold_idx, _GEOMETRY_RANK_KEY)] = _scores
+        if verbose:
+            print(f"  Representation ranking for the rep_count axis computed "
+                  f"in {time.time() - _geom_t0:.1f}s "
+                  f"({len(_fold_splits_for_cache)} folds × "
+                  f"{len(base_reps)} representations, geometry score, "
+                  f"no model fitted)")
 
     # ── Build flat list of all configs to evaluate ──
     configs = []

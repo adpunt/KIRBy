@@ -422,8 +422,21 @@ def run(data, config, output_dir, dataset_name):
     augs = data.get('augmentations') or None
     n_outer_folds = config['n_splits']
     seed = config.get('seed', 42)
-    budgets = list(config.get('budgets') or C33_BUDGETS)
-    models = list(config.get('models') or C33_MODELS)
+    # UNION, not replacement. The suite runner hands every experiment
+    # config['budgets'] = FULL_BUDGETS and config['models'] = DOWNSTREAM_MODELS,
+    # and `config.get(...) or C33_BUDGETS` let that list win outright. Two
+    # things this file exists to measure went missing under the runner and
+    # nowhere else: 4,000 and 8,000 features are not in FULL_BUDGETS, and
+    # `linear` is not in DOWNSTREAM_MODELS -- and `linear` is the only model
+    # here whose parameter count equals the feature count, which is what makes
+    # its threshold the real one (see the BUDGETS note above).
+    budgets = sorted(set(config.get('budgets') or []) | set(C33_BUDGETS))
+    models = list(config.get('models') or [])
+    for _m in C33_MODELS:
+        if _m == 'linear' and _m not in models:
+            models.append(_m)
+    if not models:
+        models = list(C33_MODELS)
 
     metric_name, _metric_fn, lower_is_better = get_domain_metric(data)
 

@@ -154,11 +154,15 @@ def test_nothing_injected():
         check(f'{space}: the uncleaned score is the same at every flag rate',
               max(base) - min(base) < 1e-12,
               f'{[round(b, 6) for b in base]}')
+    # Read the rate off the result rather than naming one. The grid moved from
+    # (0.05, 0.10, 0.20) to (0.01, 0.05, 0.20) on 2026-09-18, and a smoke that
+    # hardcodes a value fails on the grid rather than on the behaviour.
+    _rate = str(r['flag_rates'][0])
     check('the two spaces are genuinely different feature spaces',
           abs(r['per_space']['base']['per_detector']['neighbor_residual']
-              ['0.1']['per_model']['rf']['no_cleaning_mean']
+              [_rate]['per_model']['rf']['no_cleaning_mean']
               - r['per_space']['hybrid']['per_detector']['neighbor_residual']
-              ['0.1']['per_model']['rf']['no_cleaning_mean']) > 1e-9)
+              [_rate]['per_model']['rf']['no_cleaning_mean']) > 1e-9)
 
     # What the feature ranking was handed must be this fold's training labels,
     # as the loader produced them.
@@ -210,7 +214,7 @@ def test_finds_a_real_error(clean_result):
               f'wrong-label sweeps {dirty}, clean-label sweeps {clean}')
 
     check('the sweep counts sit side by side in the result file',
-          set(r['summary']['sweeps_by_space']) == set(n18.CLEANUPS),
+          set(r['summary']['sweeps_by_space']) == set(r['cleanups']),
           str(sorted(r['summary']['sweeps_by_space'])))
     return r
 
@@ -223,8 +227,13 @@ def test_counts_are_sane(r):
             for rate, blk in by_rate.items():
                 n_ran = blk['n_folds_ran']
                 for m, row in blk['per_model'].items():
-                    for c in n18.CLEANUPS:
-                        cell = row[c]
+                    for c in r['cleanups']:
+                        # Absent, not zero. A cleanup that reads neither swept
+                        # axis is scored at the first slot only, so it has no
+                        # row at the others -- quantile_clip is the only one.
+                        cell = row.get(c)
+                        if cell is None:
+                            continue
                         seen += 1
                         if cell['folds_won'] > cell['folds_scored']:
                             ok_bound = False
@@ -241,7 +250,8 @@ def test_counts_are_sane(r):
               for by_rate in sblk['per_detector'].values()
               for blk in by_rate.values()
               for row in blk['per_model'].values()
-              for c in n18.CLEANUPS if row[c]['folds_scored'] > 1))
+              for c in r['cleanups']
+              if c in row and row[c]['folds_scored'] > 1))
 
 
 def test_qm9_is_marked():
@@ -278,15 +288,19 @@ def test_runs_without_a_recipe():
           'hybrid' not in r['per_space']
           and 'hybrid' not in r['summary']['per_space'])
 
-    blk = r['per_space']['base']['per_detector']['neighbor_residual']['0.1']
+    blk = (r['per_space']['base']['per_detector']['neighbor_residual']
+           [str(r['flag_rates'][0])])
     row = blk['per_model']['rf']
+    # `cleanups` is what this task type ran, which is seven on a regression set
+    # since 2026-09-18 and was four before. A cleanup that reads neither swept
+    # axis is scored at the first slot only, and this IS that slot.
     check('every cleanup still carries a fold count in the base space',
           all(row[c]['folds_scored'] == blk['n_folds_ran']
-              for c in n18.CLEANUPS),
-          str({c: row[c]['folds_scored'] for c in n18.CLEANUPS}))
+              for c in r['cleanups']),
+          str({c: row[c]['folds_scored'] for c in r['cleanups']}))
     check('every cleanup still carries a finite mean gain',
-          all(np.isfinite(row[c]['mean_gain']) for c in n18.CLEANUPS),
-          str({c: round(row[c]['mean_gain'], 4) for c in n18.CLEANUPS}))
+          all(np.isfinite(row[c]['mean_gain']) for c in r['cleanups']),
+          str({c: round(row[c]['mean_gain'], 4) for c in r['cleanups']}))
     check('the uncleaned score is still there to beat',
           np.isfinite(row['no_cleaning_mean']),
           f"{row['no_cleaning_mean']:.4f}")
