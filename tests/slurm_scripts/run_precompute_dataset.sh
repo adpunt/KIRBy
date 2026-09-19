@@ -253,14 +253,67 @@ case "$DS" in
         ;;
 esac
 
+# ── MORE THAN TWO CLASSES: NO SIMILARITY OBJECTIVE ──────────────────────
+# objective='similarity' predicts each sample's label from its five nearest
+# neighbours in the space the features define. On a classification dataset it
+# scores those predictions by AUROC. AUROC is defined for two classes, so on a
+# 3- or 4-class label every representation scores nothing on every fold and the
+# search dies with "not one of the N representations could be scored" -- an
+# error that names three causes, all about the fold, none of them the real one.
+#
+# UNDEFINED, which is one of the three reasons a cut is allowed. This is NOT a
+# claim that the objective would lose here. Defining it -- AUROC of each class
+# against the rest, averaged -- would remove this block.
+#
+# Two passes are affected and they are affected differently:
+#   sim  asks for predictive AND similarity. The predictive half is fine, so the
+#        pass still runs, with similarity taken off it.
+#   knn  asks for similarity ALONE, so it would write nothing. Dropped.
+#
+# THE LIST LIVES IN ONE PLACE: tests/experiments/dataset_policy.py. It is read
+# from there rather than copied, because this directory already carries the scar
+# of three scripts holding their own copies of the pass flags -- see the header
+# of _precompute_passes.sh. precompute_hybrids.py drops the objective AGAIN from
+# the dataset's own labels, so a dataset missing from that list costs a wasted
+# pass here, never a wrong search.
+SIM_OBJ="predictive,similarity"
+python - "$DS" <<'EOF'
+import sys
+sys.path.insert(0, 'src'); sys.path.insert(0, 'tests')
+try:
+    from experiments.dataset_policy import MULTICLASS_DATASETS as M
+except Exception as e:
+    print(f"  could not read MULTICLASS_DATASETS ({type(e).__name__}: {e})")
+    sys.exit(2)
+sys.exit(0 if sys.argv[1] in M else 1)
+EOF
+case $? in
+    0)
+        SIM_OBJ="predictive"
+        if has_pass knn; then
+            PASSES="${PASSES// knn/}"; PASSES="${PASSES//knn /}"; PASSES="${PASSES//knn/}"
+        fi
+        echo "  ${DS} has more than two classes."
+        echo "  The sim pass runs PREDICTIVE ONLY: objective='similarity' scores"
+        echo "  classification by AUROC, which is undefined above two classes."
+        echo "  The knn pass is dropped -- it asks for similarity alone, so it"
+        echo "  would write nothing."
+        ;;
+    2)
+        echo "  WARNING: could not check the class count for ${DS}, so the sim"
+        echo "  pass keeps the similarity objective. precompute_hybrids.py still"
+        echo "  drops it from the labels if it does not apply."
+        ;;
+esac
+
 # 1-2: what every experiment reads first.
-has_pass sim  && run_one general_none          --objectives predictive,similarity ${MODEL_FLAG}
+has_pass sim  && run_one general_none          --objectives ${SIM_OBJ} ${MODEL_FLAG}
 has_pass dist && run_one general_distance_none --distance
 
 # 3-5: the augmented conditions. A dataset with no augmentation representations
 # runs no condition here and returns in seconds.
-has_pass sim  && run_one general_uncapped           --objectives predictive,similarity ${MODEL_FLAG}
-has_pass sim  && run_one general_capped             --objectives predictive,similarity ${MODEL_FLAG}
+has_pass sim  && run_one general_uncapped           --objectives ${SIM_OBJ} ${MODEL_FLAG}
+has_pass sim  && run_one general_capped             --objectives ${SIM_OBJ} ${MODEL_FLAG}
 has_pass dist && run_one general_distance_uncapped  --distance
 
 # 6-7: the two single-experiment passes, last because they block only s02 and c16.

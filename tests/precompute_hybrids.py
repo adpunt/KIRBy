@@ -46,6 +46,7 @@ from experiments._shared import (
     MAIN_MODELS_WITH_KNN, RIDGE_MODELS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
+from experiments.dataset_policy import similarity_objective_undefined
 from kirby.find_best_hybrid import (
     find_best_hybrid, _cache_stats_summary, _reset_cache_stats,
     OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY)
@@ -667,6 +668,24 @@ def precompute_dataset(dataset_name, tiers=('general',),
     # Which objectives to search. None = predictive only, which is what this
     # script ran before the parameter existed.
     objectives = tuple(objectives) if objectives else (OBJECTIVE_PREDICTIVE,)
+
+    # Drop the similarity objective where its score does not exist. The class
+    # count is COUNTED off this dataset's own labels, so this does not depend on
+    # the name list the submit script uses and cannot go stale against it.
+    # Dropped here as well as in run_precompute_dataset.sh, because a direct run
+    # of this file bypasses that script entirely.
+    _undef = similarity_objective_undefined(dataset_name, labels=labels,
+                                            task_type=task_type)
+    if _undef and OBJECTIVE_SIMILARITY in objectives:
+        objectives = tuple(o for o in objectives if o != OBJECTIVE_SIMILARITY)
+        print(f"\n  DROPPED objective='similarity': {_undef}.")
+        print(f"  Not a judgement about whether it would win here -- the "
+              f"number is undefined. Defining it (each class against the "
+              f"rest, averaged) would remove this skip.")
+        if not objectives:
+            print(f"  Nothing else was asked for, so no search runs for "
+                  f"{dataset_name}.")
+            return 0, 0
 
     # Run each condition. One search per (condition, objective, model list);
     # each combination is a separate cache entry, so none of them replaces

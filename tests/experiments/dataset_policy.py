@@ -556,3 +556,70 @@ def reference_noise_level(dataset_name: Optional[str]) -> float:
     Use reference_error_as_fraction_of_spread() to place the real error on this axis.
     """
     return 0.5
+
+
+# =============================================================================
+# WHERE THE SIMILARITY OBJECTIVE IS UNDEFINED
+# =============================================================================
+#
+# objective='similarity' predicts each sample's label from its five nearest
+# neighbours in the space the features define, then scores those predictions.
+# For a classification dataset it scores them by AUROC, rescaled to 2*(AUROC-0.5)
+# so it sits on the same zero point as the regression version
+# (hybrid._score_component -> utils.noise_mitigation_methods.activity_readacross).
+#
+# AUROC is defined for two classes. activity_readacross checks the class count
+# and returns "no score" for anything else, because a one-against-the-rest
+# scheme over more than two classes is a choice it does not make for the caller
+# (noise_mitigation_methods.py, the is_clf branch).
+#
+# So on a dataset with more than two classes EVERY representation comes back
+# unscored on EVERY fold, and allocate_weighted_global raises
+# "not one of the N representations could be scored". That error names three
+# causes, all about the fold, and the real cause is not among them.
+#
+# UNDEFINED, which is one of the three reasons a cut is allowed. This is not a
+# claim that the objective would lose here; it is that the number does not exist.
+# Defining it -- AUROC of each class against the other three, averaged -- is a
+# real option and would remove both entries below.
+#
+# The class counts are read from the loaders, not asserted here:
+#   tcga_brca_pam50     datasets/tcga.py:478          LumA, LumB, Basal, Her2
+#   tz_her2_multiclass  datasets/trastuzumab.py:149   low, mid, high
+MULTICLASS_DATASETS = {
+    'tcga_brca_pam50': 4,
+    'tz_her2_multiclass': 3,
+}
+
+
+def similarity_objective_undefined(dataset_name, labels=None,
+                                   task_type=None) -> Optional[str]:
+    """Why objective='similarity' cannot be scored here, as a sentence, or None.
+
+    Two ways to ask, because the two callers know different things:
+
+      With `labels` and `task_type`, the class count is COUNTED off the data.
+      This is the authoritative form -- it catches a dataset nobody has added
+      to MULTICLASS_DATASETS, and it catches a loader whose class count changed.
+
+      With the name alone, it falls back to MULTICLASS_DATASETS. The submit
+      script has to use this form: it decides which passes to launch before
+      anything is loaded.
+
+    If the two ever disagree, the counted form wins and the run says so, so the
+    cost of a stale name list is a wasted job, never a wrong result.
+    """
+    import numpy as np
+    if labels is not None and task_type == 'classification':
+        n = int(len(np.unique(np.asarray(labels).ravel())))
+    elif labels is not None:
+        return None          # regression: the objective scores by Spearman
+    else:
+        n = MULTICLASS_DATASETS.get(dataset_name)
+        if n is None:
+            return None
+    if n <= 2:
+        return None
+    return (f"{dataset_name} has {n} classes. objective='similarity' scores "
+            f"classification by AUROC, which is defined for 2 classes, so every "
+            f"representation scores nothing on every fold")
