@@ -62,13 +62,37 @@ def _lgb_threads() -> int:
     contend over nothing. On a wide representation the arithmetic reverses:
     5,000 rows by 200 features takes 139.6s on one thread.
 
-    So the count is NOT chosen automatically here. -1 stays the default, which
-    is byte-identical to what this file did before, and a caller on narrow
-    features sets KIRBY_LGBM_THREADS=1 -- which is what the noise experiments
-    and their smokes do.
+    ⛔ THE DEFAULT IS 1 HERE, AND -1 EVERYWHERE ELSE. Changed 2026-09-19.
+
+    The sentence this replaces said "-1 stays the default ... and a caller on
+    narrow features sets KIRBY_LGBM_THREADS=1 -- which is what the noise
+    experiments and their smokes do." The smokes do. The noise experiments on
+    the cluster do NOT: `tests/slurm_scripts/submit_dataset.sh` is what launches
+    every noise, complexity and similarity job and it never sets the variable,
+    and `setup.sh` sets OMP_NUM_THREADS to the whole allocation and leaves this
+    one unset. The five SLURM scripts that do set it are all framework ones
+    (f30, f32, f33, the two hybrid arms). So the callers that measured this
+    protected themselves and the general submit path never inherited it.
+
+    MEASURED 2026-09-19 on this call, same data and same process, 300 molecules
+    by 20 features over 5 group-aware folds -- a realistic partition, not the
+    tiny one above:
+
+        KIRBY_LGBM_THREADS=1        4.3s
+        KIRBY_LGBM_THREADS=-1    2010.3s      467 times slower
+
+    That reaches `oof_smooth` in n07, n18 and n20, and n19's out-of-fold
+    labels.
+
+    -1 remains right for a WIDE matrix and remains what `hybrid.py` defaults to,
+    which is why this is changed here and not there: this function serves one
+    surrogate, documented two paragraphs up as running on the small partitions
+    inside an outer fold, and that is the narrow case. A caller that knows its
+    matrix is wide sets KIRBY_LGBM_THREADS explicitly and gets the old
+    behaviour.
     """
     import os
-    return int(os.environ.get('KIRBY_LGBM_THREADS', '-1'))
+    return int(os.environ.get('KIRBY_LGBM_THREADS', '1'))
 
 
 def make_model(params: Optional[dict] = None) -> lgb.LGBMRegressor:

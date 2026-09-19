@@ -105,7 +105,8 @@ from experiments.noise.noise_helpers import hybrid_for_fold
 # noise unless it is handed a training label vector, and it is handed one here --
 # the labels exactly as the loader produced them. So the same code runs, over the
 # real labels, with nothing corrupted.
-from experiments.noise.n07_remediation import _evaluate_fold
+from experiments.noise.n07_remediation import (_evaluate_fold,
+                                               correction_targets)
 from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
 
 # The cleanup applied to the training rows. 'no_cleaning' is the score to beat.
@@ -754,6 +755,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # model), shared by every cleanup, every flag rate and every
             # detector — they all have to beat the same number or the
             # comparison is not paired.
+            # ⛔ THE THREE MODEL-BASED CORRECTIONS' TARGETS, ONCE PER
+            # (FOLD, SPACE). Each depends on the features, the labels and the
+            # groups and on nothing else -- not the suspicion score, not the
+            # strength, not which model is about to be fitted. Left in
+            # cleaned_training_set they were refitted for every setting: 3
+            # strengths x 2 detectors x 2 models = 12 identical fits where 1
+            # does, and the Gaussian process is cubic in the training rows with
+            # 5 inner folds per call. Same argument _compute_noise_scores
+            # carries for the detector, and what n11 does with EXTRA_TARGETS.
+            _targets = correction_targets(
+                X_tr_s, y_train, groups=g_tr,
+                want=[t for t, c in (('oof', 'oof_smooth'),
+                                     ('gp', 'gp_smooth'),
+                                     ('quantile', 'quantile_clip'))
+                      if c in CLEANUPS])
+
             base_score = {}
             for mname in downstream_models:
                 sc = _evaluate_fold(
@@ -801,6 +818,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 dataset_name=dataset_name,
                                 precomputed_y_tr=y_train, noise_scores=scores,
                                 strength=_strength,
+                                targets=_targets,
                                 # ⛔ REQUIRED BY THE THREE MODEL-BASED
                                 # CORRECTIONS. oof_smooth, gp_smooth and
                                 # quantile_clip each fit a model on part of the
