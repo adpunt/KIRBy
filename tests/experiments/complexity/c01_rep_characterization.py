@@ -99,13 +99,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         rep_result['baselines'] = {}
         scores_str = []
         for model_name, model_factory in models.items():
-            # evaluate_single_rep_cv PCA-compresses any representation wider
-            # than the fold's training rows, so the number below can come from
-            # far fewer features than this representation has. Record the width
-            # it actually fitted beside the score, one entry per fold.
+            # cap=False: score every feature this representation has.
+            #
+            # evaluate_single_rep_cv used to PCA-rotate any representation wider
+            # than the fold's training rows, and c01's question is how well each
+            # representation predicts the label ON ITS OWN. Measured here on
+            # flab_thermo_tresanco, random forest, spearman, the same five folds:
+            # saprot 0.3775 rotated against 0.5896 at its own 1,280 features,
+            # esmc 0.2405 against 0.5454, esm3 0.3714 against 0.5302. The
+            # unrotated numbers are exactly what find_best_hybrid's own
+            # full-dimension baselines print for the same three, so the rotated
+            # ones put c01 and every search baseline 0.16 to 0.30 spearman apart
+            # on the same representation. c11 took the same rotation off its
+            # baselines (c11_ensemble_vs_hybrid.py _prep).
+            #
+            # The width fitted is still recorded per fold, which now equals
+            # n_features_offered on every fold.
             mean_score, std_score, widths = evaluate_single_rep_cv(
                 X, labels, groups, model_factory, n_folds, mode=mode,
-                metric_fn=metric_fn, return_width=True)
+                metric_fn=metric_fn, return_width=True, cap=False)
             rep_result['baselines'][model_name] = {
                 'score_mean': mean_score,
                 'score_std': std_score,

@@ -166,3 +166,7 @@ sn_bibliography.bib
 
 # In-flight work, tracked in its own git repository.
 src/noise_inject/
+
+# Local auto-research runs — smoke numbers, not results
+tests/results_local_sim/
+tests/results_local_debug7/

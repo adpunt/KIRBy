@@ -82,6 +82,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     cv_split, get_domain_metric, get_model_factories, convert_numpy,
     compute_feature_importance, build_fold_hybrid,
+    fold_hybrid_scoring_kwargs,
     get_precomputed_search, get_best_for_downstream, extract_top3_base_reps,
     get_best_search_for_downstream, get_fold_pool_recipes,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
@@ -450,9 +451,10 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                             # accept/reject test judges allocations by the model that
                             # actually consumes them, instead of falling back to its
                             # internal r2/accuracy proxy.
-                            model=_KNN(n_neighbors=k_eff),
-                            metric_fn=metric_fn,
-                            lower_is_better=lower_is_better)
+                            **fold_hybrid_scoring_kwargs(
+                                blueprint, model=_KNN(n_neighbors=k_eff),
+                                metric_fn=metric_fn,
+                                lower_is_better=lower_is_better))
                     except Exception as e:
                         _record_build_error(hybrid_build_errors, e, k=k,
                                             fold=fold_i, budget=budget)
@@ -630,9 +632,10 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                         # fold's own recipe was searched at.
                         budget_override=budget,
                         groups=(groups[train_idx] if groups is not None else None),
-                        model=_make_gp(),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
+                        **fold_hybrid_scoring_kwargs(
+                            blueprint, model=_make_gp(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
                 except Exception as e:
                     _record_build_error(hybrid_build_errors, e, fold=fold_i,
                                         budget=budget)
@@ -803,9 +806,10 @@ def _run_weighted_svr(reps, labels, groups, config, fold_blueprints,
                         # fold's own recipe was searched at.
                         budget_override=budget,
                         groups=(groups[train_idx] if groups is not None else None),
-                        model=_make_svr(),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
+                        **fold_hybrid_scoring_kwargs(
+                            blueprint, model=_make_svr(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
                 except Exception as e:
                     _record_build_error(hybrid_build_errors, e, fold=fold_i,
                                         budget=budget)
@@ -1022,9 +1026,10 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                         # fold's own recipe was searched at.
                         budget_override=budget,
                         groups=(groups[train_idx] if groups is not None else None),
-                        model=_make_rf(),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
+                        **fold_hybrid_scoring_kwargs(
+                            blueprint, model=_make_rf(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
                 except Exception as e:
                     _record_build_error(hybrid_build_errors, e, fold=fold_i,
                                         budget=budget)

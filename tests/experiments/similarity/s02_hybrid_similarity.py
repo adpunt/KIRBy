@@ -270,16 +270,33 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
                      is_clf, augmentations, config, n_sample, weight_methods,
                      importance, budget, distance,
                      best_rep_sac, best_rep_name,
-                     best_rep_sac_weighted, best_rep_name_weighted):
-    """Every hybrid number in this file, for ONE (lineage, budget) cell.
+                     best_rep_sac_weighted, best_rep_name_weighted,
+                     family=None):
+    """Every hybrid number in this file, for ONE (lineage, budget, family) cell.
 
     Returns the cell dict: the pool metadata, the recipe that was built, one
     block per weight method, and the held-out fold_reselection block with its
     resolved summary. run() stores these under
-    results['lineages'][lineage]['budgets'][budget].
+    results['lineages'][lineage]['budgets'][budget], and under
+    ['families'][family] when run() asked for one family at a time.
+
+    family: which search family the recipe comes from, 'predictive' or
+        'similarity'. None asks for the POOL_SUBSET below and lets the pool
+        choose, which is what this file did before.
+
+        Why naming it matters. The two families store their scores in two
+        different metrics — a predictive search stores the dataset's own
+        metric, a similarity search stores each held-out molecule's activity
+        predicted from its five nearest neighbours — so nothing puts them on
+        one ruler and the pool falls back to whichever family the subset names
+        first. That is always 'predictive'. Every number in this file is a
+        distance between molecules, re-scored here in this file's own
+        statistic, so the two families CAN be compared — on that statistic,
+        not on their stored scores. Asking for one family at a time is what
+        makes that comparison possible.
     """
     cell = {'budget': budget, 'distance_lineage': bool(distance),
-            'weight_methods': {}}
+            'requested_family': family, 'weight_methods': {}}
 
     # best_sac is the best SAC any HYBRID arm reached, and nothing else. It used
     # to be seeded with best_rep_sac, so it could only ever rise above the best
@@ -311,7 +328,10 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
             # distance predicts each molecule's activity from its five nearest
             # neighbours. Default was 'predictive_only', which is what every
             # earlier run of this file used. Both lineages keep this subset.
-            pool_subset='predictive_and_similarity',
+            # One family when run() named one, the subset otherwise. The pool
+            # refuses both at once.
+            **({'objective': family} if family
+               else {'pool_subset': 'predictive_and_similarity'}),
             # 2026-09-12, owner's decision: s02 asks BOTH lineages. False reads
             # the general/top pools, True reads the general_distance/top_distance
             # pools (_shared.py:5329-5337). Until now only the general one was
@@ -763,22 +783,97 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     results['budgets'] = budgets
 
+    # Which search families to score, one cell each. None is the old
+    # behaviour: ask the pool for the subset and take whichever family it
+    # returns, which is always 'predictive' because the two families' stored
+    # scores are in different metrics and the tie-break is subset order.
+    # Naming them scores each one separately and compares them on THIS file's
+    # statistic, which is the only ruler both are defined on.
+    families = kwargs.get('families', config.get('s02_families',
+                                                 ['predictive', 'similarity']))
+    # Which distance lineages to ask. Both by default.
+    lineages = kwargs.get('lineages', config.get('s02_lineages',
+                                                 ['general', 'general_distance']))
+    results['families'] = list(families) if families else [None]
+    results['lineages_asked'] = list(lineages)
+
     for _lineage, _distance in (('general', False), ('general_distance', True)):
+        if _lineage not in lineages:
+            continue
         print(f"\n  ===== lineage {_lineage} (distance={_distance}) =====")
         lineage_block = {'distance': _distance, 'budgets': {}}
         results['lineages'][_lineage] = lineage_block
         for budget in budgets:
-            print(f"\n  -- {_lineage}, budget={budget} features --")
-            lineage_block['budgets'][str(budget)] = _score_pool_cell(
-                reps, labels, groups,
-                dataset_name=dataset_name, task_type=task_type,
-                is_clf=is_classification, augmentations=augmentations,
-                config=config, n_sample=n_sample,
-                weight_methods=weight_methods, importance=importance,
-                budget=budget, distance=_distance,
-                best_rep_sac=best_rep_sac, best_rep_name=best_rep_name,
-                best_rep_sac_weighted=best_rep_sac_weighted,
-                best_rep_name_weighted=best_rep_name_weighted)
+            budget_block = {}
+            for _fam in (families or [None]):
+                _label = f"{_lineage}, budget={budget} features"
+                if _fam:
+                    _label += f", {_fam} family"
+                print(f"\n  -- {_label} --")
+                budget_block[_fam or 'pool_choice'] = _score_pool_cell(
+                    reps, labels, groups,
+                    dataset_name=dataset_name, task_type=task_type,
+                    is_clf=is_classification, augmentations=augmentations,
+                    config=config, n_sample=n_sample,
+                    weight_methods=weight_methods, importance=importance,
+                    budget=budget, distance=_distance,
+                    best_rep_sac=best_rep_sac, best_rep_name=best_rep_name,
+                    best_rep_sac_weighted=best_rep_sac_weighted,
+                    best_rep_name_weighted=best_rep_name_weighted,
+                    family=_fam)
+            # The cell kept under the budget key is the one every existing
+            # reader expects: one dict with best_sac, weight_methods and
+            # fold_reselection on it. When more than one family was scored,
+            # that is the family with the better HELD-OUT delta — the number
+            # this file already computes per cell, where the winning arm and
+            # the winning single representation are each re-picked on the
+            # other folds.
+            #
+            # Not best_sac. best_sac is the whole-dataset statistic, and the
+            # two quantities disagree: measured on caco2, the similarity
+            # family reads +0.0263 on the whole dataset at 100 features and
+            # -0.0083 held out, while the predictive family reads +0.0244 and
+            # +0.0260. Picking on the whole-dataset number would name the
+            # family that overfits the rows its features were selected on,
+            # which is the same mistake as picking on subset order, with a
+            # number in front of it.
+            def _heldout(fc):
+                r = ((fc.get('fold_reselection_result') or {}).get('knn') or {})
+                v = r.get('delta_mean_of_folds')
+                return v if isinstance(v, (int, float)) else None
+
+            _heldout_scored = {k: _heldout(v) for k, v in budget_block.items()}
+            _heldout_scored = {k: v for k, v in _heldout_scored.items()
+                               if v is not None}
+            _sac_scored = {k: v['best_sac'] for k, v in budget_block.items()
+                           if isinstance(v.get('best_sac'), (int, float))}
+            if _heldout_scored:
+                _win = max(_heldout_scored, key=_heldout_scored.get)
+                _rule = ('higher held-out delta, both arms re-picked on the '
+                         'other folds')
+            elif _sac_scored:
+                _win = max(_sac_scored, key=_sac_scored.get)
+                _rule = ('higher whole-dataset sac_rho — no family produced a '
+                         'held-out delta')
+            else:
+                _win = next(iter(budget_block))
+                _rule = 'only candidate'
+            cell = dict(budget_block[_win])
+            cell['by_family'] = budget_block
+            cell['family_chosen'] = _win
+            cell['family_choice_rule'] = (
+                _rule if len(budget_block) > 1 else 'only one family scored')
+            cell['family_heldout_deltas'] = _heldout_scored
+            cell['family_wholedata_sac'] = _sac_scored
+            if len(budget_block) > 1:
+                print(f"    family chosen: {_win} ({_rule})")
+                print(f"      held-out delta   "
+                      + ', '.join(f"{k}={v:+.4f}"
+                                  for k, v in sorted(_heldout_scored.items())))
+                print(f"      whole-dataset    "
+                      + ', '.join(f"{k}={v:.4f}"
+                                  for k, v in sorted(_sac_scored.items())))
+            lineage_block['budgets'][str(budget)] = cell
 
     # Back-compat top level. s09, firstpass_notready.py, quick_hybrid_summary.py
     # and make_supervisor_plots.py all read results['best_sac'],

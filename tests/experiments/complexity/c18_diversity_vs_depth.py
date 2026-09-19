@@ -86,18 +86,45 @@ def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget,
     if not sub_names:
         return None, None
 
-    per_rep = max(1, budget // len(sub_names))
-    tr_parts, va_parts = [], []
+    # The equal share has to add up to the SAME number of features the depth
+    # arms get, or a loss for it is a loss on width and not on spreading the
+    # budget. budget // n_reps threw the remainder away: at 10 representations
+    # and a budget of 25 this arm ran on 20 features against the depth arms'
+    # 25, and at a budget of 10 on 10 against 10 only by accident. The
+    # remainder now goes one feature at a time to the representations in the
+    # order they are named, and a representation narrower than its share hands
+    # what it cannot fill back to the others.
+    quota = {n: 0 for n in sub_names}
+    width = {n: int(train_reps[n].shape[1]) for n in sub_names}
+    remaining = int(min(budget, sum(width.values())))
+    while remaining > 0:
+        open_names = [n for n in sub_names if quota[n] < width[n]]
+        if not open_names:
+            break
+        share, extra = divmod(remaining, len(open_names))
+        if share == 0:
+            for n in open_names[:remaining]:
+                quota[n] += 1
+            break
+        for i, n in enumerate(open_names):
+            take = min(share + (1 if i < extra else 0), width[n] - quota[n])
+            quota[n] += take
+        remaining = int(min(budget, sum(width.values()))) - sum(quota.values())
 
+    tr_parts, va_parts = [], []
     for name in sub_names:
+        n_sel = quota[name]
+        if n_sel <= 0:
+            continue
         imp_dict = compute_feature_importance(
             {name: train_reps[name]}, y_train, method=method)
         imp = imp_dict[name]
-        n_sel = min(per_rep, train_reps[name].shape[1])
         top_idx = np.argsort(imp)[::-1][:n_sel]
         tr_parts.append(train_reps[name][:, top_idx])
         va_parts.append(val_reps[name][:, top_idx])
 
+    if not tr_parts:
+        return None, None
     return np.hstack(tr_parts), np.hstack(va_parts)
 
 

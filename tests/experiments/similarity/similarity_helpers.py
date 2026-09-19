@@ -27,20 +27,50 @@ from scipy.spatial.distance import cdist as scipy_cdist
 from kirby.similarity.distance_config import scipy_metric as scipy_distance_metric
 
 
-def _pair_distances(Xs, pi, pj, block=4096):
+def _pair_distances(Xs, pi, pj, block=8192):
     """Distance between row pi[t] and row pj[t], under --distance-metric.
 
-    Done in blocks off the diagonal of a cdist call rather than one pair at a
-    time: cosine and fractional Minkowski have no closed subtraction form the
-    way Euclidean's np.linalg.norm did."""
+    One distance per requested pair. It used to take the diagonal of a cdist
+    call over a block of rows against itself, so a block of 4,096 pairs cost
+    4,096 x 4,096 = 16.8 million distances to keep 4,096 of them: 4,095 of
+    every 4,096 were computed and thrown away. That is why the callers sample
+    5,000 pairs — at that cost 5,000 is already 17.6 million distances — and
+    5,000 pairs is not enough to separate two representations whose Spearman
+    differs by 0.01.
+
+    Each of the four metrics the suite sweeps has a row-wise form, so there is
+    nothing to compute off the diagonal:
+
+      manhattan        sum |a - b|
+      euclidean        sqrt(sum (a - b)^2)
+      minkowski p=0.5  (sum |a - b|^0.5)^2
+      cosine           1 - (a.b) / (|a| |b|)
+    """
     import numpy as _np
     m, kw = scipy_distance_metric()
     out = _np.empty(len(pi), dtype=float)
     for start in range(0, len(pi), block):
         end = min(start + block, len(pi))
-        a, b = Xs[pi[start:end]], Xs[pj[start:end]]
-        D = scipy_cdist(a, b, metric=m, **kw)
-        out[start:end] = _np.diagonal(D)
+        a = _np.asarray(Xs[pi[start:end]], dtype=float)
+        b = _np.asarray(Xs[pj[start:end]], dtype=float)
+        if m == 'cityblock':
+            out[start:end] = _np.abs(a - b).sum(axis=1)
+        elif m == 'euclidean':
+            out[start:end] = _np.sqrt(((a - b) ** 2).sum(axis=1))
+        elif m == 'minkowski':
+            p = float(kw.get('p', 2))
+            out[start:end] = (_np.abs(a - b) ** p).sum(axis=1) ** (1.0 / p)
+        elif m == 'cosine':
+            num = (a * b).sum(axis=1)
+            den = _np.linalg.norm(a, axis=1) * _np.linalg.norm(b, axis=1)
+            # scipy returns 0 for a pair of all-zero rows; match it rather
+            # than emitting nan into a Spearman.
+            out[start:end] = _np.where(den > 0, 1.0 - num / _np.where(den > 0, den, 1.0), 0.0)
+        else:
+            # A metric added to distance_config without a row-wise form here.
+            # Fall back to the diagonal rather than returning a wrong number.
+            D = scipy_cdist(a, b, metric=m, **kw)
+            out[start:end] = _np.diagonal(D)
     return out
 
 from experiments._shared import (
@@ -111,6 +141,70 @@ def similarity_activity_correlation(D, y, n_sample=5000, is_clf=False):
 
     rho, p = spearmanr(dists, delta_y)
     return float(rho), float(p)
+
+
+def sac_pair_sample(n, n_sample, scalable=False, seed=42):
+    """The molecule pairs every distance-activity Spearman here is taken over.
+
+    One place, so the dense path and the nearest-neighbour path draw the same
+    way and the permutation null below can be built for the whole dataset
+    instead of once per representation.
+    """
+    if scalable:
+        return _sample_offdiag_pairs(n, n_sample, seed)
+    pi, pj = np.triu_indices(n, k=1)
+    if len(pi) > n_sample:
+        idx = np.random.RandomState(seed).choice(len(pi), n_sample,
+                                                 replace=False)
+        pi, pj = pi[idx], pj[idx]
+    return pi, pj
+
+
+def permuted_delta_ranks(labels, pair_i, pair_j, is_clf=False, n_perm=200,
+                         seed=42, dtype=np.float32):
+    """Ranked activity difference of those pairs under n_perm label shuffles.
+
+    Nothing in it depends on the representation: the pairs are the same for
+    every representation and the labels are shuffled the same way, so this is
+    the whole permutation null for a dataset, built once. The per-representation
+    loop used to rebuild all of it inside every representation, which is what
+    made 200 shuffles expensive enough to keep the pair count at 5,000.
+
+    Same RandomState(seed) draw order as that loop, so the shuffles are the
+    ones it drew.
+    """
+    from scipy.stats import rankdata
+    labels = np.asarray(labels)
+    rng = np.random.RandomState(seed)
+    out = np.empty((n_perm, len(pair_i)), dtype=dtype)
+    for t in range(n_perm):
+        y_perm = rng.permutation(labels)
+        out[t] = rankdata(_pairwise_delta(y_perm[pair_i], y_perm[pair_j],
+                                          is_clf=is_clf))
+    return out
+
+
+def sac_permutation_p(pair_dists, perm_ranks, sac_rho):
+    """How often a shuffled activity column reached this representation's rho.
+
+    The top counts shuffles whose absolute Spearman reached the real absolute
+    Spearman; the bottom is the number of shuffles. A Spearman IS a Pearson on
+    ranks, and the distance ranks are the same for every shuffle, so the whole
+    null is one matrix product rather than 200 spearmanr calls.
+    """
+    from scipy.stats import rankdata
+    rd = rankdata(pair_dists).astype(np.float64)
+    rd -= rd.mean()
+    dn = float(np.sqrt((rd ** 2).sum()))
+    P = perm_ranks.astype(np.float64)
+    P = P - P.mean(axis=1, keepdims=True)
+    pn = np.sqrt((P ** 2).sum(axis=1))
+    with np.errstate(invalid='ignore', divide='ignore'):
+        rhos = (P @ rd) / (pn * dn)
+    rhos = rhos[np.isfinite(rhos)]
+    if rhos.size == 0:
+        return float('nan'), rhos
+    return float(np.mean(np.abs(rhos) >= abs(sac_rho))), rhos
 
 
 def compute_sali(D, y, eps=1e-6, is_clf=False):
@@ -730,7 +824,21 @@ def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
 SIMILARITY_EXTRA = {
     'weight_methods': ['lightgbm_gain'],
     'k_values': [5, 10],
-    'n_sample': 5000,
+    # How many molecule pairs every distance-activity Spearman is taken over,
+    # in s01, s02 and s08. It was 5,000 because _pair_distances cost 4,096
+    # distances for every pair it kept; it now costs one, so 5,000 was paying
+    # for precision it did not need to give up. Measured on herg_ki, ecfp4:
+    # the rho reads 0.0580 at 5,000 pairs, 0.0491 at 50,000 and 0.0461 at
+    # 200,000, and the gap between neighbouring representations in that table
+    # is about 0.005 — so at 5,000 the ranking moved with the pair draw.
+    #
+    # It does NOT make a single rho precise. Every pair is drawn from the same
+    # molecules, so the permutation null's spread is set by the molecule count
+    # and barely moves: 0.0178 at 5,000 pairs against 0.0132 at 50,000 on those
+    # 1,412 molecules. That spread is stored per representation as
+    # sac_permutation_null_sd, and it is what a difference between two
+    # representations has to clear.
+    'n_sample': 50000,
     'knn_conditions': ['hybrid_unweighted', 'hybrid_weighted'],
 }
 
@@ -1222,19 +1330,27 @@ def run_all(dataset_name: str, output_dir: str,
         if exp_id == 's11' and os.environ.get('KIRBY_SMOKE_N'):
             kwargs['max_iterations'] = int(os.environ.get('KIRBY_SMOKE_S11_ITERS', '8'))
             kwargs['n_seeds'] = int(os.environ.get('KIRBY_SMOKE_S11_SEEDS', '1'))
-        # SMOKE ONLY: s03 hardcodes downstream_models=['rf','lightgbm','dnn']
-        # (s03_feature_concentration.py:117), but the local smoke driver trims
-        # find_best_hybrid.DEFAULT_MODELS to a tiny set (rf/knn/ridge) to dodge
-        # the macOS OpenMP segfault. The pool then has no lightgbm/dnn candidate
-        # and s03 records an {'error'} for those models. Intersect the requested
-        # downstream models with the models actually present in DEFAULT_MODELS so
-        # the smoke run only asks for what exists. Gated on KIRBY_SMOKE_N; server
-        # full runs (all models present) are unaffected.
-        if exp_id == 's03' and os.environ.get('KIRBY_SMOKE_N'):
-            from kirby.find_best_hybrid import DEFAULT_MODELS as _DM
-            _avail = set(_DM.keys())
-            kwargs['downstream_models'] = [
-                m for m in ('rf', 'lightgbm', 'dnn') if m in _avail]
+        # s03 names its own three downstream models (rf, lightgbm, dnn at
+        # s03_feature_concentration.py:117) and asks the pool for each. A model
+        # the search never scored has no candidate in the pool, and s03 records
+        # an {'error'} for it rather than a result — so ask only for the models
+        # a search on this machine actually scores. A search picks its models by
+        # tier when the caller names none, so the test is the tier and not just
+        # the name: the local grid relabels a model it is cutting to 'off',
+        # leaving the name in DEFAULT_MODELS. On the cluster all three sit at
+        # tier 'fast' and this changes nothing. It used to be gated on
+        # KIRBY_SMOKE_N, which no runner sets.
+        if exp_id == 's03':
+            from kirby.find_best_hybrid import (
+                DEFAULT_MODELS as _DM, AUTO_SELECTED_TIERS as _TIERS)
+            _avail = {m for m, spec in _DM.items()
+                      if spec.get('tier') in _TIERS}
+            _asked = [m for m in ('rf', 'lightgbm', 'dnn') if m in _avail]
+            if len(_asked) < 3:
+                print(f"  s03: asking for {_asked} — "
+                      f"{sorted(set(('rf', 'lightgbm', 'dnn')) - _avail)} "
+                      f"is not scored by a search here")
+            kwargs['downstream_models'] = _asked
 
         try:
             exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)

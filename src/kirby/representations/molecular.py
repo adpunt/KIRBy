@@ -236,19 +236,40 @@ def get_models_dir():
 # happens when torch imports cleanly, which is the case the comment above is
 # about; when it does not, the RDKit builders keep working and only the
 # torch-backed ones raise, naming torch.
-try:
-    import torch as _torch_module
-    _original_torch_load = _torch_module.load
-    _TORCH_IMPORT_ERROR = None
-except Exception as _torch_exc:          # ImportError, OSError, anything
-    _torch_module = None
-    _original_torch_load = None
-    _TORCH_IMPORT_ERROR = _torch_exc
+# The import itself is deferred to the first _require_torch() call, not run at
+# module import. Importing this module is what a CACHED load does -- every
+# representation comes off disk as a .npy and no builder runs -- and the import
+# alone brought torch, and with it functorch's libiomp5, into the process. On a
+# laptop that is the second OpenMP runtime beside LightGBM's libomp, and a
+# LightGBM fit at more than one thread then dies with SIGSEGV (KIRBY_LGBM_THREADS
+# exists for exactly that). Nothing above this line needs torch; deferring it
+# means a cached molecular load never loads it.
+_torch_module = None
+_original_torch_load = None
+_TORCH_IMPORT_ERROR = None
+_TORCH_RESOLVED = False
+
+
+def _resolve_torch():
+    """Import torch once, on first use. Records the failure rather than raising."""
+    global _torch_module, _original_torch_load, _TORCH_IMPORT_ERROR, _TORCH_RESOLVED
+    if _TORCH_RESOLVED:
+        return _torch_module
+    _TORCH_RESOLVED = True
+    try:
+        import torch as _t
+        _torch_module = _t
+        _original_torch_load = _t.load
+    except Exception as _torch_exc:      # ImportError, OSError, anything
+        _torch_module = None
+        _original_torch_load = None
+        _TORCH_IMPORT_ERROR = _torch_exc
+    return _torch_module
 
 
 def _require_torch():
     """The torch module, or a raise that names why it is not here."""
-    if _torch_module is None:
+    if _resolve_torch() is None:
         raise ImportError(
             f"this representation needs torch and torch did not import: "
             f"{type(_TORCH_IMPORT_ERROR).__name__}: {_TORCH_IMPORT_ERROR}. "
@@ -278,7 +299,8 @@ def _safe_torch_load(path, map_location=None):
 
     if torch_version >= (2, 6):
         # PyTorch 2.6+: explicitly set weights_only=False for legacy checkpoints
-        return _original_torch_load(path, map_location=map_location, weights_only=False)
+        return _original_torch_load(path, map_location=map_location,
+                                    weights_only=False)
     else:
         # Older PyTorch: use default behavior
         return _original_torch_load(path, map_location=map_location)

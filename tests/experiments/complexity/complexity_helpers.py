@@ -989,6 +989,21 @@ def run_all(dataset_name: str, output_dir: str,
 
     # ── Load augmentation reps ──
     aug_rep_names = DATASET_REPS.get(dataset_name, {}).get('augmentation', [])
+    # A local run can drop the augmentation representations that are not already
+    # on disk. caco2's four 3D ones -- pharmacophore3d, usrcat, coulomb_matrix,
+    # usr -- are cached nowhere, and building them is conformer generation for
+    # 2,158 molecules, hours before the first search starts. Unset, nothing
+    # changes. Set, the ones that are missing are named and skipped, so the
+    # result file says which donors c21 actually had.
+    if aug_rep_names and os.environ.get('KIRBY_LOCAL_CACHED_AUGS_ONLY'):
+        from experiments._shared import _rep_cache_dir
+        _cdir = _rep_cache_dir() / dataset_name
+        _have = [r for r in aug_rep_names if (_cdir / f'{r}.npy').exists()]
+        _gone = [r for r in aug_rep_names if r not in _have]
+        if _gone:
+            print(f"  [local] augmentation representations not cached, skipped: "
+                  f"{_gone} (kept: {_have})")
+        aug_rep_names = _have
     if aug_rep_names:
         missing = [r for r in aug_rep_names if r not in reps]
         aug_reps = {}
