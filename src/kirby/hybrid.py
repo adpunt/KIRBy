@@ -1173,7 +1173,8 @@ def _refuse_missing_evaluator_library(asked, module, err):
         f"for an evaluator you can actually run.")
 
 
-def _require_scored_reps(baseline_scores, objective, where):
+def _require_scored_reps(baseline_scores, objective, where,
+                         val_labels=None, is_clf=False):
     """Raise when no representation could be scored on the held-out block.
 
     Every representation coming back non-finite is not a tie, it is a slice on
@@ -1189,18 +1190,44 @@ def _require_scored_reps(baseline_scores, objective, where):
         return
     if any(np.isfinite(s) for s in baseline_scores.values()):
         return
+
+    head = ("%s: not one of the %d representations could be scored under "
+            "objective=%r on this held-out block, so there is nothing to split "
+            "the budget by, and this configuration is refused. "
+            % (where, len(baseline_scores), objective))
+    tail = ("Splitting equally instead would be filed under the requested "
+            "allocation method's name and would be indistinguishable from a "
+            "method that chose an equal split.")
+
+    # MORE THAN TWO CLASSES IS A FOURTH CAUSE, and it is not about the fold.
+    # activity_readacross scores a classification dataset by AUROC, which is
+    # defined for two classes; above two it returns "no score" for every
+    # representation on every fold, whatever the grouping. Before 2026-09-19
+    # this case printed "GET BETTER GROUPS" and sent the reader to look at a
+    # split that was never the problem -- tcga_brca_pam50 (4 classes) and
+    # tz_her2_multiclass (3) both land here every time.
+    _components, _ = normalise_objective(objective)
+    if is_clf and val_labels is not None and OBJECTIVE_SIMILARITY in _components:
+        n_classes = int(len(np.unique(np.asarray(val_labels).ravel())))
+        if n_classes > 2:
+            raise ValueError(
+                head +
+                "THE LABEL HAS %d CLASSES. Scoring the five-nearest-neighbour "
+                "prediction on a classification dataset uses AUROC, which is "
+                "defined for 2 classes, so above 2 every representation comes "
+                "back unscored no matter how the folds are cut. Nothing is "
+                "wrong with the grouping. Either run this dataset without the "
+                "similarity objective, or define the multiclass form (AUROC of "
+                "each class against the rest, averaged) in "
+                "activity_readacross. " % n_classes + tail)
+
     raise ValueError(
-        "%s: not one of the %d representations could be scored under "
-        "objective=%r on this held-out block, so there is nothing to split the "
-        "budget by, and this configuration is refused. "
+        head +
         "GET BETTER GROUPS. This fold's held-out block holds one group, or "
         "under ten rows, or one activity value, so it cannot say anything "
         "about any representation. That is how the dataset is grouped, not a "
         "property of the recipe: the grouping is too coarse, or one group is "
-        "big enough to take a whole fold. Splitting equally instead would be "
-        "filed under the requested allocation method's name and would be "
-        "indistinguishable from a method that chose an equal split."
-        % (where, len(baseline_scores), objective))
+        "big enough to take a whole fold. " + tail)
 
 
 def _abs_pearson(a, b):
@@ -1714,7 +1741,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     # Order matters: the guard reads non-finite scores, and the sanitiser
     # replaces them. Guard first.
     _require_scored_reps(baseline_scores, objective,
-                         'allocate_performance_weighted')
+                         'allocate_performance_weighted',
+                         val_labels=val_labels, is_clf=is_clf)
     # Shift scores to non-negative (weighting schemes require >= 0).
     # Preserves relative ordering.  Negated lower-is-better scores
     # (e.g. -RMSE) are all negative, so a simple max(,0) would clip
@@ -2282,7 +2310,8 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
     # all-failed vector is indistinguishable from a tie and the budget is split
     # equally under the requested method's name.
     _require_scored_reps(baseline_scores, objective,
-                         'allocate_weighted_global')
+                         'allocate_weighted_global',
+                         val_labels=val_labels, is_clf=is_clf)
     # Read the unscored set BEFORE the sanitiser turns every non-finite score
     # into 0.0 — see the note in allocate_performance_weighted. Added 2026-09-10.
     _unscored = {rn for rn, sc in baseline_scores.items() if not np.isfinite(sc)}
