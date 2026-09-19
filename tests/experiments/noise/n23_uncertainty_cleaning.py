@@ -123,10 +123,16 @@ BOTH REGIMES.
   as_they_come  nothing is corrupted. n18's regime. A win is a win on the data
                 as it arrived, and there is no list to be right about.
 
-WHAT THIS DOES NOT ASK. The features are fixed. One base representation and, if
-the pool returns a recipe, a hybrid built once per fold on the fold's training
-molecules at their UNCLEANED labels. No cleaning reaches the feature ranking or
-the budget split. Whether it should is n20's question, not this one.
+WHAT THIS DOES NOT ASK. The features are fixed. One base representation and one
+hybrid per family of stored search the pool holds, each built once per fold on
+the fold's training molecules at their UNCLEANED labels. There are two
+families: a search that chose its features to predict the label ('hybrid') and
+one that chose them so that each molecule's activity is predicted by its five
+nearest neighbours in the distance those features define
+('hybrid_similarity'). Before 2026-09-19 only the first was built and the
+second was written into the result file as a score nothing had measured in. No
+cleaning reaches the feature ranking or the budget split in any space. Whether
+it should is n20's question, not this one.
 
 WHAT THE HELD-OUT MOLECULES ARE GRADED AGAINST. `labels[val_idx]`, untouched, in
 every arm and both regimes. No cleaned label and no corrupted label is ever
@@ -154,6 +160,9 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream, make_nearest_neighbors,
     pick_noise_base_rep,
+    # One feature space per search family the pool holds, added 2026-09-19.
+    # n11's loop, in one place. See SPACE_FOR_FAMILY below.
+    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.dataset_policy import (
     noise_levels, noise_groups_for, noise_dose_units,
@@ -218,6 +227,32 @@ REGIMES = ('injected', 'as_they_come')
 # Which searches the recipe may come from. Same as n02, n07, n11, n12, n13, n17,
 # n18 and n19 since 2026-09-12.
 POOL_SUBSET = 'predictive_and_similarity'
+
+# ⛔ ONE SPACE PER FAMILY, NOT ONE RECIPE. Added 2026-09-19.
+#
+# POOL_SUBSETS names the two families in PREFERENCE order and the pool returns
+# the first that has an entry, because their stored scores are in different
+# units -- a predictive search's score is the dataset's own metric, a
+# similarity search's is the correlation between each held-out molecule's
+# activity and what its five nearest neighbours predict. A predictive recipe
+# always exists, so until 2026-09-19 this file asked for both families and
+# built one.
+#
+# It matters here, though less than in n12 or n17. One of the five uncertainty
+# sources, activity_cliff_aware, scores a molecule against its nearest
+# neighbours, and the similarity search chooses features so that exactly that
+# distance predicts activity from the five nearest neighbours. The other four
+# -- hetero_gp, ngboost, heteroscedastic_nn and gaussian_process -- fit a model
+# on the features instead, so for them the space changes what the model is
+# given rather than which neighbours are found.
+#
+# 'hybrid' is still the predictive recipe, so every number reported before
+# 2026-09-19 still means what it meant.
+HYBRID_SPACE = 'hybrid'
+SPACE_FOR_FAMILY = {
+    'predictive': HYBRID_SPACE,
+    'similarity': 'hybrid_similarity',
+}
 
 
 def _estimator_kwargs(source, groups_train, is_clf, n_folds, k):
@@ -512,24 +547,66 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     except Exception as exc:
         _meta = None
         print(f"  hybrid recipe lookup failed: {type(exc).__name__}: {exc}")
-    if bp is None:
+    # One recipe per family the pool holds, and a written reason for each family
+    # that produced none. `bp` stays the recipe the pool RETURNED, which is what
+    # every 'hybrid_*' key below already described.
+    hybrid_recipes, hybrid_unavailable = pool_recipes_by_family(
+        _meta if bp is not None else None, SPACE_FOR_FAMILY,
+        eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+    recipe_for_space = {r['space']: r['blueprint'] for r in hybrid_recipes}
+    results['hybrid_spaces_unavailable'] = hybrid_unavailable
+
+    if not hybrid_recipes:
         spaces = ('base',)
         results['hybrid_available'] = False
         results['hybrid_unavailable_reason'] = (
             f'no recipe came back from the pool subset {POOL_SUBSET!r}, so '
             'every arm ran in the base representation only. Dropping the run '
-            'would lose real answers because one of two spaces is missing.')
+            'would lose real answers because one of several spaces is missing.')
         print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
               f"base representation only")
     else:
-        spaces = ('base', 'hybrid')
+        spaces = ('base',) + tuple(r['space'] for r in hybrid_recipes)
         results['hybrid_available'] = True
         results['hybrid_family'] = _meta.get('objective')
         results['hybrid_budget'] = getattr(bp, 'budget', None)
         results['hybrid_reps'] = sorted(getattr(bp, 'reps', []) or [])
+        results['hybrid_space_of_pool_winner'] = SPACE_FOR_FAMILY.get(
+            _meta.get('objective'), f"hybrid_{_meta.get('objective')}")
+        results['hybrid_spaces'] = convert_numpy({
+            r['space']: {
+                'built_under_objective': r['objective'],
+                'features_chosen_by': describe_pool_family(r['objective']),
+                'is_the_recipe_the_pool_returned': r['is_pool_winner'],
+                'tier': r['tier'], 'aug_condition': r['aug_condition'],
+                'budget': r['budget'],
+                'allocation_method': r['allocation_method'],
+                'importance_method': r['importance_method'],
+                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
+                'search_score_mean': r['search_score_mean'],
+                'search_metric_name': r['search_metric_name'],
+            } for r in hybrid_recipes})
+        results['hybrid_spaces_note'] = (
+            'One hybrid space per family of stored search. A predictive search '
+            'chose its features to predict the label and its search_score_mean '
+            "is in the dataset's own metric. A similarity search chose its "
+            "features so that each molecule's activity is predicted by its "
+            'five nearest neighbours in the distance those features define, '
+            'fits no downstream model, and its search_score_mean is that '
+            'correlation. The two search scores are in different units and '
+            'nothing here ranks one against the other. Every arm below is '
+            "scored in the dataset's own metric, on the same folds, in every "
+            'space.')
         print(f"  hybrid recipe: {len(results['hybrid_reps'])} "
               f"representations, budget {results['hybrid_budget']}, "
               f"searched under objective {_meta.get('objective')}")
+        for r in hybrid_recipes:
+            print(f"  hybrid space {r['space']}: family {r['objective']!r}, "
+                  f"budget {r['budget']} features, allocation "
+                  f"{r['allocation_method']}, search score "
+                  f"{r['search_score_mean']} in {r['search_metric_name']!r}")
+    for _sp, _why in hybrid_unavailable.items():
+        print(f"  no {_sp} space: {_why}")
     results['spaces_run'] = list(spaces)
 
     passes = {'as_they_come': [(None, 0)]}
@@ -602,15 +679,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_spaces['base'] = (
                     sc.fit_transform(train_reps[base_rep_name]),
                     sc.transform(val_reps[base_rep_name]))
-                if 'hybrid' in spaces:
+                # One build per family the pool holds. hybrid_for_fold reads
+                # the objective off the recipe and drops the model, the metric
+                # and its direction under a geometry recipe, where
+                # build_fold_hybrid refuses the pair, so one call serves both.
+                for _sp in spaces:
+                    _bp = recipe_for_space.get(_sp)
+                    if _bp is None:
+                        continue
                     X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, y0, bp, g_tr,
+                        train_reps, val_reps, y0, _bp, g_tr,
                         model_factories[downstream_models[0]](),
                         metric_fn, lower_is_better)
                     if X_tr_h is not None:
                         sh = StandardScaler()
-                        fold_spaces['hybrid'] = (sh.fit_transform(X_tr_h),
-                                                 sh.transform(X_va_h))
+                        fold_spaces[_sp] = (sh.fit_transform(X_tr_h),
+                                            sh.transform(X_va_h))
 
                 for space in spaces:
                     if space not in fold_spaces:

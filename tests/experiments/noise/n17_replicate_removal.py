@@ -64,9 +64,13 @@ the distance between `floor` and `ceiling`. Beating `no_cleaning` while sitting
 at `floor` is not a removal result; it is a smaller training set.
 
 WHERE EVERY ARM IS MEASURED. In every representation the run loaded, one at a
-time, and in a hybrid whose recipe comes from the precomputed pool and whose
-features are rebuilt per fold. That is the same two-space treatment n19 has,
-widened on the representation axis.
+time, and in a hybrid per family of stored search, each recipe coming from the
+precomputed pool and each rebuilt per fold. There are two families: a search
+that chose its features to predict the label, and one that chose them so that
+each molecule's activity is predicted by its five nearest neighbours in the
+distance those features define. Their spaces are 'hybrid' and
+'hybrid_similarity'. Before 2026-09-19 only the first was built and the second
+was written into the result file as a score nothing had measured in.
 
 Until 2026-09-17 this file read `sorted(reps)[0]` and measured the six arms in
 that one representation. Whichever representation sorted first became the whole
@@ -98,8 +102,11 @@ nothing about datasets whose loaders collapse their repeats before anything sees
 them, which as of 2026-09-12 is most of them (NOISE_AUDIT_2026_09_10.md 11.1).
 
 WHAT IT COSTS. Six arms by five models by one fit each, in every space, on every
-fold of every draw. At ten representations plus the hybrid, five folds and three
-draws that is 4,950 downstream fits and 15 hybrid builds. Nothing is dropped to
+fold of every draw. At ten representations plus the two hybrid spaces, five
+folds and three draws that is 5,400 downstream fits and 30 hybrid builds. The
+second hybrid space added 450 of those fits and 15 of those builds on
+2026-09-19; it runs no search of its own, because the recipe it uses is one the
+same pool lookup already returned. Nothing is dropped to
 bring that down; a run that cannot afford it should be given fewer
 representations by name, and the list it ran is written to `base_reps`.
 
@@ -120,6 +127,9 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
+    # One feature space per search family the pool holds, added 2026-09-19.
+    # n11's loop, in one place. See the POOL_SUBSET comment below.
+    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
     # The top-2 selectors and the two hybrid deltas, added 2026-09-18. All four
     # read rows the search already stored and fit nothing.
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
@@ -186,11 +196,41 @@ N_DRAWS = 3
 HYBRID_SPACE = 'hybrid'
 BASE_SPACE_PREFIX = 'base:'
 
+# The second hybrid space, added 2026-09-19. See SPACE_FOR_FAMILY.
+HYBRID_SIMILARITY_SPACE = 'hybrid_similarity'
+
 # Which searches the recipe may come from. Same as n02, n06, n07, n11, n12, n13
 # and n19 since 2026-09-12: a search whose features were chosen to predict the
 # label, and one whose features were chosen so that the distance they define
 # predicts each molecule's activity from its five nearest neighbours.
 POOL_SUBSET = 'predictive_and_similarity'
+
+# ⛔ ONE SPACE PER FAMILY, NOT ONE RECIPE. Added 2026-09-19.
+#
+# POOL_SUBSETS names the two families in PREFERENCE order and the pool returns
+# the first that has an entry, because their stored scores are in different
+# units -- a predictive search's score is the dataset's own metric, a
+# similarity search's is the correlation between each held-out molecule's
+# activity and what its five nearest neighbours predict. A predictive recipe
+# always exists, so from 2026-09-12 to 2026-09-19 this file asked for both
+# families, built the predictive one and wrote the other into the result file
+# as a score it never measured in.
+#
+# That matters here in particular. Two of the six arms, `drop` and `repair`,
+# pick which entities to remove or relabel with DETECTOR, which is
+# 'neighbor_residual' at k = 10 -- a molecule scored against its ten nearest
+# neighbours in whatever space it is read in. The similarity search chooses
+# features so that exactly that distance predicts activity from the five
+# nearest neighbours. The other four arms pick without a detector: `ceiling`
+# reads the true spread, the two floors draw at random, and `no_cleaning`
+# removes nothing.
+#
+# 'hybrid' is still the predictive recipe, so every number reported before
+# 2026-09-19 still means what it meant.
+SPACE_FOR_FAMILY = {
+    'predictive': HYBRID_SPACE,
+    'similarity': HYBRID_SIMILARITY_SPACE,
+}
 
 
 def build_entities(labels, replicate_groups, seed):
@@ -626,8 +666,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         meta = None
         print(f"  hybrid recipe lookup failed: {type(exc).__name__}: {exc}")
 
+    # One recipe per family the pool holds, and a written reason for each family
+    # that produced none. See SPACE_FOR_FAMILY. `bp` above stays the recipe the
+    # pool RETURNED, which is what every 'hybrid_*' key below already described.
+    hybrid_recipes, hybrid_unavailable = pool_recipes_by_family(
+        meta, SPACE_FOR_FAMILY,
+        eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+    recipe_for_space = {r['space']: r['blueprint'] for r in hybrid_recipes}
+    results['hybrid_spaces_unavailable'] = hybrid_unavailable
+
     base_spaces = [f'{BASE_SPACE_PREFIX}{r}' for r in base_rep_names]
-    if bp is None:
+    if not hybrid_recipes:
         # Every arm still runs, in every base representation. Dropping the run
         # would lose six real answers per representation because one space of
         # the several is missing.
@@ -640,7 +689,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
               f"base representations only")
     else:
-        spaces = base_spaces + [HYBRID_SPACE]
+        spaces = base_spaces + [r['space'] for r in hybrid_recipes]
         results['hybrid_available'] = True
         results['hybrid_family'] = meta['objective']
         results['hybrid_family_choice'] = meta['objective_choice']
@@ -655,9 +704,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'lower_is_better': d['lower_is_better']}
             for o, d in (meta.get('by_objective') or {}).items()
         })
-        print(f"  hybrid recipe: {len(results['hybrid_reps'])} representations, "
-              f"budget {results['hybrid_budget']}, searched under objective "
-              f"{meta['objective']} (pool subset {meta['pool_subset']})")
+        # Which of the spaces below holds the recipe the pool returned. The
+        # other hybrid spaces are the other families' own winners.
+        results['hybrid_space_of_pool_winner'] = SPACE_FOR_FAMILY.get(
+            meta['objective'], f"hybrid_{meta['objective']}")
+        results['hybrid_spaces'] = convert_numpy({
+            r['space']: {
+                'built_under_objective': r['objective'],
+                'features_chosen_by': describe_pool_family(r['objective']),
+                'is_the_recipe_the_pool_returned': r['is_pool_winner'],
+                'tier': r['tier'], 'aug_condition': r['aug_condition'],
+                'budget': r['budget'],
+                'allocation_method': r['allocation_method'],
+                'importance_method': r['importance_method'],
+                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
+                'search_score_mean': r['search_score_mean'],
+                'search_metric_name': r['search_metric_name'],
+            } for r in hybrid_recipes})
+        results['hybrid_spaces_note'] = (
+            'One hybrid space per family of stored search. A predictive search '
+            'chose its features to predict the label and its search_score_mean '
+            "is in the dataset's own metric. A similarity search chose its "
+            "features so that each molecule's activity is predicted by its "
+            'five nearest neighbours in the distance those features define, '
+            'fits no downstream model, and its search_score_mean is that '
+            'correlation. The two search scores are in different units and '
+            'nothing here ranks one against the other. What IS comparable is '
+            "what every space below is scored in: this experiment's own arms, "
+            "in the dataset's own metric, on the same folds.")
+        for r in hybrid_recipes:
+            print(f"  hybrid space {r['space']}: family {r['objective']!r}, "
+                  f"budget {r['budget']} features, allocation "
+                  f"{r['allocation_method']}, tier {r['tier']}/"
+                  f"{r['aug_condition']}, search score "
+                  f"{r['search_score_mean']} in {r['search_metric_name']!r}")
+        for _sp, _why in hybrid_unavailable.items():
+            print(f"  no {_sp} space: {_why}")
     results['spaces_run'] = list(spaces)
     print(f"  spaces: {len(spaces)} — {', '.join(spaces)}")
     print(f"  models: {', '.join(downstream_models)}")
@@ -718,7 +800,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                for s in spaces}
         removed = {s: {a: [] for a in ARMS} for s in spaces}
         relabelled = {s: {a: [] for a in ARMS} for s in spaces}
-        hybrid_failures = []
+        # {space: [fold numbers whose build failed]}. A list of folds until
+        # 2026-09-19, when a second hybrid space arrived and the folds of the
+        # two would otherwise have been added into one list.
+        hybrid_failures = {}
         n_eligible, n_flag_per_fold = [], []
         fold_sizes = []
 
@@ -761,18 +846,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_all = ent_reps[rname]
                 fold_spaces[f'{BASE_SPACE_PREFIX}{rname}'] = (
                     sc.fit_transform(X_all[tr]), sc.transform(X_all[va_graded]))
-            if HYBRID_SPACE in spaces:
+            # One build per family the pool holds, all on the same training
+            # entities and the same single-measurement training labels.
+            # hybrid_for_fold reads the objective off the recipe and drops the
+            # model, the metric and its direction under a geometry recipe,
+            # where build_fold_hybrid refuses the pair -- so one call serves
+            # both families.
+            for _sp in spaces:
+                _bp = recipe_for_space.get(_sp)
+                if _bp is None:
+                    continue
                 X_tr_h, X_va_h = hybrid_for_fold(
                     {k: v[tr] for k, v in ent_reps.items()},
                     {k: v[va_graded] for k, v in ent_reps.items()},
-                    y_tr, bp, g_tr,
+                    y_tr, _bp, g_tr,
                     model_factories[downstream_models[0]](),
                     metric_fn, lower_is_better)
                 if X_tr_h is None:
-                    hybrid_failures.append(int(fold_i))
+                    hybrid_failures.setdefault(_sp, []).append(int(fold_i))
                 else:
                     sc_h = StandardScaler()
-                    fold_spaces[HYBRID_SPACE] = (
+                    fold_spaces[_sp] = (
                         sc_h.fit_transform(X_tr_h), sc_h.transform(X_va_h))
 
             for space in spaces:
@@ -822,7 +916,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'ceiling_exhausted_the_pool': _exhausted,
             # Folds whose hybrid could not be built. Those folds still carry
             # every base-representation number.
-            'folds_with_no_hybrid': hybrid_failures,
+            # Unchanged in name and shape: the folds the PREDICTIVE
+            # hybrid failed to build on. Every space's failures, the
+            # geometry one included, are in the key below it.
+            'folds_with_no_hybrid': hybrid_failures.get(HYBRID_SPACE, []),
+            'folds_with_no_hybrid_by_space': {
+                k: list(v) for k, v in hybrid_failures.items()},
             'per_space': {},
         }
         for space in spaces:
@@ -969,12 +1068,14 @@ def _summarise(results, models, spaces, metric_name, lower_is_better):
     # defined where the hybrid ran, and stated against EACH representation
     # rather than against one of them chosen here.
     base_spaces = [s for s in spaces if s.startswith(BASE_SPACE_PREFIX)]
-    if HYBRID_SPACE in spaces and base_spaces:
+
+    def _cross_for(hybrid_space):
+        """One hybrid space against every base representation, per arm."""
         cross = {}
         for arm in ('ceiling', 'drop', 'repair'):
             per_model = {}
             for m in models:
-                h = out['per_space'][HYBRID_SPACE]['per_model'][m][
+                h = out['per_space'][hybrid_space]['per_model'][m][
                     'gain_over_its_own_floor'][arm]
                 per_model[m] = {
                     'gain_in_hybrid': h,
@@ -992,12 +1093,27 @@ def _summarise(results, models, spaces, metric_name, lower_is_better):
                         for s in base_spaces},
                 }
             cross[arm] = per_model
+        return cross
+
+    # Every hybrid space this run built, each against every base
+    # representation. 2026-09-19: a second hybrid space exists, so this is a
+    # dict keyed by space name. 'gain_by_space' below keeps the shape it had,
+    # holding the predictive space alone, so nothing already reported moves.
+    hybrid_spaces = [s for s in spaces if s not in base_spaces]
+    if hybrid_spaces and base_spaces:
+        out['gain_by_hybrid_space'] = {
+            hs: _cross_for(hs) for hs in hybrid_spaces}
+    if HYBRID_SPACE in spaces and base_spaces:
+        cross = _cross_for(HYBRID_SPACE)
         out['gain_by_space'] = cross
         out['gain_by_space_note'] = (
             "Each entry is what one arm gained beyond a random pick from the "
             'entities it could have reached, in the hybrid and in each base '
             'representation, and the difference between them. It says whether '
-            'removal is worth more where the features were chosen.')
+            'removal is worth more where the features were chosen. '
+            "'gain_by_space' holds the space built from the predictive search "
+            "alone; 'gain_by_hybrid_space' holds the same table for every "
+            'hybrid space this run built, keyed by space name.')
     return out
 
 

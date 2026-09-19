@@ -15,13 +15,26 @@ folds it also reports the spread (std); treat any condition ordering as
 suggestive only unless the gap clearly exceeds that spread. Do not read the
 boolean "helps"/"redundant" flags as significance tests.
 
-5 conditions × 3 estimators × 3 k values × 2 importance methods × 2 sigmas.
+5 conditions × 3 estimators × 3 k values × 2 importance methods × 2 sigmas, per
+hybrid space. With both search families in the pool it is 8 conditions: the two
+base ones, plus three in each hybrid space.
 
 2026-09-12, user decision: the hybrid conditions may draw their recipe from the
 searches run under objective='similarity' as well as the prediction-built ones —
 `pool_subset='predictive_and_similarity'`. The result file records which family
 the winning recipe came from under 'hybrid_family', and every eligible family's
 own best under 'hybrid_pool_by_objective'.
+
+2026-09-19: both families are now BUILT, not only recorded. POOL_SUBSETS names
+the families in PREFERENCE order and the pool returns the first that has an
+entry; a predictive recipe always exists, so between those two dates this file
+asked for both families, built the predictive one and wrote the geometry one
+into the result file as a score nothing had measured in. That matters here more
+than almost anywhere, because this file's whole question is which DISTANCE
+finds a molecule's neighbours, and the similarity search chooses features so
+that exactly that distance predicts activity from the five nearest neighbours.
+The conditions named 'hybrid_*' are unchanged and still the predictive recipe;
+the ones named 'hybrid_similarity_*' are the new ones.
 
 Usage:
     python n12_importance_weighted_distance.py --dataset logd --mode intermediary
@@ -48,6 +61,9 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
+    # One feature space per search family the pool holds, added 2026-09-19.
+    # n11's loop, in one place. See SPACE_FOR_FAMILY below.
+    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from kirby.hybrid import compute_feature_importance
 from kirby.find_best_hybrid import _is_geometry_objective
@@ -93,24 +109,69 @@ ESTIMATOR_FACTORIES = {
     'local_variance_ratio': LocalVarianceRatioEstimator,
 }
 
+# Which searches the hybrid recipes may come from, and which result-file space
+# each family is built into.
+#
+# ⛔ ONE SPACE PER FAMILY, NOT ONE RECIPE. Added 2026-09-19.
+#
+# POOL_SUBSETS names the two families in PREFERENCE order and the pool returns
+# the first that has an entry, because their stored scores are in different
+# units -- a predictive search's score is the dataset's own metric, a
+# similarity search's is the correlation between each held-out molecule's
+# activity and what its five nearest neighbours predict. A predictive recipe
+# always exists, so from 2026-09-12 to 2026-09-19 this file asked for both
+# families, built the predictive one and wrote the other into the result file
+# as a score it never measured in.
+#
+# That matters here more than almost anywhere. This file's entire question is
+# which DISTANCE finds a molecule's neighbours. The similarity search chooses
+# features so that exactly that distance predicts activity from the five
+# nearest neighbours; it is the space built for the question this file asks.
+#
+# 'hybrid' is still the predictive recipe, so every number reported before
+# 2026-09-19 still means what it meant.
+POOL_SUBSET = 'predictive_and_similarity'
+SPACE_FOR_FAMILY = {
+    'predictive': 'hybrid',
+    'similarity': 'hybrid_similarity',
+}
+
+# The three conditions each hybrid space carries, named after that space. With
+# both families in the pool there are eight conditions, not five.
+HYBRID_CONDITION_SUFFIXES = ('_unweighted', '_imp_base', '_imp_own')
+
 CONDITION_NAMES = [
     'base_unweighted',
     'base_imp_weighted',
-    'hybrid_unweighted',
-    'hybrid_imp_base',
-    'hybrid_imp_own',
-]
+] + [f'{sp}{suf}'
+     for sp in ('hybrid', 'hybrid_similarity')
+     for suf in HYBRID_CONDITION_SUFFIXES]
 
-# Which unweighted condition each weighted one collapses onto when every
-# importance score is zero. _weight_features hands the unweighted matrix back
-# in that case, so the two spaces are the same geometry and their estimator
-# scores are the same numbers. Recorded per (importance method, condition) in
-# results['zero_importance_spaces'].
-ZERO_IMPORTANCE_TWIN = {
-    'base_imp_weighted': 'base_unweighted',
-    'hybrid_imp_base': 'hybrid_unweighted',
-    'hybrid_imp_own': 'hybrid_unweighted',
-}
+
+def zero_importance_twin(condition_name):
+    """Which unweighted condition a weighted one collapses onto.
+
+    When every importance score is zero _weight_features hands the unweighted
+    matrix back, so the two spaces are the same geometry and their estimator
+    scores are the same numbers. Recorded per (importance method, condition) in
+    results['zero_importance_spaces'].
+
+    A dict until 2026-09-19, when a second hybrid space arrived and each of its
+    conditions needed the same mapping to ITS OWN unweighted twin -- pointing
+    them at the predictive space's twin would have named a duplicate of the
+    wrong matrix.
+    """
+    if condition_name == 'base_imp_weighted':
+        return 'base_unweighted'
+    for suf in ('_imp_base', '_imp_own'):
+        if condition_name.endswith(suf):
+            return condition_name[:-len(suf)] + '_unweighted'
+    return None
+
+
+# Kept for callers that read it. Every entry is what zero_importance_twin says.
+ZERO_IMPORTANCE_TWIN = {c: zero_importance_twin(c) for c in CONDITION_NAMES
+                        if zero_importance_twin(c) is not None}
 
 
 # The private `_inject_noise` this module used to carry has been deleted. It added
@@ -265,7 +326,8 @@ def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
 
 
 def _build_conditions(train_reps, y_train, augmentations, bp,
-                       imp_method, base_rep_name, shared=None):
+                       imp_method, base_rep_name, shared=None,
+                       shared_by_space=None):
     """Build all 5 conditions for one importance method.
 
     Args:
@@ -281,6 +343,10 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
             previously rebuilt 3× per (sigma, fold) on the inner imp_method
             loop, and the via_blueprint importance was recomputed at the
             same rate even though it's imp_method-independent.
+        shared_by_space: {space name: _build_fold_shared output}, one entry per
+            family of stored search the pool held. Added 2026-09-19. Takes the
+            place of `shared`, which is the same thing for the one space
+            'hybrid' and is still accepted.
 
     Returns ({condition_name: X_standardized}, {condition_name: True}), the
     second naming every condition whose importance scores were all zero. Such a
@@ -292,14 +358,23 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
     zero_importance = {}
     X_base = train_reps[base_rep_name]
 
-    if shared is None:
-        shared = _build_fold_shared(train_reps, y_train, augmentations, bp,
-                                    base_rep_name)
+    # {space name: the _build_fold_shared output for that space's recipe}.
+    # One entry until 2026-09-19, when the pool's second search family got its
+    # own space. `shared=` alone still works and means the one space 'hybrid'.
+    if shared_by_space is None:
+        if shared is None:
+            shared = _build_fold_shared(train_reps, y_train, augmentations, bp,
+                                        base_rep_name)
+        shared_by_space = {'hybrid': shared}
 
-    X_base_std = shared['X_base_std']
-    X_hyb_std = shared['X_hyb_std']
-    X_hybrid_raw = shared['X_hybrid_raw']
-    imp_hybrid_via_blueprint = shared['imp_hybrid_via_blueprint']
+    if not shared_by_space:
+        # No family produced a hybrid on this fold. The two base conditions
+        # still have to be built, so the base matrix is scaled here rather than
+        # read off a hybrid build that never happened.
+        _sc = StandardScaler()
+        X_base_std = _sc.fit_transform(X_base)
+    else:
+        X_base_std = next(iter(shared_by_space.values()))['X_base_std']
 
     # Condition 1: base unweighted
     conditions['base_unweighted'] = X_base_std
@@ -319,18 +394,27 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
         if _importance_is_all_zero(imp_base):
             zero_importance['base_imp_weighted'] = True
 
-    if X_hyb_std is not None:
+    # Conditions 3 to 5, once per hybrid space. Each space's three conditions
+    # are named after it, so 'hybrid_imp_own' and 'hybrid_similarity_imp_own'
+    # are two rows and never one.
+    for _space, _sh in shared_by_space.items():
+        X_hyb_std = _sh['X_hyb_std']
+        X_hybrid_raw = _sh['X_hybrid_raw']
+        imp_hybrid_via_blueprint = _sh['imp_hybrid_via_blueprint']
+        if X_hyb_std is None:
+            continue
+
         # Condition 3: hybrid unweighted
-        conditions['hybrid_unweighted'] = X_hyb_std
+        conditions[f'{_space}_unweighted'] = X_hyb_std
 
         # Condition 4: hybrid weighted by blueprint's importance method.
         # imp_method-INDEPENDENT — pulled from `shared` so we don't recompute
         # it on every inner-loop iteration.
         if imp_base is not None and imp_hybrid_via_blueprint is not None:
-            conditions['hybrid_imp_base'] = _weight_features(
+            conditions[f'{_space}_imp_base'] = _weight_features(
                 X_hyb_std, imp_hybrid_via_blueprint)
             if _importance_is_all_zero(imp_hybrid_via_blueprint):
-                zero_importance['hybrid_imp_base'] = True
+                zero_importance[f'{_space}_imp_base'] = True
 
         # Condition 5: hybrid weighted by the sweep's imp_method (the only
         # imp_method-dependent hybrid weighting).
@@ -338,12 +422,12 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
             imp_hybrid_own = compute_feature_importance(
                 {'hybrid': X_hybrid_raw}, y_train, method=imp_method
             )['hybrid']
-            conditions['hybrid_imp_own'] = _weight_features(
+            conditions[f'{_space}_imp_own'] = _weight_features(
                 X_hyb_std, imp_hybrid_own)
             if _importance_is_all_zero(imp_hybrid_own):
-                zero_importance['hybrid_imp_own'] = True
+                zero_importance[f'{_space}_imp_own'] = True
         except Exception as e:
-            print(f"      hybrid_imp_own failed: {e}")
+            print(f"      {_space}_imp_own failed: {e}")
 
     return conditions, zero_importance
 
@@ -529,7 +613,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentations=augmentations,
         dataset_name=dataset_name, task_type=task_type,
         data=data,
-        pool_subset='predictive_and_similarity',
+        pool_subset=POOL_SUBSET,
     )
     bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
@@ -539,6 +623,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Hybrid recipe built under objective: {meta['objective']} "
           f"(chosen by {meta['objective_choice']}, "
           f"pool subset {meta['pool_subset']})")
+
+    # One recipe per family the pool holds, and a written reason for each family
+    # that produced none. `bp` stays the recipe the pool RETURNED, which is what
+    # every 'hybrid_*' key below already described.
+    hybrid_recipes, hybrid_unavailable = pool_recipes_by_family(
+        meta, SPACE_FOR_FAMILY,
+        eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+    for r in hybrid_recipes:
+        print(f"  hybrid space {r['space']}: family {r['objective']!r}, "
+              f"budget {r['budget']} features, allocation "
+              f"{r['allocation_method']}, tier {r['tier']}/"
+              f"{r['aug_condition']}, search score "
+              f"{r['search_score_mean']} in {r['search_metric_name']!r}")
+    for _sp, _why in hybrid_unavailable.items():
+        print(f"  no {_sp} space: {_why}")
 
     results = {
         'metric': metric_name,
@@ -566,6 +665,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'lower_is_better': d['lower_is_better']}
             for o, d in meta.get('by_objective', {}).items()
         }),
+        # Which of the hybrid spaces below holds the recipe the pool returned,
+        # what each of the others was built from, and why a family that was
+        # asked for produced no space. Added 2026-09-19, with the spaces.
+        'hybrid_space_of_pool_winner': SPACE_FOR_FAMILY.get(
+            meta['objective'], f"hybrid_{meta['objective']}"),
+        'hybrid_spaces': convert_numpy({
+            r['space']: {
+                'built_under_objective': r['objective'],
+                'features_chosen_by': describe_pool_family(r['objective']),
+                'is_the_recipe_the_pool_returned': r['is_pool_winner'],
+                'tier': r['tier'], 'aug_condition': r['aug_condition'],
+                'budget': r['budget'],
+                'allocation_method': r['allocation_method'],
+                'importance_method': r['importance_method'],
+                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
+                'search_score_mean': r['search_score_mean'],
+                'search_metric_name': r['search_metric_name'],
+                'conditions': [f"{r['space']}{suf}"
+                               for suf in HYBRID_CONDITION_SUFFIXES],
+            } for r in hybrid_recipes}),
+        'hybrid_spaces_unavailable': hybrid_unavailable,
+        'hybrid_spaces_note': (
+            'One hybrid space per family of stored search, each carrying the '
+            'same three conditions. A predictive search chose its features to '
+            "predict the label and its search_score_mean is in the dataset's "
+            "own metric. A similarity search chose its features so that each "
+            "molecule's activity is predicted by its five nearest neighbours "
+            'in the distance those features define, fits no downstream model, '
+            'and its search_score_mean is that correlation. The two search '
+            'scores are in different units and nothing here ranks one against '
+            "the other. Every condition below is scored by this file's own "
+            'estimators on the same folds under the same injected noise.'),
         # Every weighted space whose importance scores were all zero, so that
         # the space is its unweighted twin and its numbers are duplicates. One
         # entry per (importance method, condition), absent when it never
@@ -574,9 +705,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # fold, importance method) — 60 over 6 levels, 5 folds and 2 importance
         # methods — and the noise levels it happened at are listed beside it.
         'zero_importance_spaces': {},
-        # Hybrid feature matrices built: one per (noise level, fold), shared by
-        # both importance methods. 30 over 6 levels and 5 folds.
+        # Hybrid feature matrices built: one round per (noise level, fold),
+        # shared by both importance methods. 30 over 6 levels and 5 folds. A
+        # round builds one matrix per hybrid space, so with both search
+        # families in the pool it is 60 matrices from those 30 rounds — the
+        # per-space counts are in 'n_hybrid_builds_by_space'.
         'n_hybrid_builds': 0,
+        'n_hybrid_builds_by_space': {},
         'per_sigma': {},
     }
     zero_imp_acc = results['zero_importance_spaces']
@@ -666,19 +801,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # The random forest and the dataset's metric go in so the build's
             # own accept-or-reject step is scored by the estimator and the
             # quantity every condition below is finally judged on.
-            fold_shared = _build_fold_shared(
-                train_reps_fold, y_noisy, train_augs, bp, base_rep_name,
-                groups=(groups[train_idx] if groups is not None else None),
-                val_reps=val_reps_fold, augmentations_val=val_augs,
-                # The hybrid build's own accept-or-reject step keeps the first
-                # model in the roster. It decides which features go in, not which
-                # model is finally scored, and making it depend on the model would
-                # give every model a different feature space to be compared in.
-                model=model_factories[downstream_models[0]](), metric_fn=metric_fn,
-                lower_is_better=lower_is_better)
-            results['hybrid_objective_rebuilt_under'] = \
-                fold_shared['hybrid_objective']
+            # One build per family the pool holds. build_fold_hybrid reads the
+            # objective off each recipe, so a geometry recipe splits its budget
+            # by the neighbour correlation it was chosen under and a predictive
+            # one by the model's held-out score. Nothing else differs between
+            # the two calls.
+            fold_shared_by_space = {}
+            for _r in hybrid_recipes:
+                fold_shared_by_space[_r['space']] = _build_fold_shared(
+                    train_reps_fold, y_noisy, train_augs, _r['blueprint'],
+                    base_rep_name,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    val_reps=val_reps_fold, augmentations_val=val_augs,
+                    # The hybrid build's own accept-or-reject step keeps the
+                    # first model in the roster. It decides which features go
+                    # in, not which model is finally scored, and making it
+                    # depend on the model would give every model a different
+                    # feature space to be compared in.
+                    model=model_factories[downstream_models[0]](),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
+                results['n_hybrid_builds_by_space'][_r['space']] = (
+                    results['n_hybrid_builds_by_space'].get(_r['space'], 0) + 1)
+            # Unchanged in meaning: one per (noise level, fold), counted once
+            # however many spaces that round built. Every space's own count is
+            # in 'n_hybrid_builds_by_space'.
             results['n_hybrid_builds'] += 1
+            # The objective each space's rebuild split its budget by. A single
+            # string until 2026-09-19, when a second space arrived; the string
+            # is kept under its own key so nothing that read it breaks.
+            results['hybrid_objective_rebuilt_under_by_space'] = {
+                _sp: _sh['hybrid_objective']
+                for _sp, _sh in fold_shared_by_space.items()}
+            if 'hybrid' in fold_shared_by_space:
+                results['hybrid_objective_rebuilt_under'] = (
+                    fold_shared_by_space['hybrid']['hybrid_objective'])
 
             for imp_method in IMPORTANCE_METHODS:
                 if imp_method not in grid_acc:
@@ -686,13 +843,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 conditions, zero_importance = _build_conditions(
                     train_reps_fold, y_noisy, train_augs, bp,
-                    imp_method, base_rep_name, shared=fold_shared,
+                    imp_method, base_rep_name,
+                    shared_by_space=fold_shared_by_space,
                 )
                 for _cond_name in zero_importance:
                     _zi = (zero_imp_acc.setdefault(imp_method, {})
                            .setdefault(_cond_name,
                                        {'n_builds_all_zero': 0,
-                                        'duplicate_of': ZERO_IMPORTANCE_TWIN[_cond_name],
+                                        'duplicate_of': zero_importance_twin(_cond_name),
                                         'sigmas': []}))
                     _zi['n_builds_all_zero'] += 1
                     if sigma not in _zi['sigmas']:
@@ -883,31 +1041,67 @@ def _compute_summary(results):
         # Ablation answers
         base_uw = cond_avg.get('base_unweighted', float('nan'))
         base_w = cond_avg.get('base_imp_weighted', float('nan'))
-        hyb_uw = cond_avg.get('hybrid_unweighted', float('nan'))
-        hyb_w_base = cond_avg.get('hybrid_imp_base', float('nan'))
-        hyb_w_own = cond_avg.get('hybrid_imp_own', float('nan'))
 
-        weighting_helps_base = (not np.isnan(base_w) and not np.isnan(base_uw)
-                                and base_w > base_uw)
-        weighting_helps_hybrid = (not np.isnan(hyb_w_own) and not np.isnan(hyb_uw)
-                                  and (hyb_w_own > hyb_uw or hyb_w_base > hyb_uw))
-        # Redundant if hybrid_unweighted ≈ hybrid_imp_own (within 2%)
-        hybrid_already_weighted = (not np.isnan(hyb_uw) and not np.isnan(hyb_w_own)
-                                   and abs(hyb_uw - hyb_w_own) < 2.0)
+        def _answers_for(hybrid_space):
+            """The three ablation answers, read in one hybrid space."""
+            uw = cond_avg.get(f'{hybrid_space}_unweighted', float('nan'))
+            w_base = cond_avg.get(f'{hybrid_space}_imp_base', float('nan'))
+            w_own = cond_avg.get(f'{hybrid_space}_imp_own', float('nan'))
+            return {
+                'weighting_helps_base': bool(
+                    not np.isnan(base_w) and not np.isnan(base_uw)
+                    and base_w > base_uw),
+                'weighting_helps_hybrid': bool(
+                    not np.isnan(w_own) and not np.isnan(uw)
+                    and (w_own > uw or w_base > uw)),
+                # Redundant if <space>_unweighted is within 2 points of
+                # <space>_imp_own, both in percent of the damage recovered.
+                'hybrid_already_weighted': bool(
+                    not np.isnan(uw) and not np.isnan(w_own)
+                    and abs(uw - w_own) < 2.0),
+            }
 
-        # Best k
+        # Which hybrid spaces this run produced conditions for. 2026-09-19:
+        # there can be more than one, because the pool holds more than one
+        # family of stored search.
+        hybrid_spaces_seen = sorted({
+            c[:-len('_unweighted')] for c in cond_avg
+            if c.endswith('_unweighted') and c != 'base_unweighted'})
+        answers_by_space = {hs: _answers_for(hs) for hs in hybrid_spaces_seen}
+
+        # The three top-level flags stay the PREDICTIVE space's, unchanged.
+        _pred = answers_by_space.get('hybrid', {
+            'weighting_helps_base': bool(
+                not np.isnan(base_w) and not np.isnan(base_uw)
+                and base_w > base_uw),
+            'weighting_helps_hybrid': False,
+            'hybrid_already_weighted': False})
+        weighting_helps_base = _pred['weighting_helps_base']
+        weighting_helps_hybrid = _pred['weighting_helps_hybrid']
+        hybrid_already_weighted = _pred['hybrid_already_weighted']
+
+        # Best k. Read over the five conditions this file had before
+        # 2026-09-19, so the number means what it meant; 'per_k_avg_recovery'
+        # and 'best_k' would otherwise have moved because a second hybrid
+        # space added three more conditions to the same average.
+        _ORIGINAL_CONDITIONS = ('base_unweighted', 'base_imp_weighted',
+                                'hybrid_unweighted', 'hybrid_imp_base',
+                                'hybrid_imp_own')
         k_recoveries = {}
+        k_recoveries_all = {}
         for imp_data in sigma_data.get('per_importance_method', {}).values():
-            for cond_data in imp_data.values():
+            for _cond_name, cond_data in imp_data.items():
                 for ek, rv in cond_data.items():
                     # Parse k from key like 'neighbor_residual_k10'
-                    if '_k' in ek:
-                        k_val = int(ek.split('_k')[-1])
-                        if k_val not in k_recoveries:
-                            k_recoveries[k_val] = []
-                        r = rv.get('recovery', float('nan'))
-                        if not np.isnan(r):
-                            k_recoveries[k_val].append(r)
+                    if '_k' not in ek:
+                        continue
+                    k_val = int(ek.split('_k')[-1])
+                    r = rv.get('recovery', float('nan'))
+                    if np.isnan(r):
+                        continue
+                    k_recoveries_all.setdefault(k_val, []).append(r)
+                    if _cond_name in _ORIGINAL_CONDITIONS:
+                        k_recoveries.setdefault(k_val, []).append(r)
 
         best_k = None
         best_k_avg = float('-inf')
@@ -917,17 +1111,25 @@ def _compute_summary(results):
                 best_k_avg = avg
                 best_k = k_val
 
-        # Best importance method
+        # Best importance method. Same reading as best_k: over the five
+        # conditions this file had before 2026-09-19, with every condition's
+        # version of the number beside it.
         method_recoveries = {}
+        method_recoveries_all = {}
         for imp_method, imp_data in sigma_data.get('per_importance_method', {}).items():
-            all_r = []
-            for cond_data in imp_data.values():
+            all_r, every_r = [], []
+            for _cond_name, cond_data in imp_data.items():
                 for rv in cond_data.values():
                     r = rv.get('recovery', float('nan'))
-                    if not np.isnan(r):
+                    if np.isnan(r):
+                        continue
+                    every_r.append(r)
+                    if _cond_name in _ORIGINAL_CONDITIONS:
                         all_r.append(r)
             if all_r:
                 method_recoveries[imp_method] = float(np.mean(all_r))
+            if every_r:
+                method_recoveries_all[imp_method] = float(np.mean(every_r))
 
         best_imp = max(method_recoveries, key=method_recoveries.get) if method_recoveries else None
 
@@ -943,6 +1145,16 @@ def _compute_summary(results):
             'per_k_avg_recovery': {str(k): float(np.mean(rs))
                                     for k, rs in k_recoveries.items() if rs},
             'per_method_avg_recovery': method_recoveries,
+            # Added 2026-09-19 with the second hybrid space. The three flags
+            # above and the two 'best_*' answers read the five conditions this
+            # file had before that date, so they mean what they meant; these
+            # read every condition this run produced.
+            'answers_by_hybrid_space': answers_by_space,
+            'hybrid_spaces_scored': hybrid_spaces_seen,
+            'per_k_avg_recovery_every_condition': {
+                str(k): float(np.mean(rs))
+                for k, rs in k_recoveries_all.items() if rs},
+            'per_method_avg_recovery_every_condition': method_recoveries_all,
             'caveat': ('Condition differences may fall within run-to-run '
                        'variance; compare each mean against '
                        'per_condition_recovery_std/range before claiming an '

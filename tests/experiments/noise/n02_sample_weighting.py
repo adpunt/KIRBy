@@ -37,7 +37,15 @@ delta keys hold the first scorer in the sweep.
 pick its hybrid from includes similarity hybrids — searches run under
 objective='similarity', whose features were chosen to make the distance
 geometry predict each molecule's activity from its five nearest neighbours —
-not only prediction-built ones. n02 does not pass distance=True and that is
+not only prediction-built ones.
+
+2026-09-19: both families are now BUILT, not only recorded. The pool names them
+in preference order and returns the first that has an entry, so until today
+conditions 3 to 5 ran in the prediction-built hybrid alone and the other family
+appeared only as a line of metadata. Conditions 3 to 5 now run once per family.
+results['hybrid'] and results['hybrid_cliff_aware'] are unchanged — the
+prediction-built space, one entry per model — and every space is under
+results['hybrid_by_space'] and results['hybrid_cliff_aware_by_space']. n02 does not pass distance=True and that is
 unchanged; the pool subset is a separate thing. Every hybrid condition records
 which objective its recipe came from, and results['pool_selection'] says which
 numbers in the result file are in the dataset's own metric and which are read
@@ -82,6 +90,10 @@ from experiments._shared import (
     get_model_factories, get_domain_metric, cv_split,
     compute_feature_importance,
     get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
+    fold_hybrid_scoring_kwargs,
+    # One feature space per search family the pool holds, added 2026-09-19.
+    # n11's loop, in one place. See SPACE_FOR_FAMILY below.
+    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
     extract_top3_base_reps,
 )
 
@@ -115,6 +127,16 @@ from kirby.utils.noise_estimation import (ActivityCliffAwareEstimator,
 # each row's squared error (or cross-entropy) by it, so all five of the roster
 # run here. Checked by tests/experiments/noise/_smoke_dnn_sample_weight.py.
 WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+
+# Which searches a hybrid recipe may come from, and which result-file space each
+# family is built into. 'hybrid' is the predictive one and its name is
+# unchanged. See the note above the per-family loop in run().
+POOL_SUBSET = 'predictive_and_similarity'
+HYBRID_SPACE = 'hybrid'
+SPACE_FOR_FAMILY = {
+    'predictive': HYBRID_SPACE,
+    'similarity': 'hybrid_similarity',
+}
 
 # How hard the weights lean on the neighbour-disagreement score, through
 # weights_from_scores: 1.0 is a 2-to-1 row weight between the most and least
@@ -451,7 +473,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentations=augmentations,
         dataset_name=dataset_name, task_type=task_type,
         data=data,
-        pool_subset='predictive_and_similarity',
+        pool_subset=POOL_SUBSET,
     )
     # 2026-09-12: which family this top-level lookup landed in, and in what
     # units its stored numbers are. Under 'similarity' the search's stored
@@ -498,6 +520,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # family per model — two models in the same run can land in different
     # families, and a reader cannot tell them apart from the score alone.
     family_by_model = {}
+    # Each model's own pool metadata, kept so the per-family loop below can read
+    # every family's best for that model and not only the one the pool returned.
+    meta_by_model = {}
     for _mname in model_factories:
         try:
             _search, _meta = get_best_search_for_downstream(
@@ -506,7 +531,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=augmentations,
                 dataset_name=dataset_name, task_type=task_type,
                 data=data,
-                pool_subset='predictive_and_similarity',
+                pool_subset=POOL_SUBSET,
             )
             if _meta is not None:
                 _bp = _meta['best_config']['blueprint']
@@ -518,6 +543,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         pass
                 bp_by_model[_mname] = _bp
                 aug_by_model[_mname] = _aug_cond
+                meta_by_model[_mname] = _meta
                 if _search is not None:
                     search_by_model[_mname] = _search
                 # Every eligible family's own best sits beside the winner,
@@ -551,6 +577,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # hybrid (better than dropping it from the comparison).
                 bp_by_model[_mname] = bp
                 aug_by_model[_mname] = meta.get('aug_condition', 'uncapped')
+                meta_by_model[_mname] = meta
                 # 2026-09-12: the fallback inherits RF's family, not its own.
                 family_by_model[_mname] = {
                     'objective': pool_family,
@@ -576,6 +603,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"({_exc}); using RF blueprint as fallback.")
             bp_by_model[_mname] = bp
             aug_by_model[_mname] = meta.get('aug_condition', 'uncapped')
+            meta_by_model[_mname] = meta
             family_by_model[_mname] = {
                 'objective': pool_family,
                 'objective_choice': pool_family_choice,
@@ -589,6 +617,65 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'blueprint_source': f'rf_fallback_fetch_failed: {_exc}',
             }
 
+    # ── One recipe per (model, family), not one per model ─────────────────
+    # ⛔ Added 2026-09-19. POOL_SUBSETS names the two families in PREFERENCE
+    # order and the pool returns the first that has an entry, because their
+    # stored scores are in different units. A predictive recipe always exists,
+    # so from 2026-09-12 to 2026-09-19 this file asked for both families, built
+    # the predictive one and wrote the other into the result file as a score it
+    # never measured in.
+    #
+    # It matters here because conditions 4 and 5 both weight a molecule by how
+    # far it sits from its neighbours in the space the features define, and the
+    # similarity search chooses features so that exactly that distance predicts
+    # activity from the five nearest neighbours.
+    #
+    # 'hybrid' is still the predictive recipe, so every number reported before
+    # 2026-09-19 still means what it meant.
+    recipes_for_model = {}
+    space_objective = {}
+    hybrid_spaces_unavailable = {}
+    for _mname in model_factories:
+        _recipes, _unavail = pool_recipes_by_family(
+            meta_by_model.get(_mname), SPACE_FOR_FAMILY,
+            eligible_families=POOL_SUBSETS[POOL_SUBSET])
+        _per_space = {}
+        for _r in _recipes:
+            _r_bp = _r['blueprint']
+            _r_aug = _r['aug_condition'] or 'uncapped'
+            # Same alignment the per-model fetch above does: a recipe whose
+            # augmentation_strategy disagrees with the pool entry it came from
+            # rebuilds under a different condition than the one that won, which
+            # is the 2026-04-21 cache-collision pattern.
+            if getattr(_r_bp, 'augmentation_strategy', None) != _r_aug:
+                try:
+                    _r_bp.augmentation_strategy = _r_aug
+                except Exception:
+                    pass
+            _per_space[_r['space']] = (_r_bp, _r_aug)
+            space_objective[_r['space']] = _r['objective']
+        recipes_for_model[_mname] = _per_space
+        if _unavail:
+            hybrid_spaces_unavailable[_mname] = _unavail
+    results['hybrid_spaces_unavailable'] = hybrid_spaces_unavailable
+    results['hybrid_space_objective'] = dict(space_objective)
+    results['hybrid_spaces_note'] = (
+        'One hybrid space per family of stored search, per model. A predictive '
+        "search chose its features to predict the label; a similarity search "
+        "chose them so that each molecule's activity is predicted by its five "
+        'nearest neighbours in the distance those features define, and fits no '
+        'downstream model. The two searches score their own candidates in '
+        'different units and nothing here ranks one against the other. Every '
+        "number under 'hybrid_by_space' is measured by n02 itself with the "
+        "dataset's own metric, on the same folds, so those ARE comparable. "
+        "'hybrid' and 'hybrid_cliff_aware' hold the predictive space alone and "
+        'are unchanged.')
+    for _sp in sorted(space_objective):
+        print(f"  hybrid space {_sp}: family {space_objective[_sp]!r}")
+    for _mname, _unavail in hybrid_spaces_unavailable.items():
+        for _sp, _why in _unavail.items():
+            print(f"  {_mname}: no {_sp} space — {_why}")
+
     # =========================================================================
     # CONDITIONS 3-5: Hybrid (hybrid_unweighted, hybrid_weighted,
     #                         hybrid_cliff_aware)
@@ -600,191 +687,228 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # dataset. All three conditions now score the matrix this fold built once.
     print(f"\n  --- Conditions 3-5: Hybrid ---")
 
-    hybrid_results = {}
-    cliff_aware_results = {}
+    # {space: {model: row}}. One space per family of stored search, keyed by
+    # the result-file name in SPACE_FOR_FAMILY. Added 2026-09-19.
+    hybrid_by_space = {}
+    cliff_aware_by_space = {}
+    # {space: {model: the first per-fold build failure}}. A space whose every
+    # fold failed would otherwise leave no row and no reason.
+    hybrid_build_errors = {}
     for model_name, model_factory in model_factories.items():
-        model_bp = bp_by_model[model_name]
-        model_aug_cond = aug_by_model[model_name]
-        model_augs = augmentations if model_aug_cond != 'none' else None
-        # As in the base-rep block: a fold enters every list or none of them,
-        # so unweighted, weighted and cliff-aware means cover one fold set.
-        unweighted_scores = []
-        weighted_scores = {m: [] for m in importance_methods}
-        reliability_stats = {m: [] for m in importance_methods}
-        ca_scores = []
-        n_features_list = []
+        # One pass per hybrid space: the recipe the pool returned for this
+        # model, and every other family's own recipe for the same model.
+        # Added 2026-09-19. Conditions 3, 4 and 5 are scored in each space,
+        # on the same folds, with the same weights rule.
+        for space_name, (model_bp, model_aug_cond) in \
+                recipes_for_model.get(model_name, {}).items():
+            model_augs = augmentations if model_aug_cond != 'none' else None
+            # As in the base-rep block: a fold enters every list or none of them,
+            # so unweighted, weighted and cliff-aware means cover one fold set.
+            unweighted_scores = []
+            weighted_scores = {m: [] for m in importance_methods}
+            reliability_stats = {m: [] for m in importance_methods}
+            ca_scores = []
+            n_features_list = []
 
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                            labels, mode=mode):
-            train_reps = {k: v[train_idx] for k, v in reps.items()}
-            val_reps = {k: v[val_idx] for k, v in reps.items()}
-            y_train, y_val = labels[train_idx], labels[val_idx]
+            for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
+                                                labels, mode=mode):
+                train_reps = {k: v[train_idx] for k, v in reps.items()}
+                val_reps = {k: v[val_idx] for k, v in reps.items()}
+                y_train, y_val = labels[train_idx], labels[val_idx]
 
-            # Create hybrid per fold from THIS MODEL'S blueprint
-            try:
-                train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
-                val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
-                X_train_h, X_val_h, feature_info = build_fold_hybrid(
-                    train_reps, val_reps, y_train, model_bp,
-                    augmentations_train=train_augs, augmentations_val=val_augs,
-                    groups=(groups[train_idx] if groups is not None else None),
-                    model=model_factory(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
-            except Exception as e:
-                print(f"    {model_name}: hybrid creation failed - {e}")
-                continue
-
-            scaler = StandardScaler()
-            X_train_s = scaler.fit_transform(X_train_h)
-            X_val_s = scaler.transform(X_val_h)
-
-            # Condition 3: hybrid unweighted
-            try:
-                model_uw = model_factory()
-                model_uw.fit(X_train_s, y_train)
-                fold_uw = metric_fn(
-                    y_val, _predict_for_metric(model_uw, X_val_s))
-            except Exception:
-                continue
-
-            # Condition 4: hybrid + importance-weighted sample weights, once
-            # per scorer in the sweep.
-            fold_w = {}
-            fold_stats = {}
-            for imp_method in importance_methods:
+                # Create hybrid per fold from THIS MODEL'S blueprint
                 try:
-                    # Compute importance on the SAME (scaled) hybrid matrix
-                    # the reliability scorer consumes — same alignment fix as
-                    # the base-rep block above. The raw X_train_h was
-                    # previously passed to compute_feature_importance while
-                    # X_train_s (the scaled version) was passed to
-                    # compute_reliability_scores.
-                    imp = compute_feature_importance(
-                        {'hybrid': X_train_s}, y_train, method=imp_method)
-                    imp_scores = imp['hybrid']
+                    train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
+                    val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
+                    X_train_h, X_val_h, feature_info = build_fold_hybrid(
+                        train_reps, val_reps, y_train, model_bp,
+                        augmentations_train=train_augs, augmentations_val=val_augs,
+                        groups=(groups[train_idx] if groups is not None else None),
+                        # ⛔ Through the helper, not passed straight. A recipe
+                        # from the similarity family fits no downstream model
+                        # and build_fold_hybrid RAISES when a model and a
+                        # metric arrive with one; the except below would have
+                        # swallowed that and left the geometry space with no
+                        # fold at all and nothing said. For a predictive recipe
+                        # the three come back unchanged.
+                        **fold_hybrid_scoring_kwargs(
+                            model_bp, model=model_factory(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
+                except Exception as e:
+                    print(f"    {model_name} [{space_name}]: hybrid creation "
+                          f"failed - {e}")
+                    hybrid_build_errors.setdefault(space_name, {}).setdefault(
+                        model_name, f'{type(e).__name__}: {e}')
+                    continue
 
-                    sample_weights = compute_reliability_scores(
-                        X_train_s, y_train, imp_scores, k=k_neighbors,
-                        is_clf=is_clf)
+                scaler = StandardScaler()
+                X_train_s = scaler.fit_transform(X_train_h)
+                X_val_s = scaler.transform(X_val_h)
 
-                    fold_stats[imp_method] = {
-                        'mean': float(np.mean(sample_weights)),
-                        'std': float(np.std(sample_weights)),
-                        'min': float(np.min(sample_weights)),
-                        'pct_below_05': float(
-                            np.mean(sample_weights < 0.5) * 100),
-                    }
-
-                    model_w = model_factory()
-                    model_w.fit(X_train_s, y_train,
-                                sample_weight=sample_weights)
-                    fold_w[imp_method] = metric_fn(
-                        y_val, _predict_for_metric(model_w, X_val_s))
+                # Condition 3: hybrid unweighted
+                try:
+                    model_uw = model_factory()
+                    model_uw.fit(X_train_s, y_train)
+                    fold_uw = metric_fn(
+                        y_val, _predict_for_metric(model_uw, X_val_s))
                 except Exception:
-                    break
+                    continue
 
-            if len(fold_w) != len(importance_methods):
+                # Condition 4: hybrid + importance-weighted sample weights, once
+                # per scorer in the sweep.
+                fold_w = {}
+                fold_stats = {}
+                for imp_method in importance_methods:
+                    try:
+                        # Compute importance on the SAME (scaled) hybrid matrix
+                        # the reliability scorer consumes — same alignment fix as
+                        # the base-rep block above. The raw X_train_h was
+                        # previously passed to compute_feature_importance while
+                        # X_train_s (the scaled version) was passed to
+                        # compute_reliability_scores.
+                        imp = compute_feature_importance(
+                            {'hybrid': X_train_s}, y_train, method=imp_method)
+                        imp_scores = imp['hybrid']
+
+                        sample_weights = compute_reliability_scores(
+                            X_train_s, y_train, imp_scores, k=k_neighbors,
+                            is_clf=is_clf)
+
+                        fold_stats[imp_method] = {
+                            'mean': float(np.mean(sample_weights)),
+                            'std': float(np.std(sample_weights)),
+                            'min': float(np.min(sample_weights)),
+                            'pct_below_05': float(
+                                np.mean(sample_weights < 0.5) * 100),
+                        }
+
+                        model_w = model_factory()
+                        model_w.fit(X_train_s, y_train,
+                                    sample_weight=sample_weights)
+                        fold_w[imp_method] = metric_fn(
+                            y_val, _predict_for_metric(model_w, X_val_s))
+                    except Exception:
+                        break
+
+                if len(fold_w) != len(importance_methods):
+                    continue
+
+                # Condition 5: same hybrid matrix, weights from
+                # ActivityCliffAwareEstimator instead of neighbour agreement.
+                try:
+                    ca_weights = compute_cliff_aware_weights(
+                        X_train_s, y_train, k=k_neighbors, is_clf=is_clf)
+                    model_ca = model_factory()
+                    model_ca.fit(X_train_s, y_train, sample_weight=ca_weights)
+                    fold_ca = metric_fn(
+                        y_val, _predict_for_metric(model_ca, X_val_s))
+                except Exception:
+                    continue
+
+                unweighted_scores.append(fold_uw)
+                for imp_method in importance_methods:
+                    weighted_scores[imp_method].append(fold_w[imp_method])
+                    reliability_stats[imp_method].append(fold_stats[imp_method])
+                ca_scores.append(fold_ca)
+                n_features_list.append(X_train_h.shape[1])
+
+            if not unweighted_scores:
                 continue
 
-            # Condition 5: same hybrid matrix, weights from
-            # ActivityCliffAwareEstimator instead of neighbour agreement.
-            try:
-                ca_weights = compute_cliff_aware_weights(
-                    X_train_s, y_train, k=k_neighbors, is_clf=is_clf)
-                model_ca = model_factory()
-                model_ca.fit(X_train_s, y_train, sample_weight=ca_weights)
-                fold_ca = metric_fn(
-                    y_val, _predict_for_metric(model_ca, X_val_s))
-            except Exception:
-                continue
+            uw_mean = float(np.mean(unweighted_scores))
+            uw_std = float(np.std(unweighted_scores))
 
-            unweighted_scores.append(fold_uw)
+            by_importance = {}
             for imp_method in importance_methods:
-                weighted_scores[imp_method].append(fold_w[imp_method])
-                reliability_stats[imp_method].append(fold_stats[imp_method])
-            ca_scores.append(fold_ca)
-            n_features_list.append(X_train_h.shape[1])
+                m_scores = weighted_scores[imp_method]
+                m_mean = float(np.mean(m_scores))
+                by_importance[imp_method] = {
+                    'weighted_mean': m_mean,
+                    'weighted_std': float(np.std(m_scores)),
+                    'delta': m_mean - uw_mean,
+                    'reliability_stats': reliability_stats[imp_method],
+                }
 
-        if not unweighted_scores:
-            continue
+            primary = by_importance[primary_importance]
+            w_mean = primary['weighted_mean']
+            w_std = primary['weighted_std']
+            delta = primary['delta']
+            n_features = int(np.mean(n_features_list)) if n_features_list else 0
 
-        uw_mean = float(np.mean(unweighted_scores))
-        uw_std = float(np.std(unweighted_scores))
-
-        by_importance = {}
-        for imp_method in importance_methods:
-            m_scores = weighted_scores[imp_method]
-            m_mean = float(np.mean(m_scores))
-            by_importance[imp_method] = {
-                'weighted_mean': m_mean,
-                'weighted_std': float(np.std(m_scores)),
-                'delta': m_mean - uw_mean,
-                'reliability_stats': reliability_stats[imp_method],
+            hybrid_by_space.setdefault(space_name, {})[model_name] = {
+                'unweighted_mean': uw_mean,
+                'unweighted_std': uw_std,
+                'weighted_mean': w_mean,
+                'weighted_std': w_std,
+                'delta': delta,
+                'n_features': n_features,
+                'reliability_stats': primary['reliability_stats'],
+                'n_folds_scored': len(unweighted_scores),
+                'importance_methods': list(importance_methods),
+                'primary_importance_method': primary_importance,
+                'by_importance': by_importance,
+                # 2026-09-12, owner's decision (pool subset includes similarity
+                # hybrids): which family chose this hybrid's recipe. The two
+                # scores above are measured by n02 itself with metric_fn, so they
+                # are in the dataset's own metric whichever family chose the
+                # recipe; this key says what chose it.
+                'hybrid_objective': space_objective.get(space_name),
+                'hybrid_objective_choice': family_by_model.get(
+                    model_name, {}).get('objective_choice'),
+                'pool_subset': family_by_model.get(model_name, {}).get(
+                    'pool_subset'),
+                # Which result-file space these numbers are in, and whether it
+                # holds the recipe the pool returned for this model or another
+                # family's own best. Added 2026-09-19.
+                'space': space_name,
+                'is_the_recipe_the_pool_returned': (
+                    space_objective.get(space_name)
+                    == family_by_model.get(model_name, {}).get('objective')),
+                'features_chosen_by': describe_pool_family(
+                    space_objective.get(space_name)),
             }
 
-        primary = by_importance[primary_importance]
-        w_mean = primary['weighted_mean']
-        w_std = primary['weighted_std']
-        delta = primary['delta']
-        n_features = int(np.mean(n_features_list)) if n_features_list else 0
+            # Condition 5, assembled from the lists the merged loop produced. Its
+            # folds are the folds behind uw_mean, so this subtraction is over one
+            # fold set.
+            ca_mean = float(np.mean(ca_scores))
+            cliff_aware_by_space.setdefault(space_name, {})[model_name] = {
+                'score_mean': ca_mean,
+                'score_std': float(np.std(ca_scores)),
+                'delta_vs_unweighted': ca_mean - uw_mean,
+                'n_folds_scored': len(ca_scores),
+                # 2026-09-12: same hybrid recipe as conditions 3-4, so the
+                # same family chose it. Recorded here too so this block reads
+                # on its own.
+                'hybrid_objective': space_objective.get(space_name),
+                'space': space_name,
+            }
 
-        hybrid_results[model_name] = {
-            'unweighted_mean': uw_mean,
-            'unweighted_std': uw_std,
-            'weighted_mean': w_mean,
-            'weighted_std': w_std,
-            'delta': delta,
-            'n_features': n_features,
-            'reliability_stats': primary['reliability_stats'],
-            'n_folds_scored': len(unweighted_scores),
-            'importance_methods': list(importance_methods),
-            'primary_importance_method': primary_importance,
-            'by_importance': by_importance,
-            # 2026-09-12, owner's decision (pool subset includes similarity
-            # hybrids): which family chose this hybrid's recipe. The two
-            # scores above are measured by n02 itself with metric_fn, so they
-            # are in the dataset's own metric whichever family chose the
-            # recipe; this key says what chose it.
-            'hybrid_objective': family_by_model.get(model_name, {}).get(
-                'objective'),
-            'hybrid_objective_choice': family_by_model.get(model_name, {}).get(
-                'objective_choice'),
-            'pool_subset': family_by_model.get(model_name, {}).get(
-                'pool_subset'),
-        }
+            sign = '+' if delta > 0 else ''
+            _fam = space_objective.get(space_name)
+            print(f"    {model_name} [{space_name}]: unweighted={uw_mean:.4f}, "
+                  f"weighted={w_mean:.4f} (delta={sign}{delta:.4f}, "
+                  f"dim={n_features}, family={_fam}) [{primary_importance}]")
+            for imp_method in importance_methods[1:]:
+                _b = by_importance[imp_method]
+                print(f"      {'':<{len(model_name)}}  weighted="
+                      f"{_b['weighted_mean']:.4f} "
+                      f"(delta={_b['delta']:+.4f}) [{imp_method}]")
+            print(f"      {'':<{len(model_name)}}  cliff_aware={ca_mean:.4f} "
+                  f"(delta={ca_mean - uw_mean:+.4f})")
 
-        # Condition 5, assembled from the lists the merged loop produced. Its
-        # folds are the folds behind uw_mean, so this subtraction is over one
-        # fold set.
-        ca_mean = float(np.mean(ca_scores))
-        cliff_aware_results[model_name] = {
-            'score_mean': ca_mean,
-            'score_std': float(np.std(ca_scores)),
-            'delta_vs_unweighted': ca_mean - uw_mean,
-            'n_folds_scored': len(ca_scores),
-            # 2026-09-12: same hybrid recipe as conditions 3-4, so the
-            # same family chose it. Recorded here too so this block reads
-            # on its own.
-            'hybrid_objective': family_by_model.get(model_name, {}).get(
-                'objective'),
-        }
-
-        sign = '+' if delta > 0 else ''
-        _fam = family_by_model.get(model_name, {}).get('objective')
-        print(f"    {model_name}: unweighted={uw_mean:.4f}, "
-              f"weighted={w_mean:.4f} (delta={sign}{delta:.4f}, "
-              f"dim={n_features}, family={_fam}) [{primary_importance}]")
-        for imp_method in importance_methods[1:]:
-            _b = by_importance[imp_method]
-            print(f"      {'':<{len(model_name)}}  weighted="
-                  f"{_b['weighted_mean']:.4f} "
-                  f"(delta={_b['delta']:+.4f}) [{imp_method}]")
-        print(f"      {'':<{len(model_name)}}  cliff_aware={ca_mean:.4f} "
-              f"(delta={cliff_aware_results[model_name]['delta_vs_unweighted']:+.4f})")
-
+    # 'hybrid' and 'hybrid_cliff_aware' keep the shape and the numbers they had:
+    # the space built from the predictive search, one entry per model. Every
+    # space this run scored, that one included, is under the '*_by_space' keys.
+    hybrid_results = hybrid_by_space.get(HYBRID_SPACE, {})
+    cliff_aware_results = cliff_aware_by_space.get(HYBRID_SPACE, {})
     results['hybrid'] = hybrid_results
     results['hybrid_cliff_aware'] = cliff_aware_results
+    results['hybrid_by_space'] = hybrid_by_space
+    results['hybrid_cliff_aware_by_space'] = cliff_aware_by_space
+    results['hybrid_spaces_scored'] = sorted(hybrid_by_space)
+    results['hybrid_space_build_errors'] = hybrid_build_errors
 
     # =========================================================================
     # SUMMARY: Compare weighting benefit for base reps vs hybrid
@@ -1085,10 +1209,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # 2026-09-12, owner's decision: n02's pool subset includes
             # similarity hybrids. Recorded in the config so a reader can tell
             # a run under the widened subset from an older one.
-            'pool_subset': 'predictive_and_similarity',
+            'pool_subset': POOL_SUBSET,
             'hybrid_objective_by_model': {
                 _m: _d.get('objective') for _m, _d in family_by_model.items()
             },
+            # Which hybrid spaces this run actually scored the three hybrid
+            # conditions in. One per family of stored search since 2026-09-19.
+            'hybrid_spaces': sorted(results.get('hybrid_by_space') or {}),
         },
         results=results,
         primary_metric=metric_name,

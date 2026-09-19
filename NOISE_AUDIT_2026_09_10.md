@@ -2564,3 +2564,144 @@ scores, so none of them is affected.
 **Not changed:** `n_jobs` on the roster's forest. Setting it to 1 would make
 every score reproducible and would slow every fit in the repository, and that is
 a decision about the whole suite rather than about one control.
+
+## 18. Nine experiments asked the pool for two search families and built one — fixed 2026-09-19
+
+`POOL_SUBSETS['predictive_and_similarity']` is `('predictive', 'similarity')`
+and the tuple is in PREFERENCE ORDER. `get_best_search_for_downstream` returns
+the FIRST family that has an entry, because the two families' stored scores are
+in different units: a predictive search's score is the dataset's own metric, a
+similarity search's is the correlation between each held-out molecule's
+activity and what its five nearest neighbours predict. A predictive recipe
+always exists. So `pool_subset='predictive_and_similarity'` reads like "test
+both families" and means "prefer the predictive one, and record that the other
+existed".
+
+**Which files.** Nine: n02, n07, n12, n17, n19 and n23 in noise/, and s06, s08
+and s10 in similarity/. This section is the record for the six in noise/; the
+three in similarity/ have entries in EXPERIMENTS_FINALIZED.md and carry the
+same paragraph there.
+
+**Where it mattered most, file by file, checked rather than asserted.** The
+similarity search picks features so that the distance they define predicts each
+molecule's activity from its five nearest neighbours. So it matters most where
+a neighbour distance is what the method rests on:
+
+- **n02** — the per-molecule fit weight is how close a molecule's label sits to
+  its 10 nearest neighbours' mean label, and the cliff-aware arm is also a
+  neighbour reading. Both, entirely.
+- **n07** — three of its four older cleanups overwrite or reweight a label
+  using its neighbours' labels (the file's own docstring says so). Its detector
+  is `cross_val`, which is an out-of-fold model residual and not a neighbour
+  reading; `activity_cliff_aware`, graded beside it, is.
+- **n12** — both its estimators are `neighbor_residual` and
+  `local_variance_ratio`. The whole file asks which distance geometry makes
+  neighbour-based noise estimation work.
+- **n17** — `DETECTOR = 'neighbor_residual'`, k = 10.
+- **n23** — one of its five uncertainty sources, `activity_cliff_aware`, is a
+  neighbour reading; the other four fit a model on the features
+  (`hetero_gp`, `ngboost`, `heteroscedastic_nn`, `gaussian_process`).
+- **n19** — none. Its six conditions weight a molecule by how many times it was
+  measured and how far its measurements sat apart, and nothing there reads a
+  neighbour. What the feature space changes is the downstream fit those weights
+  are applied to. It asked the pool for both families and reported one, which
+  is reason enough to fix it, but it is not one of the sharp cases.
+- **s06** — the distance-error correlation and the reliability diagram are both
+  built on a molecule's mean distance to its k nearest training neighbours. The
+  conformal block is not a distance; it is a prediction interval from a forest
+  fitted on each arm's features.
+- **s08** — the two statistics its claim rests on, `sac_rho` and its held-out
+  per-fold version, are correlations between a distance between molecules and
+  how far apart their activities sit. The per-model prediction scores and the
+  intrinsic-dimension estimate in the same cells are not distances.
+- **s10** — three of its four tasks turn on a distance: the weighted
+  k-nearest-neighbours fit, and the Gaussian-process and support-vector arms
+  whose RBF kernel is a distance. The fourth, q-RASAR, adds similarity-derived
+  FEATURES rather than reweighting a distance.
+
+**What changed.** Each of the nine now builds one feature space per family the
+pool holds — `hybrid` from the predictive recipe, unchanged in name and in
+number, and `hybrid_similarity` beside it. The loop is
+`_shared.pool_recipes_by_family`, which is n11's loop
+(`n11_estimation_remediation_grid.py:731-762`) lifted into one place;
+n11, n13, n18 and n21 keep their own copies and were not touched, so nothing
+they have reported moves. A family whose best pool entry carries no recipe is
+written to the result file with the reason, never dropped silently.
+
+**One hazard closed with it.** n07's `_fold_space` passed `model=`,
+`metric_fn=` and `lower_is_better=` to `build_fold_hybrid`, which REFUSES that
+pair under a geometry recipe because create_hybrid fits no downstream model
+there. Its `except Exception: return None` would have swallowed the refusal and
+left the geometry space empty on every fold with nothing recorded. The three
+arguments are dropped under a geometry recipe now, and the first failure per
+space is written to `results['hybrid_space_build_errors']`.
+
+**n06 is NOT one of the six, and the handoff that listed it was wrong.**
+`SIMILARITY_HYBRID_NOT_BUILT_HANDOFF_2026_09_19.md` says n06 fetches one recipe
+at n06:657 and populates one space, and that every stored n06 result claims a
+comparison it did not make. n06:657 is one lookup, but n06:689 then loops over
+`meta['by_objective']`, takes each family's own recipe, and n06:703 puts each
+one into `spaces` as `hybrid_predictive` or `hybrid_similarity`; the build loop
+at n06:834 scores every space in that dict, fold by fold. Both spaces have been
+built since commit `df7c7fe`, 2026-09-12. Its `pool_subset_note` — "Both
+families' best recipes are scored here as separate spaces" — is accurate, and
+so is the EXPERIMENTS_FINALIZED.md entry describing three spaces. UNVERIFIED:
+whether any n06 result file written before 2026-09-12 is still in use. None
+exists under `tests/experiments/results/` on this machine, so the claim could
+not be checked either way here.
+
+**⛔ THE SIMILARITY SEARCH IS NOT ON DISK FOR THE DISTANCE LINEAGE, AND s06,
+s08 and s10 ALL READ THAT LINEAGE.** Counted 2026-09-19 in
+`tests/slurm_scripts/_precompute_passes.sh:34-36`, which is the one place the
+five named precompute passes are defined:
+
+    main    (no extra flags)                    predictive, general tier
+    sim     --objectives predictive,similarity  both, general tier
+    knn     --with-knn --objectives similarity  similarity only, general tier
+    dist    --distance                          PREDICTIVE ONLY
+    ridge   --with-ridge                        predictive, general tier
+
+`dist` is the distance lineage — its own evaluators, its own budget list, and
+the five models plus k-nearest-neighbours — and the submitter's own header says
+s04, s05, s06, s08, s10, s13 and c03 read it. It names no objective, so it
+writes the predictive search alone. No pass combines `--distance` with
+`--objectives ... similarity`. So on the distance lineage the pool holds one
+family, `by_objective` has one entry, and every similarity arm in those six
+files is recorded as unavailable with its reason rather than measured. The code
+is right; the search does not exist yet.
+
+The noise family is covered: `noise_helpers.run_all` runs the
+similarity-objective precompute on the general tier unconditionally, once per
+dataset (`noise_helpers.py:888-903`), and none of n02, n07, n12, n17, n19 or
+n23 passes `distance=True`.
+
+⛔ A DECISION, NOT A FIX I MADE: whether to add a sixth pass
+(`--distance --with-knn --objectives predictive,similarity`) or to widen `dist`.
+It is a queue slot per dataset and it is the owner's call. Until it runs, the
+similarity arm in s02, s04, s05, s06, s08, s10 and s13 is absent-with-a-reason.
+`similarity_helpers.run_all` takes `precompute_objectives=('similarity',)` for
+the same job on the local path; it defaults to None, and only
+`similarity/_local_autoresearch.py:129` passes it.
+
+**Cost, per dataset, with both families on disk.** No new search in any of the
+six — the second recipe comes out of the same pool lookup. n02: 25 more
+`build_fold_hybrid` calls (5 folds x 5 models). n07: 75 more (5 models x 5
+folds x 3 noise seeds), plus the fits over them. n12: 30 more (6 noise levels x
+5 folds) and three more conditions scored on each. n17: 15 more (5 folds x 3
+draws) and 450 more downstream fits. n19: 45 more (3 label constructions x 5
+folds x 3 draws). n23: one more per (regime, level, draw, fold). ⛔ The
+similarity search has to EXIST on disk for the dataset. `noise_helpers.run_all`
+precomputes it once per dataset for the noise family; for the similarity family
+it has to be in `tests/precompute_hybrids.py`, and if it is not, the first
+experiment to ask pays for a full search inside its own job.
+
+**Where each file's record is.** EXPERIMENTS_FINALIZED.md has an entry for n02,
+n07, n12, s06, s08 and s10, and each now carries an `IMPLEMENTED 2026-09-19`
+paragraph saying what changed and what it costs. It stops at n15, so n17, n19
+and n23 have no entry there and this section is their record.
+
+**Smoke:** `tests/smoke/smoke_pool_recipes_by_family.py` (the loop, seven
+cases) and `tests/smoke/smoke_similarity_hybrid_spaces.py` (per file: the space
+names, the resolution with and without the similarity family, and that the two
+recipes build matrices that are not byte-identical). Neither runs an experiment
+end to end on a real dataset; that belongs on the cluster.

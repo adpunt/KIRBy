@@ -87,6 +87,15 @@ New keys, no existing key changes value:
   `pool_subset`, and `pool_by_objective` (every eligible family's own best:
   tier, aug condition, score and metric name).
 - `results['hybrid_families_used']`: the families that won at least one budget.
+- `results['budgets_by_family'][family][b]`: added 2026-09-19. One cell per
+  (budget, family), because until then this file asked for both families and
+  scored one — the pool names them in preference order and returns the first
+  that has an entry, and a predictive recipe always exists. Each family is now
+  asked for BY NAME (`objective=<family>`), the way s02 does it.
+  `results['budgets']` holds the predictive family and is unchanged;
+  `results['family_unavailable'][family][b]` names each budget a family could
+  not supply, and `results['hybrid_families_scored']` lists the families a cell
+  was actually built and scored in.
 - `'_hybrid_family_by_candidate'` on both `fold_reselection` blocks, mapping each
   candidate name to its family.
 The two families' stored scores are in different units — a prediction-built
@@ -133,6 +142,9 @@ from experiments._shared import (
     build_fold_hybrid, extract_top3_base_reps, fold_reselection,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+    # The families a pool subset names, and one sentence saying what each one
+    # chose its features for. Added 2026-09-19 with the per-family cells.
+    POOL_SUBSETS, describe_pool_family,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, violation_rate,
@@ -151,6 +163,10 @@ from experiments.similarity._summary_keys import (
 # the distance evaluator and budget lineage and whose searches are still
 # prediction-built; both are passed and they are separate.
 POOL_SUBSET = 'predictive_and_similarity'
+
+# The family whose cells fill results['budgets']. It is the one the subset
+# returned on every run before 2026-09-19, so that key does not move.
+PRIMARY_FAMILY = 'predictive'
 
 
 def _drop_blueprint(obj):
@@ -235,8 +251,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         triu_i_s, triu_j_s = triu_i, triu_j
     d_full_sampled = D_full[triu_i_s, triu_j_s]
 
-    for budget in budgets:
-        print(f"\n  Budget={budget}:")
+    # ⛔ ONE CELL PER FAMILY, NOT ONE PER BUDGET. Added 2026-09-19.
+    #
+    # POOL_SUBSETS names the two families in PREFERENCE order and the pool
+    # returns the first that has an entry, because their stored scores are in
+    # different units. A predictive recipe always exists, so from 2026-09-12 to
+    # 2026-09-19 this file asked for both families, built the predictive one
+    # and wrote the other into the result file as a score it never measured in.
+    #
+    # It matters here because the two statistics this file's claim rests on --
+    # sac_rho and the held-out per-fold version of it -- are correlations
+    # between a distance between molecules and how far apart their activities
+    # sit, and the similarity search chooses features so that exactly that
+    # distance predicts activity from the five nearest neighbours. The
+    # per-model prediction scores and the intrinsic-dimension estimate in the
+    # same cells are not distances.
+    #
+    # Each family is asked for BY NAME, which is what s02 does: naming the
+    # objective makes the pool resolve that family's own winner instead of the
+    # subset's first. 'predictive' is what the subset returned before, so
+    # results['budgets'] is unchanged; every family, that one included, is
+    # under results['budgets_by_family'].
+    families = list(POOL_SUBSETS[POOL_SUBSET])
+    results['families_asked'] = families
+    results['budgets_by_family'] = {}
+    results['family_unavailable'] = {}
+    results['families_note'] = (
+        'One cell per (budget, search family). A predictive search chose its '
+        "features to predict the label; a similarity search chose them so that "
+        "each molecule's activity is predicted by its five nearest neighbours "
+        'in the distance those features define, and fits no downstream model. '
+        'Their stored search scores are in different units and nothing here '
+        'ranks one against the other. Every number in the cells below is '
+        'measured by this file on the same folds, so those ARE comparable. '
+        "results['budgets'] holds the predictive family alone and is "
+        'unchanged.')
+    for budget, family in [(_b, _f) for _b in budgets for _f in families]:
+        print(f"\n  Budget={budget}, {family} family:")
         t0 = time.time()
 
         try:
@@ -253,14 +304,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=data.get('augmentations'),
                 metric=metric_name, task_type=task_type, domain=domain,
                 dataset_name=dataset_name, distance=True,
-                pool_subset=POOL_SUBSET)
+                # The family BY NAME. Passing pool_subset here returned the
+                # first family the subset names on every call, so the geometry
+                # one was never built. objective= and pool_subset= cannot both
+                # be passed; the pool refuses the pair.
+                objective=family)
             # Clamp to >=0: weights feed compute_distance_matrix (X*sqrt(w),
             # no internal guard). lightgbm_gain is non-negative today, so this
             # is a no-op now but prevents silent NaN if importance ever becomes
             # signed. Mirrors the per-rep clamp below.
             weights_flat = (np.maximum(flatten_fold_weights(fi), 0) if fi
                             else np.ones(X_hybrid.shape[1]))
-            if not _top3_reported:
+            # Reported from the PREDICTIVE family's search, which is the one
+            # this key held before 2026-09-19. Each family's own ranking of the
+            # single representations is a different quantity -- a similarity
+            # search ranks them by the neighbour correlation and fits no model.
+            if family == PRIMARY_FAMILY and not _top3_reported:
                 top3 = extract_top3_base_reps(search)
                 if top3:
                     # Use distinct loop vars (rep_n/rep_s) to avoid shadowing the
@@ -270,7 +329,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _top3_reported = True
         except Exception as e:
             print(f"    Failed: {e}")
-            results['budgets'][budget] = {'error': str(e)}
+            _err = {'error': str(e), 'family': family}
+            results['budgets_by_family'].setdefault(family, {})[budget] = _err
+            results['family_unavailable'].setdefault(family, {})[budget] = (
+                f'the pool held no usable search under objective={family} for '
+                f'this dataset at {budget} features: {e}')
+            if family == PRIMARY_FAMILY:
+                results['budgets'][budget] = _err
             continue
 
         # 2026-09-12: record which family this budget's recipe came from. The
@@ -298,7 +363,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     for _o, _d in (_meta.get('by_objective') or {}).items()
                 },
             }
-            results['hybrid_family_by_budget'][budget] = _pool_family
+            # Keyed by budget for the predictive family, unchanged; every
+            # family's own row is under the key below it.
+            if family == PRIMARY_FAMILY:
+                results['hybrid_family_by_budget'][budget] = _pool_family
+            (results.setdefault('hybrid_family_by_budget_and_family', {})
+                .setdefault(family, {}))[budget] = _pool_family
             _fam_str = ', '.join(
                 f"{_o}={_d['score_mean']:.4f} ({_d['metric_name']})"
                 for _o, _d in _pool_family['pool_by_objective'].items()
@@ -556,7 +626,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         budget_result['top2_hybrids'] = _top2_hyb
         budget_result['top2_pairs_by_model'] = _top2_pairs
         budget_result['hybrid_deltas_by_model'] = _hyb_deltas
-        results['budgets'][budget] = budget_result
+        # Which family this cell was built from, beside the family the pool
+        # would have returned on its own.
+        budget_result['requested_family'] = family
+        budget_result['features_chosen_by'] = describe_pool_family(family)
+        results['budgets_by_family'].setdefault(family, {})[budget] = \
+            budget_result
+        if family == PRIMARY_FAMILY:
+            results['budgets'][budget] = budget_result
 
         scores_str = ', '.join(f"{mn}={model_means[mn]:.4f}" for mn in model_means
                                if not np.isnan(model_means[mn]))
@@ -567,6 +644,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # budgets. 'similarity' appears only when a similarity-built search was
     # found on disk for this dataset; when none was precomputed the subset is
     # wider but the pool has one family to offer and this reads ['predictive'].
+    # Every family a cell was actually BUILT and scored in, since 2026-09-19.
+    results['hybrid_families_scored'] = sorted(
+        f for f, cells in results['budgets_by_family'].items()
+        if any('error' not in c for c in cells.values()))
     results['hybrid_families_used'] = sorted(
         {v.get('hybrid_family') for v in results['hybrid_family_by_budget'].values()
          if v.get('hybrid_family')})
