@@ -64,7 +64,13 @@ def _fmt(v, width=9):
 
 
 def run(dataset_name, args):
-    data = load_data(dataset_name, args.reps)
+    # ⛔ args.reps is a comma-separated NAME LIST, not a preset. Until
+    # 2026-09-19 it was passed as load_data's second positional argument, which
+    # is rep_preset, and was never split -- so --reps silently loaded the full
+    # 10-representation pool and the flag did nothing.
+    _rep_names = ([r.strip() for r in args.reps.split(',') if r.strip()]
+                  if args.reps else None)
+    data = load_data(dataset_name, rep_names=_rep_names)
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
