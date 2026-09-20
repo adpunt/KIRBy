@@ -669,9 +669,12 @@ def precompute_dataset(dataset_name, tiers=('general',),
     # script ran before the parameter existed.
     objectives = tuple(objectives) if objectives else (OBJECTIVE_PREDICTIVE,)
 
-    # Drop the similarity objective where its score does not exist. The class
-    # count is COUNTED off this dataset's own labels, so this does not depend on
-    # the name list the submit script uses and cannot go stale against it.
+    # Drop the similarity objective where its score does not exist. Two kinds
+    # of reason, both handled by the one call: a class count above two, which is
+    # COUNTED off this dataset's own labels and so cannot go stale against the
+    # submit script's name list; and a grouping that leaves a held-out block
+    # unable to carry the comparison, which is invisible in the labels and is
+    # looked up by name.
     # Dropped here as well as in run_precompute_dataset.sh, because a direct run
     # of this file bypasses that script entirely.
     _undef = similarity_objective_undefined(dataset_name, labels=labels,
@@ -680,8 +683,8 @@ def precompute_dataset(dataset_name, tiers=('general',),
         objectives = tuple(o for o in objectives if o != OBJECTIVE_SIMILARITY)
         print(f"\n  DROPPED objective='similarity': {_undef}.")
         print(f"  Not a judgement about whether it would win here -- the "
-              f"number is undefined. Defining it (each class against the "
-              f"rest, averaged) would remove this skip.")
+              f"number does not exist. dataset_policy.py carries the reason "
+              f"and what would have to change to lift it.")
         if not objectives:
             print(f"  Nothing else was asked for, so no search runs for "
                   f"{dataset_name}.")

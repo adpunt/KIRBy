@@ -591,6 +591,40 @@ MULTICLASS_DATASETS = {
     'tz_her2_multiclass': 3,
 }
 
+# The OTHER way the objective can be undefined: the held-out block cannot carry
+# the comparison, whatever the label looks like. One sentence per dataset,
+# printed as written.
+#
+# tz_her2_binary has TWO classes, so the AUROC rule above does not touch it.
+# What stops it is the split. Its folds are cut on edit-distance shells from the
+# wildtype CDRH3 -- 10 shells, distance 1 to 10, of very unequal size
+# (DATASET_EXPANSION_2026_07_09.md:86). Predicting a sample from its five
+# nearest neighbours only means anything if the neighbours can come from a
+# different shell, so activity_readacross needs at least 2 shells inside the
+# held-out block. Five folds over ten unequal shells lets one large shell fill a
+# block on its own, and then nothing scores.
+#
+# The grouping is not negotiable -- it is the leakage control for a single-
+# wildtype mutational library, and identity clustering on one collapses to a
+# random split (antibody_baseline_survey._assign_groups says so and refuses).
+# So the objective is undefined here rather than badly configured.
+#
+# CUT BY THE OWNER 2026-09-20, told that the "every fold" claim in
+# hybrid._require_scored_reps' docstring was unmeasured, and choosing the cut
+# over measuring it first.
+SIMILARITY_UNDEFINED_OTHER = {
+    'tz_her2_binary': (
+        "tz_her2_binary cuts its folds on edit-distance shells from the "
+        "wildtype CDRH3, and a held-out block can hold a single shell. "
+        "objective='similarity' predicts each sample from its five nearest "
+        "neighbours in another shell, so one shell scores nothing"),
+}
+
+# Every dataset the similarity objective is skipped on, by name. This is what a
+# caller that has not loaded anything yet -- the submit script -- has to use.
+SIMILARITY_OBJECTIVE_SKIP_DATASETS = frozenset(MULTICLASS_DATASETS) | frozenset(
+    SIMILARITY_UNDEFINED_OTHER)
+
 
 def similarity_objective_undefined(dataset_name, labels=None,
                                    task_type=None) -> Optional[str]:
@@ -606,10 +640,18 @@ def similarity_objective_undefined(dataset_name, labels=None,
       script has to use this form: it decides which passes to launch before
       anything is loaded.
 
+    SIMILARITY_UNDEFINED_OTHER is checked by name in BOTH forms, because those
+    reasons do not show up in the labels.
+
     If the two ever disagree, the counted form wins and the run says so, so the
     cost of a stale name list is a wasted job, never a wrong result.
     """
     import numpy as np
+    # Checked by NAME and first, because these reasons are invisible in the
+    # labels -- tz_her2_binary's are a clean two-class vector.
+    _other = SIMILARITY_UNDEFINED_OTHER.get(dataset_name)
+    if _other is not None:
+        return _other
     if labels is not None and task_type == 'classification':
         n = int(len(np.unique(np.asarray(labels).ravel())))
     elif labels is not None:
