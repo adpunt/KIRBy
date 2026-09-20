@@ -16,7 +16,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n11 | every noise estimator crossed against every correction | FAIL (_smoke_n08_n12, _smoke_repair_targets) | none | 1 (1 kept) |
 | n12 | weights the distance by feature importance to find noisy labels | FAIL (_smoke_n08_n12) | 1 file(s), newest 2026-09-20 | 0 |
 | n17 | cleaning where the noise is real, measured against replicates | pass | none | 0 |
-| n18 | cleaning the labels as they come, nothing injected | FAIL (_smoke_n18) | none | 3 (3 kept) |
+| n18 | cleaning the labels as they come, nothing injected | FAIL (_smoke_n18) | none | 5 (4 kept) |
 | n20 | cleaning before the recipe search rather than after | pass | 1 file(s), newest 2026-09-21 | 1 (1 kept) |
 | n21 | which distance the nearest neighbours are found in | pass | 4 file(s), newest 2026-09-20 | 4 (3 kept) |
 | n23 | cleaning from a model's own per-molecule uncertainty | FAIL (_smoke_n23) | none | 0 |
@@ -45,6 +45,8 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 
 | | Date | What changed | Before | After | Kept |
 |---|---|---|---|---|---|
+| n18 | 2026-09-21 | the scale the four score-proportional corrections read a suspicion score on, from the raw score the correction min-max rescales itself to the molecule's position in the ordering | over the 24 readings the two runs share for those four corrections, the cleaned model beat the uncleaned one on 24 of 72 folds; gp_smooth averaged -0.0093 spearman over its 6 settings | 27 of 72 folds; gp_smooth averaged -0.0267 spearman over the same 6 settings | no |
+| n18 | 2026-09-21 | nothing in the file: the existing strength grid was read out per correction, to settle whether moving a label all the way beats moving it a quarter of the way | the uncleaned random forest, 0.4590 spearman | the strongest setting loses at every correction. label_smooth is best at alpha 0.25, 0.4492 spearman against 0.4185 at alpha 1.0. oof_smooth is best at alpha 0.5, 0.4651 against 0.4512 at alpha 1.0. gp_smooth is best at alpha 0.5, 0.4726 against 0.4705 at alpha 1.0. downweight is best at a 4-to-1 row weight ratio, 0.4823 against 0.4687 at 10-to-1 | yes |
 | n21 | 2026-09-20 | the row weight ratio the repair applies, from 1.11-to-1 to 4-to-1 | a positive share of the clean-to-corrupted gap recovered in 3 of the 15 distances | a positive share recovered in 13 of the 15 distances | yes |
 | n21 | 2026-09-20 | the representation the plain distance is computed in, from the esm2_cdr fallback to saprot | best of the 15 distances, 0.2455 detection average precision | best of the 15 distances, 0.2266 detection average precision | no |
 | n21 | 2026-09-20 | the importance exponent matched to the distance metric rather than fixed at 0.5 | 0.2098 detection average precision, lightgbm_gain at exponent 0.5 under manhattan | 0.2388 detection average precision, lightgbm_gain at exponent 1.0 under manhattan | yes |
