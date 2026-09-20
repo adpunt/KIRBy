@@ -92,6 +92,7 @@ from experiments._shared import (
     get_fitted_hybrid, get_fitted_pool_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
     apply_feature_selection, compute_feature_importance,
     get_domain_metric, get_model_factories, build_fold_hybrid,
+    importance_feature_weights,
     fold_hybrid_scoring_kwargs,
     get_best_for_downstream, extract_top3_base_reps,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
@@ -110,6 +111,96 @@ _DEFAULT_AD_BUDGET = 100
 # 'hybrid' and 'hybrid_weighted' are the predictive ones and are unchanged.
 SIM_ARM = 'hybrid_similarity'
 SIM_ARM_W = 'hybrid_similarity_weighted'
+
+
+# WHICH NUMBER IS TAKEN OFF THE k NEAREST TRAINING MOLECULES. Until
+# 2026-09-20 this file computed one: the mean of the k distances, written
+# inline as `.mean(axis=1)` at eight places. The applicability-domain
+# literature uses three others as routinely, and a run can now pick one with
+# KIRBY_S06_AD_STATISTIC. Unset gives 'mean', which is what every number
+# already on disk was computed under.
+AD_STATISTICS = ('mean', 'nn1', 'harmonic', 'kth')
+ENV_AD_STATISTIC = 'KIRBY_S06_AD_STATISTIC'
+
+
+def ad_statistic_name():
+    """The statistic in force for this run. 'mean' when nothing is set."""
+    name = os.environ.get(ENV_AD_STATISTIC) or 'mean'
+    name = name.strip().lower()
+    if name not in AD_STATISTICS:
+        raise ValueError(
+            f"{ENV_AD_STATISTIC}={name!r}: this file computes one of "
+            f"{list(AD_STATISTICS)}.")
+    return name
+
+
+def _ad_statistic(dists, k, name=None):
+    """One distance-to-training number per held-out molecule.
+
+    `dists` is (n held-out molecules, k), ascending, straight out of
+    kneighbors. Each name below reduces it to one number a molecule:
+
+      mean       the mean of the k distances. What this file computed at every
+                 one of its eight neighbour searches before 2026-09-20.
+      nn1        the distance to the single nearest training molecule. k plays
+                 no part, so every k reports the same number.
+      harmonic   k / sum(1/d), the distance-weighted mean: a training molecule
+                 close to the held-out one counts for more than a far one. A
+                 held-out molecule sitting exactly on a training molecule gives
+                 d=0 and a harmonic mean of 0, which is the right answer for
+                 how far it is from the training set.
+      kth        the distance to the k-th neighbour, i.e. the radius of the
+                 ball around the held-out molecule holding k training
+                 molecules.
+    """
+    name = ad_statistic_name() if name is None else name
+    d = np.asarray(dists, dtype=float)
+    if name == 'nn1':
+        return d[:, 0].copy()
+    if name == 'kth':
+        return d[:, -1].copy()
+    if name == 'harmonic':
+        width = d.shape[1]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            inv = np.sum(1.0 / np.where(d <= 0, np.inf, d), axis=1)
+        # A held-out molecule sitting exactly on ANY training molecule has one
+        # infinite term in the sum, so the harmonic mean is 0 -- the classical
+        # definition, and the right answer for how far it is from the training
+        # set. Dropping the zero instead would report it as further out than a
+        # molecule with no exact match at all.
+        out = np.where(inv > 0, width / inv, 0.0)
+        return np.where(np.any(d <= 0, axis=1), 0.0, out)
+    return d.mean(axis=1)
+
+
+def _importance_exponent_in_force():
+    """The power a feature's importance is raised to before it weights it.
+
+    Every `_weighted` arm in this file multiplies its z-scored features by the
+    feature's lightgbm_gain importance raised to this power. It was written out
+    as `np.sqrt(...)` at four places, so it was 0.5 and nothing recorded it.
+    KIRBY_IMPORTANCE_EXPONENT now sets it; unset still gives 0.5.
+    """
+    from kirby.similarity.preprocessing import importance_exponent_override
+    value = importance_exponent_override()
+    return 0.5 if value is None else value
+
+
+def resolved_k_values(kwargs):
+    """How many nearest training molecules the statistic is taken over.
+
+    The caller's own `k_values` wins. Otherwise KIRBY_S06_K_VALUES, a comma
+    separated list of neighbour counts; unset gives [5], which is the single
+    value this file used from 2026-06 to 2026-09-20 and the one every number
+    already on disk was computed at. The similarity wave passes nothing, so
+    before this the environment could not reach it at all.
+    """
+    if kwargs.get('k_values'):
+        return [int(v) for v in kwargs['k_values']]
+    raw = os.environ.get('KIRBY_S06_K_VALUES')
+    if not raw or not raw.strip():
+        return [5]
+    return [int(v) for v in raw.split(',') if v.strip()]
 
 
 def _graded_clf_error(clf, X, y_true):
@@ -163,7 +254,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     n_folds = config['n_splits']
-    k_values = kwargs.get('k_values', [5])
+    k_values = resolved_k_values(kwargs)
+    ad_statistic = ad_statistic_name()
+
+    print(f"  distance statistic {ad_statistic!r} over k={k_values} nearest "
+          f"training molecules; importance exponent "
+          f"{_importance_exponent_in_force()}")
 
     reps = data['reps']
     labels = data['labels']
@@ -176,7 +272,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                        n_samples=len(labels))['rf']
 
     results = {'distance_error_correlation': {}, 'reliability': {},
-               'conformal': {}, 'selection_rule': _SELECTION_RULE}
+               'conformal': {}, 'selection_rule': _SELECTION_RULE,
+               # Which number was taken off each molecule's k nearest training
+               # molecules, and over how many. Both were fixed before
+               # 2026-09-20 -- the mean, over 5 -- and neither was recorded, so
+               # a result file could not say what its distances were.
+               'distance_statistic': ad_statistic,
+               'k_values': list(k_values),
+               'importance_exponent': _importance_exponent_in_force()}
 
     augmentations = data.get('augmentations')
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
@@ -477,8 +580,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # NaN-guard: importance helpers can emit NaN for constant
                 # features; np.maximum(NaN, 0) is NaN which would corrupt the
                 # weighted kNN distance.
-                w = np.nan_to_num(flatten_fold_weights(feat_info), nan=0.0)
-                w = np.sqrt(np.maximum(w, 0))
+                w = importance_feature_weights(
+                    flatten_fold_weights(feat_info))
             except Exception as exc:
                 # N9: log the dropped fold so a thrown hybrid/importance build
                 # is distinguishable from a genuinely skipped fold.
@@ -528,20 +631,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             Xva_cmp = scaler_cmp.transform(reps[cmp_rep][val_idx])
             w_cmp = (imp[cmp_rep] if cmp_rep in imp
                      else np.ones(reps[cmp_rep].shape[1]))
-            w_cmp = np.sqrt(np.maximum(np.nan_to_num(w_cmp, nan=0.0), 0))
+            w_cmp = importance_feature_weights(w_cmp)
 
             # Distance to k-NN in training set for each val molecule
             # Comparator representation (unweighted)
             nn_c = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_c.fit(Xtr_cmp)
             dists_c, _ = nn_c.kneighbors(Xva_cmp)
-            d_cmp = dists_c.mean(axis=1)
+            d_cmp = _ad_statistic(dists_c, k)
 
             # Comparator representation (weighted)
             nn_cw = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_cw.fit(Xtr_cmp * w_cmp)
             dists_cw, _ = nn_cw.kneighbors(Xva_cmp * w_cmp)
-            d_cmp_w = dists_cw.mean(axis=1)
+            d_cmp_w = _ad_statistic(dists_cw, k)
 
             # Per-rep distances (unweighted + weighted)
             for rname, X_rep in reps.items():
@@ -551,7 +654,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 nn_r = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
                 nn_r.fit(Xtr_r)
                 dr, _ = nn_r.kneighbors(Xva_r)
-                d_rep = dr.mean(axis=1)
+                d_rep = _ad_statistic(dr, k)
                 all_d_per_rep[rname].extend(d_rep.tolist())
                 # The comparator representation is appended by the block below,
                 # which computes the same distance; appending it twice here
@@ -562,11 +665,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         _fold_spearman(d_rep, errors_neutral))
 
                 if rname in imp:
-                    w_r = np.sqrt(np.maximum(np.nan_to_num(imp[rname], nan=0.0), 0))
+                    w_r = importance_feature_weights(imp[rname])
                     nn_rw = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
                     nn_rw.fit(Xtr_r * w_r)
                     drw, _ = nn_rw.kneighbors(Xva_r * w_r)
-                    d_rep_w = drw.mean(axis=1)
+                    d_rep_w = _ad_statistic(drw, k)
                     all_d_per_rep_w[rname].extend(d_rep_w.tolist())
                     if rname != cmp_rep:
                         fold_rhos[f'{rname}_weighted'].append(
@@ -584,13 +687,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             nn_h = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_h.fit(X_tr_s)
             dists_h, _ = nn_h.kneighbors(X_va_s)
-            d_hybrid = dists_h.mean(axis=1)
+            d_hybrid = _ad_statistic(dists_h, k)
 
             # Weighted hybrid space
             nn_w = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_w.fit(X_tr_s * w)
             dists_w, _ = nn_w.kneighbors(X_va_s * w)
-            d_weighted = dists_w.mean(axis=1)
+            d_weighted = _ad_statistic(dists_w, k)
 
             # The geometry family's own hybrid, same fold, same rows, same two
             # distances. Its distances are scored against the SAME two error
@@ -613,17 +716,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     sc_h2 = StandardScaler()
                     X_tr_s2 = sc_h2.fit_transform(X_tr_h2)
                     X_va_s2 = sc_h2.transform(X_va_h2)
-                    w2 = np.nan_to_num(flatten_fold_weights(feat_info2), nan=0.0)
-                    w2 = np.sqrt(np.maximum(w2, 0))
+                    w2 = importance_feature_weights(
+                        flatten_fold_weights(feat_info2))
                     nn_h2 = make_nearest_neighbors(
                         n_neighbors=min(k, len(y_train) - 1))
                     nn_h2.fit(X_tr_s2)
-                    d_hybrid_sim = nn_h2.kneighbors(X_va_s2)[0].mean(axis=1)
+                    d_hybrid_sim = _ad_statistic(
+                        nn_h2.kneighbors(X_va_s2)[0], k)
                     nn_w2 = make_nearest_neighbors(
                         n_neighbors=min(k, len(y_train) - 1))
                     nn_w2.fit(X_tr_s2 * w2)
-                    d_weighted_sim = nn_w2.kneighbors(
-                        X_va_s2 * w2)[0].mean(axis=1)
+                    d_weighted_sim = _ad_statistic(
+                        nn_w2.kneighbors(X_va_s2 * w2)[0], k)
                 except Exception as exc:
                     print(f"      {SIM_ARM} fold build failed: "
                           f"{type(exc).__name__}: {exc}")
