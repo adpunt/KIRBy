@@ -76,9 +76,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
+from scipy.spatial.distance import cdist
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, kmeans_plusplus
 from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -90,12 +91,32 @@ from experiments._shared import (
     hr_exclude_folds,
     importance_feature_weights,
 )
+from kirby.similarity.distance_config import get_distance_metric
 from kirby.find_best_hybrid import nested_cv_outer_folds
 
 # The seed the folds are built with. The stored pool searches cross-validated
 # over the same partition (5 folds, seed 42, group-aware), so this file's fold i
 # and the pool's fold i are the same rows.
 _FOLD_SEARCH_SEED = 42
+
+# How many restarts the clusterer gets. k-means has used 10 since the file was
+# written; the coefficient-matched clusterer below is given the same number so
+# the two differ in the distance and in nothing else.
+_N_INIT = int(os.environ.get('KIRBY_S13_N_INIT', '10'))
+_MAX_ITER = int(os.environ.get('KIRBY_S13_MAX_ITER', '25'))
+
+# Cluster counts. 3, 5 and 10 were written into the signature and never swept;
+# KIRBY_S13_CLUSTERS sweeps them without editing the file. Coherence is a mean
+# of within-cluster standard deviations, and more clusters means smaller
+# clusters, so the statistic is NOT comparable across counts — see the note on
+# _coherence_from_labels.
+_ENV_CLUSTERS = os.environ.get('KIRBY_S13_CLUSTERS')
+DEFAULT_N_CLUSTERS = ([int(v) for v in _ENV_CLUSTERS.split(',') if v.strip()]
+                      if _ENV_CLUSTERS else [3, 5, 10])
+# Whether to also score every space with the clusterer that honours the
+# process-wide distance coefficient. Off by default: it is a second full set of
+# cluster fits.
+_MATCHED_ON = os.environ.get('KIRBY_S13_MATCHED_CLUSTERING', '') not in ('', '0')
 
 # 2026-09-12 decision: s13 stops calling get_fold_best_search and reads the pool
 # — best single representation plus the top three hybrids for its downstream
@@ -130,33 +151,110 @@ def _nanmean(scores):
     return float(np.nanmean(arr))
 
 
-def _heldout_coherence(X_tr_s, y_tr, X_va_s, y_va, n_clusters, is_clf):
-    """Fit KMeans on TRAIN, assign HELD-OUT points, score their label coherence.
+def matched_clusterer_name(coefficient=None):
+    """Which clusterer honours `coefficient`, or None when none does.
+
+    k-means minimises the sum of SQUARED EUCLIDEAN distances to a centroid and
+    takes no metric argument. The retrieval half of this file reads the
+    process-wide coefficient, manhattan by default since 2026-09-04. So under
+    the shipped setting the two halves of this file measure distance two
+    different ways, and `summary.metrics_agree` compares their win booleans
+    against each other.
+
+    Three of the four coefficients the suite sweeps have an exact same-shape
+    algorithm, each one 'assign to the nearest centre, move the centre to the
+    point that minimises summed distance inside its cluster':
+
+      euclidean        k-means itself. The centre is the mean.
+      manhattan        k-medians. The centre is the per-feature median, which
+                       is the point minimising summed L1 distance.
+      cosine           k-means on L2-normalised rows. On unit vectors cosine
+                       distance is 1 - x.y and squared Euclidean is 2 - 2 x.y,
+                       so the two order every pair identically.
+      minkowski p=0.5  none. No closed form for the point minimising summed
+                       L_0.5 distance, and the medoid alternative needs every
+                       within-cluster pair. Returns None; the caller writes no
+                       matched block and says so.
+    """
+    coef = coefficient or get_distance_metric()
+    return {'euclidean': 'kmeans',
+            'manhattan': 'kmedians',
+            'cosine': 'spherical_kmeans'}.get(coef)
+
+
+def _fit_assign(X_tr_s, X_va_s, n_clusters, method):
+    """Fit `method` on TRAIN rows, return the HELD-OUT rows' cluster labels.
+
+    `method` is one of the names matched_clusterer_name returns. Every one gets
+    _N_INIT restarts from k-means++ seeds, so the arms differ in the distance
+    and not in how many times they were restarted.
+    """
+    if method == 'kmeans':
+        km = KMeans(n_clusters=n_clusters, random_state=42, n_init=_N_INIT)
+        km.fit(X_tr_s)
+        return km.predict(X_va_s)
+    if method == 'spherical_kmeans':
+        def _unit(A):
+            n = np.linalg.norm(A, axis=1, keepdims=True)
+            return A / np.maximum(n, 1e-12)
+        km = KMeans(n_clusters=n_clusters, random_state=42, n_init=_N_INIT)
+        km.fit(_unit(X_tr_s))
+        return km.predict(_unit(X_va_s))
+    if method != 'kmedians':
+        raise ValueError(f"no clusterer named {method!r}")
+    best_C, best_cost = None, np.inf
+    for s in range(_N_INIT):
+        C, _ = kmeans_plusplus(X_tr_s, n_clusters, random_state=42 + s)
+        C = np.asarray(C, dtype=np.float64)
+        for _ in range(_MAX_ITER):
+            lab = cdist(X_tr_s, C, 'cityblock').argmin(axis=1)
+            newC = C.copy()
+            for c in range(n_clusters):
+                m = lab == c
+                if m.any():
+                    newC[c] = np.median(X_tr_s[m], axis=0)
+            if np.array_equal(newC, C):
+                break
+            C = newC
+        D = cdist(X_tr_s, C, 'cityblock')
+        cost = float(D.min(axis=1).sum())
+        if cost < best_cost:
+            best_cost, best_C = cost, C
+    return cdist(X_va_s, best_C, 'cityblock').argmin(axis=1)
+
+
+def _coherence_from_labels(va_lab, y_va, n_clusters, is_clf):
+    """Score held-out label coherence from the held-out rows' cluster labels.
 
     Regression: 1 - mean(within-cluster std(y_val)) / std(y_val_global).
     Classification: mean majority-class fraction among held-out points per
     cluster. Higher = the train-learned cluster geometry organises unseen
-    labels well. Returns NaN when the fold cannot support the statistic (too few
-    train points for n_clusters, degenerate labels, no cluster with >=2 held-out
-    points, etc.) — the fold_reselection helper skips NaN folds.
+    labels well. Returns NaN when the fold cannot support the statistic
+    (degenerate labels, no cluster with >=2 held-out points).
 
     Both branches need at least 2 held-out rows in a cluster. A cluster holding
     one row has purity 1.0 by construction, so admitting singletons rewarded a
     space for scattering held-out points into clusters of one while the
     regression branch, which always required 2, did not.
 
-    Returns (score, n_clusters_dropped): how many of the n_clusters received
-    fewer than 2 held-out rows and so contributed no term.
-    """
-    if n_clusters >= len(y_tr):
-        return float('nan'), 0
-    km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    km.fit(X_tr_s)
-    va_lab = km.predict(X_va_s)
+    THE MEAN IS OVER CLUSTERS, AND CLUSTERS BELOW 2 HELD-OUT ROWS ARE DROPPED,
+    so two spaces at the same cluster count can be scored on different numbers
+    of terms and a space that scatters held-out points is scored only on its
+    dense clusters. `pooled` is the same quantity with each cluster weighted by
+    how many held-out rows it holds: 1 - (pooled within-cluster standard
+    deviation) / std(y_val_global), regression only. It is NaN for
+    classification.
 
+    THE STATISTIC IS NOT COMPARABLE ACROSS CLUSTER COUNTS. More clusters means
+    fewer rows per cluster and a smaller within-cluster standard deviation, so
+    coherence rises with the count for any space at all. Taking each arm's best
+    over a list of counts compares two different granularities.
+
+    Returns (score, n_clusters_dropped, pooled).
+    """
     if is_clf:
         if (y_va < 0).any():
-            return float('nan'), 0
+            return float('nan'), 0, float('nan')
         purities = []
         n_dropped = 0
         for c in range(n_clusters):
@@ -167,23 +265,49 @@ def _heldout_coherence(X_tr_s, y_tr, X_va_s, y_va, n_clusters, is_clf):
             else:
                 n_dropped += 1
         if not purities:
-            return float('nan'), n_dropped
-        return float(np.mean(purities)), n_dropped
+            return float('nan'), n_dropped, float('nan')
+        return float(np.mean(purities)), n_dropped, float('nan')
 
     y_std = np.std(y_va)
     if y_std < 1e-10:
-        return float('nan'), 0
+        return float('nan'), 0, float('nan')
     stds = []
+    ss, n_in = 0.0, 0
     n_dropped = 0
     for c in range(n_clusters):
         mask = va_lab == c
         if mask.sum() >= 2:
-            stds.append(np.std(y_va[mask]))
+            yc = y_va[mask]
+            stds.append(np.std(yc))
+            ss += float(np.sum((yc - yc.mean()) ** 2))
+            n_in += int(mask.sum())
         else:
             n_dropped += 1
     if not stds:
-        return float('nan'), n_dropped
-    return float(1.0 - np.mean(stds) / y_std), n_dropped
+        return float('nan'), n_dropped, float('nan')
+    pooled = (float(1.0 - np.sqrt(ss / n_in) / y_std) if n_in > 0
+              else float('nan'))
+    return float(1.0 - np.mean(stds) / y_std), n_dropped, pooled
+
+
+def _heldout_coherence(X_tr_s, y_tr, X_va_s, y_va, n_clusters, is_clf,
+                       method='kmeans'):
+    """Cluster the TRAIN rows, assign the HELD-OUT rows, score label coherence.
+
+    `method` names the clusterer: 'kmeans' is what this file has always used and
+    minimises squared Euclidean distance; the others come from
+    matched_clusterer_name and honour the process-wide distance coefficient.
+
+    Returns (score, n_clusters_dropped, pooled). NaN score when the fold cannot
+    support the statistic (too few train rows for n_clusters, degenerate labels,
+    no cluster with >=2 held-out rows) — the fold_reselection helper skips NaN
+    folds. n_clusters_dropped is how many of the n_clusters received fewer than
+    2 held-out rows and so contributed no term.
+    """
+    if n_clusters >= len(y_tr):
+        return float('nan'), 0, float('nan')
+    va_lab = _fit_assign(X_tr_s, X_va_s, n_clusters, method)
+    return _coherence_from_labels(va_lab, y_va, n_clusters, is_clf)
 
 
 def _heldout_retrieval(X_tr_s, y_tr, X_va_s, y_va, k, is_clf):
@@ -227,8 +351,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_folds = config['n_splits']
     budget = kwargs.get('budget', 100)
     k_retrieval = kwargs.get('k_retrieval', 5)
-    n_clusters_list = kwargs.get('n_clusters_list', [3, 5, 10])
+    n_clusters_list = kwargs.get('n_clusters_list') or DEFAULT_N_CLUSTERS
     augmentations = data.get('augmentations')
+    # The coefficient the retrieval half reads, and the clusterer that would
+    # honour it. When the two names differ the clustering half is measuring
+    # squared Euclidean distance while the retrieval half is not.
+    coefficient = get_distance_metric()
+    matched_method = matched_clusterer_name(coefficient)
+    matched_on = bool(_MATCHED_ON and matched_method
+                      and matched_method != 'kmeans')
+    print(f"  distance coefficient={coefficient}; clustering half uses k-means "
+          f"(squared euclidean); coefficient-matched clusterer="
+          f"{matched_method or 'none (undefined for this coefficient)'}; "
+          f"matched arm {'ON' if matched_on else 'off'}")
+    print(f"  cluster counts: {n_clusters_list}")
 
     # ── Group-aware CV folds (shared by every space + both axes) ──
     # nested_cv_outer_folds is the same group-aware split make_cv_splitter built
@@ -377,9 +513,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # missing fold stays a missing fold.
     clustering_fold = {}
     retrieval_fold = {}
+    # The same coherence under the coefficient-matched clusterer, when that arm
+    # is on. Same shape, so the same aggregation and the same block shape apply.
+    clustering_matched_fold = {}
+    # The pooled form of the coherence, each cluster weighted by how many
+    # held-out rows it holds instead of every cluster counting once.
+    clustering_pooled_fold = {}
 
     def _acc_clu(space, nc, fold_i, val):
         clustering_fold.setdefault(space, {}).setdefault(nc, {})[fold_i] = val
+
+    def _acc_clu_m(space, nc, fold_i, val):
+        clustering_matched_fold.setdefault(space, {}).setdefault(
+            nc, {})[fold_i] = val
+
+    def _acc_clu_p(space, nc, fold_i, val):
+        clustering_pooled_fold.setdefault(space, {}).setdefault(
+            nc, {})[fold_i] = val
 
     def _acc_ret(space, cond, fold_i, val):
         retrieval_fold.setdefault(
@@ -398,8 +548,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # own per-fold pick alongside them.
     pool_base_rep = {}
     # pca_control_dims[space][fold_i] = how many components that control was
-    # fitted with. One control per distinct hybrid width, plus the fixed one.
+    # fitted with. One control per hybrid slot, plus the fixed-budget one.
     pca_control_dims = {}
+    # pca_control_of[control] = the hybrid slot it controls for, and
+    # pca_control_slot_width[control][fold_i] = that slot's feature count on
+    # that fold. A reader checks the match by comparing the two.
+    pca_control_of = {}
+    pca_control_slot_width = {}
     # clusters_dropped[space][n_clusters][fold_i] = clusters that received fewer
     # than 2 held-out rows and so contributed no coherence term.
     clusters_dropped = {}
@@ -424,23 +579,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    fold {fold_i}: PCA input failed: "
                   f"{type(e).__name__}: {e}")
 
-        def _add_pca_control(space_name, n_features):
-            """One PCA control of `n_features` features, fitted on TRAIN only."""
-            if Xc_tr is None or space_name in fold_spaces:
-                return
+        # PCA spaces already fitted on this fold, keyed by how many components
+        # they hold, so two hybrid slots that came out the same width share one
+        # fit instead of paying for two.
+        _pca_by_dim = {}
+
+        def _pca_space(n_features):
+            """A TRAIN-fitted PCA of `n_features` components; (pair, dim)."""
+            if Xc_tr is None:
+                return None, None
             pca_dim = min(int(n_features), Xc_tr.shape[1], len(tr) - 1)
             if pca_dim < 2:
-                return
+                return None, None
+            if pca_dim in _pca_by_dim:
+                return _pca_by_dim[pca_dim], pca_dim
             try:
                 sc = StandardScaler()
                 pca = PCA(n_components=pca_dim, random_state=42)
                 Xp_tr = pca.fit_transform(sc.fit_transform(Xc_tr))
                 Xp_va = pca.transform(sc.transform(Xc_va))
-                fold_spaces[space_name] = (Xp_tr, Xp_va)
-                pca_control_dims.setdefault(space_name, {})[fold_i] = pca_dim
             except Exception as e:
-                print(f"    fold {fold_i}: PCA failed ({space_name}, "
-                      f"{pca_dim} features): {type(e).__name__}: {e}")
+                print(f"    fold {fold_i}: PCA failed ({pca_dim} components): "
+                      f"{type(e).__name__}: {e}")
+                return None, None
+            _pca_by_dim[pca_dim] = (Xp_tr, Xp_va)
+            return _pca_by_dim[pca_dim], pca_dim
+
+        def _add_pca_control(space_name, n_features):
+            """One PCA control of `n_features` features, fitted on TRAIN only."""
+            if space_name in fold_spaces:
+                return
+            pair, pca_dim = _pca_space(n_features)
+            if pair is None:
+                return
+            fold_spaces[space_name] = pair
+            pca_control_dims.setdefault(space_name, {})[fold_i] = pca_dim
 
         # The fixed-width control, kept as it was.
         _add_pca_control('pca_matched', budget)
@@ -511,17 +684,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     print(f"    fold {fold_i}: hybrid build failed "
                           f"({sname}): {type(e).__name__}: {str(e)[:80]}")
 
-        # ── A PCA control of every hybrid slot's own width ────────────────
+        # ── A PCA control PER HYBRID SLOT, at that slot's own width ────────
         # The fixed 100-feature control above matches a hybrid slot only by
         # coincidence: each slot's width is whatever its recipe chose, and the
-        # pool's recipes are searched across [10, 25, 50, 100, 250, 500]. So a
-        # control is fitted at each distinct width this fold's hybrids came out
-        # at, named by that width. The 100-feature control stays.
+        # pool's recipes are searched across [10, 25, 50, 100, 250, 500].
+        #
+        # 2026-09-20: the controls used to be named by WIDTH — 'pca_matched_25'.
+        # A width that only occurred on one fold produced a control scored on
+        # one fold while the hybrid it controlled for was scored on five, and
+        # the two means were then read side by side. The control is now named
+        # by the SLOT it controls for and refitted per fold at that fold's slot
+        # width, so control and slot always rest on the same folds. Slots that
+        # share a width on a fold share one PCA fit.
         for _sname in list(fold_spaces):
             if _sname not in _slot_blueprints:
                 continue
             _w = int(np.asarray(fold_spaces[_sname][0]).shape[1])
-            _add_pca_control(f'pca_matched_{_w}', _w)
+            _cname = f'pca_for_{_sname}'
+            _pair, _dim = _pca_space(_w)
+            if _pair is None:
+                continue
+            fold_spaces[_cname] = _pair
+            pca_control_dims.setdefault(_cname, {})[fold_i] = _dim
+            pca_control_slot_width.setdefault(_cname, {})[fold_i] = _w
+            pca_control_of[_cname] = _sname
 
         # Score every space on this held-out fold.
         for sname, (Xtr, Xva) in fold_spaces.items():
@@ -534,11 +720,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
 
             for nc in n_clusters_list:
-                _coh, _dropped = _heldout_coherence(
-                    Xtr_s, y_tr, Xva_s, y_va, nc, is_clf)
+                _coh, _dropped, _pooled = _heldout_coherence(
+                    Xtr_s, y_tr, Xva_s, y_va, nc, is_clf, method='kmeans')
                 _acc_clu(sname, nc, fold_i, _coh)
+                _acc_clu_p(sname, nc, fold_i, _pooled)
                 clusters_dropped.setdefault(sname, {}).setdefault(
                     nc, {})[fold_i] = _dropped
+                if matched_on:
+                    try:
+                        _cm, _dm, _ = _heldout_coherence(
+                            Xtr_s, y_tr, Xva_s, y_va, nc, is_clf,
+                            method=matched_method)
+                    except Exception as e:
+                        print(f"    fold {fold_i}: {matched_method} failed "
+                              f"({sname}, nc={nc}): {type(e).__name__}: {e}")
+                        _cm = float('nan')
+                    _acc_clu_m(sname, nc, fold_i, _cm)
 
             _acc_ret(sname, 'unweighted', fold_i,
                      _heldout_retrieval(Xtr_s, y_tr, Xva_s, y_va,
@@ -575,6 +772,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     clustering_fold = {s: {nc: _fold_series(byf, len(folds))
                            for nc, byf in ncmap.items()}
                        for s, ncmap in clustering_fold.items()}
+    clustering_matched_fold = {s: {nc: _fold_series(byf, len(folds))
+                                   for nc, byf in ncmap.items()}
+                               for s, ncmap in clustering_matched_fold.items()}
+    clustering_pooled_fold = {s: {nc: _fold_series(byf, len(folds))
+                                  for nc, byf in ncmap.items()}
+                              for s, ncmap in clustering_pooled_fold.items()}
     retrieval_fold = {s: {c: _fold_series(byf, len(folds))
                           for c, byf in conds.items()}
                       for s, conds in retrieval_fold.items()}
@@ -584,11 +787,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for sname, ncmap in clustering_fold.items():
         entry = {}
         for nc, fs in ncmap.items():
+            _drop = clusters_dropped.get(sname, {}).get(nc, {})
             entry[nc] = {
                 'label_coherence': _nanmean(fs),
                 'n_folds_used': int(sum(1 for s in fs
                                         if s is not None and np.isfinite(s))),
+                # Each cluster weighted by its held-out row count instead of
+                # every cluster counting once.
+                'label_coherence_pooled': _nanmean(
+                    clustering_pooled_fold.get(sname, {}).get(nc, [])),
+                # Clusters that carried >=2 held-out rows and so contributed a
+                # term, averaged over the folds that scored. Two spaces at one
+                # cluster count can be scored on different numbers of terms.
+                'mean_clusters_scored': (
+                    float(nc - np.mean(list(_drop.values()))) if _drop
+                    else float(nc)),
             }
+            if matched_on:
+                entry[nc]['label_coherence_matched'] = _nanmean(
+                    clustering_matched_fold.get(sname, {}).get(nc, []))
         clustering_results[sname] = entry
         best_nc = max(entry, key=lambda k: (entry[k]['label_coherence']
                                             if np.isfinite(entry[k]['label_coherence'])
@@ -618,12 +835,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_folds': len(folds),
             'spaces': sorted(set(list(clustering_results.keys())
                                  + list(retrieval_results.keys()))),
+            # The coefficient the retrieval half read, what the clustering half
+            # minimised, and the clusterer that would honour the coefficient.
+            'distance_coefficient': coefficient,
+            'clustering_distance': 'squared_euclidean',
+            'matched_clusterer': matched_method,
+            'matched_clustering_scored': matched_on,
+            'n_init': _N_INIT,
         },
         # How many components each PCA control was fitted with, per fold. One
         # control per distinct hybrid width plus the fixed-width one, so every
         # hybrid slot has a control of its own width to be read against.
         'pca_control_dims': {s: {int(f): int(d) for f, d in sorted(byf.items())}
                              for s, byf in sorted(pca_control_dims.items())},
+        # Which hybrid slot each control controls for, and that slot's feature
+        # count on each fold. The control is matched when its component count
+        # equals the slot's feature count on the same fold.
+        'pca_control_of': dict(sorted(pca_control_of.items())),
+        'pca_control_slot_width': {
+            s: {int(f): int(w) for f, w in sorted(byf.items())}
+            for s, byf in sorted(pca_control_slot_width.items())},
         # Clusters that received fewer than 2 held-out rows, per space, per
         # cluster count, per fold. Those contributed no coherence term.
         'clusters_dropped': {
@@ -752,6 +983,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for nc, fs in ncmap.items():
             if fs and _has_finite(fs):
                 clu_baselines[f'{sname}|nc{nc}'] = [float(s) for s in fs]
+    # The PCA controls, as a THIRD arm rather than a baseline. They are not
+    # single representations, so putting them in clu_baselines would change what
+    # 'best single representation' means; kept separately, a reader can re-pick
+    # the hybrid against its own-width control fold by fold. Before 2026-09-20
+    # these per-fold scores were not written out at all and the control could
+    # only be read as a whole-run mean.
+    clu_controls = {}
+    for sname, ncmap in clustering_fold.items():
+        if not sname.startswith('pca_'):
+            continue
+        for nc, fs in ncmap.items():
+            if fs and _has_finite(fs):
+                clu_controls[f'{sname}|nc{nc}'] = [float(s) for s in fs]
 
     ret_candidates = []
     for sname in hybrid_spaces:
@@ -767,12 +1011,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'name': f'{sname}|weighted_k{k_retrieval}',
                 'fold_scores': [float(s) for s in h_ret_fold['weighted']]})
     ret_baselines = {}
+    ret_controls = {}
     for sname, conds in retrieval_fold.items():
-        if not sname.startswith('rep_'):
-            continue
         if _has_finite(conds['unweighted']):
-            ret_baselines[f'{sname}|k{k_retrieval}'] = [
-                float(s) for s in conds['unweighted']]
+            if sname.startswith('rep_'):
+                ret_baselines[f'{sname}|k{k_retrieval}'] = [
+                    float(s) for s in conds['unweighted']]
+            elif sname.startswith('pca_'):
+                ret_controls[f'{sname}|k{k_retrieval}'] = [
+                    float(s) for s in conds['unweighted']]
 
     # Coherence is higher-better; retrieval COST is lower-better (both regression
     # |dy| and classification 1 - precision@k).
@@ -797,6 +1044,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 if clu_candidates else {}),
         'baselines_by_model': ({'kmeans': clu_baselines}
                                if clu_baselines else {}),
+        'controls_by_model': ({'kmeans': clu_controls}
+                              if clu_controls else {}),
+        # What the k-means in this block minimised, and what the retrieval block
+        # below measured. When the two names differ the file's two halves are
+        # not answering the same question about distance.
+        'clusterer': 'kmeans',
+        'clusterer_distance': 'squared_euclidean',
+        'distance_coefficient': coefficient,
     }
     results['fold_reselection_retrieval'] = {
         'lower_is_better': True,
@@ -808,13 +1063,67 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 if ret_candidates else {}),
         'baselines_by_model': ({'knn': ret_baselines}
                                if ret_baselines else {}),
+        'controls_by_model': ({'knn': ret_controls}
+                              if ret_controls else {}),
+        'distance_coefficient': coefficient,
     }
+
+    # ── The same clustering block under the coefficient-matched clusterer ──
+    # Identical shape, identical cells, one difference: the clusterer honours
+    # the process-wide distance coefficient instead of minimising squared
+    # Euclidean distance. Reading the two deltas side by side says what the
+    # mismatch is worth. Absent when the arm is off, and absent with a stated
+    # reason when no clusterer of that shape exists for the coefficient.
+    if not matched_on:
+        results['clustering_matched_note'] = (
+            f"coefficient={coefficient}; "
+            + ('the clustering half already matches it (k-means is euclidean)'
+               if matched_method == 'kmeans' else
+               'no clusterer minimising summed distance under this coefficient '
+               'is available, so the clustering half cannot honour it'
+               if matched_method is None else
+               f'matched arm off; set KIRBY_S13_MATCHED_CLUSTERING=1 to score '
+               f'every space with {matched_method} as well'))
+    else:
+        m_cands, m_bases, m_ctrls = [], {}, {}
+        for sname, ncmap in clustering_matched_fold.items():
+            for nc, fs in ncmap.items():
+                if not (fs and _has_finite(fs)):
+                    continue
+                cell = f'{sname}|nc{nc}'
+                vals = [float(s) for s in fs]
+                if sname.startswith('hybrid_'):
+                    m_cands.append({'name': cell, 'fold_scores': vals})
+                elif sname.startswith('rep_'):
+                    m_bases[cell] = vals
+                elif sname.startswith('pca_'):
+                    m_ctrls[cell] = vals
+        results['fold_reselection_clustering_matched'] = {
+            'lower_is_better': False,
+            'recipe_selection': 'other_folds_of_pool_search',
+            'exclude_folds': _exclude,
+            'fold0_pruned': pool_fold0_pruned,
+            'pool_subset': POOL_SUBSET,
+            'candidates_by_model': ({matched_method: m_cands}
+                                    if m_cands else {}),
+            'baselines_by_model': ({matched_method: m_bases}
+                                   if m_bases else {}),
+            'controls_by_model': ({matched_method: m_ctrls}
+                                  if m_ctrls else {}),
+            'clusterer': matched_method,
+            'clusterer_distance': coefficient,
+            'distance_coefficient': coefficient,
+            'n_init': _N_INIT,
+        }
 
     # Reuse the shared pure-arithmetic helper (no ML) to report the honest
     # hybrid-vs-best-single-rep delta inline for each axis.
-    for axis, block, better in (
-            ('clustering', results['fold_reselection_clustering'], 'higher'),
-            ('retrieval', results['fold_reselection_retrieval'], 'lower')):
+    _axes = [('clustering', results['fold_reselection_clustering'], 'higher'),
+             ('retrieval', results['fold_reselection_retrieval'], 'lower')]
+    if 'fold_reselection_clustering_matched' in results:
+        _axes.append(('clustering_matched',
+                      results['fold_reselection_clustering_matched'], 'higher'))
+    for axis, block, better in _axes:
         try:
             hr = fold_reselection(block['candidates_by_model'],
                                 block['baselines_by_model'],
@@ -825,17 +1134,95 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 # as a whole-dataset pick.
                                 recipe_selection=block['recipe_selection'])
             results[f'fold_reselection_{axis}_result'] = hr
-            model_key = 'kmeans' if axis == 'clustering' else 'knn'
-            m = hr.get(model_key)
+            model_key = next(iter(block['candidates_by_model']), None)
+            m = hr.get(model_key) if model_key else None
             if m is not None:
                 flag = ' [single-fold, NOT honest]' if m.get('single_fold') else ''
                 print(f"  Honest LOFO re-score ({axis}, {better}-better){flag}: "
                       f"hybrid={m['hybrid_reselected']:.4f}, "
                       f"best_single={m['best_single_reselected']:.4f}, "
-                      f"delta={m['delta']:+.4f} (positive=hybrid better)")
+                      f"delta={m['delta']:+.4f} (positive=hybrid better) "
+                      f"on {m.get('n_paired_folds')} paired folds")
         except Exception as e:
             print(f"  [warn] fold_reselection ({axis}) failed: "
                   f"{type(e).__name__}: {e}")
+
+        # The same re-pick against the PCA control of the hybrid's own width,
+        # in place of the single representations. Positive still means the
+        # hybrid won.
+        ctrls = block.get('controls_by_model') or {}
+        if ctrls and block['candidates_by_model']:
+            try:
+                hrc = fold_reselection(block['candidates_by_model'], ctrls,
+                                       block['lower_is_better'],
+                                       exclude_folds=hr_exclude_folds(block),
+                                       recipe_selection=block['recipe_selection'])
+                results[f'fold_reselection_{axis}_vs_pca_result'] = hrc
+                mk = next(iter(ctrls))
+                mc = hrc.get(mk)
+                if mc is not None:
+                    print(f"  Honest LOFO re-score ({axis}) against the PCA "
+                          f"control: hybrid={mc['hybrid_reselected']:.4f}, "
+                          f"best_pca={mc['best_single_reselected']:.4f}, "
+                          f"delta={mc['delta']:+.4f} on "
+                          f"{mc.get('n_paired_folds')} paired folds")
+            except Exception as e:
+                print(f"  [warn] fold_reselection vs PCA ({axis}) failed: "
+                      f"{type(e).__name__}: {e}")
+
+    # ── Per-cluster-count re-picks ─────────────────────────────────────────
+    # The block above lets each arm choose its own cluster count per fold, so
+    # the hybrid's winning cell and the single representation's can sit at two
+    # different counts and the delta subtracts coherence at one granularity from
+    # coherence at another. These are the same re-pick with the count held
+    # fixed, one entry per count, so the two arms are read at the same
+    # granularity.
+    per_count = {}
+    for axis, block in (('clustering', results['fold_reselection_clustering']),
+                        ('clustering_matched',
+                         results.get('fold_reselection_clustering_matched'))):
+        if not block or not block['candidates_by_model']:
+            continue
+        mk = next(iter(block['candidates_by_model']))
+        out = {}
+        for nc in n_clusters_list:
+            suffix = f'|nc{nc}'
+            c = [x for x in block['candidates_by_model'][mk]
+                 if x['name'].endswith(suffix)]
+            b = {k: v for k, v in
+                 (block['baselines_by_model'].get(mk) or {}).items()
+                 if k.endswith(suffix)}
+            if not c or not b:
+                continue
+            try:
+                hr = fold_reselection({mk: c}, {mk: b}, False,
+                                      exclude_folds=hr_exclude_folds(block),
+                                      recipe_selection=block['recipe_selection'])
+                r = hr.get(mk)
+                if r is not None:
+                    out[int(nc)] = {
+                        'delta': r['delta'],
+                        'hybrid_reselected': r['hybrid_reselected'],
+                        'best_single_reselected': r['best_single_reselected'],
+                        'n_paired_folds': r.get('n_paired_folds'),
+                        'hybrid_winners_per_fold': r.get('hybrid_winners_per_fold'),
+                        'baseline_winners_per_fold': r.get('baseline_winners_per_fold'),
+                    }
+            except Exception as e:
+                print(f"  [warn] per-count re-pick ({axis}, nc={nc}) failed: "
+                      f"{type(e).__name__}: {e}")
+        if out:
+            per_count[axis] = out
+            print(f"  Held-out delta by cluster count ({axis}, coherence is "
+                  f"unitless and higher-better; positive=hybrid won):")
+            for nc in sorted(out):
+                e = out[nc]
+                print(f"    {nc:>3} clusters: delta={e['delta']:+.4f} "
+                      f"(hybrid {e['hybrid_reselected']:.4f}, best single "
+                      f"representation {e['best_single_reselected']:.4f}, "
+                      f"{e['n_paired_folds']} paired folds)")
+    if per_count:
+        results['clustering_delta_by_cluster_count'] = per_count
 
     return results
 
