@@ -991,7 +991,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sim_threshold, activity_threshold,
         smiles=smiles,
         is_clf=is_clf,
-        dataset_name=dataset_name)
+        dataset_name=dataset_name,
+        # 2026-09-20: `noise_helpers.run_all` puts the caller's model list in
+        # config['models'] and passes no `models` kwarg. Without this the
+        # configured list was dropped and every run scored all five models.
+        models_to_run=(kwargs.get('models') or config.get('models') or None))
 
     # Top-3 base representations now come from the per-fold searches (mean of
     # each representation's rf baseline over the folds that scored it), not

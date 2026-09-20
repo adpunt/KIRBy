@@ -416,8 +416,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
+    # 2026-09-20: `noise_helpers.run_all` puts the caller's model list in
+    # config['models'] and passes no `models` kwarg. Reading only the module
+    # default meant the configured list was silently dropped and every run
+    # scored the full five-model roster. Config first, kwarg as override.
+    downstream_models = list(
+        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS_NOISE)
     model_factories = get_model_factories(
-        DOWNSTREAM_MODELS_NOISE, task_type=task_type,
+        downstream_models, task_type=task_type,
         n_samples=len(labels))
     print(f"  Models: {list(model_factories.keys())}")
     # SVM internally caps training data at _max_samples=10000. On big

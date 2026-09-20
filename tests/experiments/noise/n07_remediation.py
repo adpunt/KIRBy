@@ -523,8 +523,10 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         if target is None:
             target = oof_predict(X_tr_s, y_tr, groups,
                                  n_splits=min(REPAIR_OOF_SPLITS, len(y_tr)))
-        y_smoothed = smooth_by_scores(y_tr, noise_scores, target,
-                                      alpha=0.5, method='proportional')
+        y_smoothed = smooth_by_scores(
+            y_tr, noise_scores, target,
+            alpha=0.5 if strength is None else float(strength),
+            method='proportional')
         return {'X': X_tr_s, 'y': y_smoothed, 'sample_weight': None,
                 'keep': None, 'label_column': y_smoothed}
 
@@ -539,8 +541,10 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                                            groups=groups)
             est.estimate(X_tr_s, y_tr)
             target = np.asarray(est.predictions_, dtype=float)
-        y_smoothed = smooth_by_scores(y_tr, noise_scores, target,
-                                      alpha=0.5, method='proportional')
+        y_smoothed = smooth_by_scores(
+            y_tr, noise_scores, target,
+            alpha=0.5 if strength is None else float(strength),
+            method='proportional')
         return {'X': X_tr_s, 'y': y_smoothed, 'sample_weight': None,
                 'keep': None, 'label_column': y_smoothed}
 
@@ -851,8 +855,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # (e.g. label_smooth tends to help a neural net more than tree ensembles).
     # Each model gets a matched-evaluator blueprint via the cached pool helper
     # below.
+    # 2026-09-20: `noise_helpers.run_all` puts the caller's model list in
+    # config['models'] and passes no `models` kwarg. Reading only the module
+    # default meant the configured list was silently dropped and every run
+    # scored the full five-model roster. Config first, kwarg as override.
+    downstream_models = list(
+        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS_NOISE)
     model_factories = get_model_factories(
-        DOWNSTREAM_MODELS_NOISE, task_type=task_type,
+        downstream_models, task_type=task_type,
         n_samples=len(data['labels']))
 
     reps = data['reps']
