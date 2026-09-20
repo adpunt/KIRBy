@@ -61,12 +61,14 @@ the repository uses; its docstring says sum-to-1 "divides every distance by the
 feature count" and that a kernel width does not survive it. So on a 2048-feature
 representation the GP's RBF, whose length scale starts at 1.0 in the units of
 the features, saw every pairwise distance divided by 2048 and fitted a kernel
-matrix that is constant to within rounding. It predicted the training mean. On
-caco2 six of the seven representations came out at 0.4371 rmse, identical to
-four decimals, against a label standard deviation of 0.4449 log10 units; on
-adme_mdr1 six came out at 0.6881 against 0.6885; on herg_ki the two
-2048-feature ones came out at 0.9160 against 0.9147 pKi. pdv, at 200 features,
-is the one that partly escaped on each dataset.
+matrix that is constant to within rounding. It predicted the training mean, and the arithmetic
+says so exactly. A predictor that returns the training fold's mean label and
+nothing else scores 0.4371 rmse on caco2 over these five folds, 0.6881 on
+adme_mdr1 and 0.9160 on herg_ki. The weighted GP reported 0.4371 on six of
+caco2's seven representations, 0.6881 on six of adme_mdr1's and 0.9160 on
+herg_ki's two 2048-feature ones. Those are the same numbers to four decimals,
+not near ones. pdv, at 200 features, is the one that partly escaped on each
+dataset.
 
 Two consequences. The printed per-task delta is RAW -- the print statements run
 before _orient_deltas -- so on these three rmse datasets a POSITIVE printed
