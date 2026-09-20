@@ -1,0 +1,93 @@
+{
+  "_what_this_is": "One entry per closed optimisation loop on a noise experiment. A loop is measured, changed ONE thing, re-measured. An entry without both a before and an after number is not a loop and does not belong here. Read by coverage.py.",
+  "_fields": {
+    "experiment": "nNN",
+    "date": "YYYY-MM-DD",
+    "dataset": "the dataset it was measured on, and how many molecules",
+    "changed": "the one thing that changed, in words",
+    "before": "the number before, with its unit named",
+    "after": "the number after, with its unit named",
+    "kept": "true if the change stayed in the file, false if it was reverted",
+    "note": "optional: what the number does not settle"
+  },
+  "loops": [
+    {
+      "experiment": "n21",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+      "changed": "the row weight ratio the repair applies, from 1.11-to-1 to 4-to-1",
+      "before": "a positive share of the clean-to-corrupted gap recovered in 3 of the 15 distances",
+      "after": "a positive share recovered in 13 of the 15 distances",
+      "kept": true,
+      "note": "4-to-1 against 10-to-1 split the 60 paired readings 30 to 30, so what this bought was leaving the weakest setting behind, not the choice between those two."
+    },
+    {
+      "experiment": "n21",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+      "changed": "the representation the plain distance is computed in, from the esm2_cdr fallback to saprot",
+      "before": "best of the 15 distances, 0.2455 detection average precision",
+      "after": "best of the 15 distances, 0.2266 detection average precision",
+      "kept": false,
+      "note": "The plain control improved from 0.2101 to 0.2221 and the forest proximity fell from 0.2455 to 0.1885, so the best distance in the run dropped. Reverted; the choice of base representation is the owner's, and changing it means changing pick_noise_base_rep for the whole suite."
+    },
+    {
+      "experiment": "n21",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+      "changed": "the importance exponent matched to the distance metric rather than fixed at 0.5",
+      "before": "0.2098 detection average precision, lightgbm_gain at exponent 0.5 under manhattan",
+      "after": "0.2388 detection average precision, lightgbm_gain at exponent 1.0 under manhattan",
+      "kept": true,
+      "note": "The matched exponent won 3 of the 4 scorer-and-metric pairs. Four paired readings behind each, so it is a direction. n12 still applies 0.5 under manhattan, which is the mismatched pairing."
+    },
+    {
+      "experiment": "n21",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+      "changed": "built the similarity-objective hybrid space, which the file had never produced a number for",
+      "before": "no number: the experiment built four distances and its header said four",
+      "after": "0.2182 detection average precision under manhattan, against 0.2045 for the prediction-objective hybrid and 0.2101 for the plain representation",
+      "kept": true,
+      "note": "The two hybrid spaces share no identical reading, so they are genuinely different spaces. Four paired readings behind each comparison."
+    },
+    {
+      "experiment": "n18",
+      "date": "2026-09-20",
+      "dataset": "herg_ki, rmse, lower is better",
+      "changed": "the flag rates swept, from 0.05/0.10/0.20 to 0.01/0.05/0.20, and the detectors from neighbor_residual and activity_cliff_aware to neighbor_residual and cross_val",
+      "before": "downweight best in 5 of 5 folds at 4 of 4 settings, +0.0047 rmse",
+      "after": "downweight best in 5 of 5 folds at 9 of 12 settings, +0.0069 rmse",
+      "kept": true,
+      "note": "remove went from 0 of 12 settings positive to 2 of 12, both of those at the new 0.01 flag rate."
+    },
+    {
+      "experiment": "n18",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, spearman, higher is better",
+      "changed": "swept the correction strength instead of using one value",
+      "before": "no strength sweep",
+      "after": "downweight at a 4-to-1 row weight ratio, best in 5 of 5 folds, +0.0447 spearman against a 0.5985 baseline",
+      "kept": true
+    },
+    {
+      "experiment": "n18",
+      "date": "2026-09-20",
+      "dataset": "caco2",
+      "changed": "added the hybrid and similarity-objective hybrid spaces beside the base representation",
+      "before": "nothing won in the hybrid space",
+      "after": "downweight best in 5 of 5 folds at 6 of 12 settings, +0.0041",
+      "kept": true,
+      "note": "cross_val supplied every best setting on this dataset."
+    },
+    {
+      "experiment": "n02",
+      "date": "2026-09-20",
+      "dataset": "herg_ki (rmse) and flab_thermo_tresanco (spearman)",
+      "changed": "the reliability score for regression, from the previous scoring to the neighbour-mean deviation passed through weights_from_scores at a 4-to-1 ratio",
+      "before": "within 0.001 on both datasets, in their own metrics",
+      "after": "-0.0098 rmse on herg_ki; +0.0192 and +0.0367 spearman on flab_thermo_tresanco",
+      "kept": true
+    }
+  ]
+}

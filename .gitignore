@@ -57,6 +57,8 @@ coverage.xml
 *.json
 !package.json      # Allow package.json if needed
 !src/kirby/representations/data/*.json
+# The noise suite's loop ledger is tracked state, not a result file.
+!tests/experiments/noise/coverage_loops.json
 *.pkl
 *.pth
 *.mmap
