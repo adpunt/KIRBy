@@ -569,6 +569,26 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # as predictions_; nothing in this file read it before today.
         target = (targets or {}).get('gp')
         if target is None:
+            # ⛔ THE ROW CAP LIVES HERE TOO, BECAUSE THE FIT IS HERE.
+            #
+            # GP_SMOOTH_MAX_ROWS was written into `correction_targets` above
+            # and nowhere else, and n07 calls `correction_targets` ZERO times
+            # -- grep the file. n18 calls it; n07 reaches gp_smooth through
+            # this branch, which fitted the Gaussian process with no row check
+            # at all. So the cap that exists because gp_smooth did not finish a
+            # fold on herg_ki's 1,130-molecule training blocks was not read on
+            # the path herg_ki actually takes.
+            #
+            # Refusing rather than subsampling, for the reason the cap's own
+            # note gives: a target fitted on a subsample is a different
+            # quantity from one fitted on the fold, and a cleanup silently
+            # aiming somewhere else is worse than one that says it did not run.
+            if len(y_tr) > GP_SMOOTH_MAX_ROWS:
+                print(f"      gp_smooth refused: {len(y_tr)} training "
+                      f"molecules is over GP_SMOOTH_MAX_ROWS="
+                      f"{GP_SMOOTH_MAX_ROWS}; a Gaussian process is cubic in "
+                      f"the rows and this one has no cap.")
+                return None
             est = GaussianProcessEstimator(n_folds=REPAIR_OOF_SPLITS,
                                            groups=groups)
             est.estimate(X_tr_s, y_tr)
