@@ -954,6 +954,32 @@ def outer_rep_builders_from_factories(rep_factories, n_samples, names=None):
     return {n: _make(rep_factories[n]) for n in wanted if n in rep_factories}
 
 
+def _apply_dataset_search_speed(kwargs, dataset_name):
+    """Set speed='fast' on a find_best_hybrid call for the twelve fast datasets.
+
+    ⛔ THE REASON THIS EXISTS. Until 2026-09-21 the speed lived in
+    run_precompute_dataset.sh alone. The precompute searched twelve datasets at
+    fast -- 816 configurations per condition -- and every experiment asked the
+    engine for its default, which is full, at 8,160. So the precomputed rows
+    could never satisfy an experiment: KIRBY_NO_COLD_SEARCH counts what is
+    stored against what THIS call would evaluate and refuses below half, and a
+    tenth is below half. Every experiment on all twelve refused, and more fast
+    links could not fix it. The list is now dataset_policy.FAST_SPEED_DATASETS
+    and both sides read it.
+
+    An explicit speed= from the caller WINS. An experiment that deliberately
+    asks for the full grid on one of these -- a one-off comparison, a smoke
+    run -- still gets it, and is then asking for a different search and will not
+    be served the precomputed one.
+    """
+    if kwargs.get('speed') is not None:
+        return kwargs
+    speed = dataset_policy.dataset_search_speed(dataset_name)
+    if speed != 'full':
+        kwargs['speed'] = speed
+    return kwargs
+
+
 def run_nested_cv(reps, labels, groups, config, *,
                   dataset_name,
                   augmentations=None,
@@ -1140,6 +1166,7 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                     _fbh_kwargs['label_noise'] = label_noise
                 if objective is not None:
                     _fbh_kwargs['objective'] = objective
+                _apply_dataset_search_speed(_fbh_kwargs, dataset_name)
                 search = find_best_hybrid(**_fbh_kwargs)
                 results[aug_cond][fold_i] = search
                 if verbose:
@@ -1294,6 +1321,7 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
                 _kw['label_noise'] = label_noise
             if objective is not None:
                 _kw['objective'] = objective
+            _apply_dataset_search_speed(_kw, dataset_name)
             results[aug_cond] = find_best_hybrid(**_kw)
         except _StaleResultDB:
             # Same reason as the other three. See result_cache.StaleResultDB.
@@ -3815,6 +3843,8 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             ds_reps = DATASET_REPS.get(dataset_name)
             if ds_reps is not None and ds_reps.get('general'):
                 rep_names = ds_reps['general']
+                from experiments._local_grid import cut_pool
+                rep_names = cut_pool(dataset_name, rep_names)
                 print(f"  [auto] {dataset_name}: filtering to "
                       f"{len(rep_names)} general reps from DATASET_REPS")
         except ImportError:
@@ -4550,6 +4580,7 @@ def get_hybrid_features_and_weights(
         # cache files when augmentations are absent.
         kwargs['augmentation_strategy'] = 'none'
 
+    _apply_dataset_search_speed(kwargs, dataset_name)
     search = find_best_hybrid(**kwargs)
     # Use RF as default downstream model for weight extraction
     fitted = (search.fitted_results or {}).get('rf')
@@ -5290,6 +5321,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 _fbh_kwargs['label_noise'] = label_noise
             if objective is not None:
                 _fbh_kwargs['objective'] = objective
+            _apply_dataset_search_speed(_fbh_kwargs, dataset_name)
             search = find_best_hybrid(**_fbh_kwargs)
             results[aug_cond] = search
             elapsed = time.time() - t0
@@ -5592,6 +5624,7 @@ def get_precomputed_search(reps, labels, groups,
         call_kwargs['objective'] = objective
     call_kwargs.update(kwargs)
 
+    _apply_dataset_search_speed(call_kwargs, dataset_name)
     return find_best_hybrid(**call_kwargs)
 
 

@@ -626,6 +626,71 @@ SIMILARITY_OBJECTIVE_SKIP_DATASETS = frozenset(MULTICLASS_DATASETS) | frozenset(
     SIMILARITY_UNDEFINED_OTHER)
 
 
+# =============================================================================
+# THE DATASETS SEARCHED AT speed='fast'
+# =============================================================================
+#
+# WHAT speed='fast' IS. It shortens three of the axes find_best_hybrid sweeps:
+# 3 allocation methods instead of 5, one importance method instead of 3, two
+# representation counts instead of 4. Per condition that is 816 configurations
+# against 8,160 at full speed. The downstream model list is NOT shortened --
+# run_precompute_dataset.sh names all five explicitly, changed 2026-09-18.
+#
+# WHY THESE TWELVE. Each is past what four 12-hour links can reach at full
+# speed, or past 10,000 rows where no full grid is sensible. The estimates the
+# class was set from: qm9 ~103 h, flab_expression_koenig ~64 h, logd ~62 h,
+# nt_promoter_tata ~39 h; nt_H3K27me3 33,000 rows, nt_H3K9me3 28,288,
+# gb_human_enhancers_cohn 27,791, nt_H3K9ac 24,278, nt_H3K4me3 18,244,
+# herg 7,772, tz_her2_binary and tz_her2_multiclass 5,000 each.
+#
+# ⛔ WHY IT LIVES HERE AND NOT IN THE SUBMIT SCRIPT. It was in
+# run_precompute_dataset.sh alone until 2026-09-21, which meant the precompute
+# searched these twelve at fast while every experiment asked the engine for the
+# full grid -- the engine's own default. Two consequences, and the second is
+# the one that cost the time:
+#   1. an experiment could not be served a precomputed search, because speed is
+#      in the search key;
+#   2. KIRBY_NO_COLD_SEARCH counts stored configurations against the ones THIS
+#      call would evaluate and refuses below half. A fast precompute supplies
+#      about a tenth of a full-speed call, so every experiment on all twelve
+#      refused, however many links were added.
+# Measured 2026-09-20: six of them sat at exactly 432 stored configurations on
+# general/predictive/none, 432 being the fast grid as it was before the model
+# fix of 2026-09-18.
+#
+# So both sides read this one name. `_shared._dataset_search_speed` applies it
+# to every find_best_hybrid call an experiment makes, and
+# run_precompute_dataset.sh reads it for its LARGE class.
+#
+# ⛔ REMOVING A NAME FROM HERE MAKES THAT DATASET SEARCH THE FULL GRID in the
+# precompute AND in every experiment. Adding one does the reverse. Neither is a
+# cache question -- caches are wiped and everything re-runs -- it changes how
+# many configurations get scored, so it is a compute decision, not a tidy-up.
+FAST_SPEED_DATASETS = frozenset({
+    'flab_expression_koenig',
+    'gb_human_enhancers_cohn',
+    'herg',
+    'logd',
+    'nt_H3K27me3',
+    'nt_H3K4me3',
+    'nt_H3K9ac',
+    'nt_H3K9me3',
+    'nt_promoter_tata',
+    'qm9',
+    'tz_her2_binary',
+    'tz_her2_multiclass',
+})
+
+
+def dataset_search_speed(dataset_name: Optional[str]) -> str:
+    """'fast' for the twelve above, 'full' for everything else.
+
+    An unknown or missing name is 'full', which is the engine's own default --
+    a dataset nobody has classified is never silently given a shorter search.
+    """
+    return 'fast' if dataset_name in FAST_SPEED_DATASETS else 'full'
+
+
 def similarity_objective_undefined(dataset_name, labels=None,
                                    task_type=None) -> Optional[str]:
     """Why objective='similarity' cannot be scored here, as a sentence, or None.

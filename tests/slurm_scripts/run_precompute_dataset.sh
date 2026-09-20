@@ -194,6 +194,46 @@ export KIRBY_SKIP_INSTALLS=1
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 
+# ── THE FAST LIST IS OWNED BY dataset_policy.py, NOT BY THIS FILE ───────
+# LARGE_DATASETS above is a copy kept so the class can be resolved before
+# setup.sh has been sourced. The list the EXPERIMENTS read is
+# dataset_policy.FAST_SPEED_DATASETS, and if the two ever disagree the
+# precompute searches one grid while every experiment asks for another --
+# which is exactly the state this repository was in until 2026-09-21, and it
+# made every experiment on all twelve datasets refuse to start.
+#
+# So they are compared here, once setup.sh has given us the interpreter, and a
+# disagreement stops the job. It does not cost a fit and it cannot be silent.
+# KIRBY_LARGE_DATASETS deliberately skips the check: an override is a
+# one-off by hand, and the experiments will not know about it.
+if [ -z "${KIRBY_LARGE_DATASETS:-}" ]; then
+    python - "$DS" "$CLASS" <<'EOF'
+import sys
+sys.path.insert(0, 'src'); sys.path.insert(0, 'tests')
+ds, cls = sys.argv[1], sys.argv[2]
+try:
+    from experiments.dataset_policy import FAST_SPEED_DATASETS
+except Exception as e:
+    print(f"  ⛔ could not read FAST_SPEED_DATASETS ({type(e).__name__}: {e}).")
+    print("     Refusing to precompute: the speed this job would use cannot be")
+    print("     checked against the speed the experiments will ask for.")
+    sys.exit(2)
+wants_fast = ds in FAST_SPEED_DATASETS
+if wants_fast != (cls == 'LARGE'):
+    print(f"  ⛔ {ds}: this script says class={cls} and dataset_policy says "
+          f"{'fast' if wants_fast else 'full'}.")
+    print("     One of the two lists has been edited without the other.")
+    print("     Fix dataset_policy.FAST_SPEED_DATASETS and LARGE_DATASETS in")
+    print("     this file so they name the same datasets, then resubmit.")
+    sys.exit(3)
+EOF
+    _rc=$?
+    if [ "$_rc" != "0" ]; then
+        echo "  precompute aborted before any work (exit ${_rc})."
+        exit "$_rc"
+    fi
+fi
+
 echo "=========================================================="
 echo " precompute  dataset=${DS}"
 echo " class=${CLASS}  speed=${SPEED}  pruning=${PRUNING}"
