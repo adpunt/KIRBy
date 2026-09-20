@@ -1284,15 +1284,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Detection, graded before any cleanup ran. Two feature spaces: the one
         # built from the corrupted labels and the one built from the clean ones.
         # Empty on a condition where every training molecule moves.
-        'detection': {_sp: _mean_detection(_rows)
-                      for _sp, _rows in detection_acc.items()},
-        # Every candidate detector graded against the molecules that really
-        # moved, in the corrupted-label space, before any cleanup ran. The
-        # cleanups ran under `detector_used` alone; this says whether that was
-        # the name that finds them. Costs one estimator fit per fold per extra
-        # name and no model fit.
-        'detection_by_detector': {_dn: _mean_detection(_rows)
-                                  for _dn, _rows in detection_by_detector.items()},
+        #
+        # ⛔ PLACEHOLDERS. Both are FILLED IN after the fold loop, near
+        # `per_strategy_model`. This dict is built before that loop runs, and
+        # writing the comprehension here read `detection_acc` and
+        # `detection_by_detector` while both were still the empty dicts they are
+        # initialised as -- so every n07 result file on disk carries
+        # "detection": {} and "detection_by_detector": {} beside a
+        # detection_tally saying the grading was reached 4 times and graded 8,
+        # with 0 declined. The tally and the block it counts disagreed, and the
+        # tally was right.
+        'detection': {},
+        'detection_by_detector': {},
         'detection_tally': detection_tally,
         'detection_tally_note': (
             'Counts of (fold, noise seed) passes. reached = got as far as the '
@@ -1922,6 +1925,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # here. That is not a failure and the numbers are not missing: they are in
     # per_model_per_strategy under the two models that did run them. Said out
     # loud rather than left as three NaNs a reader has to explain.
+    # The two detection blocks, now that the fold loop that fills them has run.
+    # See the placeholders in the results dict above for what went wrong when
+    # these were written at construction time.
+    results['detection'] = {_sp: _mean_detection(_rows)
+                            for _sp, _rows in detection_acc.items()}
+    results['detection_by_detector'] = {
+        _dn: _mean_detection(_rows)
+        for _dn, _rows in detection_by_detector.items()}
+
     results['per_strategy_model'] = _legacy_model
     _absent_here = [st for st in strategies
                     if st in REGRESSION_ONLY_CLEANUPS
