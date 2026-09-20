@@ -32,6 +32,8 @@ defect has already hit this repo twice -- n12's docstring records the whole
 importance-weighting ablation silently producing identical geometry, and the
 2026-08-25 fix in tests/noise_mitigation_advanced.py records the second.
 """
+import os
+
 import numpy as np
 
 
@@ -359,7 +361,33 @@ def weight_exponent(coefficient, p=None):
     return None
 
 
-def fold_weights(Z, w, coefficient, p=None, convention='mean1'):
+ENV_IMPORTANCE_EXPONENT = 'KIRBY_IMPORTANCE_EXPONENT'
+
+
+def importance_exponent_override():
+    """The swept exponent from the environment, or None when nothing is set.
+
+    None means "use the exponent the coefficient's own family implies", which is
+    what every caller did before this existed, so an unset environment leaves
+    every number bit-identical.
+
+    The quantity is the power the normalised importance vector is raised to
+    before it multiplies the z-scored features. 0 makes every feature weigh the
+    same, which is the unweighted control; 1 multiplies each feature by its own
+    normalised importance.
+    """
+    raw = os.environ.get(ENV_IMPORTANCE_EXPONENT)
+    if raw is None or str(raw).strip() == '':
+        return None
+    value = float(raw)
+    if value < 0:
+        raise ValueError(
+            f"{ENV_IMPORTANCE_EXPONENT}={raw!r}: a negative exponent turns a "
+            f"zero-importance feature into an infinite multiplier.")
+    return value
+
+
+def fold_weights(Z, w, coefficient, p=None, convention='mean1', exponent=None):
     """Apply per-feature weights to ALREADY-STANDARDISED features.
 
     Returns (Z_weighted, scipy_kwargs). When the weight cannot be folded into
@@ -369,6 +397,14 @@ def fold_weights(Z, w, coefficient, p=None, convention='mean1'):
     Applying weights before standardising is an exact no-op, measured at 9e-16,
     so `Z` must already be z-scored. There is no way to check that from inside
     this function, which is why it is in the name.
+
+    `exponent` overrides the power of the weight vector that multiplies the
+    features. None reads KIRBY_IMPORTANCE_EXPONENT, and an unset environment
+    falls through to weight_exponent(coefficient, p) -- the family-correct
+    value, which is what this function always used. An override is only
+    meaningful while it is being swept: it makes the weighted distance a
+    DIFFERENT formula from the unweighted one, not the same formula with a
+    rescale.
     """
     if w is None:
         return np.asarray(Z, dtype=np.float64), {}
@@ -392,7 +428,11 @@ def fold_weights(Z, w, coefficient, p=None, convention='mean1'):
         # while the same weights move Euclidean by 6.79. Correlation puts the
         # weight inside the centring mean too.
         return A, {'w': v}
-    exp = weight_exponent(coefficient, p)
+    exp = exponent
+    if exp is None:
+        exp = importance_exponent_override()
+    if exp is None:
+        exp = weight_exponent(coefficient, p)
     return A * (v ** exp), {}
 
 

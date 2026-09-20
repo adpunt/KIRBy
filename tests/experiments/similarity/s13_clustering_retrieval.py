@@ -88,6 +88,7 @@ from experiments._shared import (
     fold_reselection,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
     hr_exclude_folds,
+    importance_feature_weights,
 )
 from kirby.find_best_hybrid import nested_cv_outer_folds
 
@@ -554,7 +555,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         method=getattr(_bp, 'importance_method',
                                        'lightgbm_gain')).get(
                         'hybrid', np.ones(Xtr_s.shape[1]))
-                    w = np.sqrt(np.maximum(imp, 0))
+                    # The power the importance is raised to is swept through
+                    # KIRBY_IMPORTANCE_EXPONENT; unset gives the 0.5 this line
+                    # used to spell out.
+                    w = importance_feature_weights(imp)
                     w = w / (w.sum() + 1e-10)
                     _acc_ret(sname, 'weighted', fold_i,
                              _heldout_retrieval(Xtr_s * w, y_tr, Xva_s * w, y_va,
