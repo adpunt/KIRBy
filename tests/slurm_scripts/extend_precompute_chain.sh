@@ -38,6 +38,12 @@
 #
 #   --links N       extra links per dataset, default 1
 #   --wall T        default 24:00:00
+#   --speed S       fast | full. Default: the dataset's class in
+#                   run_precompute_dataset.sh. The twelve LARGE datasets --
+#                   logd and flab_expression_koenig among them -- default to
+#                   fast, which evaluates 816 configurations per condition
+#                   rather than 8,160. Pass full to make a link work the whole
+#                   grid instead.
 #   --partition P   default medium,long
 #   --datasets "A B"  only these. Default: every dataset with a pc_ job queued
 #   --no-repoint    leave the experiment jobs pointed at the link they were
@@ -52,6 +58,7 @@ WALL="24:00:00"
 PARTITION="medium,long"
 LINKS=1
 PRUNING="${KIRBY_PRUNING:-calibrated}"
+SPEED=""          # empty = the dataset's class in run_precompute_dataset.sh
 EXPLICIT=""
 REPOINT=true
 GO=false
@@ -63,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --partition) PARTITION=$2; shift 2 ;;
         --datasets)  EXPLICIT=$2; shift 2 ;;
         --pruning)   PRUNING=$2; shift 2 ;;
+        --speed)     SPEED=$2; shift 2 ;;
         --repoint)   REPOINT=true; shift ;;
         --no-repoint) REPOINT=false; shift ;;
         --go)        GO=true; shift ;;
@@ -98,6 +106,7 @@ echo " datasets     $N_DS"
 echo " extra links  $LINKS each, ${WALL} per link"
 echo " partition    $PARTITION      account $ACCOUNT"
 echo " pruning      $PRUNING"
+echo " speed        ${SPEED:-per dataset class — LARGE datasets run fast, 816 configurations per condition, not 8,160}"
 echo " repoint      $([ "$REPOINT" = true ] && echo 'YES — every experiment job moves onto the new last link' || echo 'no — experiment jobs keep waiting for the link they have')"
 echo " mode         $([ "$GO" = true ] && echo 'SUBMITTING' || echo 'dry run, nothing sent')"
 echo "=========================================================="
@@ -136,7 +145,7 @@ for DS in $DATASETS; do
                 --mem="$MEM" --cpus-per-task=8 \
                 --job-name="pc_${DS}_x${L}" \
                 --mail-user="$EMAIL" --mail-type=FAIL \
-                --export="ALL,KIRBY_PRUNING=${PRUNING}" \
+                --export="ALL${SPEED:+,KIRBY_SPEED=${SPEED}},KIRBY_PRUNING=${PRUNING}" \
                 $DEP \
                 "$REPO/tests/slurm_scripts/run_precompute_dataset.sh" "$DS" 2>/dev/null)
             [ -n "$JID" ] || { echo "   FAILED pc_${DS}_x${L}"; continue; }
