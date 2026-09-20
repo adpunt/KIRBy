@@ -292,13 +292,45 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False, detector=None,
     """
     import inspect
     name = DETECTOR if detector is None else detector
+    cls = ESTIMATOR_REGISTRY[name]
+    # Each estimator takes its own arguments. Handing every one `k` and
+    # `metric` is what kept CrossValResidualEstimator, which takes neither,
+    # out of this file and out of n18 (fixed there the same day).
+    offered = {'k': 10, 'metric': None, 'groups': groups, 'is_clf': is_clf}
+    accepts = set(inspect.signature(cls.__init__).parameters)
+    # ⛔ A FLAG THIS FILTER CANNOT DELIVER IS AN ERROR, NOT A SHRUG.
+    #
+    # The filter keeps whatever the estimator's constructor happens to name
+    # and DROPS the rest with nothing printed. `is_clf` was one of the dropped
+    # ones: CrossValResidualEstimator, which DETECTOR names, took no such
+    # argument until 2026-09-20, and its `estimate` fitted a
+    # RandomForestRegressor whatever it was handed. So on a classification
+    # dataset a molecule's suspicion score was the distance from its class
+    # NUMBER to a regressor's prediction of that number, while the docstring
+    # above said the flag threaded through to a class-disagreement branch. The
+    # two disagreed and nothing said so.
+    #
+    # `groups` sits in the same filter and the same argument applies: an
+    # estimator that cannot hold the scaffold groups splits its inner folds at
+    # random, and a molecule's own scaffold family then trains the model that
+    # predicts it.
+    #
+    # This raises OUTSIDE the try below on purpose. Inside it the refusal would
+    # be caught, printed and turned into None, which is what a genuinely failed
+    # fit returns -- a configuration that can never be right would then be
+    # indistinguishable from a fold that happened not to converge.
+    #
+    # Only a flag that would CHANGE something is refused. is_clf=False and
+    # groups=None ask for nothing, so an estimator that names neither is used
+    # exactly as it was.
+    undeliverable = [k for k, v in (('is_clf', is_clf), ('groups', groups))
+                     if k not in accepts and v is not None and v is not False]
+    if undeliverable:
+        raise TypeError(
+            f"detector {name!r} ({cls.__name__}) takes no "
+            f"{' or '.join(undeliverable)} argument, so it would be dropped "
+            f"and the scores computed as though it had never been asked for.")
     try:
-        cls = ESTIMATOR_REGISTRY[name]
-        # Each estimator takes its own arguments. Handing every one `k` and
-        # `metric` is what kept CrossValResidualEstimator, which takes neither,
-        # out of this file and out of n18 (fixed there the same day).
-        offered = {'k': 10, 'metric': None, 'groups': groups, 'is_clf': is_clf}
-        accepts = set(inspect.signature(cls.__init__).parameters)
         est = cls(**{k: v for k, v in offered.items() if k in accepts})
         est.fit(X_tr_s, y_tr)
         return est.noise_scores_
@@ -1724,10 +1756,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if no_noise_same_space is not None:
                     per_strategy_scores['no_noise'].append(no_noise_same_space)
 
+                # ⛔ THE SCAFFOLD GROUPS REACH THE DETECTOR HERE. They did not
+                # until 2026-09-20, and the two readings this file takes of the
+                # same detector then disagreed. The grading call below hands
+                # `activity_cliff_aware` _groups_tr, so its inner split is
+                # scaffold-disjoint; these two calls, whose scores are what the
+                # cleanups actually flag on, handed none, so a molecule's own
+                # scaffold family trained the model that predicted it and its
+                # residual was small for a reason that has nothing to do with
+                # its label. So the two detectors were graded against each
+                # other differing in two ways at once, not one: which estimator
+                # they are, and whether the inner split was scaffold-disjoint.
                 noise_scores_noisy = _compute_noise_scores(
-                    X_tr_n, y_tr_noisy, is_clf=is_clf)
+                    X_tr_n, y_tr_noisy, is_clf=is_clf, groups=_groups_tr)
                 noise_scores_clean_space = _compute_noise_scores(
-                    X_tr_s, y_tr_noisy, is_clf=is_clf)
+                    X_tr_s, y_tr_noisy, is_clf=is_clf, groups=_groups_tr)
 
                 # Did the detector find the molecules that really moved, before
                 # any cleanup ran? Owner's decision 2026-09-12. This experiment
@@ -1936,6 +1979,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 cv_split(groups, n_folds, sample_X, labels, mode=mode)):
             y_train_clean = labels[train_idx]
             y_val = labels[val_idx]
+            # This fold's scaffold groups, for the detector's inner split.
+            _g_tr_rep = (np.asarray(groups)[train_idx]
+                         if groups is not None else None)
 
             scaler = StandardScaler()
             X_tr_s = scaler.fit_transform(X_rep[train_idx])
@@ -1959,7 +2005,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     dataset_name=dataset_name)
                 noise_provenance.setdefault(_spec.spec_id, _prov)
                 noise_scores_cache = _compute_noise_scores(
-                    X_tr_s, y_tr_noisy, is_clf=is_clf)
+                    X_tr_s, y_tr_noisy, is_clf=is_clf, groups=_g_tr_rep)
 
                 for strategy in rep_strategies:
                     if strategy == 'no_noise':
@@ -2053,7 +2099,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         dataset_name=dataset_name)
                     noise_provenance.setdefault(_spec.spec_id, _prov)
                     ns_cache = _compute_noise_scores(X_tr_s, y_tr_noisy,
-                                                     is_clf=is_clf)
+                                                     is_clf=is_clf,
+                                                     groups=g_tr)
 
                     for strategy in strategies:
                         if strategy == 'no_noise':
