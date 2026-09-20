@@ -555,7 +555,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         bp = meta['best_config']['blueprint'] if meta else None
     except Exception as exc:
         meta = None
-        print(f"  hybrid recipe lookup failed: {type(exc).__name__}: {exc}")
+        # ⛔ WHAT WENT WRONG IS RECORDED, NOT JUST THAT SOMETHING DID. Two
+        # different things put this file in the base representation alone and
+        # they call for opposite responses. One is a dataset the precompute
+        # never covered: this file was built to survive it and no action fixes
+        # it. The other is a stored search written under an older column list
+        # -- result_cache.StaleResultDB -- which one rebuild of that one file
+        # fixes. Both were reported here as "no recipe came back from the
+        # precomputed pool", so a result file could not tell them apart and a
+        # run that should have been re-launched after a rebuild read as a run
+        # with nothing to rebuild.
+        #
+        # Measured on flab_thermo_tresanco 2026-09-20: commit 9c6f7d7 added
+        # distance_metric to the search store's identity that morning, every
+        # stored search on disk was written without it, and three n18 runs
+        # dropped both hybrid spaces while their result files said the pool was
+        # empty. The same commit made four callers in find_best_hybrid and
+        # _shared re-raise StaleResultDB for exactly this reason; this file
+        # still swallows it, because dropping the run would lose every
+        # base-representation number -- so it records the cause instead.
+        _lookup_error = f"{type(exc).__name__}: {exc}"
+        print(f"  hybrid recipe lookup failed: {_lookup_error}")
+    else:
+        _lookup_error = None
 
     if bp is None:
         # Every cleanup still runs, in the base representation alone. Dropping
@@ -563,10 +585,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # is missing.
         spaces = ('base',)
         results['hybrid_available'] = False
+        results['hybrid_lookup_error'] = _lookup_error
         results['hybrid_unavailable_reason'] = (
-            'no recipe came back from the precomputed pool for subset '
-            f'{POOL_SUBSET!r}, so the hybrid space could not be built. Every '
-            'cleanup ran in the base representation only.')
+            (f'the recipe lookup RAISED -- {_lookup_error} -- so neither '
+             f'hybrid space could be built. This is NOT a dataset the '
+             f'precompute never covered: something is wrong with the stored '
+             f'search and it can be fixed. Every cleanup ran in the base '
+             f'representation only.')
+            if _lookup_error else
+            (f'no recipe came back from the precomputed pool for subset '
+             f'{POOL_SUBSET!r}, so the hybrid space could not be built. Every '
+             f'cleanup ran in the base representation only.'))
         print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
               f"base representation only")
     else:
