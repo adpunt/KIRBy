@@ -73,6 +73,7 @@ from experiments._shared import (
     get_domain_metric, build_fold_hybrid,
     fold_hybrid_scoring_kwargs,
     fold_reselection, get_fold_pool_recipes,
+    importance_feature_weights,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
     hr_exclude_folds,
 )
@@ -171,7 +172,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT S05: kNN PREDICTION WITH HYBRID DISTANCE")
     print("=" * 70)
 
-    k_values = kwargs.get('k_values', [5, 10])
+    # The neighbour counts this file scores, one arm each. KIRBY_S05_K_VALUES
+    # is a comma-separated list; unset leaves the 5 and 10 written here.
+    _env_k = os.environ.get('KIRBY_S05_K_VALUES', '').strip()
+    k_values = kwargs.get(
+        'k_values',
+        [int(v) for v in _env_k.split(',') if v.strip()] if _env_k else [5, 10])
+    # sklearn's `weights` for every kNN fitted below. 'uniform' averages the k
+    # neighbours' labels, which is what this file did; 'distance' averages them
+    # weighted by one over the distance. KIRBY_S05_KNN_VOTE; unset gives
+    # 'uniform'.
+    knn_vote = kwargs.get(
+        'knn_vote', os.environ.get('KIRBY_S05_KNN_VOTE', 'uniform').strip()
+        or 'uniform')
     budgets = kwargs.get('budgets', DISTANCE_BUDGETS)
     n_folds = config['n_splits']
 
@@ -186,6 +199,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {'per_budget': {}, 'per_rep_baselines': {},
                'selection_rule': _SELECTION_RULE}
+
+    # The three settings the kNN arms are built with, stored so a result file
+    # says which arm produced its numbers without anyone reading the
+    # environment the run had.
+    from kirby.similarity.preprocessing import importance_exponent_override
+    _exp = importance_exponent_override()
+    results['knn_settings'] = {
+        'k_values': list(k_values),
+        'knn_vote': knn_vote,
+        'importance_exponent': 0.5 if _exp is None else _exp,
+        'basis': ("k_values are the neighbour counts scored, one arm each. "
+                  "knn_vote is sklearn's weights argument: uniform averages "
+                  "the k neighbours' labels, distance averages them weighted "
+                  'by one over the distance. importance_exponent is the power '
+                  'the importance is raised to before it multiplies the '
+                  'z-scored features; 0 makes every feature weigh the same.'),
+    }
 
     # ── The reference override, resolved before anything is scored ──
     # The reference itself is one (representation, model) pair per downstream
@@ -383,8 +413,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     def _make_knn(k_val, n_train):
         nn = min(k_val, n_train - 1)
         if is_clf:
-            return KNeighborsClassifier(n_neighbors=nn)
-        return KNeighborsRegressor(n_neighbors=nn)
+            return KNeighborsClassifier(n_neighbors=nn, weights=knn_vote)
+        return KNeighborsRegressor(n_neighbors=nn, weights=knn_vote)
 
     # Honest leave-one-fold-out re-score arms (persisted below). This
     # experiment runs its OWN kNN CV (not find_best_hybrid), so we collect the
@@ -539,7 +569,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         if condition == 'hybrid_weighted':
                             try:
                                 w_raw = flatten_fold_weights(feat_info)
-                                w = np.sqrt(np.maximum(w_raw, 0))
+                                w = importance_feature_weights(w_raw)
                                 assert w.shape[0] == X_tr.shape[1], (
                                     f"weight/feature mismatch: "
                                     f"w={w.shape[0]} vs X={X_tr.shape[1]}")
@@ -646,7 +676,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     {rep_name: X_rep[train_idx]}, labels[train_idx],
                     method='lightgbm_gain')
                 fold_importance.append(
-                    np.sqrt(np.maximum(imp[rep_name], 0)))
+                    importance_feature_weights(imp[rep_name]))
             except Exception as exc:
                 # N9: log so a None-importance fold reads as "compute failed"
                 # rather than silently falling back to unweighted kNN.

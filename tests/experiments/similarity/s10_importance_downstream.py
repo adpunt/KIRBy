@@ -53,6 +53,40 @@ unchanged; every space is under results['by_hybrid_space'][space], with its own
 recipes in results['hybrid_space_recipes'] and its per-fold read failures in
 results['hybrid_space_errors'].
 
+The weighted GP arm was a constant predictor (2026-09-20). The weight vector
+this file built was rescaled to SUM to 1. normalise_weights in
+src/kirby/similarity/preprocessing.py rescales so the weights AVERAGE 1, which
+is what f17 measured on 2026-08-25 and what every other weighted distance in
+the repository uses; its docstring says sum-to-1 "divides every distance by the
+feature count" and that a kernel width does not survive it. So on a 2048-feature
+representation the GP's RBF, whose length scale starts at 1.0 in the units of
+the features, saw every pairwise distance divided by 2048 and fitted a kernel
+matrix that is constant to within rounding. It predicted the training mean. On
+caco2 six of the seven representations came out at 0.4371 rmse, identical to
+four decimals, against a label standard deviation of 0.4449 log10 units; on
+adme_mdr1 six came out at 0.6881 against 0.6885; on herg_ki the two
+2048-feature ones came out at 0.9160 against 0.9147 pKi. pdv, at 200 features,
+is the one that partly escaped on each dataset.
+
+Two consequences. The printed per-task delta is RAW -- the print statements run
+before _orient_deltas -- so on these three rmse datasets a POSITIVE printed
+delta means the weighted arm had the HIGHER error, which is worse. And Tasks 1
+and 3 are unaffected by the rescale: a kNN only ranks distances and an SVR at
+gamma='scale' divides by the data's own variance, so both are exactly invariant
+to a uniform shrink. Task 4's four neighbour-derived features feed a random
+forest, whose splits are invariant to a monotone rescale of any one feature, so
+it is unaffected too. Task 2 is the only one that moved.
+
+KIRBY_S10_WEIGHT_CONVENTION now picks the rescale and defaults to 'mean1'; pass
+'sum1' to reproduce the old arm. KIRBY_IMPORTANCE_EXPONENT picks the power the
+importance is raised to (0.5 unset, 0 = unweighted control),
+KIRBY_S10_K_VALUES the neighbour counts Task 1 scores, KIRBY_S10_KNN_VOTE
+sklearn's uniform-or-distance vote, KIRBY_S10_QRASAR_K how many neighbours
+Task 4's four features are built from, and KIRBY_S10_GP_RESTARTS how many extra
+starts the GP's marginal-likelihood optimiser gets, now 0 rather than 2 --
+both arms got all three starts, so they cancelled out of the difference this
+task reports while costing three times the Cholesky work.
+
 Top 2 of each arm, and the two deltas (2026-09-18, owner's decision: "I'll add
 the top 2 rows everywhere as an extra, change nothing that's already reported").
 Additive: four new TOP-LEVEL keys on `results`, no existing key changed, and the
@@ -157,11 +191,74 @@ def _budget_key(budget):
 # LOCAL HELPERS
 # =============================================================================
 
-def _importance_weights(imp_scores):
-    """Convert raw importance scores to sqrt-normalised feature weights."""
-    w = np.sqrt(np.maximum(imp_scores, 0))
-    w = w / (w.sum() + 1e-10)
-    return w
+def _importance_weights(imp_scores, exponent=None, convention=None):
+    """Importance scores turned into the multiplier for standardised features.
+
+    Two steps. The importance is raised to a power, and the result is rescaled.
+
+    The power is `exponent`. None reads KIRBY_IMPORTANCE_EXPONENT through the
+    shared importance_feature_weights, and an unset environment gives 0.5, which
+    is the square root this function always took. 0 makes every feature weigh
+    the same, which is the unweighted control.
+
+    The rescale is `convention`, read from KIRBY_S10_WEIGHT_CONVENTION when
+    None. Until 2026-09-20 it was sum-to-1 and could not be changed. Under
+    sum-to-1 a 2048-feature representation has every distance divided by 2048,
+    and normalise_weights' own docstring says a kernel width does not survive
+    that. Task 1 fits a kNN and Task 3 an SVR at gamma='scale', both of which
+    only rank distances or rescale by the data's own variance, so neither
+    notices. Task 2 fits a GP whose RBF length scale starts at 1.0 in the units
+    of the features, and it collapsed to a constant predictor. The default is
+    now 'mean1', which is this repository's measured choice (f17, 2026-08-25)
+    and keeps a z-scored feature near its own scale. Pass 'sum1' to reproduce
+    the old arm.
+    """
+    from kirby.similarity.preprocessing import normalise_weights
+    from experiments._shared import importance_feature_weights
+    w = importance_feature_weights(imp_scores, exponent=exponent)
+    conv = convention if convention is not None else _weight_convention()
+    if conv == 'sum1':
+        return w / (w.sum() + 1e-10)
+    return normalise_weights(w, conv)
+
+
+def _weight_convention():
+    """How the weight vector is rescaled before it multiplies the features.
+
+    'mean1' divides by the mean weight, 'sum1' by the sum. Reads
+    KIRBY_S10_WEIGHT_CONVENTION; unset gives 'mean1'.
+    """
+    return os.environ.get('KIRBY_S10_WEIGHT_CONVENTION', 'mean1').strip() or 'mean1'
+
+
+def _knn_vote_weights():
+    """sklearn's `weights` argument for every KNeighbors model in this file.
+
+    'uniform' averages the k neighbours' labels, which is what this file did.
+    'distance' averages them weighted by one over the distance. Reads
+    KIRBY_S10_KNN_VOTE; unset gives 'uniform'.
+    """
+    return os.environ.get('KIRBY_S10_KNN_VOTE', 'uniform').strip() or 'uniform'
+
+
+def _k_values():
+    """The neighbour counts Task 1 scores, one arm each.
+
+    Reads KIRBY_S10_K_VALUES as a comma-separated list; unset gives 5,10,20,
+    which is what this file had written out.
+    """
+    raw = os.environ.get('KIRBY_S10_K_VALUES', '').strip()
+    if not raw:
+        return [5, 10, 20]
+    return [int(v) for v in raw.split(',') if v.strip()]
+
+
+def _qrasar_k():
+    """How many nearest training rows the four q-RASAR features are built from.
+
+    Reads KIRBY_S10_QRASAR_K; unset gives 10, which is what this file had.
+    """
+    return int(os.environ.get('KIRBY_S10_QRASAR_K', '10'))
 
 
 def _paired_delta(treatment_scores, reference_scores):
@@ -377,7 +474,8 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
     is_clf = task_type == 'classification'
     print(f"\n  --- Task 1: Weighted kNN {'Classification' if is_clf else 'Regression'} ---")
 
-    k_values = [5, 10, 20]
+    k_values = _k_values()
+    vote = _knn_vote_weights()
     results = {'per_rep': {}, 'hybrid': {}}
 
     # Per-rep evaluation
@@ -397,7 +495,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
 
                 # Unweighted
                 KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
-                model = KNN(n_neighbors=k_eff)
+                model = KNN(n_neighbors=k_eff, weights=vote)
                 model.fit(X_tr, y_train)
                 uw_scores.append(metric_fn(y_val, model.predict(X_va)))
 
@@ -407,7 +505,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                     if imp_arr is None:
                         raise RuntimeError(f"missing precomputed importance for fold={fold_i} rep={rep_name}")
                     w = _importance_weights(imp_arr)
-                    model_w = KNN(n_neighbors=k_eff)
+                    model_w = KNN(n_neighbors=k_eff, weights=vote)
                     model_w.fit(X_tr * w, y_train)
                     w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
                 except Exception:
@@ -474,7 +572,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                             # actually consumes them, instead of falling back to its
                             # internal r2/accuracy proxy.
                             **fold_hybrid_scoring_kwargs(
-                                blueprint, model=_KNN(n_neighbors=k_eff),
+                                blueprint, model=_KNN(n_neighbors=k_eff, weights=vote),
                                 metric_fn=metric_fn,
                                 lower_is_better=lower_is_better))
                     except Exception as e:
@@ -488,7 +586,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
 
                     # Unweighted
                     KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
-                    model = KNN(n_neighbors=k_eff)
+                    model = KNN(n_neighbors=k_eff, weights=vote)
                     model.fit(X_tr, y_train)
                     uw_scores.append(metric_fn(y_val, model.predict(X_va)))
 
@@ -497,7 +595,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                         w = _compute_importance_for_hybrid(feat_info)
                         assert w.shape[0] == X_tr.shape[1], (
                             f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
-                        model_w = KNN(n_neighbors=k_eff)
+                        model_w = KNN(n_neighbors=k_eff, weights=vote)
                         model_w.fit(X_tr * w, y_train)
                         w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
                     except Exception:
@@ -573,8 +671,15 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
 
     def _make_gp():
         kernel = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(1e-3)
+        # n_restarts_optimizer counts EXTRA starts of the marginal-likelihood
+        # optimiser, so 2 ran the whole Cholesky sequence three times per fit.
+        # Both arms of this comparison got all three, so they cancel out of the
+        # weighted-minus-unweighted difference this task reports, and on
+        # herg_ki at 1130 training rows a fold they were most of the ~7 hours
+        # six feature spaces took. KIRBY_S10_GP_RESTARTS puts them back.
         return GaussianProcessRegressor(
-            kernel=kernel, n_restarts_optimizer=2,
+            kernel=kernel,
+            n_restarts_optimizer=int(os.environ.get('KIRBY_S10_GP_RESTARTS', '0')),
             alpha=1e-6, random_state=42,
         )
 
@@ -929,7 +1034,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
     """
     print("\n  --- Task 4: Similarity-Augmented Features (q-RASAR style) ---")
 
-    k_neighbors = 10
+    k_neighbors = _qrasar_k()
     results = {'per_rep': {}, 'hybrid': {}}
 
     _rf_fac = get_model_factories(['rf'], task_type=task_type,
@@ -1799,6 +1904,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _orient_deltas(_t, lower_is_better)
                 _oriented.add(id(_t))
     results['deltas_oriented'] = True  # positive delta == improvement everywhere
+
+    # The four settings the arms in this file are built with, stored so a
+    # result file says which arm produced its numbers without anyone reading
+    # the environment the run had.
+    from kirby.similarity.preprocessing import importance_exponent_override
+    _exp = importance_exponent_override()
+    results['weighting_settings'] = {
+        'importance_exponent': 0.5 if _exp is None else _exp,
+        'weight_convention': _weight_convention(),
+        'knn_vote': _knn_vote_weights(),
+        'k_values': _k_values(),
+        'qrasar_k': _qrasar_k(),
+        'gp_restarts': int(os.environ.get('KIRBY_S10_GP_RESTARTS', '0')),
+        'basis': (
+            'Every feature is z-scored, then multiplied by its importance '
+            'raised to importance_exponent and rescaled by weight_convention. '
+            "mean1 divides by the mean weight and keeps a z-scored feature at "
+            'its own scale; sum1 divides by the sum, which divides every '
+            'distance by the number of features. knn_vote is sklearn\'s '
+            "weights argument: uniform averages the k neighbours' labels, "
+            'distance averages them weighted by one over the distance.'),
+    }
 
     # Summary
     print(f"\n  Total elapsed: {time.time() - start_total:.1f}s")
