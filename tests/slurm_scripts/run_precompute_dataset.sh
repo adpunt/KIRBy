@@ -253,17 +253,25 @@ case "$DS" in
         ;;
 esac
 
-# ── MORE THAN TWO CLASSES: NO SIMILARITY OBJECTIVE ──────────────────────
+# ── DATASETS THE SIMILARITY OBJECTIVE CANNOT BE SCORED ON ───────────────
 # objective='similarity' predicts each sample's label from its five nearest
-# neighbours in the space the features define. On a classification dataset it
-# scores those predictions by AUROC. AUROC is defined for two classes, so on a
-# 3- or 4-class label every representation scores nothing on every fold and the
-# search dies with "not one of the N representations could be scored" -- an
-# error that names three causes, all about the fold, none of them the real one.
+# neighbours in the space the features define. Three datasets cannot produce
+# that number at all, for two different reasons, and on all three every
+# representation comes back unscored on every fold and the search dies with
+# "not one of the N representations could be scored".
+#
+#   tcga_brca_pam50 (4 classes), tz_her2_multiclass (3)
+#       scoring a classification dataset uses AUROC, which is defined for 2.
+#   tz_her2_binary
+#       two classes, so AUROC is fine. Its FOLDS are the problem: they are cut
+#       on edit-distance shells from the wildtype CDRH3, and a held-out block
+#       can hold a single shell, leaving no other shell to find neighbours in.
 #
 # UNDEFINED, which is one of the three reasons a cut is allowed. This is NOT a
-# claim that the objective would lose here. Defining it -- AUROC of each class
-# against the rest, averaged -- would remove this block.
+# claim that the objective would lose on any of them. Defining the multiclass
+# score -- AUROC of each class against the rest, averaged -- would release the
+# first two. tz_her2_binary's grouping is the leakage control and is not
+# negotiable, so that one stays cut. Owner's call, 2026-09-20.
 #
 # Two passes are affected and they are affected differently:
 #   sim  asks for predictive AND similarity. The predictive half is fine, so the
@@ -281,9 +289,9 @@ python - "$DS" <<'EOF'
 import sys
 sys.path.insert(0, 'src'); sys.path.insert(0, 'tests')
 try:
-    from experiments.dataset_policy import MULTICLASS_DATASETS as M
+    from experiments.dataset_policy import SIMILARITY_OBJECTIVE_SKIP_DATASETS as M
 except Exception as e:
-    print(f"  could not read MULTICLASS_DATASETS ({type(e).__name__}: {e})")
+    print(f"  could not read the similarity skip list ({type(e).__name__}: {e})")
     sys.exit(2)
 sys.exit(0 if sys.argv[1] in M else 1)
 EOF
@@ -293,14 +301,14 @@ case $? in
         if has_pass knn; then
             PASSES="${PASSES// knn/}"; PASSES="${PASSES//knn /}"; PASSES="${PASSES//knn/}"
         fi
-        echo "  ${DS} has more than two classes."
-        echo "  The sim pass runs PREDICTIVE ONLY: objective='similarity' scores"
-        echo "  classification by AUROC, which is undefined above two classes."
-        echo "  The knn pass is dropped -- it asks for similarity alone, so it"
-        echo "  would write nothing."
+        echo "  ${DS} cannot be scored under objective='similarity'."
+        echo "  The sim pass runs PREDICTIVE ONLY, and the knn pass is dropped"
+        echo "  -- it asks for similarity alone, so it would write nothing."
+        echo "  The reason for this dataset is in dataset_policy.py; precompute"
+        echo "  prints it in full when it drops the objective."
         ;;
     2)
-        echo "  WARNING: could not check the class count for ${DS}, so the sim"
+        echo "  WARNING: could not check the skip list for ${DS}, so the sim"
         echo "  pass keeps the similarity objective. precompute_hybrids.py still"
         echo "  drops it from the labels if it does not apply."
         ;;
