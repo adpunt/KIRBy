@@ -97,6 +97,27 @@ what n15 was set to on 2026-09-12 and for the same reason -- n15 also searches
 inside the experiment, and that is what the settings are there to absorb. Both
 arms get identical settings, so the comparison is like for like.
 
+⛔ A SEARCH WITH ONE CANDIDATE CANNOT ANSWER THIS FILE'S QUESTION. The first
+result n20 ever produced, on flab_thermo_tresanco on 2026-09-20, came back with
+its identity control passing exactly: both searches scored the same number of
+candidates on 2 of 2 held-out folds and picked the same recipe in 2 of 2
+(fold, model) cells, and the four arms sat 0.0 apart. That number of candidates
+was ONE. The local iteration settings cut the search to one allocation method,
+one importance scorer, one internal evaluator and one budget, and of the two
+representation counts they left only the whole pool survived.
+
+With a single configuration in the list the search picks the same recipe
+whatever label column it is handed, so the half of this experiment that is
+about WHICH REPRESENTATION gets selected cannot move. What still moved in that
+run is the other half: the per-fold feature ranking and budget split, which are
+recomputed from the label column handed to `hybrid_for_fold`, so the two arms
+built different features out of the same recipe. Both halves are named in the
+docstring above as "features chosen from"; only the second one was live.
+
+Anything that narrows the search must leave the representation counts, the
+allocation methods and the importance scorers more than one value between them.
+That is the axis the question rides on.
+
 ONE THING TO KNOW BEFORE READING THE FLAG-RATE AXIS. On a regression dataset
 `label_smooth` does not read the flag rate: it moves every label toward its
 neighbours' mean in proportion to that molecule's suspicion score
