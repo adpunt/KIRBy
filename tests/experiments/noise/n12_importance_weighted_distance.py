@@ -538,7 +538,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The whole roster, not random forest alone. Owner's decision 2026-09-12.
     # The distances and the suspicion scores do not involve a model at all; only
     # the score after repair does, so the added cost is the downstream fits.
-    downstream_models = list(kwargs.get('models') or DOWNSTREAM_MODELS)
+    # ⛔ config FIRST, then the kwarg. run_all passes the caller's model list in
+    # `config['models']` and never as a `models` kwarg -- the only kwarg it ever
+    # forwards is noise_condition (noise_helpers.py:1053). This file read
+    # kwargs alone, so the list the runner was asked for was silently dropped
+    # and every run fell back to the module default. Eight files in this
+    # directory had it; the same files read config['n_splits'] correctly two
+    # lines away. Fixed 2026-09-20. An explicit kwarg still wins, which is what
+    # a smoke or a direct caller uses.
+    downstream_models = list(
+        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     downstream_models = [m for m in downstream_models if m in model_factories]
