@@ -38,12 +38,12 @@
 #
 #   --links N       extra links per dataset, default 1
 #   --wall T        default 24:00:00
-#   --speed S       fast | full. Default: the dataset's class in
-#                   run_precompute_dataset.sh. The twelve LARGE datasets --
-#                   logd and flab_expression_koenig among them -- default to
-#                   fast, which evaluates 816 configurations per condition
-#                   rather than 8,160. Pass full to make a link work the whole
-#                   grid instead.
+#   --speed S       fast | full. Default, and what you want: the dataset's
+#                   class. The twelve in dataset_policy.FAST_SPEED_DATASETS run
+#                   fast, 816 configurations per condition against 8,160.
+#                   ⛔ DO NOT PASS full ON THOSE TWELVE. Since 2026-09-21 the
+#                   experiments search them at fast too, so a full-speed link
+#                   computes 8,160 configurations nothing will read.
 #   --partition P   default medium,long
 #   --datasets "A B"  only these. Default: every dataset with a pc_ job queued
 #   --no-repoint    leave the experiment jobs pointed at the link they were
