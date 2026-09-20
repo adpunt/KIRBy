@@ -489,7 +489,21 @@ Spearman at five neighbours, held out:
     fold   count fingerprint   structural triplets   activity triplets
     0                 0.7977                0.7493              0.8410
     1                 0.6821                0.6720              0.7678
-    2                 0.6718                0.6347                   —
+    2                 0.6718                0.6347              0.7085
+    3                 0.7094                0.6872              0.7568
+    4                 0.6445                0.5401              0.6890
+    mean              0.7011                0.6567              0.7526
+
+**The activity-defined arm beats the count fingerprint on all five held-out
+folds and it is the only method in this group that wins everywhere it was
+measured.** Its per-fold gains are 0.0433, 0.0857, 0.0367, 0.0474 and 0.0445
+Spearman. The scaffold-defined arm loses on all five, by 0.0484, 0.0101, 0.0371,
+0.0222 and 0.1044.
+
+On the structural yardstick the order reverses in part: the scaffold-defined arm
+beats the count fingerprint on four of five folds, the activity-defined arm on
+three of five, and every one of those structural numbers rests on between 288
+and 318 held-out pairs rather than 8,000.
 
 The counts underneath those columns are the finding. A triplet survives when
 the anchor's positive is closer than its negative by less than the margin, so a
@@ -508,21 +522,29 @@ on 5,101 triples and the activity arm on 790,333. So the two arms differ in
 what defines a positive and in how many examples the encoder sees, two ways at
 once, and the file reports them as one comparison.
 
-Wall clock: about 15 minutes per fold for all three arms, on a machine at load
-average 300.
+Wall clock: about 40 minutes per fold for all three arms, on a machine at load
+average 300. All five folds completed.
 
-## Two cache facts that cost wall clock
+## The conformer cache costs four hours once, and it is not a defect
 
 `shape_similarity.py` prints `spatial cache has 1415 rows but records no
-molecule list -- rebuilding` and regenerates every ETKDG conformer for herg_ki.
-`sim_herg_ki_spatial.npz` is on disk, dated 19 July, with the right number of
-rows. It is rebuilt on every run because it stores no list of which molecules
-those rows are. The rebuild had taken 68 minutes of wall clock and was still
-going.
+molecule list -- rebuilding`. `sim_herg_ki_spatial.npz` is on disk, dated 19
+July, with the right number of rows. It carries no `smiles_id`, and
+`build_spatial_reps` at shape_similarity.py:104 refuses a cache whose molecule
+list cannot be checked rather than trusting the row count. That is the right
+call and the comment in the file says so. Once the rebuild finishes it writes
+`smiles_id` and every later run is a cache hit.
+
+The cost of that one rebuild, measured: the 12-feature USR descriptor on
+herg_ki's 1,415 molecules took 5,155 s, and USR is one of three descriptors,
+each of which generates its own conformers. So herg_ki alone is roughly four
+hours at load average 500, and the run was handed to the supervisor at
+`/Volumes/seagate/kirby_simrun_logs/supervisor_jobs.tsv` under the name
+`sm_shape_similarity` rather than abandoned.
 
 `aug3d_similarity.py` prints `3d-aug cache hit` on all three datasets and
-finishes a dataset in 39 to 47 s. Same kind of cache, written the same week,
-and it records what it holds.
+finishes a dataset in 39 to 47 s. Its cache was written after the molecule-list
+field existed, so it is trusted.
 
 ## What is broken, in one place
 
@@ -535,7 +557,7 @@ and it records what it holds.
 | `run_battery_moleculeace.py` and `build_moleculeace.py` | the `MoleculeACE` package is not installed here. The builder locates its CSVs by globbing inside that package's install directory, so there is nothing to build from and nothing to score |
 | `feature_type_study.py` | no `if __name__` block, so it cannot be run. Its only caller is `tests/experiments/opig_scaffold_similarity.py`, outside this directory |
 | `augmented_descriptor_reps.py` | `padelpy` is absent, so its PaDEL arm cannot be built. PDV and Mordred both build |
-| `shape_similarity.py` | runs, but rebuilds its conformer cache every time; see above |
+| `shape_similarity.py` | not broken. Its 19 July conformer cache predates the molecule-list field, so it is rebuilt once at roughly four hours per dataset; see above |
 
 Nothing in this group was fixed by editing it. Every script that runs today ran
 unmodified.
