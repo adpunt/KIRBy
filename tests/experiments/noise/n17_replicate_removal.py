@@ -573,6 +573,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     n_draws = int(kwargs.get('n_draws', N_DRAWS))
 
+    # The share of training entities every removing arm takes out, swept from
+    # the caller rather than edited into the constant above. It sets how far
+    # the ceiling and `floor_measured` overlap, and on a dataset where few
+    # entities were measured twice the two can end up removing almost the same
+    # set: at 0.10 on herg_ic50 a training fold of about 6,535 entities is
+    # asked for about 653, while only about 812 of those entities have a
+    # disagreement to rank at all, so both arms take four in five of the same
+    # small population. The default is the constant, so a caller that passes
+    # nothing gets exactly what this file did before.
+    flag_fraction = float(kwargs.get('flag_fraction', FLAG_FRACTION))
+
     # EVERY representation the caller loaded, each its own space. Not
     # `sorted(reps)[0]`, which is what this read until 2026-09-17 -- that made
     # whichever representation sorted first the whole feature axis and said
@@ -599,7 +610,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'arms': list(ARMS),
         'detector': DETECTOR,
         'detector_k': DETECTOR_K,
-        'flag_fraction': FLAG_FRACTION,
+        'flag_fraction': flag_fraction,
+        'flag_fraction_default': FLAG_FRACTION,
         'min_measurements_to_grade': MIN_MEASUREMENTS,
         'n_draws': n_draws,
         'claim_scope': (
@@ -831,7 +843,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_va = y_grade_all[va_graded]
             g_tr = ent_groups[tr] if ent_groups is not None else None
 
-            n_flag = max(1, int(round(FLAG_FRACTION * len(tr))))
+            n_flag = max(1, int(round(flag_fraction * len(tr))))
             # How many training entities the ceiling could possibly reach. Only
             # an entity measured twice or more has a disagreement to rank by.
             # When this is at or below n_flag, the ceiling and `floor_measured`
@@ -1173,13 +1185,16 @@ def main():
     parser = create_experiment_parser('N17: removal on real repeat disagreement')
     parser.add_argument('--n-draws', type=int, default=N_DRAWS,
                         help='How many times the training measurement is re-drawn')
+    parser.add_argument('--flag-fraction', type=float, default=FLAG_FRACTION,
+                        help='Share of training entities every removing arm '
+                             'takes out')
     parser.add_argument('--base-reps', type=str, default=None,
                         help='Comma-separated representations to run as base '
                              'spaces. Default: every representation loaded')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)
-    kw = {'n_draws': args.n_draws}
+    kw = {'n_draws': args.n_draws, 'flag_fraction': args.flag_fraction}
     if args.base_reps:
         kw['base_reps'] = [x.strip() for x in args.base_reps.split(',')]
     run(data, config, args.output, args.dataset, **kw)
