@@ -176,8 +176,26 @@ DEFAULT_NOISE_CONDITION = 'outlier_p10'
 NOISE_DRAWS = (0, 1, 2)
 
 # The detector whose per-molecule suspicion score decides what gets flagged.
-# n07's own, at n07's neighbour count, because these are n07's cleanups.
-DETECTOR_K = 10
+# n07's own, because these are n07's cleanups.
+#
+# ⛔ THE NAME WAS WRONG IN THE RESULT FILE UNTIL 2026-09-20. The file wrote
+# 'activity_cliff_aware' and 'detector_k': 10. The call is
+# `_compute_noise_scores(X_base_tr, y0, is_clf=is_clf)` with no `detector=`, so
+# it takes n07's own default, which is `cross_val` — n07_remediation.py:274.
+# That resolves to CrossValResidualEstimator, whose __init__ takes n_folds,
+# normalize, groups and random_state and no neighbour count at all, so the
+# `k: 10` that _compute_noise_scores offers is dropped by its `accepts` filter
+# (n07_remediation.py:300-302). Two things written to the result disagreed with
+# what ran: the detector's name, and a neighbour count the estimator never saw.
+# The name is now passed explicitly, so the label and the call cannot drift
+# apart again.
+DETECTOR = 'cross_val'
+
+# What every candidate inside the cleaned search is SCORED on: 'asis' is the
+# training labels the practitioner holds, 'cleaned' is the same column the
+# search trains on. Only the smoothers see this -- `remove` drops rows and its
+# search is already scored and trained on the kept rows' labels either way.
+SEARCH_SCORES_ON = 'asis'
 
 
 def search_settings(n_samples, pruning_mode='aggressive_pruning'):
@@ -348,6 +366,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     cache = bool(kwargs.get('cache', True))
     cache_dir = kwargs.get('cache_dir')
     search_verbose = bool(kwargs.get('search_verbose', False))
+    # What the candidates inside the cleaned search are SCORED on. See the
+    # comment at the branch that uses it. 'asis' is what ran before 2026-09-20.
+    search_scores_on = str(kwargs.get('search_scores_on', SEARCH_SCORES_ON))
+    if search_scores_on not in ('asis', 'cleaned'):
+        raise ValueError(
+            f"n20: search_scores_on must be 'asis' or 'cleaned', "
+            f"got {search_scores_on!r}")
 
     # ⛔ config FIRST, then the kwarg. run_all passes the caller's model list in
     # `config['models']` and never as a `models` kwarg -- the only kwarg it ever
@@ -418,13 +443,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'arm_the_question_is_about': ARM_ORDERED,
         'models': downstream_models,
         'base_rep': base_rep_name,
-        'detector': 'activity_cliff_aware',
-        'detector_k': DETECTOR_K,
+        'detector': DETECTOR,
+        'detector_takes_no_neighbour_count': (
+            'CrossValResidualEstimator takes n_folds, normalize, groups and '
+            'random_state. There is no neighbour count to record.'),
         'search_settings': {k: v for k, v in settings.items()
                             if k not in ('adaptive_pruning_schedule',
                                          'model_pruning_aggressiveness')},
         'adaptive_pruning_schedule': settings.get('adaptive_pruning_schedule'),
         'search_n_folds': search_n_folds,
+        'search_scores_on': search_scores_on,
+        'search_scores_on_note': (
+            "What every candidate inside the CLEANED search was scored on. "
+            "'asis' is the training labels the practitioner holds, which under "
+            "the injected regime are the corrupted ones. 'cleaned' is the same "
+            "column the search trains on. Only the smoothers read it: `remove` "
+            "drops rows and its search is scored and trained on the kept rows' "
+            "labels under either setting."),
         'search_budgets': list(budgets),
         'cleanup_reaches_feature_selection': reach,
         'claim_scope': (
@@ -532,7 +567,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # cleaning is decided, once per fold for all four arms.
                 sc = StandardScaler()
                 X_base_tr = sc.fit_transform(train_reps[base_rep_name])
-                suspicion = _compute_noise_scores(X_base_tr, y0, is_clf=is_clf)
+                suspicion = _compute_noise_scores(X_base_tr, y0, is_clf=is_clf,
+                                                  detector=DETECTOR)
                 if suspicion is None:
                     errors[f'{regime}|{lvl_key}|d{draw}|f{fold_i}|detector'] = (
                         'the detector would not fit on this fold')
@@ -625,7 +661,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 g_s = g_tr[keep] if g_tr is not None else None
                             else:
                                 tr_for_search = train_reps
-                                y_s = y0
+                                # WHAT EVERY CANDIDATE INSIDE THE SEARCH IS
+                                # SCORED ON, and the two cleanup families did
+                                # not get the same treatment.
+                                #
+                                # `remove` drops rows, so the branch above
+                                # scores AND trains its search on the kept
+                                # rows' labels: the cleaning reaches both
+                                # halves of the selection.
+                                #
+                                # A smoother keeps every row, so this branch
+                                # trains on the cleaned column and scored every
+                                # candidate on y0 -- the training labels the
+                                # practitioner holds, which under the injected
+                                # regime are the CORRUPTED ones. The candidate
+                                # that best predicts corrupted labels then won
+                                # the selection, which is the thing the arm
+                                # exists to avoid.
+                                #
+                                # `search_scores_on` is the axis: 'asis' is
+                                # what ran before 2026-09-20, 'cleaned' scores
+                                # on the same column it trains on and puts the
+                                # smoothers on `remove`'s footing. Measured,
+                                # not assumed; the value that ran is written to
+                                # the result file.
+                                y_s = col if search_scores_on == 'cleaned' else y0
                                 y_t = col
                                 g_s = g_tr
                             # ⛔ THE SEARCH IS KEYED ON THE LABEL COLUMN, NOT
@@ -661,8 +721,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             # is a cold rebuild of the cleaned arm, not a
                             # migration. The uncleaned arm's namespace is
                             # untouched.
+                            # BOTH columns are in the key. The digest used to
+                            # cover only the column the search TRAINS on, so
+                            # two runs that scored their candidates on
+                            # different columns read each other's stored rows
+                            # and the second one's setting never reached a fit.
                             _col_key = _label_column_key(y_t)
-                            ns_c = f'{ns}_{cleanup}_{_col_key}'
+                            _score_key = _label_column_key(y_s)
+                            ns_c = f'{ns}_{cleanup}_{_col_key}_{_score_key}'
                             search_cleaned = _run_one_search(
                                 tr_for_search, y_s, y_t, g_s,
                                 dataset_name=dataset_name,
