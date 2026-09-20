@@ -806,7 +806,11 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     # None when the strategy needs scores and they're unavailable (loud).
     if strategy in SCORE_DRIVEN_CLEANUPS:
         if noise_scores is None:
-            noise_scores = _compute_noise_scores(X_tr_s, y_tr, is_clf=is_clf)
+            # train_groups, for the same reason every other call in this file
+            # now passes this fold's scaffold groups: without them a molecule's
+            # own scaffold family trains the model that predicts it.
+            noise_scores = _compute_noise_scores(X_tr_s, y_tr, is_clf=is_clf,
+                                                 groups=train_groups)
         if noise_scores is None:
             return None
 
