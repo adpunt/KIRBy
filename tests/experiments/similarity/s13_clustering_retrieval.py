@@ -117,6 +117,11 @@ DEFAULT_N_CLUSTERS = ([int(v) for v in _ENV_CLUSTERS.split(',') if v.strip()]
 # process-wide distance coefficient. Off by default: it is a second full set of
 # cluster fits.
 _MATCHED_ON = os.environ.get('KIRBY_S13_MATCHED_CLUSTERING', '') not in ('', '0')
+# Which cluster counts the matched arm is scored at. Unset means every count in
+# the sweep; a shorter list keeps the second set of cluster fits affordable.
+_ENV_MATCHED_CLUSTERS = os.environ.get('KIRBY_S13_MATCHED_CLUSTERS')
+MATCHED_N_CLUSTERS = ([int(v) for v in _ENV_MATCHED_CLUSTERS.split(',')
+                       if v.strip()] if _ENV_MATCHED_CLUSTERS else None)
 
 # 2026-09-12 decision: s13 stops calling get_fold_best_search and reads the pool
 # — best single representation plus the top three hybrids for its downstream
@@ -360,11 +365,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     matched_method = matched_clusterer_name(coefficient)
     matched_on = bool(_MATCHED_ON and matched_method
                       and matched_method != 'kmeans')
+    matched_clusters = [nc for nc in (MATCHED_N_CLUSTERS or n_clusters_list)
+                        if nc in n_clusters_list]
     print(f"  distance coefficient={coefficient}; clustering half uses k-means "
           f"(squared euclidean); coefficient-matched clusterer="
           f"{matched_method or 'none (undefined for this coefficient)'}; "
-          f"matched arm {'ON' if matched_on else 'off'}")
-    print(f"  cluster counts: {n_clusters_list}")
+          f"matched arm "
+          f"{('ON at cluster counts ' + str(matched_clusters)) if matched_on else 'off'}")
+    print(f"  cluster counts: {n_clusters_list}; clusterer restarts: {_N_INIT}")
 
     # ── Group-aware CV folds (shared by every space + both axes) ──
     # nested_cv_outer_folds is the same group-aware split make_cv_splitter built
@@ -726,7 +734,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _acc_clu_p(sname, nc, fold_i, _pooled)
                 clusters_dropped.setdefault(sname, {}).setdefault(
                     nc, {})[fold_i] = _dropped
-                if matched_on:
+                if matched_on and nc in matched_clusters:
                     try:
                         _cm, _dm, _ = _heldout_coherence(
                             Xtr_s, y_tr, Xva_s, y_va, nc, is_clf,
