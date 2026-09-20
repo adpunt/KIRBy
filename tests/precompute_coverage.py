@@ -153,7 +153,10 @@ def main():
     from kirby.find_best_hybrid import (
         DEFAULT_ALLOCATION_METHODS, DEFAULT_IMPORTANCE_METHODS,
         DEFAULT_INTERNAL_EVALUATORS, DEFAULT_REP_COUNTS,
+        FAST_ALLOCATION_METHODS, FAST_IMPORTANCE_METHODS,
+        FAST_INTERNAL_EVALUATORS, FAST_REP_COUNTS,
     )
+    from experiments.dataset_policy import dataset_search_speed
     from experiments._shared import (
         FULL_BUDGETS, DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
         DOWNSTREAM_MODELS, DISTANCE_MODELS,
@@ -190,7 +193,26 @@ def main():
             print()
             continue
 
-        print(f"{ds}")
+        # ⛔ COUNT AGAINST THE GRID THIS DATASET ACTUALLY SEARCHES.
+        # Until 2026-09-21 this always counted against the full grid, so the
+        # twelve datasets searched at fast could never print above about 10%
+        # and looked barely started when they were nearly done. Both the
+        # precompute and, since the same day, every experiment search those
+        # twelve at speed='fast'.
+        _speed = dataset_search_speed(ds)
+        _alloc = (FAST_ALLOCATION_METHODS if _speed == 'fast'
+                  else DEFAULT_ALLOCATION_METHODS)
+        _imp = (FAST_IMPORTANCE_METHODS if _speed == 'fast'
+                else DEFAULT_IMPORTANCE_METHODS)
+        _evals = (FAST_INTERNAL_EVALUATORS if _speed == 'fast'
+                  else DEFAULT_INTERNAL_EVALUATORS)
+        _counts_all = FAST_REP_COUNTS if _speed == 'fast' else DEFAULT_REP_COUNTS
+
+        print(f"{ds}" + (f"   [speed=fast: {len(_alloc)} allocation methods, "
+                         f"{len(_imp)} importance method"
+                         f"{'s' if len(_imp) != 1 else ''}, "
+                         f"{len(_counts_all)} representation counts]"
+                         if _speed == 'fast' else ""))
         print(f"  {'pass (tier / objective / augmentation / tuned)':52s} "
               f"{'stored':>8s} {'asked':>8s} {'%':>5s} {'s/config':>9s} {'h left':>8s}")
         print(f"  {'-'*52} {'-'*8} {'-'*8} {'-'*5} {'-'*9} {'-'*8}")
@@ -203,14 +225,13 @@ def main():
                 DATASET_REPS.get(ds, {}).get('general', []) or [10])
 
             models = DISTANCE_MODELS if is_distance else DOWNSTREAM_MODELS
-            evaluators = (DISTANCE_EVALUATORS if is_distance
-                          else DEFAULT_INTERNAL_EVALUATORS)
+            evaluators = DISTANCE_EVALUATORS if is_distance else _evals
             budgets = DISTANCE_BUDGETS if is_distance else FULL_BUDGETS
-            counts = [None] if not is_predictive else DEFAULT_REP_COUNTS
+            counts = [None] if not is_predictive else _counts_all
 
             want, pairs, n_counts = expected_configs(
                 n_pool, models, evaluators,
-                len(DEFAULT_ALLOCATION_METHODS), len(DEFAULT_IMPORTANCE_METHODS),
+                len(_alloc), len(_imp),
                 len(budgets), counts)
 
             done = p['n']

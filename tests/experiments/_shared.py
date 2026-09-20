@@ -988,8 +988,35 @@ def _apply_dataset_search_speed(kwargs, dataset_name):
     if kwargs.get('speed') is not None:
         return kwargs
     speed = dataset_policy.dataset_search_speed(dataset_name)
-    if speed != 'full':
-        kwargs['speed'] = speed
+    if speed == 'full':
+        return kwargs
+    kwargs['speed'] = speed
+
+    # ⛔ AND THE MODELS MUST BE NAMED, OR fast CUTS THEM TO THREE.
+    # Experiments pass models=None deliberately, to match the cache key the
+    # precompute writes. But find_best_hybrid only applies the fast model cut
+    # inside `if models is None` (find_best_hybrid.py:8445-8455), where
+    # speed='fast' keeps the fast tier alone -- rf, lightgbm and dnn. xgboost
+    # and svm would then never be scored, and every experiment reads a recipe
+    # per name in DOWNSTREAM_MODELS: a name the search never scored comes back
+    # as (None, None) from get_best_search_for_downstream and the experiment
+    # writes no rows for that model WITHOUT SAYING SO.
+    #
+    # That is the exact defect the precompute fixed on 2026-09-18 by naming the
+    # five models on its fast passes. Setting speed here without doing the same
+    # would have put it straight back, on the experiment side, on the same
+    # twelve datasets.
+    #
+    # An explicit list also skips the `models is None` branch entirely, so the
+    # allocation, importance and representation-count lists are still shortened
+    # and only the models are spared. svm drops itself above 10,000 rows
+    # (find_best_hybrid.py:8236-8241 applies to an explicit list too), which
+    # covers the five nucleotide sets and gb_human_enhancers_cohn, so naming it
+    # costs nothing there.
+    if kwargs.get('models') is None:
+        kwargs['models'] = list(
+            DISTANCE_MODELS if str(kwargs.get('tier') or '').startswith(
+                'general_distance') else DOWNSTREAM_MODELS)
     return kwargs
 
 
