@@ -23,11 +23,37 @@ kirby.similarity.distance_config.get_distance_metric() -- manhattan unless
 explicitly still wins.
 """
 
+import os
+
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.model_selection import KFold, GroupKFold, cross_val_predict
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
+
+
+def _rf_jobs():
+    """How many cores a forest inside this module may use.
+
+    ⛔ EVERY FOREST HERE ASKED FOR EVERY CORE. Seven of them were written
+    `n_jobs=_rf_jobs()`, and nothing in the repository could change that: the local
+    runner (tests/experiments/noise/_local_run.py) rebinds the DOWNSTREAM rf
+    factory to KIRBY_RF_JOBS and never touches this file, so a run that had set
+    every downstream fit to one thread still had its DETECTOR forests fanning
+    out over the whole machine. On a shared machine already carrying other work
+    that is slower, not faster -- oof_predict was measured at 4.3 seconds on one
+    thread against 2010 seconds at every core on 2026-09-19.
+
+    The number of trees, their seeds and therefore every score are untouched by
+    this: n_jobs changes how the same forest is built, not what it is. The
+    default is -1, so a caller that sets nothing gets exactly what this module
+    did before.
+    """
+    try:
+        return int(os.environ.get('KIRBY_RF_JOBS', '-1') or -1)
+    except ValueError:
+        return -1
+
 from scipy.spatial.distance import cdist
 from kirby.similarity.distance_config import (
     resolve as resolve_distance_metric,
@@ -504,22 +530,71 @@ class CrossValResidualEstimator(NoiseEstimator):
     """
     
     def __init__(self, n_folds: int = 5, normalize: bool = True,
-                 groups=None, random_state: int = 42):
+                 groups=None, random_state: int = 42, is_clf: bool = False):
         super().__init__(random_state)
         self.n_folds = n_folds
         self.normalize = normalize
         self.groups = groups
+        # ⛔ WHAT A "RESIDUAL" IS WHEN THE LABEL IS A CLASS.
+        #
+        # This class fitted a RandomForestRegressor whatever it was handed, and
+        # took |y - prediction|. Handed the class codes 0, 1, 2 that subtracts
+        # one class number from another, so a molecule labelled class 2 that an
+        # out-of-fold model calls class 0 scores twice as suspect as one it
+        # calls class 1 -- an ordering the class numbers do not carry. Class 2
+        # is not twice class 1.
+        #
+        # With this True the out-of-fold model is a CLASSIFIER and a molecule's
+        # score is one minus the probability that model gives the class the
+        # molecule is actually labelled with. Same idea as the regression
+        # branch -- how badly a model trained on the other molecules accounts
+        # for this label -- expressed in the only units a nominal label has.
+        #
+        # False is the default and the regression branch is byte-identical to
+        # what it was, so every existing caller is unaffected.
+        self.is_clf = bool(is_clf)
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         # Out-of-fold predictions on the same scaffold-disjoint folds the other
         # estimators use. Without groups a molecule's own scaffold-mates train
         # the model that predicts it, so its residual is small for a reason
         # that has nothing to do with its label being noisy.
+        if self.is_clf:
+            from sklearn.ensemble import RandomForestClassifier
+            classes = np.unique(np.asarray(y))
+            pos = {c: i for i, c in enumerate(classes)}
+
+            def fold_fn_clf(X_tr, y_tr, X_te):
+                model = RandomForestClassifier(
+                    n_estimators=100,
+                    random_state=self.random_state,
+                    n_jobs=_rf_jobs(),
+                )
+                model.fit(X_tr, y_tr)
+                proba = model.predict_proba(X_te)
+                # One column per class this OUTER label column carries, so a
+                # fold whose training rows are missing a class still lines up.
+                full = np.zeros((proba.shape[0], len(classes)), dtype=float)
+                for j, c in enumerate(model.classes_):
+                    full[:, pos[c]] = proba[:, j]
+                return {f'p{j}': full[:, j] for j in range(len(classes))}
+
+            oof = self._oof_apply(X, y, fold_fn_clf, n_folds=self.n_folds,
+                                  groups=self.groups)
+            P = np.column_stack([oof[f'p{j}'] for j in range(len(classes))])
+            own = np.array([pos[c] for c in np.asarray(y)])
+            p_true = P[np.arange(len(y)), own]
+            scores = 1.0 - p_true
+            self.noise_scores_ = scores
+            self.cv_predictions_ = classes[np.argmax(P, axis=1)]
+            self.cv_probabilities_ = P
+            return scores
+
         def fold_fn(X_tr, y_tr, X_te):
             model = RandomForestRegressor(
                 n_estimators=100,
                 random_state=self.random_state,
-                n_jobs=-1,
+                n_jobs=_rf_jobs(),
             )
             model.fit(X_tr, y_tr)
             return {'pred': model.predict(X_te)}
@@ -528,10 +603,10 @@ class CrossValResidualEstimator(NoiseEstimator):
                               groups=self.groups)
         cv_pred = oof['pred']
         residuals = np.abs(y - cv_pred)
-        
+
         if self.normalize:
             residuals = residuals / (np.std(y) + 1e-10)
-        
+
         self.noise_scores_ = residuals
         self.cv_predictions_ = cv_pred
         return residuals
@@ -564,7 +639,7 @@ class EnsembleDisagreementEstimator(NoiseEstimator):
                     n_estimators=50,
                     max_features='sqrt',
                     random_state=self.random_state + i,
-                    n_jobs=-1
+                    n_jobs=_rf_jobs()
                 )
                 model.fit(X_tr, y_tr)
                 preds[:, i] = model.predict(X_ev)
@@ -627,7 +702,7 @@ class LeaveOneOutEstimator(NoiseEstimator):
 
             def _fold(X_tr, y_tr, X_ev):
                 m = RandomForestRegressor(
-                    n_estimators=200, random_state=self.random_state, n_jobs=-1)
+                    n_estimators=200, random_state=self.random_state, n_jobs=_rf_jobs())
                 m.fit(X_tr, y_tr)
                 return {'pred': m.predict(X_ev)}
 
@@ -640,7 +715,7 @@ class LeaveOneOutEstimator(NoiseEstimator):
                 n_estimators=200,
                 oob_score=True,
                 random_state=self.random_state,
-                n_jobs=-1
+                n_jobs=_rf_jobs()
             )
             model.fit(X, y)
             pred = model.oob_prediction_
@@ -974,7 +1049,7 @@ class ConformalEstimator(NoiseEstimator):
         if self.base_model == 'rf':
             from sklearn.ensemble import RandomForestRegressor
             model = RandomForestRegressor(n_estimators=100,
-                                          random_state=self.random_state, n_jobs=-1)
+                                          random_state=self.random_state, n_jobs=_rf_jobs())
             model.fit(X_fit, y_fit)
             y_pred_cal = model.predict(X_cal)
             cal_std = np.array([t.predict(X_cal) for t in model.estimators_]).std(axis=0)
@@ -1197,7 +1272,7 @@ class BayesianRFEstimator(NoiseEstimator):
 
         def fold_fn(X_tr, y_tr, X_ev):
             rf = RandomForestRegressor(n_estimators=self.n_estimators,
-                                       random_state=self.random_state, n_jobs=-1)
+                                       random_state=self.random_state, n_jobs=_rf_jobs())
             rf.fit(X_tr, y_tr)
             tree_preds = np.array([t.predict(X_ev) for t in rf.estimators_])
             pred = rf.predict(X_ev)
@@ -1294,7 +1369,7 @@ class QuantileForestEstimator(NoiseEstimator):
         def fold_fn(X_tr, y_tr, X_ev):
             qrf = RandomForestQuantileRegressor(
                 n_estimators=self.n_estimators,
-                random_state=self.random_state, n_jobs=-1)
+                random_state=self.random_state, n_jobs=_rf_jobs())
             qrf.fit(X_tr, y_tr)
             pred = np.atleast_2d(qrf.predict(X_ev, quantiles=qs))
             return {'q_lo': pred[:, 0], 'q_med': pred[:, 1], 'q_hi': pred[:, 2]}
