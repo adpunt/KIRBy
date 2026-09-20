@@ -66,7 +66,7 @@ class NoiseMitigationMethod(ABC):
 
 def compute_distance_matrix(X, metric=None, feature_weights=None,
                             standardize=True, weight_convention='mean1',
-                            p=None):
+                            p=None, weight_exponent=None):
     """
     Compute pairwise distance matrix using scipy.cdist.
 
@@ -92,6 +92,14 @@ def compute_distance_matrix(X, metric=None, feature_weights=None,
         weight_convention: 'mean1' (default, f17's measured choice), 'sum1' or
                 'raw'. Rankings are identical under all three; absolute cutoffs
                 and kernel widths are not.
+        weight_exponent: the power the normalised weight vector is raised to
+                before it multiplies the standardised features. None (the
+                default) reads KIRBY_IMPORTANCE_EXPONENT, and an unset
+                environment falls through to the exponent the metric's own
+                family implies -- 1 for manhattan, 0.5 for euclidean and
+                cosine, 2 for minkowski p=0.5. Those three differ, so the same
+                importance vector does not mean the same weighting under two
+                metrics unless this is set.
 
     Returns:
         D: Distance matrix (n_samples, n_samples)
@@ -166,7 +174,7 @@ def compute_distance_matrix(X, metric=None, feature_weights=None,
         X_proc, scipy_kw = fold_weights(
             X_proc, feature_weights, metric,
             p=(p if metric == 'minkowski' else None),
-            convention=weight_convention)
+            convention=weight_convention, exponent=weight_exponent)
 
     # Handle special metrics
     if metric == 'mahalanobis':

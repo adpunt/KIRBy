@@ -2707,6 +2707,35 @@ def evaluate_weighted_knn(
     return results
 
 
+def importance_feature_weights(importance_scores, exponent=None):
+    """Importance scores turned into the multiplier for standardised features.
+
+    s13 and five other similarity experiments wrote `np.sqrt(np.maximum(imp, 0))`
+    inline: the features are multiplied by the square root of the importance,
+    whatever distance is in force. compute_distance_matrix does something else
+    for the same quantity -- it raises the importance to the power its metric's
+    family implies, which is 1 under manhattan and 0.5 under euclidean. Both
+    were called "the sqrt weighting"; they are the same number only under
+    euclidean and cosine.
+
+    `exponent` is the power the clipped importance is raised to. None reads
+    KIRBY_IMPORTANCE_EXPONENT, and an unset environment gives 0.5, which is what
+    the inline expression computed. 0 returns an all-ones vector -- every
+    feature weighs the same, so the geometry is the unweighted one.
+
+    Normalising is left to the caller, which is where it already is.
+    """
+    from kirby.similarity.preprocessing import importance_exponent_override
+    alpha = exponent
+    if alpha is None:
+        alpha = importance_exponent_override()
+    if alpha is None:
+        alpha = 0.5
+    w = np.maximum(np.nan_to_num(np.asarray(importance_scores, dtype=np.float64),
+                                 nan=0.0, posinf=0.0, neginf=0.0), 0.0)
+    return np.power(w, float(alpha))
+
+
 def make_nearest_neighbors(n_neighbors, metric=None, **kwargs):
     """A sklearn NearestNeighbors that obeys --distance-metric.
 
