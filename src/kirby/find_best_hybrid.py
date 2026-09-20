@@ -624,10 +624,16 @@ def _refuse_cold_search(*, tier, objective, dataset_name, result_db_identity,
     want = _expected_config_count(base_reps, models, evaluators,
                                   allocation_methods, importance_methods,
                                   budgets, rep_counts)
+    from .result_cache import StaleResultDB as _StaleDB
     try:
         from .result_cache import ResultCache as _RC
         with _RC(result_db_dataset, cache_dir=result_db_cache_dir) as _rc:
             have = len(list(_rc.fetch_rows(result_db_identity)))
+    except _StaleDB:
+        # NOT swallowed. This guard exists to stop a run that would search from
+        # nothing, and a store it cannot open is exactly that case: returning
+        # here lets the cold search it was built to refuse proceed unguarded.
+        raise
     except Exception:
         return  # never let the guard itself break a run
 
@@ -5883,6 +5889,19 @@ def _tune_identity_token(tune: bool, tune_n_iter: int,
     return f'tuned{int(tune_n_iter)}' + ('_k' if tune_knn_k else '')
 
 
+def _distance_identity_token() -> str:
+    """Which pairwise distance this process computes neighbours under.
+
+    One of manhattan / euclidean / cosine / minkowski_p0.5. Unlike the tuning
+    token above, the default is written out in full rather than as '': every
+    result_db/*.db predating this column raises on open and has to be deleted
+    anyway (there is no migration), so there is no set of old rows for a blank
+    to keep matching.
+    """
+    from kirby.similarity.distance_config import get_distance_metric
+    return str(get_distance_metric())
+
+
 def _result_to_db_row(identity: Dict[str, Any], result: dict,
                       ranking_metric: Optional[str],
                       config_const: Optional[Dict[str, Any]] = None,
@@ -8816,6 +8835,13 @@ def _find_best_hybrid_inner(
             # tier marker could read a predictive row into a geometry run.
             # An identity column of its own since 2026-09-10.
             'objective': _esm.get('objective'),
+            # Which pairwise distance the neighbours and the budget split were
+            # computed under. Read from the process-wide setting rather than
+            # from expected_search_meta, because that is the one place
+            # --distance-metric and KIRBY_DISTANCE_METRIC land. Nothing carried
+            # it into the identity before 2026-09-20, so a euclidean run read a
+            # manhattan run's rows.
+            'distance_metric': _distance_identity_token(),
             'labels_hash': _esm.get('labels_hash'),
             'groups_hash': _esm.get('groups_hash'),
             'n_folds': _esm.get('n_folds'),

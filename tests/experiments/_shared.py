@@ -1097,6 +1097,8 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
         reps, labels, groups, n_outer_folds, seed, task_type)
     n_outer = len(outer_folds)
 
+    from kirby.result_cache import StaleResultDB as _StaleResultDB
+
     results = PrecomputeResults()
     t_start = time.time()
 
@@ -1142,6 +1144,11 @@ def precompute_nested_cv_searches(reps, labels, groups, config,
                 results[aug_cond][fold_i] = search
                 if verbose:
                     print(f" done ({time.time() - t0:.1f}s)")
+            except _StaleResultDB:
+                # Same reason as the other three: a store written under an
+                # older column list fails every fold, and a None fold is a gap
+                # the caller fills from the remaining folds rather than a stop.
+                raise
             except Exception as e:
                 # Fold value stays None; the exception goes into
                 # results.failures (fold index in the record) so the caller
@@ -1255,6 +1262,7 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
 
     namespace = (cache_namespace if cache_namespace is not None
                  else nested_cv_cache_namespace(fold_i, n_outer_folds, seed))
+    from kirby.result_cache import StaleResultDB as _StaleResultDB
     results = PrecomputeResults()
 
     for aug_cond in aug_conditions:
@@ -1287,6 +1295,9 @@ def search_on_fold(reps, labels, groups, *, train_idx, fold_i, n_outer_folds,
             if objective is not None:
                 _kw['objective'] = objective
             results[aug_cond] = find_best_hybrid(**_kw)
+        except _StaleResultDB:
+            # Same reason as the other three. See result_cache.StaleResultDB.
+            raise
         except Exception as e:
             results[aug_cond] = None
             rec = results.record_failure(e, tier=tier, dataset=dataset_name,
@@ -5238,6 +5249,8 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         aug_conditions.append('capped')   # gate removed 2026-08-27
     aug_conditions = _local_aug_conditions(aug_conditions)
 
+    from kirby.result_cache import StaleResultDB as _StaleResultDB
+
     results = PrecomputeResults()
     t_start = time.time()
 
@@ -5294,6 +5307,14 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 else:
                     print(f" done {elapsed:.1f}s (no results)")
 
+        except _StaleResultDB:
+            # NOT recorded as a per-condition failure. Every other failure here
+            # is one condition's problem and the remaining conditions are still
+            # worth computing; a result_db written under an older column list
+            # fails EVERY condition and every later read of the same store, so
+            # the run's own summary line reads "0/1 searches" and it carries on
+            # to produce numbers from nothing. Stop instead.
+            raise
         except Exception as e:
             if verbose:
                 print(f" FAILED: {e}")
@@ -5744,6 +5765,7 @@ def _iter_pool_searches(reps, labels, groups, *, pool, dataset_name,
     a swallowed error here silently drops the hybrid from an experiment.
     """
     from kirby.find_best_hybrid import OBJECTIVE_PREDICTIVE as _OBJ_PRED
+    from kirby.result_cache import StaleResultDB as _StaleResultDB
     for tier, aug_cond, augs, obj in pool:
         _geo = obj != _OBJ_PRED
         # The in-memory dicts are filled by a predictive precompute and record
@@ -5763,6 +5785,16 @@ def _iter_pool_searches(reps, labels, groups, *, pool, dataset_name,
                 **({'objective': obj} if _geo else {}),
                 **extra,
             )
+        except _StaleResultDB:
+            # NOT swallowed, and not turned into a skipped pool member. A
+            # result_db written under an older column list means every member
+            # of this pool fails to open, so the loop yields nothing and the
+            # caller builds its recipe from an EMPTY pool -- and then reports a
+            # number that looks like every other run's. Measured 2026-09-20 on
+            # herg_ki, caco2 and adme_mdr1: the warning printed, the run
+            # continued, and its recipe came from 0 rows while the cells
+            # already on disk had taken theirs from 168, 168 and 150.
+            raise
         except Exception as e:
             print(f"[pool] WARNING: {tier}/{aug_cond}/{obj} search failed: "
                   f"{type(e).__name__}: {e}")

@@ -64,6 +64,18 @@ IDENTITY_COLS: Tuple[str, ...] = (
     # primary key: every result_db/*.db written before that date has to be
     # deleted (there is no migration -- see the module note).
     'objective',
+    # WHICH PAIRWISE DISTANCE the search's neighbours and its budget split were
+    # computed under: one of manhattan / euclidean / cosine / minkowski_p0.5,
+    # the four names kirby.similarity.distance_config sweeps, set per run by
+    # --distance-metric or KIRBY_DISTANCE_METRIC and manhattan when neither
+    # says otherwise. Nothing recorded it before 2026-09-20, so a search stored
+    # under manhattan was served unchanged to a run launched under euclidean:
+    # the second run fitted nothing, reported the first's scores, widths and
+    # budget splits as its own, and the axis the similarity suite exists to
+    # sweep could not be swept. Added 2026-09-20, which widens the primary key:
+    # every result_db/*.db written before that date has to be deleted (there is
+    # no migration -- see the module note).
+    'distance_metric',
     # WHICH REPRESENTATIONS the search ran over, as sorted (name, n_features)
     # pairs. Until 2026-09-10 this was recorded as plain data and never matched
     # on, and the comment here said the pool was "fixed by tier+config, so it
@@ -142,6 +154,23 @@ RESULT_COLS: Tuple[str, ...] = (
 )
 
 ALL_COLS: Tuple[str, ...] = KEY_COLS + DATA_COLS + RESULT_COLS
+
+
+class StaleResultDB(RuntimeError):
+    """A result_db file written under an older column list.
+
+    Its own type, not a bare RuntimeError, because THREE callers wrap the open
+    in `except Exception` and degrade instead of stopping:
+    find_best_hybrid._refuse_cold_search returns (so a cold search runs
+    unguarded), _shared._iter_pool_searches prints a warning and continues WITH
+    AN EMPTY POOL, and _shared's precompute loop records a failure and reports
+    "0/1 searches". All three then produce numbers. A run whose recipe came from
+    an empty pool is indistinguishable, in the results table, from one whose
+    recipe came from 168 stored rows -- measured on herg_ki and caco2 on
+    2026-09-20, when adding the distance_metric column made every open on the
+    machine raise and no caller stopped. Each of the three now re-raises this
+    type and swallows everything else as before.
+    """
 
 
 def canon(v: Any) -> str:
@@ -253,10 +282,14 @@ class ResultCache:
         have = {r[1] for r in cur.execute('PRAGMA table_info(results)')}
         missing = [c for c in ALL_COLS if c not in have]
         if missing:
-            raise RuntimeError(
+            raise StaleResultDB(
                 f"{self.path} was written under an older column list and is "
                 f"missing {missing}. There is no migration path by design: "
-                f"delete this file and re-run.")
+                f"delete this file and re-run. Do NOT delete it while jobs are "
+                f"reading it -- cells computed after the rebuild would take "
+                f"their recipe from a different set of rows than cells "
+                f"computed before it, in one table, with nothing recording "
+                f"which.")
         # Index the identity prefix so per-identity SELECTs are fast.
         cur.execute('CREATE INDEX IF NOT EXISTS ix_identity ON results '
                     f'({", ".join(IDENTITY_COLS)})')
