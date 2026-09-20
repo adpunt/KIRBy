@@ -34,15 +34,15 @@
 #   bash tests/slurm_scripts/extend_precompute_chain.sh --go
 #   bash tests/slurm_scripts/extend_precompute_chain.sh --links 2 --go
 #   bash tests/slurm_scripts/extend_precompute_chain.sh --datasets "logd caco2" --go
-#   bash tests/slurm_scripts/extend_precompute_chain.sh --repoint --go
+#   bash tests/slurm_scripts/extend_precompute_chain.sh --no-repoint --go
 #
 #   --links N       extra links per dataset, default 1
 #   --wall T        default 24:00:00
 #   --partition P   default medium,long
 #   --datasets "A B"  only these. Default: every dataset with a pc_ job queued
-#   --repoint       also point each pending x_*_<dataset> job at the new last
-#                   link, so it cannot start on a precompute that is still
-#                   going. Without this they keep waiting for the old last link.
+#   --no-repoint    leave the experiment jobs pointed at the link they were
+#                   submitted against. BY DEFAULT they are repointed at the new
+#                   last link, so none can start while a precompute still runs.
 #   --go            actually submit. Without it, nothing is sent.
 set -uo pipefail
 
@@ -53,7 +53,7 @@ PARTITION="medium,long"
 LINKS=1
 PRUNING="${KIRBY_PRUNING:-calibrated}"
 EXPLICIT=""
-REPOINT=false
+REPOINT=true
 GO=false
 
 while [[ $# -gt 0 ]]; do
@@ -64,6 +64,7 @@ while [[ $# -gt 0 ]]; do
         --datasets)  EXPLICIT=$2; shift 2 ;;
         --pruning)   PRUNING=$2; shift 2 ;;
         --repoint)   REPOINT=true; shift ;;
+        --no-repoint) REPOINT=false; shift ;;
         --go)        GO=true; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
@@ -85,7 +86,7 @@ if [ -n "$EXPLICIT" ]; then
     DATASETS="$EXPLICIT"
 else
     DATASETS=$(printf '%s\n' "$QUEUE" | awk -F'|' '$2 ~ /^pc_/ {print $2}' \
-               | sed -E 's/^pc_//; s/_general_.*$//; s/_[0-9]+$//' \
+               | sed -E 's/^pc_//; s/_general_.*$//; s/_x?[0-9]+$//' \
                | sort -u | tr '\n' ' ')
 fi
 DATASETS=$(echo "$DATASETS" | xargs)
@@ -97,23 +98,33 @@ echo " datasets     $N_DS"
 echo " extra links  $LINKS each, ${WALL} per link"
 echo " partition    $PARTITION      account $ACCOUNT"
 echo " pruning      $PRUNING"
-echo " repoint      $([ "$REPOINT" = true ] && echo 'yes — experiment jobs will wait for the new last link' || echo 'no — experiment jobs keep waiting for the old one')"
+echo " repoint      $([ "$REPOINT" = true ] && echo 'YES — every experiment job moves onto the new last link' || echo 'no — experiment jobs keep waiting for the link they have')"
 echo " mode         $([ "$GO" = true ] && echo 'SUBMITTING' || echo 'dry run, nothing sent')"
 echo "=========================================================="
 echo ""
 
 for DS in $DATASETS; do
-    # Every job queued for this dataset, whatever its name or state. The new
-    # link waits for all of them, so it can never write the database beside one.
+    # Every job queued for this dataset, whatever its state. The new link waits
+    # for all of them, so it can never write the database beside one.
+    #
+    # ⛔ THE NAME IS MATCHED WHOLE, NOT AS A PREFIX. A precompute job is
+    # pc_<dataset>_<link>, pc_<dataset>_x<link> from this script, or the older
+    # pc_<dataset>_general_<condition>. Matching "^pc_herg_" instead gave herg
+    # every job belonging to herg_ki, because that name starts the same way.
+    _PAT="^pc_${DS}_(x?[0-9]+|general_.*)$"
     WAIT_ON=$(printf '%s\n' "$QUEUE" \
-              | awk -F'|' -v d="$DS" '$2 == "pc_" d || $2 ~ "^pc_" d "_" {printf "%s:", $1}' \
-              | sed 's/:$//')
+              | awk -F'|' -v p="$_PAT" '$2 ~ p {printf "%s:", $1}' | sed 's/:$//')
     N_WAIT=$([ -n "$WAIT_ON" ] && echo "$WAIT_ON" | tr ':' '\n' | wc -l | tr -d ' ' || echo 0)
 
     MEM=64G
     case "$DS" in nt_*|gb_*|tcga_*|kiba|bindingdb_kd|qm9) MEM=128G ;; esac
 
-    echo "$DS  —  waits for $N_WAIT queued job(s), ${MEM}"
+    echo "$DS   ($MEM)"
+    # Name and state of each one, so the dependency list is readable rather
+    # than a row of job numbers.
+    printf '%s\n' "$QUEUE" | awk -F'|' -v p="$_PAT" \
+        '$2 ~ p {printf "   waits for %-12s %-34s %s\n", $1, $2, $3}'
+    [ "$N_WAIT" = "0" ] && echo "   waits for nothing — no precompute queued for it"
 
     LAST="$WAIT_ON"
     for L in $(seq 1 "$LINKS"); do
