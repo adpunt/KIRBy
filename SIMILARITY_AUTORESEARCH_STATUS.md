@@ -99,6 +99,43 @@ Held-out delta in label units at exponent 0.5: caco2 manhattan +0.0181 against
 euclidean +0.0236; adme_mdr1 +0.0504 against +0.0594; herg_ki +0.0245 against
 +0.0023. Manhattan is the default because f18 measured it on herg_ki and logd.
 
+**s13 clustering — the headline subtracted coherence at 3 clusters from
+coherence at 10.** Every space is scored at 3, 5 and 10 clusters and each arm
+keeps its own best count per fold. Label coherence rises with the count — at 10
+clusters it is higher than at 3 in 44 of the 50 (dataset, space) pairs on disk —
+because more clusters means fewer molecules per cluster and a smaller
+within-cluster standard deviation. On herg_ki the hybrid's best count is 3 and
+the best single representation's is 10, so the reported -0.1183 is 0.3866
+against 0.5050, at two different granularities. Held-out label coherence delta,
+unitless, higher better, positive means the hybrid won, 4 paired folds on both
+arms (fold 0 excluded because the pool pruned on its scores):
+
+    clusters         caco2   herg_ki  adme_mdr1
+       3           +0.0145   -0.0129    +0.0340
+       5           +0.0519   +0.0584    +0.0067
+      10           -0.0381   -0.2417    +0.0264
+    each arm free  -0.0381   -0.1183    +0.0264
+
+At 5 clusters the hybrid wins all three.
+
+**A cluster holding fewer than 2 held-out molecules contributes no term, and
+which spaces lose clusters is not even.** Summed over 5 folds on herg_ki at 10
+clusters, ecfp4 loses 16 of its 50 clusters and top_torsion 20 of 50, while the
+six hybrid spaces lose between 0 and 4. ecfp4 is the single representation that
+wins at that count, and its 0.4761 is a mean over the clusters that held 2 or
+more held-out molecules — about 34 of 50. The classification purity branch was
+given the same 2-molecule floor in `df7c7fe`; all three datasets here are
+regression, so that branch never fires on them.
+
+**s13's PCA control was matched on one dataset of three.** `pca_matched` is
+fitted at 100 components on every fold. Each hybrid slot's width is whatever
+budget its recipe chose, from 25, 100 and 250. Of the 30 (hybrid slot, fold)
+pairs per dataset, the control's 100 components equal the slot's feature count
+in 29 on adme_mdr1, 15 on herg_ki and 5 on caco2 — 24 of caco2's 30 are 250
+features wide. The per-width controls added in `df7c7fe` did not fix it: a width
+that occurred on one fold produced a control scored on one fold beside a hybrid
+scored on five, and the two means were read side by side.
+
 **s10 GP — a null, and a correction.** Multiplying features by the square root
 of their importance destroys an RBF kernel: the weighted arm returned the
 training mean on all three datasets (herg_ki label spread 0.9151, weighted arm
@@ -402,3 +439,103 @@ adme_solubility while the same bits under Tanimoto reach 0.654 and 0.331.
 
 Wall clock: 39 s per dataset with the conformer cache warm.
 
+### `similarity_noise_cleaning.py` — the structure-selected space does not find corrupted labels better than the count fingerprint
+
+Corrupted labels are injected at three noise widths and three contaminated
+shares, three injection seeds each. Detection is an AUROC: does a corrupted
+molecule disagree with its neighbours in this space? Recovery is a correlation
+between the correction the neighbours apply and the error that was injected.
+Both on the held-out half of the molecules, with every fitted step fitted on the
+other half.
+
+    herg_ki, scored on 706 held-out molecules and 2,005 of its 8,000 pairs
+      space                                      detect AUROC   recovery corr
+      ecfp4_count Tanimoto (baseline)                  0.6490          0.7860
+      count+descriptor survivors (coarse x0.5)         0.6491          0.7935
+      count+survivors+pharmacophore+fine2D             0.6422          0.8002
+
+    adme_solubility, scored on 1,087 held-out molecules and 2,022 pairs
+      space                                      detect AUROC   recovery corr
+      ecfp4_count Tanimoto (baseline)                  0.6640          0.8043
+      count+descriptor survivors (equal)               0.6753          0.7966
+      count+survivors+pharmacophore+fine2D             0.6673          0.8103
+
+On herg_ki the structure-selected space loses detection by 0.0068 AUROC and
+wins recovery by 0.0142. On adme_solubility it wins detection by 0.0033 AUROC
+and recovery by 0.0061. Every one of those four numbers is smaller than the gap
+between the two spaces inside the same column, so nothing here separates.
+
+**The drop-one descriptor selection picks a different set on each half of the
+molecules.** On herg_ki it keeps 55 of 208 RDKit descriptors when fitted on one
+half and 64 of 208 when fitted on the other. On adme_solubility, 54 and 57.
+Both halves are the same dataset and the same procedure.
+
+Wall clock: 681 s herg_ki, 1,059 s adme_solubility.
+
+**logd was not run for this one and it is the only script in the group that
+would not have read the same molecules.** `similarity_noise_cleaning.run` calls
+`load_prepared(dataset, cap=None)` at line 320, so logd arrives as all 5,039
+molecules, split 2,541 fit and 2,498 held-out. Every other script in the
+directory takes the default cap and gets 1,427. Both cite a user decision dated
+2026-09-11 in their own comments. Its distance matrices are 5,039 by 5,039, and
+it was stopped at 658 MB resident with the machine at 14.4 GB of 15.4 GB swap.
+
+### `triplet_similarity.py` — the two arms of one method train on triplet counts 155 times apart
+
+Learned distance on herg_ki, five folds by scaffold group, each fold's encoder
+trained on its own training scaffolds and scored on the held-out ones. Activity
+Spearman at five neighbours, held out:
+
+    fold   count fingerprint   structural triplets   activity triplets
+    0                 0.7977                0.7493              0.8410
+    1                 0.6821                0.6720              0.7678
+    2                 0.6718                0.6347                   —
+
+The counts underneath those columns are the finding. A triplet survives when
+the anchor's positive is closer than its negative by less than the margin, so a
+pass with no surviving triplets teaches the encoder nothing. Per pass, out of
+20,000 candidate triples drawn:
+
+    arm                   surviving triplets per pass (min / median / max)
+    structural positive             106 / 127 / 154     (fold 0)
+    activity positive         19,730 / 19,759 / 19,788  (fold 0)
+
+The structural arm defines a positive as a molecule sharing the anchor's
+Bemis-Murcko scaffold. The activity arm defines it as the molecule with the
+smaller absolute activity gap. The first finds a usable triple in 127 of 20,000
+draws, the second in 19,759 of 20,000. Over 40 passes the structural arm trains
+on 5,101 triples and the activity arm on 790,333. So the two arms differ in
+what defines a positive and in how many examples the encoder sees, two ways at
+once, and the file reports them as one comparison.
+
+Wall clock: about 15 minutes per fold for all three arms, on a machine at load
+average 300.
+
+## Two cache facts that cost wall clock
+
+`shape_similarity.py` prints `spatial cache has 1415 rows but records no
+molecule list -- rebuilding` and regenerates every ETKDG conformer for herg_ki.
+`sim_herg_ki_spatial.npz` is on disk, dated 19 July, with the right number of
+rows. It is rebuilt on every run because it stores no list of which molecules
+those rows are. The rebuild had taken 68 minutes of wall clock and was still
+going.
+
+`aug3d_similarity.py` prints `3d-aug cache hit` on all three datasets and
+finishes a dataset in 39 to 47 s. Same kind of cache, written the same week,
+and it records what it holds.
+
+## What is broken, in one place
+
+| what | what is wrong |
+|---|---|
+| `ranker_experiment.py` | not on disk, deleted in `4ab874c`. Its two result files are still in the directory and nothing can regenerate them |
+| `blacklist.py` | not on disk, deleted in `df7c7fe`. Its procedure now lives in `src/kirby/similarity/selection.select_saboteur_drop`, which `winning_recipe_honest.py` calls |
+| `build_adme_solubility.py` | not on disk, deleted in `df7c7fe`. `sim_adme_solubility.npz` still works, but it cannot be rebuilt from this directory |
+| `winning_recipe_reselected.py` | EXPERIMENTS_FINALIZED.md documents it. `git log --all` over that path returns nothing. The file it describes is `winning_recipe_honest.py` |
+| `run_battery_moleculeace.py` and `build_moleculeace.py` | the `MoleculeACE` package is not installed here. The builder locates its CSVs by globbing inside that package's install directory, so there is nothing to build from and nothing to score |
+| `feature_type_study.py` | no `if __name__` block, so it cannot be run. Its only caller is `tests/experiments/opig_scaffold_similarity.py`, outside this directory |
+| `augmented_descriptor_reps.py` | `padelpy` is absent, so its PaDEL arm cannot be built. PDV and Mordred both build |
+| `shape_similarity.py` | runs, but rebuilds its conformer cache every time; see above |
+
+Nothing in this group was fixed by editing it. Every script that runs today ran
+unmodified.
