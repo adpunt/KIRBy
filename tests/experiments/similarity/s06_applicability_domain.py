@@ -45,6 +45,16 @@ is train-only and consistent). That entry was recorded against the pooled
 correlation, which was the only one stored at the time; the per-fold mean
 added on 2026-08-26 is a separate number and was not part of it.
 
+2026-09-20: the paragraph above has not held on the three datasets run since.
+In tests/results_local_sim/s06_applicability_domain, every one of the 18 pooled
+arms is a POSITIVE Spearman on all three: caco2 0.1403 to 0.2540, herg_ki 0.0768
+to 0.2977, adme_mdr1 0.0432 to 0.3494. The de-tautologised block, where the
+errors come from a forest that never saw the hybrid features, is positive in all
+18 arms on all three as well: 0.1456 to 0.2408, 0.0925 to 0.3040, 0.0719 to
+0.3840. None of those three datasets is one the 2026-06-03 entry was written
+from, and its own run is not on disk here, so this is a disagreement between two
+sets of datasets and not a correction of that entry.
+
 2026-09-12 (owner's decision): the hybrid this experiment measures distance in
 may now also come from a search run under objective='similarity' -- a search
 whose features were chosen to make the distance geometry predict each
