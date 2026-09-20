@@ -28,10 +28,10 @@ Two categories, and they need different work:
 | s02 | method | yes, 3/3 | yes | **yes** — 20 cells per dataset, all three complete |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
 | s04 | method | yes, 3/3 twice | yes | **yes** — four levers, 48 settings |
-| s05 | method | yes, 3/3 | yes | **partial** — knobs added, never re-run with them |
+| s05 | method | yes, 3/3 | yes | **partial** — knobs added, re-run still in flight (2026-09-21) |
 | s06 | method | yes, 3/3 twice | yes | **none** |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
-| s09 | investigation | **never run** | no | n/a |
+| s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
 | s10 | method | **partial** — has never completed a full run | yes | **partial** |
 | s11 | method | yes, 3/3 at two budgets | yes | **yes** |
 | s12 | method | yes, 3/3 twice | yes | **yes** |
@@ -41,8 +41,9 @@ Two categories, and they need different work:
 
 | group | scripts | note |
 |---|---|---|
-| s09 | 1 | reads s02/s04/s05/s06/s08, all of which now exist on disk |
-| standalone | `similarity_optimized_hybrid`, `structural_geometry_survey` | — |
+| s09 | 1 | opened 2026-09-21. Ran on all three, read all five inputs, wrote 11 series |
+| standalone | `similarity_optimized_hybrid` | imports and prints help. `tests/results/sim_optimized_hybrid/` exists and is empty — nothing has ever been written to it |
+| standalone | `structural_geometry_survey` | cannot address these three. It reads heavy and light chain sequences, and its registry holds 31 antibody datasets — caco2, herg_ki and adme_mdr1 are not among them |
 | `similarity_metrics/` | ~25 per EXPERIMENTS_FINALIZED.md | several are method experiments: nary, triplet, noise-cleaning, creative_hybrids |
 
 ---
@@ -145,6 +146,45 @@ training mean on all three datasets (herg_ki label spread 0.9151, weighted arm
 **s10 q-RASAR — a null.** The four neighbour features carry real signal alone
 (pdv's four reach 0.6730 pKi against 0.9160 for a mean predictor) and add
 nothing to a forest that already has the features.
+
+---
+
+## What s09 says across three datasets
+
+Ran 2026-09-21 against `tests/results_local_sim`. All five inputs loaded for all
+three datasets, all fifteen (dataset, input) pairs stamped
+`per_file_2026_09_18`, so no column was held back for mixed selection rules. It
+wrote eleven series, each carrying three numbers — one per dataset — and never
+averages them.
+
+**The signed-rank test is not worth reading at three datasets.** Enumerated over
+all eight sign patterns of three values, a two-sided Wilcoxon can return only
+0.25, 0.5, 0.75 or 1.0. The floor of 0.25 is reached whenever all three share a
+sign, no matter how large they are: three deltas of +5, +9 and +12 give the same
+0.25 as +0.0001, +0.0002 and +0.0003. The p-value therefore carries nothing the
+three signs do not already carry. Read the three per-dataset numbers.
+
+s05's held-out kNN delta, the column s09 reads as `knn_delta_heldout`, in RMSE
+where positive means the hybrid beat the best single representation:
+
+    caco2 +0.0134, herg_ki -0.0105, adme_mdr1 +0.0292
+
+**The two sides of s09's own `knn_delta` are not picked over the same number of
+choices.** The hybrid side takes the best of 36 cells — 3 budgets x 2 search
+families x 3 ranks within a family x 2 neighbour counts. The baseline side takes
+the best of 7 representations, each already reduced to its own better neighbour
+count out of 2, so 14 cells. So the hybrid side maximises over 36 and the
+baseline side over 14, and the difference between them is read as a win for the
+hybrid. `knn_delta_heldout` does not have this problem: it re-picks both sides on
+the other folds.
+
+Four things an earlier audit listed, re-checked against the code on 2026-09-21:
+s09 is absent from `SINGLE_DATASET_EXPERIMENTS`, so `run_dataset.py` rejects it —
+it takes `--datasets` and is run directly instead. Neither s09's docstring nor
+`_summary_keys.py` names s07; the only mention left in the suite is
+`similarity_helpers.py:399`, which calls it deleted. The NaN guards are present
+and fired: the ratio column, which is exactly 1.00 on all three datasets,
+recorded `wilcoxon_skipped` with scipy's own reason rather than a p-value.
 
 ---
 
