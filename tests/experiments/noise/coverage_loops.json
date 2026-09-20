@@ -137,7 +137,7 @@
       "before": "0.2845 detection average precision on held-out fold 0 and 0.2056 on held-out fold 1, groups withheld",
       "after": "0.3322 detection average precision on held-out fold 0 and 0.2387 on held-out fold 1, groups given",
       "kept": true,
-      "note": "Two paired passes, one corruption draw, one dataset, one representation (esm2_cdr, which is what pick_noise_base_rep falls back to here). Giving the groups won both passes, by 0.0477 and by 0.0331 average precision, so the gain is larger than the difference between the two gains. What it does not settle: whether the recipe the search then picks, or the held-out spearman, moves at all. n20 has produced no result file yet, so the downstream effect of a better-ordered flag list is unmeasured."
+      "note": "Two paired passes, one corruption draw, one dataset, one representation (esm2_cdr, which is what pick_noise_base_rep falls back to here). Giving the groups won both passes, by 0.0477 and by 0.0331 average precision, so the gain is larger than the difference between the two gains. Cross-checked by n20's own run the same night, which computed the same score with the groups withheld and wrote 0.2450 average precision averaged over its 2 passes at 30 corrupted of 336 training antibodies, against 0.2451 for the mean of the two withheld readings here. What it does not settle: whether the recipe the search then picks, or the held-out spearman, moves at all. n20's first result file, written that night, came back with its search scoring ONE candidate per fold, so the recipe could not move whatever the flag list said."
     }
   ]
 }
