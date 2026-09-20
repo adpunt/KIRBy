@@ -5,11 +5,13 @@ Paper: Similarity
 Conclusion: Hybrid reduces RMSE on activity cliffs.
 Dependencies: S02 (reads JSON, optional).
 
-Identifies cliff compounds using ECFP4 Tanimoto (representation-independent
-definition based on Bajorath standard). CV evaluation of kNN on cliff vs
-non-cliff compounds for: per-rep kNN baselines, the pool's own single
-representation, the pool's hybrid recipes (unweighted and importance-weighted),
-RF baseline.
+Which molecules are cliffs comes from similarity_helpers.calibrated_cliff_rule,
+which s12 also calls, so the two files no longer partition a dataset two
+different ways. ECFP4 Tanimoto at or above 0.55 on the structural side, and an
+activity gap solved per dataset so a stated share of the molecules are cliffs.
+CV evaluation of kNN on cliff vs non-cliff molecules for: per-rep kNN baselines,
+the pool's own single representation, the pool's hybrid recipes (unweighted and
+importance-weighted), RF baseline.
 
 2026-09-12, owner's decision: this file runs NO hybrid recipe search. For each
 held-out fold it reads the pool -- the best single representation plus the top
@@ -37,7 +39,8 @@ from experiments._shared import (
     fold_hybrid_scoring_kwargs,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
-from experiments.similarity.similarity_helpers import identify_cliff_compounds
+from experiments.similarity.similarity_helpers import (
+    calibrated_cliff_rule, cliff_structural_similarity, CLIFF_TARGET_PCT)
 from kirby.find_best_hybrid import nested_cv_outer_folds
 
 # 2026-09-12, owner's decision (EXPERIMENTS_FINALIZED.md, s04): s04 stops
@@ -61,85 +64,22 @@ from kirby.hybrid import apply_feature_selection, compute_feature_importance
 from experiments.similarity._summary_keys import (
     SELECTION_RULE as _SELECTION_RULE)
 
-# Bit width and radius of the fingerprint the cliff rule is defined on. Radius
-# 2 over 2048 bits is ECFP4, the same setting n01 builds its cliff similarity
-# from.
-_CLIFF_FP_BITS = 2048
-_CLIFF_FP_RADIUS = 2
-
-
-def _cliff_ecfp4(smiles_list):
-    """ECFP4 bit matrix for the cliff rule, built from the dataset's SMILES.
-
-    Returns (matrix, n_unparsed). A molecule rdkit cannot parse gets one
-    private feature of its own rather than an all-zero row: scipy's jaccard
-    distance calls two all-zero rows identical, which would make every
-    unparsable molecule a cliff partner of every other one.
-    """
-    from rdkit import Chem
-    from rdkit.Chem import AllChem
-
-    mols = [Chem.MolFromSmiles(smi) if smi else None for smi in smiles_list]
-    unparsed = [i for i, m in enumerate(mols) if m is None]
-    fp_array = np.zeros((len(mols), _CLIFF_FP_BITS + len(unparsed)),
-                        dtype=np.float32)
-    for i, mol in enumerate(mols):
-        if mol is None:
-            continue
-        fp = AllChem.GetMorganFingerprintAsBitVect(
-            mol, _CLIFF_FP_RADIUS, nBits=_CLIFF_FP_BITS)
-        for bit in fp.GetOnBits():
-            fp_array[i, bit] = 1.0
-    for slot, i in enumerate(unparsed):
-        fp_array[i, _CLIFF_FP_BITS + slot] = 1.0
-    return fp_array, len(unparsed)
-
-
-def _cliff_fingerprint(data, reps):
-    """The matrix the cliff rule is defined on, and where it came from.
-
-    2026-09-12, owner's decision: build ECFP4 from the SMILES so the cliff rule
-    stops depending on the representation pool. reps['ecfp4'] is the fallback
-    for a dataset carrying no SMILES, or where rdkit cannot build them.
-
-    Returns (matrix or None, source name or None, note).
-    """
-    smiles = data.get('smiles')
-    n_rows = len(data['labels'])
-    if smiles is not None and len(smiles) == n_rows:
-        try:
-            fp_array, n_unparsed = _cliff_ecfp4(smiles)
-        except Exception as exc:
-            note = (f'ECFP4 from SMILES failed ({type(exc).__name__}: {exc})')
-        else:
-            return fp_array, 'smiles_ecfp4', (
-                f'ECFP4 radius {_CLIFF_FP_RADIUS} over {_CLIFF_FP_BITS} bits, '
-                f'built from this dataset\'s {n_rows} SMILES; {n_unparsed} of '
-                f'them rdkit could not parse and each got a private feature, '
-                f'so it is a cliff partner of nothing')
-    elif smiles is None:
-        note = 'the dataset carries no SMILES'
-    else:
-        note = (f'the dataset carries {len(smiles)} SMILES for {n_rows} '
-                f'molecules')
-
-    if 'ecfp4' in reps:
-        return reps['ecfp4'], 'pool_ecfp4', (
-            f'fell back to the pool\'s ecfp4 representation: {note}')
-    return None, None, (
-        f'{note}, and ecfp4 is not in the representation pool either')
-
+# 2026-09-20: the ECFP4 build and the cliff rule that read it moved to
+# similarity_helpers (cliff_structural_similarity, calibrated_cliff_rule), so
+# s12 decides which molecules are cliffs with the same two calls instead of a
+# rule of its own. What that fixed is written at the top of that block.
 
 # =============================================================================
 # EXPERIMENT
 # =============================================================================
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """Prediction performance on activity cliff compounds.
+    """Prediction performance on activity cliff molecules.
 
-    Uses representation-independent cliff definition (Bajorath ECFP4 standard):
-      - ECFP4 Tanimoto >= tanimoto_threshold
-      - |delta_y| > activity_k * MAD(y)
+    The cliff rule is shared with s12: ECFP4 Tanimoto at or above
+    tanimoto_threshold, and an activity gap solved so cliff_target_pct per cent
+    of the molecules are cliffs. Pass activity_k to use a fixed multiple of the
+    labels' median absolute deviation instead.
 
     Reports RMSE_cliff, RMSE_noncliff for:
       - Per-rep kNN baselines
@@ -150,8 +90,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT S04: PREDICTION PERFORMANCE ON ACTIVITY CLIFFS")
     print("=" * 70)
 
+    # 2026-09-20: which molecules count as cliffs. The structural side is the
+    # ECFP4 Tanimoto 0.55 of Stumpfe & Bajorath 2019, unchanged. The activity
+    # gap is no longer a fixed 2 x the median absolute deviation of the labels:
+    # that flagged 1625 of 2158 caco2 molecules and 125 of 2641 adme_mdr1
+    # molecules, so the stratum meant something different on every dataset. It
+    # is now solved per dataset to flag cliff_target_pct per cent of the
+    # molecules. Passing activity_k restores the old fixed-multiple rule, and
+    # either way the file records both counts. See
+    # similarity_helpers.calibrated_cliff_rule.
     tanimoto_threshold = kwargs.get('tanimoto_threshold', 0.55)
-    activity_k = kwargs.get('activity_k', 2.0)
+    activity_k = kwargs.get('activity_k')       # None = calibrate
+    cliff_target_pct = kwargs.get('cliff_target_pct', CLIFF_TARGET_PCT)
+    # How many nearest neighbours every kNN arm below predicts from, and the
+    # exponent the importance weights are raised to before they multiply the
+    # standardised features. Both were written into the code as 5 and a square
+    # root; they are arguments so the same file can be run at other settings and
+    # the arms compared under the held-out re-pick.
+    knn_k = int(kwargs.get('knn_k', 5))
+    weight_exponent = float(kwargs.get('weight_exponent', 0.5))
     n_folds = config['n_splits']
     mode = 'intermediary' if config['n_splits'] == 1 else 'full'
 
@@ -179,53 +136,83 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'this stub does not read or check for any S12 cliff result for '
                 'this dataset. Verify one exists before treating cliffs as covered.'),
         }
-    cliff_fp, cliff_fp_source, cliff_fp_note = _cliff_fingerprint(data, reps)
-    if cliff_fp is None:
-        print(f"  ERROR: cannot identify cliffs -- {cliff_fp_note}")
-        return {'error': 'ecfp4 not available',
-                'cliff_fingerprint_source': None,
-                'cliff_fingerprint_note': cliff_fp_note}
-    print(f"  Cliff fingerprint: {cliff_fp_source} -- {cliff_fp_note}")
-
     # Derive task_type BEFORE cliff identification so classification cliffs
     # use the class-mismatch indicator, not the regression |delta_y| rule.
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
     is_clf = task_type == 'classification'
 
-    cliff_mask, cliff_info = identify_cliff_compounds(
-        cliff_fp, labels,
-        tanimoto_threshold=tanimoto_threshold,
-        activity_k=activity_k,
+    # The same two calls s12 makes, so the two files partition a dataset into
+    # cliff and non-cliff molecules identically instead of two different ways.
+    cliff_sim, cliff_cutoff, cliff_fp_note, cliff_fp_source = \
+        cliff_structural_similarity(data, reps, is_molecular=True)
+    if tanimoto_threshold is not None and \
+            cliff_fp_source == 'smiles_ecfp4_tanimoto':
+        cliff_cutoff = float(tanimoto_threshold)
+    print(f"  Cliff structural side: {cliff_fp_source} -- {cliff_fp_note}")
+
+    cliff_mask, cliff_info = calibrated_cliff_rule(
+        cliff_sim, labels,
+        structural_cutoff=cliff_cutoff,
+        structural_source=cliff_fp_note,
+        target_pct=cliff_target_pct,
         is_clf=is_clf,
+        activity_k=activity_k,
     )
     cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
     if is_clf:
-        print(f"  Cliff definition (clf): Tanimoto>={tanimoto_threshold}, "
-              f"different class")
+        print(f"  Cliff rule: similarity>={cliff_cutoff:.4f}, different class")
+    elif cliff_info['rule'] == 'calibrated_to_target_share':
+        print(f"  Cliff rule: similarity>={cliff_cutoff:.4f} and an activity "
+              f"gap above {cliff_info['activity_threshold']:.4f} label units, "
+              f"solved so that {cliff_target_pct:.0f} per cent of the "
+              f"molecules are cliffs. That gap is "
+              f"{cliff_info['activity_k']:.2f} x the median absolute deviation "
+              f"of the labels, against the fixed 2.0 this file used before.")
     else:
-        print(f"  Cliff definition: Tanimoto>={tanimoto_threshold}, "
-              f"|delta_y|>{activity_k}*MAD(y) = {cliff_info['activity_threshold']:.3f}")
-    print(f"  Cliff compounds: {cliff_info['n_cliff_compounds']} / {len(labels)} "
-          f"({cliff_info['pct_cliff_compounds']:.1f}%)")
-    print(f"  Cliff pairs: {cliff_info['n_cliff_pairs']}")
+        print(f"  Cliff rule: similarity>={cliff_cutoff:.4f} and an activity "
+              f"gap above {cliff_info['activity_k']:.2f} x the median absolute "
+              f"deviation of the labels = "
+              f"{cliff_info['activity_threshold']:.4f} label units")
+    print(f"  Cliff molecules: {cliff_info['n_cliff_compounds']} of "
+          f"{len(labels)} molecules "
+          f"({cliff_info['pct_cliff_compounds']:.1f} per cent); "
+          f"{cliff_info['n_cliff_pairs']} cliff pairs")
+    print(f"  Under the fixed 2 x median-absolute-deviation gap this file used "
+          f"before: {cliff_info['uncalibrated_n_cliff_compounds']} of "
+          f"{len(labels)} molecules "
+          f"({cliff_info['uncalibrated_pct_cliff_compounds']:.1f} per cent), "
+          f"{cliff_info['uncalibrated_n_cliff_pairs']} cliff pairs")
 
     results = {
         # Which selection rule produced the numbers below. s09 reads this
         # and refuses to run its signed-rank test across a mixed set — see
         # _summary_keys.SELECTION_RULE. Added 2026-09-18.
         'selection_rule': _SELECTION_RULE,
+        # WHICH RULE DECIDED THE CLIFF MOLECULES. s04 and s12 disagreed about
+        # this until 2026-09-20 and neither file said which rule it had used, so
+        # every key the shared rule returns is written out here and s12 writes
+        # the same block. 'rule' is 'calibrated_to_target_share' or
+        # 'fixed_mad_multiple'; 'uncalibrated_*' is what the old fixed 2 x
+        # median-absolute-deviation gap would have flagged on these same rows.
         'cliff_definition': {
             'fingerprint_source': cliff_fp_source,
             'fingerprint_note': cliff_fp_note,
             'tanimoto_threshold': tanimoto_threshold,
-            'activity_k': activity_k,
-            'activity_threshold': cliff_info['activity_threshold'],
-            'mad_y': cliff_info['mad_y'],
-            'n_cliff_compounds': cliff_info['n_cliff_compounds'],
-            'n_cliff_pairs': cliff_info['n_cliff_pairs'],
-            'pct_cliff_compounds': cliff_info['pct_cliff_compounds'],
+            'shared_with_s12': True,
+            **{k: v for k, v in cliff_info.items() if k != 'cliff_pair_counts'},
+        },
+        # The two settings every kNN arm below ran at. Before 2026-09-20 they
+        # were 5 and a square root written into the code with no way to change
+        # them.
+        'knn_settings': {
+            'k_neighbours': knn_k,
+            'importance_weight_exponent': weight_exponent,
+            'note': ('every molecule is predicted from its k nearest '
+                     'neighbours; the weighted arms multiply each standardised '
+                     'feature by its importance raised to this exponent, 0.5 '
+                     'being the square root that was hardcoded'),
         },
         'per_rep': {},
         'hybrid': {},
@@ -380,7 +367,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     hybrid_blueprint_available = bool(hybrid_arms)
 
     def _make_knn(n_train):
-        k = min(5, n_train - 1)
+        k = min(knn_k, n_train - 1)
         if is_clf:
             return KNeighborsClassifier(n_neighbors=k)
         return KNeighborsRegressor(n_neighbors=k)
@@ -532,7 +519,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 imp_arr = fold_importance[_rname].get(_fold_key(tr))
                 if imp_arr is None:
                     return None, None
-                w = np.sqrt(np.maximum(imp_arr, 0))
+                w = np.maximum(imp_arr, 0) ** weight_exponent
                 scaler = StandardScaler()
                 return scaler.fit_transform(_X[tr]) * w, scaler.transform(_X[va]) * w
             res_w = _evaluate_condition(_get_rep_w, pre_scaled=True)
@@ -584,7 +571,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 imp_arr = fold_importance[_rname].get(_fold_key(tr))
                 if imp_arr is None:
                     return None, None
-                w = np.sqrt(np.maximum(imp_arr, 0))
+                w = np.maximum(imp_arr, 0) ** weight_exponent
                 _X = reps[_rname]
                 scaler = StandardScaler()
                 return (scaler.fit_transform(_X[tr]) * w,
@@ -687,7 +674,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         w_parts.append(imp[rname][idx])
                     else:
                         w_parts.append(np.ones(len(idx)))
-                w = np.sqrt(np.maximum(np.concatenate(w_parts), 0))
+                w = np.maximum(np.concatenate(w_parts), 0) ** weight_exponent
                 # Scale-then-weight (matches Exp 5 and compute_distance_matrix
                 # convention)
                 scaler_w = StandardScaler()
