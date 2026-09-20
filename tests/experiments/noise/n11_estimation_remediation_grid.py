@@ -157,21 +157,51 @@ NEIGHBOR_ESTIMATORS = {
     'distance_weighted', 'hybrid',
 }
 
-# is_clf-aware estimators: the kNN/neighbour-based ones whose constructor
-# accepts is_clf (class-mismatch disagreement instead of a regression value
-# residual). On a CLASSIFICATION dataset ONLY these produce a meaningful noise
-# score (FIX 4f). Every other estimator in BASE_ESTIMATORS / TORCH_ESTIMATORS /
-# OPTIONAL_ESTIMATORS is model-based and regression-only — it fits a regressor
-# (or GP / NN / quantile / ngboost) on the integer class labels, which does not
-# crash but yields a meaningless number. NOTE this is a STRICT SUBSET of
-# NEIGHBOR_ESTIMATORS: 'hybrid' is in NEIGHBOR_ESTIMATORS (it uses kNN distance
-# metrics) but is NOT is_clf-aware — HybridNoiseEstimator averages a
-# CrossValResidualEstimator (a regressor on the labels) and exposes no is_clf
-# branch — so it is correctly skipped on classification.
-IS_CLF_AWARE_ESTIMATORS = {
-    'neighbor_residual', 'local_variance_ratio',
-    'distance_weighted', 'distance_weighted_residual',
-}
+# Which estimators produce a meaningful noise score when the label is a CLASS.
+#
+# The rule: the estimator's constructor takes `is_clf`, and under it scores a
+# molecule by how far its label is from what the other molecules say it should
+# be in the only units a nominal label has — a class-mismatch rate among its
+# neighbours, or one minus the probability an out-of-fold classifier gives the
+# class it carries. Every other estimator here fits a regressor (or a GP, a
+# network, a quantile model, ngboost) on the integer class codes. That does not
+# crash, and it means a molecule labelled class 2 that a model calls class 0
+# scores twice as suspect as one it calls class 1 — an ordering the class
+# numbers do not carry. Those are dropped on a classification dataset, with the
+# reason recorded (FIX 4f).
+#
+# ⛔ THIS WAS A HAND-WRITTEN LIST OF FOUR NAMES AND IT DRIFTED. On 2026-09-20
+# `CrossValResidualEstimator` gained the flag, for n07; the list did not gain
+# the name, so n11 and n06 went on dropping cross_val from every classification
+# dataset with the reason 'regression-only', which had stopped being true of
+# it. The list is now derived from the constructors it was meant to track, so
+# there is nothing to keep in step. `_smoke_n08_n12.py` holds the names a human
+# has actually read the branch of, and fails when this set stops matching them
+# — which is how the drift was caught and is the only thing a signature cannot
+# tell you: accepting the flag is not the same as doing something sensible
+# under it.
+#
+# What stays out and why it is not an oversight. 'hybrid' is in
+# NEIGHBOR_ESTIMATORS — it does use the kNN distance metrics — but
+# HybridNoiseEstimator takes no is_clf and passes none to the three estimators
+# it averages, so each of them falls back to its regression branch on the class
+# codes whatever the task is. It is excluded because its own constructor lacks
+# the flag, not because of anything about the estimators inside it.
+def _is_clf_aware_estimators():
+    """The registry names whose estimator class accepts is_clf."""
+    import inspect as _inspect
+    from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
+    out = set()
+    for _name, _cls in ESTIMATOR_REGISTRY.items():
+        try:
+            if 'is_clf' in _inspect.signature(_cls.__init__).parameters:
+                out.add(_name)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+IS_CLF_AWARE_ESTIMATORS = _is_clf_aware_estimators()
 
 # All estimators to try (torch-dependent ones are try-imported).
 # leave_one_out removed (2026-05-26 audit decision): it required N model
@@ -952,37 +982,53 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # not affected: it costs no extra fit beyond the
                     # quantile_forest estimator, which sweeps every space as
                     # every other estimator does.
+                    # ⛔ EXTRA_TARGETS is the list, and this loop is what reads
+                    # it. Until 2026-09-20 the two names were written out here
+                    # by hand and EXTRA_TARGETS was read in one place only --
+                    # results['extra_smoothing_targets'], the field that TELLS a
+                    # reader which targets the run used. So a harness that set
+                    # EXTRA_TARGETS = ('oof',) got a file claiming one target
+                    # and carrying rows under both, and paid for the Gaussian
+                    # process it had asked to drop. Both names are still
+                    # spelled out below because each is built by a different
+                    # call; what changed is that each one is now gated on the
+                    # list saying it was asked for.
                     extra_targets = {}
                     if not is_clf and space_name in extra_target_spaces:
                         _g_tr = (groups[train_idx] if groups is not None
                                  else None)
-                        try:
-                            extra_targets['oof'] = oof_predict(
-                                X_space, y_noisy, _g_tr,
-                                n_splits=min(EXTRA_TARGET_SPLITS, len(y_noisy)))
-                        except Exception as exc:
-                            extra_target_errors.setdefault(
-                                f'{space_name}|oof',
-                                f'{type(exc).__name__}: {exc}')
+                        if 'oof' in EXTRA_TARGETS:
+                            try:
+                                extra_targets['oof'] = oof_predict(
+                                    X_space, y_noisy, _g_tr,
+                                    n_splits=min(EXTRA_TARGET_SPLITS,
+                                                 len(y_noisy)))
+                            except Exception as exc:
+                                extra_target_errors.setdefault(
+                                    f'{space_name}|oof',
+                                    f'{type(exc).__name__}: {exc}')
                         # The Gaussian-process target is the same O(n^3) fit
                         # KIRBY_NOISE_LIGHT_ESTIMATORS was set up to drop, so
                         # the flag drops it here too rather than reintroducing
                         # it through a side door. Recorded, not silent.
-                        if light_estimators:
-                            extra_target_errors.setdefault(
-                                f'{space_name}|gp',
-                                'not computed: KIRBY_NOISE_LIGHT_ESTIMATORS=1')
-                        else:
-                            try:
-                                _gp = GaussianProcessEstimator(
-                                    n_folds=EXTRA_TARGET_SPLITS, groups=_g_tr)
-                                _gp.estimate(X_space, y_noisy)
-                                extra_targets['gp'] = np.asarray(
-                                    _gp.predictions_, dtype=float)
-                            except Exception as exc:
+                        if 'gp' in EXTRA_TARGETS:
+                            if light_estimators:
                                 extra_target_errors.setdefault(
                                     f'{space_name}|gp',
-                                    f'{type(exc).__name__}: {exc}')
+                                    'not computed: '
+                                    'KIRBY_NOISE_LIGHT_ESTIMATORS=1')
+                            else:
+                                try:
+                                    _gp = GaussianProcessEstimator(
+                                        n_folds=EXTRA_TARGET_SPLITS,
+                                        groups=_g_tr)
+                                    _gp.estimate(X_space, y_noisy)
+                                    extra_targets['gp'] = np.asarray(
+                                        _gp.predictions_, dtype=float)
+                                except Exception as exc:
+                                    extra_target_errors.setdefault(
+                                        f'{space_name}|gp',
+                                        f'{type(exc).__name__}: {exc}')
 
                     for est_name in available_estimators:
                         if est_name in NEIGHBOR_ESTIMATORS:
