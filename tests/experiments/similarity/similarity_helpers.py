@@ -583,6 +583,269 @@ def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
 
 
 # =============================================================================
+# CALIBRATED CLIFF RULE — the one rule s04 and s12 both call
+# =============================================================================
+#
+# WHY THIS EXISTS. Two files decided which molecules are activity cliffs and
+# they did not agree. s04 called a pair a cliff when ECFP4 Tanimoto was at or
+# above 0.55 and the activity gap exceeded 2 x the median absolute deviation of
+# the labels. s12 called a pair a cliff when it was in the top half per cent of
+# pairwise similarity on the standardised concatenation of every representation,
+# with the same 2 x median absolute deviation gap. On herg_ki s04 called 451 of
+# 1412 molecules cliffs; s12 called 295 of 1412. Same dataset, same molecules,
+# two answers, and neither file recorded which rule had produced its number.
+#
+# WHAT WAS MISCALIBRATED. The activity gap scaled with each dataset's own
+# spread, so the share of molecules it flagged was whatever that dataset's label
+# distribution happened to give. Measured 2026-09-19 at Tanimoto 0.55 and a gap
+# of 2 x the median absolute deviation: 1625 of 2158 caco2 molecules, 451 of
+# 1412 herg_ki molecules, 125 of 2641 adme_mdr1 molecules. As shares of each
+# dataset that is 75.3%, 31.9% and 4.7%. At 75.3% the cliff stratum is most of
+# the dataset and its score cannot differ much from the overall score. At 4.7%
+# the 71 cliff pairs spread over 5 folds leave 20 to 30 cliff molecules in a
+# held-out fold.
+#
+# WHAT THIS DOES INSTEAD. The structural side is unchanged: ECFP4 Tanimoto at or
+# above 0.55, the convention identify_cliff_compounds cites Stumpfe & Bajorath
+# 2019 for. The activity side stops being a fixed multiple of the median
+# absolute deviation. It is solved, per dataset, so the share of molecules the
+# rule flags is the same on every dataset. The multiplier it lands on is
+# reported back in units of the median absolute deviation, so how far each
+# dataset moved from the old 2.0 is readable.
+#
+# WHERE THIS DEPARTS FROM THE CITED CONVENTION, STATED. Stumpfe & Bajorath fix
+# the activity side as well as the structural one: a 100-fold potency
+# difference, two log units. That is defined for potency. caco2's label is log
+# permeability with a median absolute deviation of 0.2085, and a two-log-unit
+# gap flags no molecule there at all. The structural cutoff is the half of the
+# convention that transfers across these endpoints, and it is the half kept.
+
+# The share of the dataset's molecules the cliff stratum is calibrated to.
+# Chosen from the sweep in the calibration run of 2026-09-20: see the block
+# comment above for what the uncalibrated rule gave.
+CLIFF_TARGET_PCT = 15.0
+
+# The structural cutoff of Stumpfe & Bajorath 2019 for ECFP4, unchanged.
+CLIFF_TANIMOTO_CUTOFF = 0.55
+
+# For a dataset with no ECFP4 — no SMILES, or a non-molecular domain — the
+# structural side is the top this-many per cent of pairwise similarity on the
+# standardised concatenation of every representation. Held fixed so that the
+# solved activity gap is the only free quantity; with both free the target share
+# does not determine a rule.
+CLIFF_SIMILARITY_PERCENTILE = 1.0
+
+
+def solve_activity_gap(structural_mask, y, target_pct, is_clf=False,
+                       n_steps=80):
+    """The activity gap that makes `target_pct` per cent of molecules cliffs.
+
+    `structural_mask` is the boolean n x n matrix of structurally similar pairs,
+    diagonal already false. The share of molecules flagged falls as the gap
+    rises, so a bisection finds it. The share moves in steps, so the gap
+    returned is the one whose share is nearest the target, not one that hits it.
+
+    Returns (gap, achieved_pct). On a classification task the activity side is
+    the class-mismatch indicator and there is nothing to solve, so the gap comes
+    back as 0.5 and the achieved share is whatever the structural side gives.
+    """
+    n = len(y)
+    delta_y = _pairwise_delta_matrix(y, is_clf=is_clf)
+
+    def _pct(gap):
+        m = structural_mask & (delta_y > gap)
+        np.fill_diagonal(m, False)
+        return 100.0 * float(m.any(axis=1).sum()) / n
+
+    if is_clf:
+        return 0.5, _pct(0.5)
+
+    lo, hi = 0.0, float(np.max(delta_y)) if n else 1.0
+    if hi <= 0:
+        return 0.0, _pct(0.0)
+    best = (lo, _pct(lo))
+    for _ in range(n_steps):
+        mid = 0.5 * (lo + hi)
+        p = _pct(mid)
+        if abs(p - target_pct) < abs(best[1] - target_pct):
+            best = (mid, p)
+        if p > target_pct:
+            lo = mid
+        else:
+            hi = mid
+    return float(best[0]), float(best[1])
+
+
+def calibrated_cliff_rule(structural_sim, y, structural_cutoff,
+                          structural_source, target_pct=CLIFF_TARGET_PCT,
+                          is_clf=False, activity_k=None):
+    """Cliff molecules under the calibrated rule, and the rule that produced them.
+
+    Args:
+        structural_sim: n x n similarity, diagonal ignored. ECFP4 Tanimoto for a
+            molecular dataset; 1/(1+d) on the standardised concatenation of
+            every representation otherwise.
+        y: the labels, in the dataset's own units.
+        structural_cutoff: the similarity at or above which a pair counts as
+            structurally similar.
+        structural_source: a sentence saying where structural_sim came from,
+            stored so a result file says which rule wrote it.
+        target_pct: the share of the dataset's molecules to flag. The activity
+            gap is solved to reach it.
+        activity_k: set this to skip the calibration and use a gap of
+            activity_k x the median absolute deviation of y, which is what s04
+            and s12 both did before. The uncalibrated share is recorded either
+            way, so the two are always comparable in a stored result.
+
+    Returns (cliff_mask, info). info['rule'] names which of the two ran.
+    """
+    y = np.asarray(y)
+    n = len(y)
+    mad_y = 0.0 if is_clf else float(np.median(np.abs(y - np.median(y))))
+    delta_y = _pairwise_delta_matrix(y, is_clf=is_clf)
+
+    structural_mask = np.asarray(structural_sim) >= structural_cutoff
+    np.fill_diagonal(structural_mask, False)
+    n_structural_pairs = int(structural_mask.sum()) // 2
+
+    def _stats(gap):
+        m = structural_mask & (delta_y > gap)
+        np.fill_diagonal(m, False)
+        mask = m.any(axis=1)
+        return mask, m.sum(axis=1), int(m.sum()) // 2, int(mask.sum())
+
+    # What the uncalibrated rule gives, recorded whichever rule runs, so the
+    # calibrated count is never the only count in the file.
+    gap_uncal = 0.5 if is_clf else 2.0 * mad_y
+    _, _, pairs_uncal, n_uncal = _stats(gap_uncal)
+
+    if activity_k is not None or is_clf:
+        k = 2.0 if activity_k is None else float(activity_k)
+        gap = 0.5 if is_clf else k * mad_y
+        rule = 'fixed_mad_multiple'
+        achieved = None
+    else:
+        gap, achieved = solve_activity_gap(structural_mask, y, target_pct)
+        k = (gap / mad_y) if mad_y > 0 else float('nan')
+        rule = 'calibrated_to_target_share'
+
+    cliff_mask, pair_counts, n_pairs, n_cliff = _stats(gap)
+
+    info = {
+        'rule': rule,
+        'structural_source': structural_source,
+        'structural_cutoff': float(structural_cutoff),
+        'n_structural_pairs': n_structural_pairs,
+        'target_pct_molecules': (None if rule == 'fixed_mad_multiple'
+                                 else float(target_pct)),
+        'activity_threshold': float(gap),
+        'activity_k': float(k),
+        'activity_k_note': (
+            'the activity gap divided by the median absolute deviation of the '
+            'labels, so it is comparable with the 2.0 both files used before'),
+        'mad_y': mad_y,
+        'n_molecules': int(n),
+        'n_cliff_compounds': n_cliff,
+        'n_cliff_pairs': n_pairs,
+        'pct_cliff_compounds': float(100.0 * n_cliff / n) if n else 0.0,
+        'cliff_pair_counts': pair_counts,
+        # The rule both files ran before this one existed, on these same rows.
+        'uncalibrated_activity_k': 2.0,
+        'uncalibrated_activity_threshold': float(gap_uncal),
+        'uncalibrated_n_cliff_compounds': n_uncal,
+        'uncalibrated_n_cliff_pairs': pairs_uncal,
+        'uncalibrated_pct_cliff_compounds': (float(100.0 * n_uncal / n)
+                                             if n else 0.0),
+        # Kept for the readers of the older key names.
+        'tanimoto_threshold': float(structural_cutoff),
+    }
+    if achieved is not None:
+        info['achieved_pct_molecules'] = float(achieved)
+    return cliff_mask, info
+
+
+def cliff_structural_similarity(data, reps, is_molecular=True):
+    """The n x n similarity the cliff rule reads, and where it came from.
+
+    ECFP4 Tanimoto built from the dataset's own SMILES where there are SMILES
+    and rdkit can parse them — the same matrix s04 built, so both files now
+    partition a molecular dataset identically. Otherwise 1/(1+d) on the
+    standardised concatenation of every representation, which is what s12 built
+    and is the only option for a dataset with no SMILES.
+
+    Returns (similarity, cutoff, source_sentence, kind) where kind is
+    'smiles_ecfp4_tanimoto' or 'concatenation_similarity_percentile'.
+    """
+    n_rows = len(data['labels'])
+    smiles = data.get('smiles')
+    if is_molecular and smiles is not None and len(smiles) == n_rows:
+        try:
+            fp, n_unparsed = _cliff_ecfp4_bits(smiles)
+        except Exception as exc:
+            print(f"  cliff ECFP4 from SMILES failed "
+                  f"({type(exc).__name__}: {exc}); falling back to the "
+                  f"standardised concatenation of every representation")
+        else:
+            # Tanimoto on binary rows as one matrix product: the intersection is
+            # fp @ fp.T and the union is |a| + |b| - intersection. Identical to
+            # 1 - scipy's jaccard distance on these rows and far cheaper.
+            f = np.asarray(fp, dtype=np.float64)
+            inter = f @ f.T
+            cnt = f.sum(axis=1)
+            union = cnt[:, None] + cnt[None, :] - inter
+            sim = np.where(union > 0, inter / np.maximum(union, 1e-12), 0.0)
+            np.fill_diagonal(sim, 0.0)
+            return (sim, CLIFF_TANIMOTO_CUTOFF,
+                    (f'ECFP4 radius 2 over 2048 bits, built from this '
+                     f"dataset's {n_rows} SMILES; {n_unparsed} of them rdkit "
+                     f'could not parse and each got a private feature, so it is '
+                     f'a cliff partner of nothing. Tanimoto at or above '
+                     f'{CLIFF_TANIMOTO_CUTOFF}, the ECFP4 convention of '
+                     f'Stumpfe & Bajorath 2019'),
+                    'smiles_ecfp4_tanimoto')
+
+    from kirby.utils.noise_mitigation_methods import compute_distance_matrix
+    from kirby.similarity.distance_config import get_distance_metric
+    X = np.hstack([reps[k] for k in sorted(reps.keys())])
+    D = compute_distance_matrix(X, standardize=True)
+    sim = 1.0 / (1.0 + D)
+    np.fill_diagonal(sim, 0.0)
+    off = sim[~np.eye(len(sim), dtype=bool)]
+    cutoff = float(np.percentile(off, 100.0 - CLIFF_SIMILARITY_PERCENTILE))
+    return (sim, cutoff,
+            (f'1/(1+d) on the standardised concatenation of every '
+             f'representation, {X.shape[1]} features, d taken with '
+             f'{get_distance_metric()}; structurally similar means the top '
+             f'{CLIFF_SIMILARITY_PERCENTILE} per cent of pairs by that '
+             f'similarity. No ECFP4 was available for this dataset'),
+            'concatenation_similarity_percentile')
+
+
+def _cliff_ecfp4_bits(smiles_list, n_bits=2048, radius=2):
+    """ECFP4 bit matrix for the cliff rule. Returns (matrix, n_unparsed).
+
+    A molecule rdkit cannot parse gets one private feature of its own rather
+    than an all-zero row: two all-zero rows are Tanimoto 1 to each other, which
+    would make every unparsable molecule a cliff partner of every other one.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    mols = [Chem.MolFromSmiles(smi) if smi else None for smi in smiles_list]
+    unparsed = [i for i, m in enumerate(mols) if m is None]
+    fp_array = np.zeros((len(mols), n_bits + len(unparsed)), dtype=np.float32)
+    for i, mol in enumerate(mols):
+        if mol is None:
+            continue
+        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits)
+        for bit in fp.GetOnBits():
+            fp_array[i, bit] = 1.0
+    for slot, i in enumerate(unparsed):
+        fp_array[i, n_bits + slot] = 1.0
+    return fp_array, len(unparsed)
+
+
+# =============================================================================
 # ANTIBODY SEQUENCE CLIFF ANALYSIS (classification-aware edit-distance sweep)
 # =============================================================================
 #

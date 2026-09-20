@@ -7,10 +7,14 @@ similarity on the standardised concatenation of every representation, making it
 applicable to antibody, TCGA, and molecular datasets alike. Same approach as
 N01's non-molecular branch.
 
-Cliff definition: pairs where sim >= threshold AND |delta_y| > k * MAD(y), with
-sim = 1/(1+d). The coefficient d is taken with is whatever
-kirby.similarity.distance_config holds — manhattan since 2026-09-04, not
-Euclidean — and cliff_info['similarity_type'] records which one ran.
+Cliff definition (2026-09-20): the same one s04 uses, in
+similarity_helpers.calibrated_cliff_rule. On a molecular dataset with SMILES the
+structural side is ECFP4 Tanimoto at or above 0.55, so this file and s04 flag
+the same molecules; otherwise it is 1/(1+d) on the standardised concatenation of
+every representation, at a fixed percentile of pairs. The activity gap is solved
+per dataset so a stated share of molecules are cliffs, instead of being a fixed
+multiple of the labels' median absolute deviation. What that fixed, and the
+counts before and after, are written above calibrated_cliff_rule.
 
 Hybrid recipes (2026-09-12, owner's decision): read from the pool, ranked for
 each held-out fold on the other folds' scores. This file runs no search of its
@@ -42,6 +46,8 @@ from experiments._shared import (
     fold_reselection,
     hr_exclude_folds,
 )
+from experiments.similarity.similarity_helpers import (
+    calibrated_cliff_rule, cliff_structural_similarity, CLIFF_TARGET_PCT)
 from kirby.find_best_hybrid import nested_cv_outer_folds
 
 # 2026-09-12, owner's decision: s12 stops calling get_fold_best_search and reads
@@ -88,6 +94,14 @@ def identify_cliff_pairs(X_concat, y, sim_threshold=0.55, activity_k=2.0,
                          max_compounds=5000, is_clf=False,
                          similar_percentile=None):
     """Identify activity cliff pairs on the stacked representation.
+
+    ⛔ 2026-09-20: run() no longer calls this. It is the rule that disagreed
+    with s04 — on herg_ki it called 295 of 1412 molecules cliffs where s04
+    called 451 — and its percentile auto-select never reached its own stated 10
+    per cent target on caco2, herg_ki or adme_mdr1, because even its smallest
+    candidate overshot. Kept because smoke_tests_broken_fixes.py exercises it
+    through identify_cliff_pairs_euclidean. New callers want
+    similarity_helpers.calibrated_cliff_rule.
 
     sim = 1/(1+d) on standardised features, where d comes from
     compute_distance_matrix with no metric named — so it is whatever
@@ -262,43 +276,69 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                            n_samples=len(labels))
     print(f"  Models: {list(model_factories.keys())}")
 
-    sim_threshold = kwargs.get('sim_threshold', 0.55)
-    activity_k = kwargs.get('activity_k', 2.0)
-    # Distribution-relative structural threshold. Absolute sim_threshold=0.55
-    # found 0 cliffs in 13/16 datasets on standardised high-D embeddings. See
-    # COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
-    # The percentile is now auto-selected in-run from the prevalence sweep
-    # (closest to a 10% cliff-compound target) — no rerun/retune needed; the
-    # full sweep is recorded in cliff_info['percentile_sweep'].
-    similar_pct = kwargs.get('similar_percentile', [0.5, 1.0, 2.0, 5.0, 10.0])
+    # 2026-09-20: WHICH MOLECULES ARE CLIFFS. This file and s04 used to decide
+    # that two different ways. s04 read ECFP4 Tanimoto at or above 0.55 and an
+    # activity gap of 2 x the median absolute deviation of the labels. This file
+    # read the top half per cent of pairwise similarity on the standardised
+    # concatenation of every representation, with the same activity gap. On
+    # herg_ki s04 called 451 of 1412 molecules cliffs and this file called 295
+    # of 1412 — same dataset, same molecules, two answers.
+    #
+    # There was a second disagreement inside this file alone. The percentile was
+    # auto-selected from a sweep of 0.5, 1, 2, 5 and 10 per cent, picking the
+    # one whose share of cliff molecules came nearest a stated 10 per cent
+    # target. On all three of caco2, herg_ki and adme_mdr1 even the smallest
+    # candidate overshot — 44.9, 20.9 and 30.7 per cent of molecules at 0.5 per
+    # cent of pairs — so the sweep always chose its own floor and the 10 per
+    # cent target was never reached on any of them.
+    #
+    # Both files now call similarity_helpers.calibrated_cliff_rule. On a dataset
+    # with SMILES the structural side is the same ECFP4 Tanimoto s04 builds, so
+    # the two files flag the same molecules; on a dataset without SMILES it is
+    # the concatenation similarity at a FIXED percentile, and the activity gap
+    # is solved to the target share either way.
+    activity_k = kwargs.get('activity_k')       # None = calibrate
+    cliff_target_pct = kwargs.get('cliff_target_pct', CLIFF_TARGET_PCT)
+    # A dataset outside the molecular domain has no ECFP4, so it takes the
+    # concatenation branch. Passing force_concat_similarity=True takes it on a
+    # molecular dataset too, which is what makes the two branches comparable on
+    # one dataset.
+    force_concat = bool(kwargs.get('force_concat_similarity', False))
 
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-    print(f"  Domain: {domain}, n={len(labels)}, dim={X_concat.shape[1]}")
+    print(f"  Domain: {domain}, {len(labels)} molecules, "
+          f"{X_concat.shape[1]} features in the concatenation")
 
-    # Identify cliffs
     # NOTE: cliff identity uses full-dataset labels — accepted leakage for cliff
     # partitioning, per N01 precedent.
-    cliff_indices, scanned_indices, cliff_info = identify_cliff_pairs(
-        X_concat, labels, sim_threshold, activity_k, is_clf=is_clf,
-        similar_percentile=similar_pct)
-    print(f"  Cliffs: {cliff_info['n_cliff_compounds']}/{cliff_info['n_analyzed']} "
-          f"({cliff_info['pct_cliff_compounds']:.1f}%), "
-          f"{cliff_info['n_cliff_pairs']} pairs")
-
-    if not cliff_indices:
-        print("  No cliffs found — widening structural percentile...")
-        # Relax by treating more pairs as structurally similar.
-        for pct in [10.0, 20.0, 30.0]:
-            cliff_indices, scanned_indices, cliff_info = identify_cliff_pairs(
-                X_concat, labels, sim_threshold, activity_k, is_clf=is_clf,
-                similar_percentile=pct)
-            if cliff_info['pct_cliff_compounds'] >= 5:
-                cliff_info['threshold_was_relaxed'] = True
-                cliff_info['final_percentile'] = pct
-                print(f"  Widened to top {pct}% similar: "
-                      f"{cliff_info['n_cliff_compounds']} cliffs "
-                      f"({cliff_info['pct_cliff_compounds']:.1f}%)")
-                break
+    cliff_sim, cliff_cutoff, cliff_note, cliff_kind = \
+        cliff_structural_similarity(
+            data, reps, is_molecular=(domain == 'molecular' and not force_concat))
+    print(f"  Cliff structural side: {cliff_kind} -- {cliff_note}")
+    cliff_mask, cliff_info = calibrated_cliff_rule(
+        cliff_sim, labels,
+        structural_cutoff=cliff_cutoff,
+        structural_source=cliff_note,
+        target_pct=cliff_target_pct,
+        is_clf=is_clf,
+        activity_k=activity_k,
+    )
+    cliff_info = {k: v for k, v in cliff_info.items() if k != 'cliff_pair_counts'}
+    cliff_info['shared_with_s04'] = (cliff_kind == 'smiles_ecfp4_tanimoto')
+    cliff_indices = set(np.where(cliff_mask)[0].tolist())
+    # This rule scans every pair of every row, so nothing is left untested. The
+    # 5000-row subsample the old rule took above that size is gone with it.
+    scanned_indices = set(range(len(labels)))
+    cliff_info['n_analyzed'] = len(labels)
+    cliff_info['n_unanalyzed'] = 0
+    print(f"  Cliff molecules: {cliff_info['n_cliff_compounds']} of "
+          f"{len(labels)} molecules "
+          f"({cliff_info['pct_cliff_compounds']:.1f} per cent); "
+          f"{cliff_info['n_cliff_pairs']} cliff pairs")
+    print(f"  Under the fixed 2 x median-absolute-deviation gap this file used "
+          f"before: {cliff_info['uncalibrated_n_cliff_compounds']} of "
+          f"{len(labels)} molecules "
+          f"({cliff_info['uncalibrated_pct_cliff_compounds']:.1f} per cent)")
 
     if not cliff_indices:
         # No activity cliffs is a LEGITIMATE methodological outcome, not a
@@ -312,9 +352,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # experiment, leaving similarity stuck at 11/12. Signal the outcome
         # with the canonical 'skipped'/'reason' convention (cf. s04) — no
         # 'error' key — so the experiment is counted complete.
-        print("  No activity cliffs at any structural percentile (<=30%) — "
-              "representation preserves structure-activity; reporting as a "
-              "valid no-cliff result (not an error).")
+        #
+        # 2026-09-20: the shared rule solves the activity gap down towards zero
+        # to reach its target share, so it reaches this only when the structural
+        # side alone flags no pair at all.
+        print("  No activity cliffs: no pair of molecules is structurally "
+              "similar enough under this rule at any activity gap. Reporting "
+              "as a valid no-cliff result, not an error.")
         return {
             'skipped': True,
             'reason': 'no_cliffs_found',
@@ -799,27 +843,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 if __name__ == '__main__':
     parser = create_experiment_parser('S12: Cross-Domain Activity Cliffs')
-    parser.add_argument('--sim-threshold', type=float, default=0.55)
-    parser.add_argument('--activity-threshold', type=float, default=2.0)
-    # --sim-threshold reached nothing before this existed: run() always supplied
-    # a percentile list, and the absolute-cutoff branch is only taken when the
-    # percentile is None. 'none' here takes that branch.
-    parser.add_argument('--similar-percentile', nargs='+', default=None,
-                        help="One or more percentages of most-similar pairs to "
-                             "sweep (default 0.5 1.0 2.0 5.0 10.0), or the word "
-                             "'none' to use the absolute --sim-threshold cutoff "
-                             "instead.")
+    # 2026-09-20: --sim-threshold and --similar-percentile are gone with the
+    # rule they configured. The structural side is fixed (ECFP4 Tanimoto 0.55
+    # where there are SMILES, otherwise a fixed percentile of the concatenation
+    # similarity) and the activity gap is solved to --cliff-target-pct.
+    parser.add_argument('--cliff-target-pct', type=float,
+                        default=CLIFF_TARGET_PCT,
+                        help='the share of this dataset\'s molecules the cliff '
+                             'stratum is calibrated to, in per cent')
+    parser.add_argument('--activity-k', type=float, default=None,
+                        help='skip the calibration and use an activity gap of '
+                             'this many times the median absolute deviation of '
+                             'the labels, which is what this file did before '
+                             '2026-09-20 with 2.0')
+    parser.add_argument('--force-concat-similarity', action='store_true',
+                        help='take the concatenation-similarity branch even on '
+                             'a molecular dataset, instead of the ECFP4 '
+                             'Tanimoto s04 also uses')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, args.reps)
-    _run_kwargs = {'sim_threshold': args.sim_threshold,
-                   'activity_k': args.activity_threshold}
-    if args.similar_percentile is not None:
-        if len(args.similar_percentile) == 1 and \
-                str(args.similar_percentile[0]).lower() == 'none':
-            _run_kwargs['similar_percentile'] = None
-        else:
-            _run_kwargs['similar_percentile'] = [
-                float(p) for p in args.similar_percentile]
+    _run_kwargs = {'cliff_target_pct': args.cliff_target_pct,
+                   'activity_k': args.activity_k,
+                   'force_concat_similarity': args.force_concat_similarity}
     results = run(data, config, args.output, args.dataset, **_run_kwargs)
     save_experiment_results(results, args.output, 's12_cross_domain_cliffs', args.dataset)
