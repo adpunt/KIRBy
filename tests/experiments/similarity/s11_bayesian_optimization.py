@@ -429,6 +429,16 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
     Returns:
         best_so_far: list of best-found-so-far at each iteration
         surrogate_failures: number of surrogate fitting failures
+        flat_acquisition_iters: iterations on which Expected Improvement took
+            its maximum value on more than half the molecules still in the
+            pool. On those iterations `np.argmax` returns the lowest row number
+            among the tied molecules, so the pick is made by dataset row order
+            and not by the surrogate. Measured because a surrogate whose fit
+            RAISES is already counted (surrogate_failures) while one that fits
+            and then returns the prior is not: on caco2 ECFP4 the fitted RBF
+            length_scale comes out at 3.6e-4, every pool molecule is then
+            effectively infinitely far from every labelled one, and the
+            posterior is the prior everywhere.
     """
     if rng is None:
         rng = np.random.RandomState(42)
@@ -441,6 +451,7 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
 
     best_so_far = [float(np.max(y_lab))]
     surrogate_failures = 0
+    flat_acquisition_iters = 0
     last_optimize = -refit_interval
 
     for it in range(max_iterations):
@@ -469,6 +480,18 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
             y_best = float(np.max(y_lab))
             ei = expected_improvement(mu, sigma, y_best)
 
+            # How many of the molecules still in the pool carry the maximum
+            # Expected Improvement. One is the normal case. A count above half
+            # the pool means the surrogate separates almost nothing and the
+            # pick below falls to whichever tied molecule has the lowest row
+            # number. Compared with np.isclose so a tie that differs only in
+            # the last bits of the float still counts as one.
+            _ei_max = ei.max()
+            _n_tied = int(np.isclose(ei, _ei_max, rtol=1e-9,
+                                     atol=1e-12 * max(abs(_ei_max), 1.0)).sum())
+            if _n_tied > 0.5 * ei.size:
+                flat_acquisition_iters += 1
+
             best_ei_idx = np.argmax(ei)
             available = np.where(pool_mask)[0]
             selected_pool_idx = available[best_ei_idx]
@@ -482,7 +505,7 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
 
         best_so_far.append(float(max(best_so_far[-1], y_new)))
 
-    return best_so_far, surrogate_failures
+    return best_so_far, surrogate_failures, flat_acquisition_iters
 
 
 def run_random_loop(y_labeled, y_pool, max_iterations, rng):
@@ -833,6 +856,11 @@ def compute_bo_metrics(best_so_far_curves, y_all, budgets):
             # seeds whose curve produced a real AUC, out of len(auc_values)
             'auc_n_seeds': int(_auc_finite.size),
             'auc_n_curves': int(_auc_arr.size),
+            # The area under each seed's own best-found curve, in the BO
+            # objective's units times picks. At three seeds a standard
+            # deviation is not readable on its own, and auc_std was the only
+            # spread stored; these are the numbers it is computed from.
+            'auc_per_seed': [float(a) for a in _auc_arr],
             'iters_to_top1pct_mean': float(np.nanmean([
                 x for x in iters_to_top1 if x is not None
             ])) if any(x is not None for x in iters_to_top1) else None,
@@ -861,6 +889,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     rebuild_interval = kwargs.get('rebuild_interval', 0)
     hybrid_budget = kwargs.get('hybrid_budget', 50)
     target_dim = kwargs.get('target_dim', 50)
+    # The search family the per-seed recipe comes from. None is the predictive
+    # family, which is what this file always used. 'similarity' asks instead
+    # for features that predict each molecule's activity from its five nearest
+    # neighbours in the distance those features define.
+    recipe_objective = kwargs.get('recipe_objective')
+    # Which of the conditions below to actually run. None runs them all.
+    # A caller that names a subset gets the rest recorded as not_run, so a
+    # result file says which comparisons it does and does not hold rather than
+    # having a condition silently absent.
+    only_conditions = kwargs.get('conditions')
 
     reps = data['reps']
     labels = data['labels']
@@ -932,7 +970,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=augmentations,
                 dataset_name=dataset_name, task_type=task_type,
                 domain=data.get('domain', 'molecular'),
-                seed=seed,
+                seed=seed, objective=recipe_objective,
                 cache_namespace=f'bo_seed{int(seed_i)}_s{int(seed)}')
             bp_s = (meta['best_config']['blueprint']
                     if meta and 'blueprint' in meta['best_config'] else None)
@@ -947,6 +985,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Domain-aware metric for determining "lower_is_better"
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+
+    # What the hybrid build is scored by, and when it must be handed nothing.
+    # build_fold_hybrid REFUSES model and metric_fn when the recipe's objective
+    # scores rep-space geometry: under objective='similarity' create_hybrid
+    # fits no downstream model and metric_fn is a raising guard. The two
+    # builders below pass both unconditionally, so asking for a similarity
+    # recipe raised inside the build, the handler stored a one-point NaN curve,
+    # and the condition read as a method that produced nothing rather than as a
+    # build that was refused. Resolved once, here.
+    from kirby.find_best_hybrid import _is_geometry_objective as _is_geom_obj
+    _geometry_recipe = (recipe_objective is not None
+                        and _is_geom_obj(recipe_objective))
+    if _geometry_recipe:
+        print(f"  recipe objective {recipe_objective!r} scores geometry: the "
+              f"hybrid build is handed no downstream model and no metric")
+
+    def _hybrid_scoring():
+        """(model, metric_fn, lower_is_better) for a hybrid build."""
+        if _geometry_recipe:
+            return None, None, None
+        return _hybrid_build_model(), metric_fn, lower_is_better
     # BO maximizes -metric when lower_is_better, so curves & AUC are over the
     # negated objective. We sign-flip the AUC at STORAGE time below so that
     # JSON consumers read auc_mean in the natural metric direction without
@@ -1028,6 +1087,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             conditions.append(f'single_{rname}')
         print(f"  Per-rep BO: {len(reps)} individual rep conditions added")
 
+    # A caller that names a subset splits one run into several. The names it
+    # left out are written into the result as not_run, so the file says which
+    # comparisons it holds instead of leaving a condition silently missing.
+    not_run = []
+    if only_conditions:
+        _asked = list(only_conditions)
+        _unknown = [c for c in _asked if c not in conditions]
+        if _unknown:
+            raise ValueError(
+                f"conditions= names no such S11 condition: {_unknown}; "
+                f"this run offers {conditions}")
+        not_run = [c for c in conditions if c not in _asked]
+        conditions = [c for c in conditions if c in _asked]
+        print(f"  Conditions this run: {conditions}")
+        print(f"  Not run here: {not_run}")
+
     results = {
         'conditions': {},
         'config': {
@@ -1040,6 +1115,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'lower_is_better': lower_is_better,
             'metric_name': metric_name,
             'n_samples': n_samples,
+            'recipe_objective': recipe_objective,
+            'conditions_not_run': not_run,
         },
     }
 
@@ -1078,6 +1155,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         all_curves = []
         total_gp_failures = 0
+        # Iterations on which Expected Improvement tied at its maximum across
+        # more than half the remaining pool, summed over seeds. See
+        # run_bo_loop's docstring: on those the molecule is chosen by row
+        # order, not by the surrogate.
+        total_flat_acq = 0
         cond_dim = target_dim  # default; overwritten by feature builders
         degenerate_split_seeds = 0  # SIMA-10b: count of skipped seed iterations
         no_blueprint_seeds = 0  # seeds whose seed rows produced no recipe
@@ -1200,43 +1282,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # BO with periodic hybrid rebuilding. refit_interval=10
                         # keeps the GP-refit cadence aligned with run_bo_loop
                         # (SIMA-12).
-                        curve, gp_fail = _run_bo_with_rebuild(
+                        curve, gp_fail, flat_acq = _run_bo_with_rebuild(
                             reps, y_bo, seed_idx, pool_idx,
                             max_iterations, hybrid_budget, rebuild_interval,
                             rng=rng, bp=bp, augmentations=augmentations,
                             refit_interval=10, groups=groups,
-                            model=_hybrid_build_model(), metric_fn=metric_fn,
-                            lower_is_better=lower_is_better)
+                            **dict(zip(('model', 'metric_fn',
+                                        'lower_is_better'),
+                                       _hybrid_scoring())))
                         all_curves.append(curve)
                         total_gp_failures += gp_fail
+                        total_flat_acq += flat_acq
                         best_final = curve[-1] if curve else float('nan')
                         print(f"      final best: {best_final:.4f}, "
-                              f"GP failures: {gp_fail}")
+                              f"GP failures: {gp_fail}, "
+                              f"flat-acquisition picks: {flat_acq}")
                         continue
                     else:
                         X_seed, X_pool, dim, _, _ = build_hybrid_features(
                             reps, y_bo, seed_idx, pool_idx,
                             budget=hybrid_budget, bp=bp,
                             augmentations=augmentations, groups=groups,
-                            model=_hybrid_build_model(), metric_fn=metric_fn,
-                            lower_is_better=lower_is_better)
+                            **dict(zip(('model', 'metric_fn',
+                                        'lower_is_better'),
+                                       _hybrid_scoring())))
 
                 elif condition == 'hybrid_50d_refit':
                     # Always rebuild hybrid every 25 iterations; GP refit stays
                     # at 10 to match run_bo_loop (SIMA-12: rebuild cadence and
                     # refit cadence are distinct).
-                    curve, gp_fail = _run_bo_with_rebuild(
+                    curve, gp_fail, flat_acq = _run_bo_with_rebuild(
                         reps, y_bo, seed_idx, pool_idx,
                         max_iterations, hybrid_budget, 25,
                         rng=rng, bp=bp, augmentations=augmentations,
                         refit_interval=10, groups=groups,
-                        model=_hybrid_build_model(), metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
+                        **dict(zip(('model', 'metric_fn', 'lower_is_better'),
+                                   _hybrid_scoring())))
                     all_curves.append(curve)
                     total_gp_failures += gp_fail
+                    total_flat_acq += flat_acq
                     best_final = curve[-1] if curve else float('nan')
                     print(f"      final best: {best_final:.4f}, "
-                          f"GP failures: {gp_fail}")
+                          f"GP failures: {gp_fail}, "
+                          f"flat-acquisition picks: {flat_acq}")
                     continue
 
                 elif condition == 'random_50d':
@@ -1256,8 +1344,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         reps, y_cond, seed_idx, pool_idx,
                         budget=hybrid_budget, bp=bp,
                         augmentations=augmentations, groups=groups,
-                        model=_hybrid_build_model(), metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
+                        **dict(zip(('model', 'metric_fn', 'lower_is_better'),
+                                   _hybrid_scoring())))
 
                 elif condition == 'multi_obj_random':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
@@ -1284,8 +1372,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         reps, y_bo, seed_idx, pool_idx,
                         budget=hybrid_budget, bp=bp,
                         augmentations=augmentations, groups=groups,
-                        model=_hybrid_build_model(), metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
+                        **dict(zip(('model', 'metric_fn', 'lower_is_better'),
+                                   _hybrid_scoring())))
 
                 else:
                     print(f"      Unknown condition: {condition}")
@@ -1307,7 +1395,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # --- Run BO loop ---
             kt = 'tanimoto' if condition == 'tanimoto_ecfp4' else 'rbf'
-            curve, gp_fail = run_bo_loop(
+            curve, gp_fail, flat_acq = run_bo_loop(
                 X_seed, y_seed, X_pool, y_pool,
                 max_iterations=max_iterations,
                 refit_interval=10, rng=rng,
@@ -1316,9 +1404,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             )
             all_curves.append(curve)
             total_gp_failures += gp_fail
+            total_flat_acq += flat_acq
 
             best_final = curve[-1] if curve else float('nan')
-            print(f"      final best: {best_final:.4f}, GP failures: {gp_fail}")
+            print(f"      final best: {best_final:.4f}, GP failures: {gp_fail}, "
+                  f"flat-acquisition picks: {flat_acq}")
 
         # --- Aggregate metrics across seeds ---
         if not all_curves:
@@ -1360,6 +1450,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for bk_key, bk_metrics in metrics.items():
                 if 'auc_mean' in bk_metrics:
                     bk_metrics['auc_mean'] = -bk_metrics['auc_mean']
+                # The per-seed areas auc_mean is the mean of. Flipped with it,
+                # or the three numbers would sit on the opposite side of zero
+                # from the mean they explain.
+                if 'auc_per_seed' in bk_metrics:
+                    bk_metrics['auc_per_seed'] = [
+                        -a for a in bk_metrics['auc_per_seed']]
 
         # Mean curve for plotting
         max_len = max(len(c) for c in all_curves)
@@ -1386,6 +1482,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             and total_gp_failures >= 0.99 * _max_possible_fails
         )
 
+        # The second way a condition stops being a method. degenerate_random
+        # above counts fits that RAISED. This counts picks made while Expected
+        # Improvement was tied at its maximum across more than half the
+        # remaining pool -- the surrogate fitted, and then separated nothing,
+        # so np.argmax handed back the lowest row number among the tied
+        # molecules. Those picks are dataset row order, not acquisition, and
+        # not random either.
+        _successful_picks = max(0, (n_seeds * max_iterations)
+                                - total_gp_failures - degenerate_split_seeds
+                                * max_iterations)
+        degenerate_row_order = (
+            not _is_random_only
+            and _successful_picks > 0
+            and total_flat_acq >= 0.5 * _successful_picks
+        )
+
         results['conditions'][condition] = {
             'metrics': metrics,
             'mean_curve': mean_curve,
@@ -1393,6 +1505,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_curves': len(all_curves),
             'total_gp_failures': total_gp_failures,
             'degenerate_random_fallback': bool(degenerate_random),
+            # picks made on a tied Expected Improvement, summed over seeds
+            'flat_acquisition_picks': int(total_flat_acq),
+            'degenerate_row_order_acquisition': bool(degenerate_row_order),
             'degenerate_split_seeds': degenerate_split_seeds,
             # seeds refused because their seed rows produced no recipe
             'no_blueprint_seeds': no_blueprint_seeds,
@@ -1415,14 +1530,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    [flag] {condition}: every surrogate fit failed "
                   f"({total_gp_failures}/{_max_possible_fails}) -> this curve is "
                   f"pure random acquisition, not a real {condition} result.")
+        if degenerate_row_order:
+            print(f"    [flag] {condition}: Expected Improvement was tied at "
+                  f"its maximum across more than half the pool on "
+                  f"{total_flat_acq} of {_successful_picks} picks -> those "
+                  f"molecules were taken in dataset row order, not chosen.")
 
         # Print summary for this condition
         for bk in budget_checkpoints:
             key = f'budget_{bk}'
             if key in metrics:
                 m = metrics[key]
+                _ps = m.get('auc_per_seed') or []
+                _spread = (f"[{min(_ps):.1f}..{max(_ps):.1f}]" if _ps else "[]")
                 print(f"    Budget {bk}: AUC={display_sign*m['auc_mean']:.1f}"
-                      f"+/-{m['auc_std']:.1f}, "
+                      f" seeds{_spread} "
                       f"top1%: {m['iters_to_top1pct_mean']}"
                       f"/{m['iters_to_top1pct_found']} found, "
                       f"top5%: {m['iters_to_top5pct_mean']}"
@@ -1567,6 +1689,7 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
     best_so_far = [float(np.max(y_lab))]
     gp_failures = 0
+    flat_acquisition_iters = 0
     last_optimize = -refit_interval
 
     for it in range(max_iterations):
@@ -1625,6 +1748,11 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
             mu, sigma = gp.predict(X_pool_available, return_std=True)
             y_best = float(np.max(y_lab))
             ei = expected_improvement(mu, sigma, y_best)
+            _ei_max = ei.max()
+            _n_tied = int(np.isclose(ei, _ei_max, rtol=1e-9,
+                                     atol=1e-12 * max(abs(_ei_max), 1.0)).sum())
+            if _n_tied > 0.5 * ei.size:
+                flat_acquisition_iters += 1
             best_ei_idx = np.argmax(ei)
             available = np.where(pool_mask)[0]
             selected_pool_idx = available[best_ei_idx]
@@ -1640,7 +1768,7 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
         best_so_far.append(float(max(best_so_far[-1], y_new)))
 
-    return best_so_far, gp_failures
+    return best_so_far, gp_failures, flat_acquisition_iters
 
 
 # =============================================================================
@@ -1664,6 +1792,16 @@ if __name__ == '__main__':
     parser.add_argument('--multi-objective', action='store_true', default=False,
                         help='Enable multi-objective BO: optimize label + QED '
                              '(molecular datasets with SMILES only, per Moesser 2023)')
+    parser.add_argument('--conditions', type=str, default=None,
+                        help='Comma-separated subset of the conditions to run '
+                             '(default: all of them). The rest are recorded '
+                             'in the result as not_run.')
+    parser.add_argument('--recipe-objective', type=str, default=None,
+                        help="Search family the per-seed hybrid recipe comes "
+                             "from. Default (unset) is the predictive family. "
+                             "'similarity' asks for features that predict each "
+                             "molecule's activity from its five nearest "
+                             "neighbours in the distance they define.")
     parser.add_argument('--per-rep-bo', action='store_true', default=False,
                         help='Run BO in each individual rep space (shows which '
                              'reps give GP the best landscape, per Moesser Ch.2)')
@@ -1687,6 +1825,9 @@ if __name__ == '__main__':
                   hybrid_budget=args.hybrid_budget,
                   target_dim=args.target_dim,
                   multi_objective=args.multi_objective,
-                  per_rep_bo=args.per_rep_bo)
+                  per_rep_bo=args.per_rep_bo,
+                  recipe_objective=args.recipe_objective,
+                  conditions=([c.strip() for c in args.conditions.split(',')
+                               if c.strip()] if args.conditions else None))
     save_experiment_results(results, args.output, 's11_bayesian_optimization',
                             args.dataset)
