@@ -268,3 +268,137 @@ reproduce or update those two files.
 data: `MoleculeACE` is not an installed package here, and `build_moleculeace.py`
 locates its CSVs by globbing inside that package's install directory.
 
+## Method experiments, run at full molecule count
+
+Every number below is this session's run on whole datasets: herg_ki 1,415
+molecules, logd 1,427 kept from 5,039 by whole scaffold groups,
+adme_solubility 2,173. No rows were subsampled. The activity yardstick
+throughout is `simeval.eval_knn_readacross`: five folds by Bemis-Murcko
+scaffold group, each held-out molecule predicted from its five nearest
+training molecules weighted by one over distance, one Spearman pooled over
+every held-out molecule. Higher is better, unitless. The structural yardstick
+is the Spearman between a pair's distance in the space and its
+maximum-common-substructure distance, over 8,000 cached molecule pairs. Higher
+is better, unitless.
+
+### `winning_recipe_vs_standard.py` — the headline table. Wins structure 3 of 3, wins activity 1 of 3.
+
+This is the only script in the group that fits its feature selection on one half
+of the molecules and scores on the other. The molecules split by whole scaffold
+group: herg_ki 709 select and 706 score, logd 738 and 689, adme_solubility by
+the same rule. A cached pair counts only when both its molecules land on the
+score half, so herg_ki scores structure on 2,005 of its 8,000 pairs and drops
+4,025 that straddle.
+
+The stacked space is ecfp4_count, the RDKit descriptors that survive a drop-one
+selection, 100 atompair/torsion features and a 49-feature 3D pharmacophore
+block, each block z-scored, divided by the square root of its own feature count
+and concatenated, then Euclidean.
+
+Activity Spearman on the score half, five nearest neighbours:
+
+    space                            herg_ki    logd   adme_solubility
+    ecfp4:tanimoto (field default)    0.5781  0.5339   0.2895
+    ecfp4_count:tanimoto (baseline)   0.5802  0.5811   0.3439
+    ecfp4_count, z-scored Euclidean   0.5789  0.4629   0.1786
+    the stacked space                 0.6415  0.4315   0.3366
+
+Structural Spearman on the score half's pairs:
+
+    space                            herg_ki    logd   adme_solubility
+    ecfp4:tanimoto (field default)    0.1796  0.4081   0.2483
+    ecfp4_count:tanimoto (baseline)   0.1079  0.4170   0.2752
+    ecfp4_count, z-scored Euclidean   0.2863  0.1857   0.3011
+    the stacked space                 0.4389  0.5851   0.3823
+
+**The script's third question has an answer and it is not the same on the three
+datasets.** It asks whether a gain is the added blocks or the switch from
+Tanimoto to z-scored Euclidean. On herg_ki the switch costs 0.5802 to 0.5789,
+so the whole 0.5802 to 0.6415 is the added blocks. On logd the switch costs
+0.5811 to 0.4629 and the stacked space ends at 0.4315, so the coefficient
+change is most of the loss and the added blocks make it slightly worse still.
+On adme_solubility the switch costs 0.3439 to 0.1786 and the stacked space
+recovers to 0.3366, so the added blocks are worth 0.1580 Spearman there and the
+coefficient is what sank it.
+
+Wall clock: 377 s, 371 s, 354 s per dataset, on a machine at load average 210
+where the process held 8% of one core.
+
+### `creative_hybrids_v2.py` — the same stacking, scored on every molecule, and it disagrees with the held-out table on logd
+
+This one fits the descriptor drop and the fine-2D selection on the same 8,000
+pairs it then scores structure on, and scores activity on all n molecules.
+Activity Spearman, delta against ecfp4_count Tanimoto in the same column:
+
+    space                                     herg_ki           logd
+    count_tanimoto (baseline)                  0.7087          0.6180
+    count, z-scored Euclidean                  0.6641 -0.0446  0.5329 -0.0851
+    count+descriptors (all 208)                0.7100 +0.0014  0.6293 +0.0113
+    count+descriptors (drop-one survivors)     0.6901 -0.0185  0.5866 -0.0314
+    count+3D pharmacophore                     0.7317 +0.0230  0.3515 -0.2665
+    count+survivors+pharmacophore+fine2D       0.7333 +0.0247  0.5259 -0.0920
+
+The drop-one selection keeps 63 of herg_ki's 208 descriptors and 68 of logd's.
+It is chosen to raise the structural Spearman and it does: herg_ki 0.248 to
+0.492, logd 0.383 to 0.675 on the pairs it fitted on. On activity it costs
+0.0185 on herg_ki and 0.0314 on logd.
+
+**The 3D pharmacophore block is the whole story and it points opposite ways.**
+Adding it alone to the count fingerprint is the second-best space on herg_ki at
++0.0230 Spearman and the worst space on logd at -0.2665. Nothing else in the
+table moves either dataset by more than 0.05.
+
+### `nary_similarity.py` — the shipped setting is worse than turning the method off, on all three
+
+The method multiplies every pair's distance by `1 + lam * mean outlierness of
+the pair`, where outlierness is complementary similarity min-max scaled over
+every molecule. At lam = 0 the matrix is the plain count-fingerprint Tanimoto,
+so lam = 0 is the method switched off. The file ships lam = 1.0.
+
+Activity Spearman at five neighbours, three datasets:
+
+    lam                 herg_ki    logd   adme_solubility
+    0 (method off)       0.7087  0.6180   0.3995
+    1.0 (shipped)        0.7041  0.6137   0.3728
+    8.0                  0.6863  0.6009   0.3242
+
+Sweeping lam over -0.9, -0.5, -0.25, 0, 0.25, 0.5, 1, 2, 4, 8 and the neighbour
+count over 3, 5, 7, 15, the best cell is lam = -0.50 at 3 neighbours on herg_ki
+(0.7132 against 0.7027 at lam = 0 and the same neighbour count), lam = -0.90 at
+7 neighbours on logd (0.6195 against 0.6181), and lam = 0 at 15 neighbours on
+adme_solubility (0.4325, no lam improves it). **Where lam helps at all its sign
+is negative, which shrinks distances toward outliers — the opposite of what the
+method is for.** The whole lam axis moves the Spearman by less than 0.011 on
+every dataset. The neighbour count moves adme_solubility from 0.3995 at five
+neighbours to 0.4325 at fifteen, three times the largest lam effect.
+
+The file's other test ranks molecules whose activity disagrees with their
+neighbours. Spearman against that target: complementary similarity 0.1265,
+0.0897, -0.2855 on the three datasets; mean distance to all molecules 0.1389,
+0.0945, -0.2676; distance of the activity from the dataset median 0.0665,
+0.2588, 0.5086. The method is beaten by mean distance on all three and by
+activity extremeness on two.
+
+Wall clock: 6.1 s herg_ki, 14.5 s logd, 14.7 s adme_solubility for one setting.
+The whole 40-cell sweep took 173 s on adme_solubility.
+
+### `aug3d_similarity.py` — E3FP and Coulomb eigenvalues lose to the count fingerprint on all three
+
+Activity Spearman at five neighbours, against ecfp4_count Tanimoto in the first
+row:
+
+    metric                  herg_ki    logd   adme_solubility
+    ecfp4_count:tanimoto      0.709   0.618   0.399
+    e3fp:tanimoto             0.654   0.548   0.331
+    e3fp:cosine               0.651   0.548   0.307
+    e3fp:euclidean            0.101   0.315   0.044
+    coulomb:cosine            0.556   0.556   0.083
+    coulomb:euclidean         0.532   0.430   0.231
+
+E3FP under z-scored Euclidean is the same collapse s11 described: 1,024 bits
+whose median Euclidean distance sits far above the scale the neighbour search
+expects, and the activity Spearman falls to 0.101 on herg_ki and 0.044 on
+adme_solubility while the same bits under Tanimoto reach 0.654 and 0.331.
+
+Wall clock: 39 s per dataset with the conformer cache warm.
+
