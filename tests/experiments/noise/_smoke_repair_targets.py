@@ -336,9 +336,19 @@ def test_n11_grid_keys():
     prefixed = [k for k in res if k.startswith('rf|oof+')]
     print(f"  keys under the estimator's own target: {len(own)}; "
           f"under the out-of-fold target: {len(prefixed)}")
+    # ⛔ 0.5 MEANT TWO DIFFERENT THINGS AND THIS LINE ASKED FOR THE WRONG ONE.
+    # Until 2026-09-18 one list drove both loops, so 'inverse_0.5' and
+    # 'proportional_0.5' both existed. n11 then split it: a smoothing alpha is a
+    # fraction of the way from the label to a target and keeps [0.1, 0.3, 0.5,
+    # 0.7], a weighting strength is an unbounded row-weight ratio and moved to
+    # [0.3, 1.0, 3.0, 9.0]. There is no strength 0.5 any more, so this check has
+    # asked for a key that cannot exist since the split. Strength 1.0 is the
+    # 2-to-1 row weight ratio n07 and n18 used, which is what 0.5 was standing
+    # in for here. Fixed 2026-09-20.
     check("the estimator's own remediation keys are unchanged",
-          'rf|proportional_0.5' in res and 'rf|inverse_0.5' in res,
-          f'{len(own)} keys with no target prefix')
+          'rf|proportional_0.5' in res and 'rf|inverse_1.0' in res,
+          f'{len(own)} keys with no target prefix; smoothing alphas '
+          f'{n11.SMOOTH_ALPHAS}, weight strengths {n11.WEIGHT_STRENGTHS}')
     check('the out-of-fold target got its own keys',
           'rf|oof+proportional_0.5' in res,
           f'{len(prefixed)} keys carrying the target name')

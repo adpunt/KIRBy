@@ -176,7 +176,20 @@ def sweep_cuts(exp_ids):
 
     if 'n11' in exp_ids:
         m = mod('n11_estimation_remediation_grid')
-        m.ALPHAS = [0.3, 0.7]
+        # ⛔ TWO LISTS, AND `ALPHAS` IS NEITHER OF THEM. n11 split its one
+        # swept list in two on 2026-09-18 -- a smoothing alpha is a fraction of
+        # the way from the label to a target, a weighting strength is an
+        # unbounded row-weight ratio -- and kept `ALPHAS` as an alias bound once
+        # at import, which the result file reports and no loop reads. This
+        # entry rebound the alias alone, so from 2026-09-18 to 2026-09-20 it
+        # reported cutting the swept values 4 -> 2 and cut nothing: both loops
+        # still ran all four. Fixed 2026-09-20.
+        m.SMOOTH_ALPHAS = [0.3, 0.7]
+        # 2-to-1 is what n07 and n18 used before 2026-09-18; 4-to-1 is what n18
+        # then measured as the winner on two domains. Keeping both means the
+        # iteration run can still tell them apart. A results run sweeps all four.
+        m.WEIGHT_STRENGTHS = [1.0, 3.0]
+        m.ALPHAS = m.SMOOTH_ALPHAS
         m.WEIGHT_METHODS = ['inverse']
         m.SMOOTH_METHODS = ['proportional', 'threshold']
         m.NEIGHBOR_METRICS = ['manhattan']
@@ -184,9 +197,11 @@ def sweep_cuts(exp_ids):
         m.TORCH_ESTIMATORS = []
         m.OPTIONAL_ESTIMATORS = []
         force(m, noise_seeds=[0])
-        notes['n11'] = ('4 strengths -> 2, 3 weightings -> 1, 4 smoothers -> 2, '
-                        '4 distances -> 1, 2 extra targets -> 1, torch and '
-                        'ngboost detectors dropped, 3 draws -> 1')
+        notes['n11'] = ('4 smoothing alphas -> 2, 4 weight strengths -> 2 '
+                        '(2-to-1 and 4-to-1), 3 weightings -> 1, 4 smoothers '
+                        '-> 2, 4 distances -> 1, 2 extra targets -> 1 (the '
+                        'Gaussian-process target is the dropped one), torch '
+                        'and ngboost detectors dropped, 3 draws -> 1')
 
     if 'n12' in exp_ids:
         m = mod('n12_importance_weighted_distance')

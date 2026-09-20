@@ -216,13 +216,49 @@ def test_n11_run_estimator_grid():
 # ---------------------------------------------------------------------------
 # FIX 4f: on classification, n11 must SKIP the model-based regression
 # estimators (they fit a regressor on integer class labels = meaningless) and
-# KEEP only the kNN/is_clf-aware ones. Verify the skip partition is correct,
-# that 'hybrid'/'hybrid_noise' is in the skip set (its cross-val component is a
-# regressor with no is_clf branch), and that the kept estimators genuinely
-# accept is_clf while the skipped model-based ones do not.
+# KEEP only the is_clf-aware ones. n11 derives that set from the estimator
+# constructors, so what this file holds is the other half: the names a human has
+# read the classification branch of. A signature says the flag is accepted; only
+# reading the branch says the number it produces means anything. When the two
+# disagree, one of them is new and somebody has to look at it.
+#
+# THE NAMES, AND WHAT EACH COMPUTES UNDER THE FLAG:
+#   neighbor_residual       the fraction of its k nearest neighbours carrying a
+#                           different class
+#   local_variance_ratio    its disagreement with its neighbours over theirs
+#                           with each other
+#   distance_weighted       the same fraction, weighted by distance
+#                           (distance_weighted_residual is the same class)
+#   cross_val               one minus the probability an out-of-fold classifier
+#                           gives the class the molecule carries. Gained the
+#                           flag on 2026-09-20 in commit 1677bfc; n11's
+#                           hand-written list did not gain the name, and this
+#                           check is what caught it.
+#   activity_cliff_aware    accepts the flag, but n11 cut it on 2026-09-12 and
+#                           never asks for it, so it cannot reach a run.
+#
+# 'hybrid' stays out: HybridNoiseEstimator takes no is_clf and passes none to
+# the three estimators it averages, so all three fall back to the regression
+# branch on the class codes. Its own constructor is the reason, not theirs.
 # ---------------------------------------------------------------------------
 def test_fix4f_clf_skip_partition():
     print("FIX 4f clf skip partition (n11):")
+
+    # Every name a human has read the classification branch of. n11 derives its
+    # own set from the constructors; when the two stop matching, an estimator
+    # gained or lost the flag and nobody has looked at what it now computes.
+    READ_AND_CHECKED = {
+        'neighbor_residual', 'local_variance_ratio',
+        'distance_weighted', 'distance_weighted_residual',
+        'cross_val', 'cross_val_residual',
+        'activity_cliff_aware',
+    }
+    derived = set(n11.IS_CLF_AWARE_ESTIMATORS)
+    check('every estimator n11 will run on a classification dataset is one '
+          'somebody has read the classification branch of',
+          derived == READ_AND_CHECKED,
+          f'only in the code: {sorted(derived - READ_AND_CHECKED)}; '
+          f'only in this file: {sorted(READ_AND_CHECKED - derived)}')
 
     # n11: partition over BASE + TORCH + OPTIONAL. 'hybrid' (short name) is
     # in NEIGHBOR_ESTIMATORS but must STILL be skipped (not is_clf-aware).
@@ -230,25 +266,25 @@ def test_fix4f_clf_skip_partition():
                + list(n11.OPTIONAL_ESTIMATORS))
     n11_kept = [e for e in n11_all if e in n11.IS_CLF_AWARE_ESTIMATORS]
     n11_skip = [e for e in n11_all if e not in n11.IS_CLF_AWARE_ESTIMATORS]
-    check('n11 keeps exactly the kNN/is_clf-aware estimators on clf',
+    check('n11 runs the three neighbour estimators and cross_val on clf',
           set(n11_kept) == {'neighbor_residual', 'local_variance_ratio',
-                            'distance_weighted'},
+                            'distance_weighted', 'cross_val'},
           f'kept={n11_kept}')
     check("n11 skips 'hybrid' even though it's in NEIGHBOR_ESTIMATORS",
           'hybrid' in n11_skip and 'hybrid' in n11.NEIGHBOR_ESTIMATORS)
-    check('n11 skips cross_val/ensemble/gaussian_process/conformal/bayesian_rf',
-          {'cross_val', 'ensemble', 'gaussian_process', 'conformal',
+    check('n11 skips ensemble/gaussian_process/conformal/bayesian_rf',
+          {'ensemble', 'gaussian_process', 'conformal',
            'bayesian_rf'}.issubset(set(n11_skip)),
           f'skip={n11_skip}')
 
     # The kept estimators must actually accept is_clf in the library; the
     # skipped model-based ones must NOT (that's why they can't run clf-aware).
     for e in ('neighbor_residual', 'local_variance_ratio',
-              'distance_weighted'):
+              'distance_weighted', 'cross_val'):
         est = get_noise_estimator(e)
         params = inspect.signature(type(est).__init__).parameters
         check(f'kept estimator "{e}" accepts is_clf', 'is_clf' in params)
-    for e in ('cross_val', 'ensemble', 'hybrid', 'gaussian_process',
+    for e in ('ensemble', 'hybrid', 'gaussian_process',
               'conformal', 'bayesian_rf'):
         est = get_noise_estimator(e)
         params = inspect.signature(type(est).__init__).parameters
