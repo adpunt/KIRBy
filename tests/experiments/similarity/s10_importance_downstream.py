@@ -790,6 +790,7 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
         for budget in budgets:
             bkey = _budget_key(budget)
             std_scores, w_scores = [], []
+            std_fits, w_fits = [], []
 
             for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
                 blueprint = fold_blueprints.get(fold_i)
@@ -827,9 +828,12 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                 try:
                     gp = _make_gp()
                     gp.fit(X_tr, y_train)
-                    std_scores.append(metric_fn(y_val, gp.predict(X_va)))
+                    _p = gp.predict(X_va)
+                    std_scores.append(metric_fn(y_val, _p))
+                    std_fits.append(_gp_fit_report(gp, _p))
                 except Exception:
                     std_scores.append(float('nan'))
+                    std_fits.append(None)
 
                 # Weighted GP
                 try:
@@ -838,9 +842,12 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                         f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
                     gp_w = _make_gp()
                     gp_w.fit(X_tr * w, y_train)
-                    w_scores.append(metric_fn(y_val, gp_w.predict(X_va * w)))
+                    _p = gp_w.predict(X_va * w)
+                    w_scores.append(metric_fn(y_val, _p))
+                    w_fits.append(_gp_fit_report(gp_w, _p))
                 except Exception:
                     w_scores.append(float('nan'))
+                    w_fits.append(None)
 
             if std_scores:
                 std_mean = float(np.nanmean(std_scores))
@@ -854,6 +861,13 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                     'n_paired_folds': n_paired,
                     'standard_folds': [float(s) for s in std_scores],
                     'weighted_folds': [float(s) for s in w_scores],
+                    'standard_fits': std_fits,
+                    'weighted_fits': w_fits,
+                    'n_standard_at_bound': sum(
+                        1 for f in std_fits if f and f['at_bound']),
+                    'n_weighted_at_bound': sum(
+                        1 for f in w_fits if f and f['at_bound']),
+                    'fit_basis': _GP_FIT_BASIS,
                 }
                 print(f"    hybrid [{bkey} features]: std={std_mean:.4f}, "
                       f"weighted={w_mean:.4f} "
