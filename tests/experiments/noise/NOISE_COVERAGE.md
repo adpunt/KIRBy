@@ -11,9 +11,9 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | | What it is | Smoke | Result | Loops |
 |---|---|---|---|---|
 | n02 | weights training rows by how reliable their label looks | FAIL (_smoke_audit_n02_n03_n07) | 2 file(s), newest 2026-09-19 | 1 (1 kept) |
-| n07 | seven corrections applied after noise is detected | FAIL (_smoke_audit_n02_n03_n07, _smoke_n04_n07) | 1 file(s), newest 2026-09-20 | 0 |
+| n07 | seven corrections applied after noise is detected | FAIL (_smoke_audit_n02_n03_n07, _smoke_n04_n07) | 1 file(s), newest 2026-09-20 | 1 (0 kept) |
 | n09 | a survey of learning-with-noisy-labels methods | 1 of 2 pass, rest not yet run | none | 0 |
-| n11 | every noise estimator crossed against every correction | 2 file(s), not yet run | none | 0 |
+| n11 | every noise estimator crossed against every correction | 3 file(s), not yet run | none | 0 |
 | n12 | weights the distance by feature importance to find noisy labels | 2 file(s), not yet run | 1 file(s), newest 2026-09-20 | 0 |
 | n17 | cleaning where the noise is real, measured against replicates | 2 file(s), not yet run | none | 0 |
 | n18 | cleaning the labels as they come, nothing injected | 1 file(s), not yet run | none | 3 (3 kept) |
@@ -39,7 +39,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 - 18 experiments, 10 of them methods.
 - 0 have no smoke file at all.
 - 13 have never written a result file.
-- 7 of the 10 methods have had no optimisation loop.
+- 6 of the 10 methods have had no optimisation loop.
 
 ## The loops, newest first
 
@@ -53,5 +53,6 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n18 | 2026-09-20 | swept the correction strength instead of using one value | no strength sweep | downweight at a 4-to-1 row weight ratio, best in 5 of 5 folds, +0.0447 spearman against a 0.5985 baseline | yes |
 | n18 | 2026-09-20 | added the hybrid and similarity-objective hybrid spaces beside the base representation | nothing won in the hybrid space | downweight best in 5 of 5 folds at 6 of 12 settings, +0.0041 | yes |
 | n02 | 2026-09-20 | the reliability score for regression, from the previous scoring to the neighbour-mean deviation passed through weights_from_scores at a 4-to-1 ratio | within 0.001 on both datasets, in their own metrics | -0.0098 rmse on herg_ki; +0.0192 and +0.0367 spearman on flab_thermo_tresanco | yes |
+| n07 | 2026-09-20 | the injected dose, from the level 0.5 n07 runs to level 2.0, at the same one molecule in ten corrupted | the clean-to-corrupted gap a recovery divides by, 0.0192 spearman against a clean score of 0.5985 spearman | the same gap, 0.1639 spearman against the same clean score of 0.5985 spearman | no |
 
 Every before and after names its own units. A loop with no before and after number is not a loop and is not listed here.
