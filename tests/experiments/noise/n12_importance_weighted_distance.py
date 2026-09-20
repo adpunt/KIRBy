@@ -66,6 +66,9 @@ from experiments._shared import (
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from kirby.hybrid import compute_feature_importance
+from kirby.similarity.distance_config import (
+    get_distance_metric as _get_distance_metric,
+)
 from kirby.find_best_hybrid import _is_geometry_objective
 from kirby.utils.noise_estimation import (
     NeighborResidualEstimator,
@@ -194,8 +197,41 @@ def _importance_is_all_zero(importance):
     return float(np.sqrt(np.maximum(importance, 0)).sum()) < 1e-10
 
 
+# THE POWER THE IMPORTANCE IS RAISED TO, AND THE DISTANCE IT HAS TO MATCH.
+#
+# Weighting multiplies a z-scored feature by its importance raised to some
+# power e. Under euclidean the per-feature term of the squared distance is
+# (w ** e * delta) ** 2, which is w ** (2e) * delta ** 2, so e = 0.5 makes the
+# weight a feature carries in the distance equal its own importance. Under
+# manhattan the term is w ** e * |delta|, so e = 1.0 does. Under Minkowski with
+# exponent p the matched value is 1 / p, which is what
+# kirby.similarity.preprocessing.weight_exponent already returns. Cosine has no
+# matched value: rescaling a feature does not enter that formula this way.
+#
+# This file has raised the importance to 0.5 since it was written, and the
+# estimators have found their neighbours under manhattan ever since
+# kirby.similarity.distance_config made manhattan the default. The two do not
+# match.
+#
+# n21 measured the pair on flab_thermo_tresanco, 672 antibodies, 336 of them in
+# each training fold, over 2 folds and 1 corruption draw. The reading is
+# detection average precision against the molecules whose labels actually
+# moved. Under manhattan, lightgbm_gain read 0.2098 at exponent 0.5 and 0.2388
+# at exponent 1.0, and treeshap read 0.2185 and 0.2210. Under euclidean,
+# lightgbm_gain read 0.2346 at 0.5 and 0.2175 at 1.0, and treeshap read 0.2030
+# and 0.2103. The matched exponent won 3 of those 4 scorer-and-distance pairs,
+# on 4 paired readings behind each. That is a direction, not a settled result.
+#
+# ⛔ NOT YET MEASURED IN THIS FILE. IMPORTANCE_EXPONENT stays at 0.5, which is
+# exactly the np.sqrt this replaced, so every number n12 has ever produced is
+# unchanged. A sweep sets the module attribute to compare the two arms; the
+# default moves only once n12's own numbers say it should.
+IMPORTANCE_EXPONENT = 0.5
+EXPONENT_MATCHED_TO_METRIC = {'euclidean': 0.5, 'manhattan': 1.0}
+
+
 def _weight_features(X_standardized, importance):
-    """Apply sqrt(importance) weighting to features that are ALREADY z-scored.
+    """Raise the importance to IMPORTANCE_EXPONENT and multiply z-scored features by it.
 
     CRITICAL: caller must pass a standardized X. The previous version of this
     helper applied the weight first and the caller standardized after, which
@@ -204,16 +240,25 @@ def _weight_features(X_standardized, importance):
     silently produced identical Euclidean geometry across weighted and
     unweighted conditions.
 
-    Returns X * sqrt(w_normalized) where w_normalized has positive entries
-    summing to len(importance) (mean ≈ 1) — chosen so the weighting expands
-    or contracts the per-feature dimension relative to the unit-variance
-    z-scored input rather than crushing every column toward zero.
+    Returns X * w_normalized, where w_normalized is the importance raised to
+    IMPORTANCE_EXPONENT and then scaled so its entries are positive and sum to
+    the number of features (mean ≈ 1) — chosen so the weighting expands or
+    contracts a feature relative to the unit-variance z-scored input rather
+    than crushing every one of them toward zero.
+
+    ⛔ THE POWER IS TAKEN BEFORE THE NORMALISATION, NOT AFTER.
+    kirby.similarity.preprocessing.fold_weights does it the other way round: it
+    normalises the importance to mean 1 and then raises that to the exponent.
+    The two orders give different numbers at any exponent other than 1, and
+    which one is right is a question about what "the importance of a feature"
+    means, not a bug to fix in passing. This order is the one every n12 result
+    on disk was produced under, so it is the one kept here.
     """
     if _importance_is_all_zero(importance):
         # All-zero importance → no signal to weight by; return X_standardized
-        # unchanged so downstream Euclidean distances are well-defined.
+        # unchanged so downstream distances are well-defined.
         return X_standardized
-    w = np.sqrt(np.maximum(importance, 0))
+    w = np.power(np.maximum(importance, 0), IMPORTANCE_EXPONENT)
     # Normalize to mean ≈ 1 (not sum ≈ 1) so unit-variance columns are
     # rescaled around their original magnitude rather than crushed to ~1/d.
     w = w * (len(w) / w.sum())
@@ -654,6 +699,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'base_rep': base_rep_name,
         'k_values': K_VALUES,
         'importance_methods': IMPORTANCE_METHODS,
+        # The power the importance was raised to, the distance the neighbours
+        # were found under, and the power that distance would match. Without
+        # these three a result file cannot be told from one run at the other
+        # exponent. See IMPORTANCE_EXPONENT above.
+        'importance_exponent': float(IMPORTANCE_EXPONENT),
+        'distance_metric': _get_distance_metric(),
+        'exponent_matched_to_distance_metric': EXPONENT_MATCHED_TO_METRIC.get(
+            _get_distance_metric()),
         'sigmas': sigmas,
         'noise_condition': noise_condition,
         'noise_provenance': noise_provenance,
