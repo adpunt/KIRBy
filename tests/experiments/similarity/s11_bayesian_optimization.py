@@ -1474,7 +1474,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # curve" is actually pure random acquisition. Flag it (informational --
         # for ecfp4_raw this degeneracy IS the hypothesis, but the flag stops a
         # silently-random curve being read as a successful method elsewhere).
-        _is_random_only = condition in ('random_acq', 'random_50d', 'multi_obj_random')
+        # The conditions that acquire at random, so that a degeneracy flag
+        # meaning "this is really random picking" says nothing about them.
+        # random_50d is NOT one: build_random_features projects the
+        # concatenated representations onto 50 random Gaussian directions and
+        # run_bo_loop then fits the same RBF GP and takes the
+        # Expected-Improvement maximum, so its acquisition is a surrogate's,
+        # not a coin's. It was on this list because of its name, and on herg_ki
+        # it made all 90 of its picks on a tied Expected Improvement with
+        # nothing saying so.
+        _is_random_only = condition in ('random_acq', 'multi_obj_random')
         _max_possible_fails = n_seeds * max_iterations
         degenerate_random = (
             not _is_random_only
