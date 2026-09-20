@@ -17,7 +17,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n12 | weights the distance by feature importance to find noisy labels | FAIL (_smoke_n08_n12) | 1 file(s), newest 2026-09-20 | 0 |
 | n17 | cleaning where the noise is real, measured against replicates | pass | none | 0 |
 | n18 | cleaning the labels as they come, nothing injected | FAIL (_smoke_n18) | none | 3 (3 kept) |
-| n20 | cleaning before the recipe search rather than after | pass | none | 0 |
+| n20 | cleaning before the recipe search rather than after | pass | none | 1 (1 kept) |
 | n21 | which distance the nearest neighbours are found in | pass | 4 file(s), newest 2026-09-20 | 4 (3 kept) |
 | n23 | cleaning from a model's own per-molecule uncertainty | 1 file(s), not yet run | none | 0 |
 
@@ -39,7 +39,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 - 18 experiments, 10 of them methods.
 - 0 have no smoke file at all.
 - 13 have never written a result file.
-- 5 of the 10 methods have had no optimisation loop.
+- 4 of the 10 methods have had no optimisation loop.
 
 ## The loops, newest first
 
@@ -57,5 +57,6 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n11 | 2026-09-20 | the iteration harness's n11 cuts rebound onto the two lists the loops actually read, and the extra-target list gated at the place the targets are built | 28 downstream model fits per estimator per estimation space with one downstream model, and one Gaussian-process out-of-fold pass per (fold, draw, space) | 10 downstream model fits per estimator per estimation space with one downstream model, and no Gaussian-process out-of-fold pass | yes |
 | n07 | 2026-09-20 | how far a label moves toward its target, from the alpha of 0.5 that oof_smooth and gp_smooth run at to an alpha of 1.0, with the suspicion score rescaled the same way in both | aiming at a Gaussian-process posterior mean, 0.4509 spearman; aiming at a LightGBM out-of-fold prediction, 0.4581 spearman; aiming at the mean label of the ten nearest molecules, 0.4331 spearman | aiming at a Gaussian-process posterior mean, 0.4996 spearman; aiming at a LightGBM out-of-fold prediction, 0.4703 spearman; aiming at the mean label of the ten nearest molecules, 0.4552 spearman | no |
 | n07 | 2026-09-20 | the fraction of the way a score-proportional correction moves a label, from 0.5 to 1.0, holding the correction's target fixed | share of the 0.1939 spearman clean-to-corrupted gap recovered at 0.5: 25.9% for the gaussian-process target, 11.2% for the neighbour mean, 25.7% for the out-of-fold prediction | at 1.0: 44.6%, 31.5% and 45.4% for the same three targets | no |
+| n20 | 2026-09-20 | the fold's homology groups are handed to the detector that decides which labels are suspect, instead of being withheld | 0.2845 detection average precision on held-out fold 0 and 0.2056 on held-out fold 1, groups withheld | 0.3322 detection average precision on held-out fold 0 and 0.2387 on held-out fold 1, groups given | yes |
 
 Every before and after names its own units. A loop with no before and after number is not a loop and is not listed here.
