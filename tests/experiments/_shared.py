@@ -971,6 +971,19 @@ def _apply_dataset_search_speed(kwargs, dataset_name):
     asks for the full grid on one of these -- a one-off comparison, a smoke
     run -- still gets it, and is then asking for a different search and will not
     be served the precomputed one.
+
+    ⛔ THE NAME IS MATCHED EXACTLY, so four call sites are deliberately NOT
+    covered. They decorate the name, which makes a search the precompute does
+    not own and the cold-search refusal does not touch:
+        c05_learning_curves.py:255          <dataset>_n<rows>_s<seed>
+        c07_data_complexity_partitions.py:286  <dataset>_<partition>_<subpop>
+        c15_ml_theory_depth.py:662          <dataset>__c15c_b<budget>
+        c16_feature_selection_as_regularization.py:389  <dataset>__c16_capped...
+    Those keep full speed. c05 and c07 search a SUBSET of the rows, so full is
+    cheaper there than it is on the whole dataset; c15c and c16 are
+    experiment-local tiers that were always going to build their own search.
+    Whether those four should follow the dataset's class as well is a compute
+    decision and has not been taken.
     """
     if kwargs.get('speed') is not None:
         return kwargs
