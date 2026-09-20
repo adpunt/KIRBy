@@ -32,7 +32,16 @@ ten nearest training molecules. label_smooth and knn_smooth still do.
 oof_smooth aims at what a LightGBM model trained on the other training
 molecules predicts for this one, and gp_smooth at the posterior mean of a
 Gaussian process fitted the same way; both inner splits are scaffold-group
-aware. quantile_clip aims at nothing — a quantile regression forest gives each
+aware.
+
+⛔ BUT gp_smooth's TARGET IS A CONSTANT PER INNER FOLD ON A WIDE REPRESENTATION,
+not a prediction for the molecule. Measured 2026-09-21 on saprot, 448 training
+molecules and 1280 features: the 448 molecules received 3 distinct values and
+each was exactly the mean label of the inner fold they were held out of. Read
+the note in `cleaned_training_set`'s gp_smooth branch before treating that arm
+as a model-based repair.
+
+quantile_clip aims at nothing — a quantile regression forest gives each
 molecule the 10th-to-90th-percentile range of the labels its own leaves'
 training molecules carry, a label inside that range is left byte-identical, and
 a label outside is pulled onto the edge it crossed.
@@ -576,6 +585,32 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # process fitted on the other training molecules. GaussianProcessEstimator
         # already computed this on every call and kept it on the fitted object
         # as predictions_; nothing in this file read it before today.
+        #
+        # ⛔ ON A WIDE REPRESENTATION THAT POSTERIOR MEAN IS A CONSTANT PER
+        # INNER FOLD, NOT A PREDICTION FOR THIS MOLECULE. MEASURED 2026-09-21,
+        # fold 0 of flab_thermo_tresanco, saprot, 448 training molecules and
+        # 1280 features, REPAIR_OOF_SPLITS cut to 3 for the probe: the 448
+        # molecules received 3 distinct values -- 64.0567, 65.7113 and 65.7467
+        # label units -- and each one is exactly the mean label of the inner
+        # fold that molecule was held out of. The fitted noise level came back
+        # at 22.7930 label units against a fitted-label standard deviation of
+        # 22.8228, so the process assigns all of the variance to noise and its
+        # posterior mean falls back to its prior mean. Its rank correlation
+        # with the labels it was fitted on is -0.0234 spearman.
+        #
+        # Why: the kernel is an RBF with ONE length scale for every feature, and
+        # over 1280 features on 448 molecules every pair of molecules sits at
+        # nearly the same distance, so the kernel carries no information to
+        # optimise against. Weighting the inputs by lightgbm gain, which zeroes
+        # 919 of the 1280 columns, changed the posterior mean by 0.00000000
+        # label units -- bit-identical, because nothing was reading the columns.
+        #
+        # So this branch is shrinkage toward the inner fold's mean label. That
+        # is not nothing -- at strength 1.0 it recovered 47.2% of the
+        # clean-to-corrupted gap over 3 folds, the best of the twelve settings
+        # measured -- but it is not what "aiming at a Gaussian process's
+        # prediction" says, and no amount of work on the TARGET will change it
+        # while the process is fitted at this width.
         target = (targets or {}).get('gp')
         if target is None:
             # ⛔ THE ROW CAP LIVES HERE TOO, BECAUSE THE FIT IS HERE.

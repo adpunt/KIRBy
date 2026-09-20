@@ -102,12 +102,12 @@
     {
       "experiment": "n11",
       "date": "2026-09-20",
-      "dataset": "synthetic, 90 rows, 70 per training fold — a cost measurement, not a score",
+      "dataset": "synthetic, 90 rows, 70 per training fold \u2014 a cost measurement, not a score",
       "changed": "the iteration harness's n11 cuts rebound onto the two lists the loops actually read, and the extra-target list gated at the place the targets are built",
       "before": "28 downstream model fits per estimator per estimation space with one downstream model, and one Gaussian-process out-of-fold pass per (fold, draw, space)",
       "after": "10 downstream model fits per estimator per estimation space with one downstream model, and no Gaussian-process out-of-fold pass",
       "kept": true,
-      "note": "This settles nothing about which estimator to pair with which correction. The harness had declared these cuts since 2026-09-18 and they reached nothing: it rebound ALPHAS, an alias bound once at import that the result file reports and no loop reads, while the loops read SMOOTH_ALPHAS and WEIGHT_STRENGTHS; and it rebound EXTRA_TARGETS, which run() wrote into the result file while building both targets by hand. So a run under the harness reported two cuts it had not made and paid for a Gaussian process it had asked to drop. n11 still produced no result file on 2026-09-20 — every result store it reads raises StaleResultDB for a missing distance_metric column."
+      "note": "This settles nothing about which estimator to pair with which correction. The harness had declared these cuts since 2026-09-18 and they reached nothing: it rebound ALPHAS, an alias bound once at import that the result file reports and no loop reads, while the loops read SMOOTH_ALPHAS and WEIGHT_STRENGTHS; and it rebound EXTRA_TARGETS, which run() wrote into the result file while building both targets by hand. So a run under the harness reported two cuts it had not made and paid for a Gaussian process it had asked to drop. n11 still produced no result file on 2026-09-20 \u2014 every result store it reads raises StaleResultDB for a missing distance_metric column."
     },
     {
       "experiment": "n07",
@@ -158,6 +158,16 @@
       "after": "the strongest setting loses at every correction. label_smooth is best at alpha 0.25, 0.4492 spearman against 0.4185 at alpha 1.0. oof_smooth is best at alpha 0.5, 0.4651 against 0.4512 at alpha 1.0. gp_smooth is best at alpha 0.5, 0.4726 against 0.4705 at alpha 1.0. downweight is best at a 4-to-1 row weight ratio, 0.4823 against 0.4687 at 10-to-1",
       "kept": true,
       "note": "The grid does not need extending above alpha 1.0; it may need extending below 0.25 for label_smooth. Only one setting of the 44 scored won every fold: gp_smooth at alpha 1.0 with the cross_val detector, 3 of 3 folds, 0.4590 to 0.4705 spearman. Two cautions. Both hybrid spaces were absent -- every stored search on disk is behind the distance_metric column commit 9c6f7d7 added, so this is the base representation alone. And the uncleaned score here is 0.4590 spearman where the earlier n18 entry on this dataset reads 0.5985, because pick_noise_base_rep has no ecfp4, pdv or blosum on an antibody set and falls back to esm2_cdr alphabetically, while the 0.5985 runs elsewhere in this ledger name saprot."
+    },
+    {
+      "experiment": "n07",
+      "date": "2026-09-21",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 in fold 0's training block, saprot, 1280 features",
+      "changed": "weighted the Gaussian process's kernel inputs by each feature's lightgbm gain, which is what cut a Gaussian process's error by 29 percent in n21",
+      "before": "the posterior mean gp_smooth aims every label at spans 1.6899 label units across the 448 molecules and rank-correlates with the labels it was fitted on at -0.0234 spearman",
+      "after": "the same 1.6899 label units and the same -0.0234 spearman; the two posterior means differ by 0.00000000 label units, bit-identical",
+      "kept": false,
+      "note": "THE WEIGHTING IS NOT THE FINDING. It reached the kernel and it was drastic -- lightgbm gives gain to only 361 of saprot's 1280 features, so 919 columns were multiplied by zero and both guards in GaussianProcessEstimator passed. Nothing changed because the process is not reading its inputs. Counted directly: the 448 molecules receive 3 DISTINCT posterior-mean values, 64.0567, 65.7113 and 65.7467 label units, and each is exactly the mean label of the inner fold that molecule was held out of -- inner fold 0 trains on 298 molecules whose mean label is 64.0567 and every molecule it held out received 64.0567. The fitted noise level is 22.7930 label units against a fitted-label standard deviation of 22.8228, so the process assigns all of the variance to noise and its posterior mean is its prior mean. So gp_smooth does not move a label toward what a Gaussian process predicts for that molecule, which is what n07's docstring says it does; it moves every label toward the mean label of its inner fold. It is shrinkage toward the mean under a model's name. This is one representation at 1280 features over 448 molecules, which is the regime where an isotropic RBF kernel flattens because every pair of molecules is nearly the same distance apart; whether a narrower feature set revives it is not measured."
     }
   ]
 }
