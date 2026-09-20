@@ -98,6 +98,26 @@
       "after": "the same gap, 0.1639 spearman against the same clean score of 0.5985 spearman",
       "kept": false,
       "note": "Measured over 3 scaffold-grouped folds and 3 noise draws. NOT applied: the injected level is the owner's to set and it is the axis the experiment is about. It is recorded because at level 0.5 the completed run on disk, at 2 folds and 1 noise draw, measured that gap as NEGATIVE -- clean 0.5775 spearman against corrupted 0.5847 -- so every recovery in its hybrid block came back undefined. Level 1.0 gives 0.0656 spearman and level 3.0 gives 0.2758. Doubling the corrupted share from one molecule in ten to one in five moved the gap from 0.0192 to 0.0225 spearman at level 0.5 and from 0.1639 to 0.1643 at level 2.0, so the dose is what damages the model and the count of corrupted molecules barely is."
+    },
+    {
+      "experiment": "n11",
+      "date": "2026-09-20",
+      "dataset": "synthetic, 90 rows, 70 per training fold \u2014 a cost measurement, not a score",
+      "changed": "the iteration harness's n11 cuts rebound onto the two lists the loops actually read, and the extra-target list gated at the place the targets are built",
+      "before": "28 downstream model fits per estimator per estimation space with one downstream model, and one Gaussian-process out-of-fold pass per (fold, draw, space)",
+      "after": "10 downstream model fits per estimator per estimation space with one downstream model, and no Gaussian-process out-of-fold pass",
+      "kept": true,
+      "note": "This settles nothing about which estimator to pair with which correction. The harness had declared these cuts since 2026-09-18 and they reached nothing: it rebound ALPHAS, an alias bound once at import that the result file reports and no loop reads, while the loops read SMOOTH_ALPHAS and WEIGHT_STRENGTHS; and it rebound EXTRA_TARGETS, which run() wrote into the result file while building both targets by hand. So a run under the harness reported two cuts it had not made and paid for a Gaussian process it had asked to drop. n11 still produced no result file on 2026-09-20 \u2014 every result store it reads raises StaleResultDB for a missing distance_metric column."
+    },
+    {
+      "experiment": "n07",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 in fold 0's training block, saprot, random forest, spearman",
+      "changed": "how far a label moves toward its target, from the alpha of 0.5 that oof_smooth and gp_smooth run at to an alpha of 1.0, with the suspicion score rescaled the same way in both",
+      "before": "aiming at a Gaussian-process posterior mean, 0.4730 spearman; aiming at a LightGBM out-of-fold prediction, 0.4765 spearman; aiming at the mean label of the ten nearest molecules, 0.4215 spearman",
+      "after": "aiming at a Gaussian-process posterior mean, 0.5213 spearman; aiming at a LightGBM out-of-fold prediction, 0.4992 spearman; aiming at the mean label of the ten nearest molecules, 0.4825 spearman",
+      "kept": false,
+      "note": "ONE paired reading: fold 0, one noise draw, injected level 2.0, one molecule in ten flagged. Clean 0.6547 spearman, corrupted 0.4008, so the gap is 0.2538 spearman. Not applied. n18 already sweeps this same alpha over 0.25, 0.5 and 1.0 for exactly these two cleanups, so that sweep should set the default rather than a second measurement here, and one fold is not enough to move it. WHY IT MOVES AT ALL: the outlier condition is Huber contamination at lambda 3, so EVERY training label carries an error and the flagged tenth carries one about three times wider -- measured on this fold, 39.32 label units on the 39 molecules the injector flagged against 12.67 on the other 409. A correction that rewrites only the flagged tenth therefore leaves most of the damage in place, which is why overwriting the flagged tenth outright scored 0.4798, 0.4614 and 0.4288 spearman for the three targets, below moving every label the whole way."
     }
   ]
 }
