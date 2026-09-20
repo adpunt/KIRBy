@@ -458,6 +458,72 @@ def _read_second_axis(per, groups, nt, kw):
     return out
 
 
+def _read_n23(payload, dataset, experiment, source_file):
+    """n23 writes per_regime[regime][level][space][source][arm][model][fold] = score.
+
+    It is a sweep, and it was unclassified until 2026-09-21. It runs the injected
+    regime over dataset_policy's level grid and writes a held-out score at every
+    one of them, so leaving it out of both tables dropped every curve it produces
+    without a note. It is NOT in n11's shape: there is no `noisy_score_by_model`
+    cell. The innermost mapping is one score per fold key, so the point on the
+    curve is the MEAN over the folds that scored. n23's own headline is a count of
+    folds won, and a count of folds is not a point on an error curve.
+
+    What each curve is. One per (feature space, uncertainty source, arm, model).
+    `arm` is what was done to the training labels -- 'none' is the uncleaned fit,
+    'drop@0.1' removes the tenth of training molecules with the widest predicted
+    spread, 'move_confidence@0.5' shifts every training label toward the model's
+    own out-of-fold prediction. The 'none' arm is the same fit under all five
+    sources, so it is emitted once per space rather than five times.
+
+    The 'as_they_come' regime is skipped: it corrupts nothing and its only key is
+    'none', which is not a level.
+    """
+    per_regime = payload.get('per_regime') or {}
+    inj = per_regime.get('injected')
+    if not isinstance(inj, dict) or not inj:
+        return []
+    kw = _common(payload, dataset, experiment, source_file)
+    cond = payload.get('noise_condition', 'unknown')
+
+    # (space, source, arm, model) -> {level: mean over the folds that scored}
+    series = {}
+    for lvl, key in _levels_of(inj):
+        for space, by_source in (inj[key] or {}).items():
+            if not isinstance(by_source, dict):
+                continue
+            for source, by_arm in by_source.items():
+                if not isinstance(by_arm, dict):
+                    continue
+                for arm, by_model in by_arm.items():
+                    if not isinstance(by_model, dict):
+                        continue
+                    for model, by_fold in by_model.items():
+                        if not isinstance(by_fold, dict):
+                            continue
+                        vals = [_finite(v) for v in by_fold.values()]
+                        vals = [v for v in vals if v is not None]
+                        if not vals:
+                            continue
+                        src = None if arm == 'none' else source
+                        series.setdefault((space, src, arm, model), {})[lvl] = (
+                            float(np.mean(vals)))
+
+    out = []
+    for (space, src, arm, model), by_level in sorted(
+            series.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
+        if len(by_level) < MIN_POINTS_2P:
+            continue
+        levels = sorted(by_level)
+        what = ('no cleaning, %s space, model %s' % (space, model)
+                if src is None else
+                'cleaning %s keyed on %s, %s space, model %s'
+                % (arm, src, space, model))
+        out.append(Curve(condition=cond, what=what, levels=levels,
+                         scores=[by_level[l] for l in levels], **kw))
+    return out
+
+
 def _read_c10(payload, dataset, experiment, source_file):
     """individual_reps[rep][condition]['scores_by_level'], plus best_single and hybrids."""
     kw = _common(payload, dataset, experiment, source_file)
@@ -524,6 +590,11 @@ READERS = {
     # average precision is its headline; it also scores predictions at every level,
     # and skipping it dropped every one of those curves without a note.
     'n21_neighbour_distance':          ('n21', _read_n21),
+    # n23 sweeps the injected level and writes a held-out score at each one, so it
+    # belongs here rather than in NOT_A_SWEEP. Its shape is its own -- one score
+    # per fold key, not n11's `noisy_score_by_model` -- so it gets its own reader.
+    # Added 2026-09-21, after _smoke_noise_ceiling part5 reported it unclassified.
+    'n23_uncertainty_cleaning':        ('n23', _read_n23),
     'c10_noise_robustness':            ('c10', _read_c10),
 }
 
