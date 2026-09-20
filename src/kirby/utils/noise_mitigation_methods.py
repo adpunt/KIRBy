@@ -294,14 +294,55 @@ def similarity_activity_correlation_scalable(X, y, n_sample=5000, is_clf=False,
     return float(rho)
 
 
+def neighbour_distance_matrix(X, metric=None):
+    """Pairwise distances on an ALREADY-STANDARDISED block, under one coefficient.
+
+    The two places that predict a molecule's activity from its five nearest
+    neighbours -- `activity_readacross` here, which the budget split calls
+    through hybrid._score_component, and
+    find_best_hybrid._readacross_objective_score, which scores the
+    configuration -- both call this, so the score a configuration is judged by
+    and the score its budget is split by cannot come from two different
+    coefficients.
+
+    `metric` None reads kirby.similarity.distance_config.get_distance_metric(),
+    which is manhattan unless --distance-metric or KIRBY_DISTANCE_METRIC says
+    otherwise.
+
+    No standardising and no feature weighting happen here: both callers hand in
+    a block their own scaler already produced. That is the whole difference from
+    compute_distance_matrix above, which z-scores its input by default.
+
+    The euclidean branch keeps the hand-written Gram form
+    sqrt(max(|xi|^2 + |xj|^2 - 2 xi.xj, 0)) that both callers used before
+    2026-09-20, rather than cdist, so every number computed under Euclidean
+    before that date comes back bit-for-bit identical.
+    """
+    from kirby.similarity.distance_config import resolve, scipy_metric
+    Xa = np.asarray(X, dtype=np.float64)
+    name = resolve(metric)
+    if name == 'euclidean':
+        G = Xa @ Xa.T
+        sq = np.diag(G)
+        return np.sqrt(np.maximum(sq[:, None] + sq[None, :] - 2.0 * G, 0.0))
+    m, kw = scipy_metric(name)
+    return cdist(Xa, Xa, metric=m, **kw)
+
+
 def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise',
-                        degenerate=0.0, is_clf=False):
+                        degenerate=0.0, is_clf=False, metric=None):
     """Activity read-across: how well do near neighbours predict activity?
 
-    Builds the pairwise Euclidean distance matrix on the (already standardised)
+    Builds the pairwise distance matrix on the (already standardised)
     block, predicts each sample's activity from its k nearest neighbours under a
     scaffold-grouped split, and returns the Spearman rho between predicted and
     true activity. Higher is better. No model is fit on the features.
+
+    ★ `metric` is which pairwise distance the neighbours are found under. None
+    (the default) reads distance_config.get_distance_metric(), manhattan unless
+    the run says otherwise. Until 2026-09-20 there was no such argument: the
+    Gram-matrix form of Euclidean was written out by hand here, so the budget
+    was split by Euclidean neighbourhoods whatever --distance-metric said.
 
     ★ CLASSIFICATION (is_clf=True) returns 2*(AUROC - 0.5) instead. On a binary
     label the neighbour prediction is the distance-weighted fraction of the k
@@ -362,9 +403,7 @@ def activity_readacross(X, y, groups, k=5, seed=42, missing_groups='raise',
     if n_groups < 2:
         return _degen
     try:
-        G = X @ X.T
-        sq = np.diag(G)
-        D = np.sqrt(np.maximum(sq[:, None] + sq[None, :] - 2.0 * G, 0.0))
+        D = neighbour_distance_matrix(X, metric)
         preds = np.full(n, np.nan)
         for tr, te in GroupKFold(n_splits=min(5, n_groups)).split(
                 np.arange(n), y, g):

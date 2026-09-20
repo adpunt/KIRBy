@@ -2031,10 +2031,10 @@ def _geometry_fold_mean(fold_scores):
 
 
 def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
-                                seed=42) -> float:
+                                seed=42, metric=None) -> float:
     """Activity read-across objective (higher-is-better) for objective='similarity'.
 
-    Builds the held-out fold's pairwise Euclidean distance matrix from the
+    Builds the held-out fold's pairwise distance matrix from the
     (already-scaled) embedding and scores how activity-coherent its
     neighbourhoods are via scaffold-grouped, distance-weighted kNN read-across
     (continuous MODI in its regression form): the Spearman correlation between
@@ -2059,6 +2059,17 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
     the two changes, the score a configuration is judged by stops agreeing with
     the score its budget is split by.
 
+    ★ `metric` is which pairwise distance the neighbours are found under. None
+    (the default) reads kirby.similarity.distance_config.get_distance_metric(),
+    which is manhattan unless --distance-metric or KIRBY_DISTANCE_METRIC says
+    otherwise. Until 2026-09-20 this function took no metric at all and wrote
+    out the Gram-matrix form of Euclidean by hand, so a search whose whole
+    purpose is picking features whose distance predicts activity from five
+    nearest neighbours picked them under Euclidean whatever the run was
+    launched with. The 'euclidean' branch below still uses that hand-written
+    Gram form rather than cdist, so every number computed before that date is
+    reproduced bit-for-bit by asking for euclidean.
+
     MODI (Golbraikh/Muratov/Tropsha, JCIM 2014) is the published name for this
     measurement and was the alternative. It was not taken: it discards the
     graded fraction for a hard 1-nearest-neighbour class match, reordered about
@@ -2080,6 +2091,11 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
     """
     from sklearn.model_selection import GroupKFold
     from sklearn.neighbors import KNeighborsRegressor
+    # The SAME builder the budget split uses, so the score a configuration is
+    # judged by and the score its budget is split by cannot come from two
+    # different coefficients.
+    from kirby.utils.noise_mitigation_methods import (
+        neighbour_distance_matrix as _pairwise_objective_distance)
     X = np.asarray(X_val_s, dtype=np.float64)
     y = np.asarray(y_val, dtype=np.float64).ravel()
     n = len(y)
@@ -2092,11 +2108,7 @@ def _readacross_objective_score(X_val_s, y_val, groups_val, is_clf=False,
     if n_groups < 2:
         return float('nan')
     try:
-        # Pairwise Euclidean distance (matches simeval.dist_euclidean geometry).
-        G = X @ X.T
-        sq = np.diag(G)
-        d2 = np.maximum(sq[:, None] + sq[None, :] - 2.0 * G, 0.0)
-        D = np.sqrt(d2)
+        D = _pairwise_objective_distance(X, metric)
         n_splits = min(5, n_groups)
         gkf = GroupKFold(n_splits=n_splits)
         preds = np.full(n, np.nan)
