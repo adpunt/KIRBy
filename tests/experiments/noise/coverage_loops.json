@@ -118,6 +118,16 @@
       "after": "aiming at a Gaussian-process posterior mean, 0.5106 spearman; aiming at a LightGBM out-of-fold prediction, 0.5122 spearman; aiming at the mean label of the ten nearest molecules, 0.4853 spearman",
       "kept": false,
       "note": "Two folds, one noise draw each, injected level 2.0, one molecule in ten flagged. Clean 0.6181 spearman, corrupted 0.4241, so the gap is 0.1939 spearman. Moving the whole way beat moving half way in 6 of the 6 paired readings, 3 targets by 2 folds. At the whole-way setting the two model-based targets lead the neighbour mean, 0.5122 and 0.5106 against 0.4853 spearman -- the reverse of the ranking in the completed run on disk, where oof_smooth and gp_smooth came last of seven at the half-way setting they run at. NOT APPLIED: one dataset, one representation, one downstream model, one dose, and n18 already sweeps this same alpha over 0.25, 0.5 and 1.0 for exactly these two cleanups. WHY IT MOVES: the outlier condition is Huber contamination at lambda 3, so every training label carries an error and the flagged tenth carries one about three times wider -- 39.32 label units on the 39 molecules flagged in fold 0 against 12.67 on the other 409, clean label standard deviation 10.12. WHAT IT DOES NOT SETTLE: rescaling the suspicion score by its rank instead of its range repaired the labels most, 7.25 label units from clean against 10.99 for the winner, and still recovered less of the gap -- so the correction that puts the most labels back is not the one that recovers the most score."
+    },
+    {
+      "experiment": "n07",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, saprot, 2 scaffold-grouped folds, 1 corruption draw each, injected level 2.0, one molecule in ten corrupted",
+      "changed": "the fraction of the way a score-proportional correction moves a label, from 0.5 to 1.0, holding the correction's target fixed",
+      "before": "share of the 0.1939 spearman clean-to-corrupted gap recovered at 0.5: 25.9% for the gaussian-process target, 11.2% for the neighbour mean, 25.7% for the out-of-fold prediction",
+      "after": "at 1.0: 44.6%, 31.5% and 45.4% for the same three targets",
+      "kept": false,
+      "note": "NOT applied: 2 folds and 1 draw each, and the folds took 1848 and 3757 seconds. Recorded because it refutes the reading that the min-max rescale was what held these corrections back. Replacing the raw score with its rank at the same 1.0, which makes that rescale the identity, LOST at all three targets: 26.5%, 19.3% and 23.1%. Both comparisons held at 3 of 3 targets across the first pass and the second. The TARGET matters less than it looked after one pass: at 1.0 the out-of-fold prediction (45.4%) and the gaussian process (44.6%) are within a point of each other, where after one pass they read 38.7% and 47.5%. Separately, the shape that moved labels closest to their clean values was not the shape that scored best -- rank at 1.0 cut the mean distance from a corrupted training label to its clean value from 15.05 label units to between 7.25 and 7.81 and still lost the held-out spearman to proportional at 1.0, which reached only 10.99 to 11.15 units. The gaussian process ran without importance-weighted kernel inputs. n18's STRENGTHS sweep is what would settle the alpha."
     }
   ]
 }

@@ -11,13 +11,13 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | | What it is | Smoke | Result | Loops |
 |---|---|---|---|---|
 | n02 | weights training rows by how reliable their label looks | FAIL (_smoke_audit_n02_n03_n07) | 2 file(s), newest 2026-09-19 | 1 (1 kept) |
-| n07 | seven corrections applied after noise is detected | FAIL (_smoke_audit_n02_n03_n07, _smoke_n04_n07) | 1 file(s), newest 2026-09-20 | 2 (0 kept) |
+| n07 | seven corrections applied after noise is detected | FAIL (_smoke_audit_n02_n03_n07, _smoke_n04_n07) | 1 file(s), newest 2026-09-20 | 3 (0 kept) |
 | n09 | a survey of learning-with-noisy-labels methods | pass | none | 0 |
 | n11 | every noise estimator crossed against every correction | FAIL (_smoke_n08_n12) | none | 1 (1 kept) |
 | n12 | weights the distance by feature importance to find noisy labels | FAIL (_smoke_n08_n12) | 1 file(s), newest 2026-09-20 | 0 |
 | n17 | cleaning where the noise is real, measured against replicates | pass | none | 0 |
 | n18 | cleaning the labels as they come, nothing injected | FAIL (_smoke_n18) | none | 3 (3 kept) |
-| n20 | cleaning before the recipe search rather than after | 1 file(s), not yet run | none | 0 |
+| n20 | cleaning before the recipe search rather than after | pass | none | 0 |
 | n21 | which distance the nearest neighbours are found in | 1 file(s), not yet run | 4 file(s), newest 2026-09-20 | 4 (3 kept) |
 | n23 | cleaning from a model's own per-molecule uncertainty | 1 file(s), not yet run | none | 0 |
 
@@ -56,5 +56,6 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n07 | 2026-09-20 | the injected dose, from the level 0.5 n07 runs to level 2.0, at the same one molecule in ten corrupted | the clean-to-corrupted gap a recovery divides by, 0.0192 spearman against a clean score of 0.5985 spearman | the same gap, 0.1639 spearman against the same clean score of 0.5985 spearman | no |
 | n11 | 2026-09-20 | the iteration harness's n11 cuts rebound onto the two lists the loops actually read, and the extra-target list gated at the place the targets are built | 28 downstream model fits per estimator per estimation space with one downstream model, and one Gaussian-process out-of-fold pass per (fold, draw, space) | 10 downstream model fits per estimator per estimation space with one downstream model, and no Gaussian-process out-of-fold pass | yes |
 | n07 | 2026-09-20 | how far a label moves toward its target, from the alpha of 0.5 that oof_smooth and gp_smooth run at to an alpha of 1.0, with the suspicion score rescaled the same way in both | aiming at a Gaussian-process posterior mean, 0.4743 spearman; aiming at a LightGBM out-of-fold prediction, 0.4740 spearman; aiming at the mean label of the ten nearest molecules, 0.4458 spearman | aiming at a Gaussian-process posterior mean, 0.5106 spearman; aiming at a LightGBM out-of-fold prediction, 0.5122 spearman; aiming at the mean label of the ten nearest molecules, 0.4853 spearman | no |
+| n07 | 2026-09-20 | the fraction of the way a score-proportional correction moves a label, from 0.5 to 1.0, holding the correction's target fixed | share of the 0.1939 spearman clean-to-corrupted gap recovered at 0.5: 25.9% for the gaussian-process target, 11.2% for the neighbour mean, 25.7% for the out-of-fold prediction | at 1.0: 44.6%, 31.5% and 45.4% for the same three targets | no |
 
 Every before and after names its own units. A loop with no before and after number is not a loop and is not listed here.
