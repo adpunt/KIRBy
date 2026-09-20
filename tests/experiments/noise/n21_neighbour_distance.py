@@ -9,14 +9,19 @@ are found in has never been swept. n12 sweeps one weighting against no
 weighting; nothing has put a forest proximity or the hybrid's own feature space
 beside them.
 
-FOUR DISTANCES.
+FIVE DISTANCES.
 
   plain                the base representation as it is, z-scored.
   importance-weighted  each feature multiplied by its importance raised to an
                        exponent, then z-scored first. n12's space.
   forest proximity     how often two molecules land in the same leaf of a
                        fitted forest; the distance is one minus that share.
-  the hybrid's own     the feature space the recipe built, z-scored.
+  the hybrid's own     the feature space the prediction-objective recipe
+                       built, z-scored.
+  the similarity one   the feature space the similarity-objective recipe built,
+                       z-scored. Its features were chosen so that the distance
+                       predicts each molecule's activity from its five nearest
+                       neighbours.
 
 WHAT IS SCORED. `noise_helpers.detection_scores` against the molecules whose
 label actually moved. Average precision is the headline: it needs no threshold,
@@ -63,7 +68,7 @@ with. That is n12's design and carries n12's caveat: the hybrid distance is a
 best case, not a leak-free comparison. Recorded in the result file as
 `hybrid.blueprint_is_clean_label`.
 
-HOW THE NEIGHBOURS ARE FOUND. One function, for all four distances. Three of
+HOW THE NEIGHBOURS ARE FOUND. One function, for all five distances. Three of
 them are feature spaces and go through sklearn's NearestNeighbors under the
 named metric. Forest proximity is not a feature space -- it is a pairwise
 distance and nothing else -- so it goes in as a square distance matrix. The
@@ -183,9 +188,14 @@ _PROXIMITY_CHUNK = 250
 WEIGHT_STRENGTH = 3.0
 WEIGHT_METHOD = 'inverse'
 
+# The smallest clean-to-corrupted gap that a recovery percentage may be divided
+# by, as a fraction of the clean score. Same floor and same value as n06, n07
+# (n07_remediation.GAP_MIN_FRAC) and n11.
+GAP_MIN_FRAC = 0.02
+
 
 # ---------------------------------------------------------------------------
-# The four distances
+# The five distances
 # ---------------------------------------------------------------------------
 
 def importance_is_all_zero(importance):
@@ -243,8 +253,12 @@ def forest_leaf_ids(X_train, y_train, is_clf, n_trees=FOREST_TREES,
     """
     from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
     cls = RandomForestClassifier if is_clf else RandomForestRegressor
+    # 2026-09-20: was n_jobs=-1 while every other estimator in the run honours
+    # the single-thread policy (KIRBY_RF_JOBS, KIRBY_LGBM_THREADS,
+    # OMP_NUM_THREADS). Same shape as the defect commit 9cb3f43 fixed.
     rf = cls(n_estimators=int(n_trees), min_samples_leaf=int(min_samples_leaf),
-             random_state=int(seed), n_jobs=-1)
+             random_state=int(seed),
+             n_jobs=int(os.environ.get('KIRBY_RF_JOBS', '1') or 1))
     rf.fit(np.asarray(X_train, dtype=np.float64), y_train)
     return np.asarray(rf.apply(X_train), dtype=np.int32)
 
@@ -387,7 +401,7 @@ def space_specs(importance_methods, metrics, exponents,
                 include_hybrid=True):
     """Every (space, metric) cell this run scores, and what each one is.
 
-    One entry per key. `family` says which of the four distances it belongs to.
+    One entry per key. `family` says which of the five distances it belongs to.
     `distance_metric` is None for forest proximity, which is a distance and not
     a space a metric is applied to.
     """
@@ -1128,14 +1142,30 @@ def _level_block(specs, models, detectors, k_values, seeds, clean, noisy,
                         continue
                     denoised = _mean(vals)
                     c, nz = clean_by_model[m], noisy_by_model[m]
+                    # 2026-09-20: the denominator is the clean-to-corrupted gap.
+                    # A gap of a few thousandths turns a small swing in the
+                    # repaired score into a recovery of hundreds of percent, so
+                    # require the gap to be at least GAP_MIN_FRAC of the clean
+                    # score. Same floor as n06, n07 and n11.
+                    _floor = (max(1e-10, GAP_MIN_FRAC * abs(c))
+                              if np.isfinite(c) else 1e-10)
+                    gap_too_small = not (abs(gap_by_model[m]) > _floor)
                     if (np.isfinite(c) and np.isfinite(nz)
-                            and abs(gap_by_model[m]) > 1e-10):
+                            and not gap_too_small):
                         recovery = float((denoised - nz) / (c - nz) * 100.0)
+                        recovery_note = None
                     else:
                         recovery = float('nan')
+                        recovery_note = (
+                            f'not computed: the clean-to-corrupted gap '
+                            f'({gap_by_model[m]:.6g}) is under '
+                            f'{GAP_MIN_FRAC:.0%} of the clean score ({c:.6g})'
+                            if gap_too_small and np.isfinite(c)
+                            else 'not computed: a score was not finite')
                     repair[f'{m}|{est_key}'] = {
                         'model': m,
                         'detector': est_key,
+                        'recovery_note': recovery_note,
                         'denoised_score': denoised,
                         'corrupted_score': nz,
                         'clean_score': c,
