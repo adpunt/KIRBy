@@ -216,10 +216,19 @@ GAP_MIN_FRAC = 0.02
 
 
 def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False):
-    """The Outlier condition at this dataset's corrupted fraction.
+    """The Outlier condition at this dataset's WIDE-ERROR fraction.
 
-    For classification the level is the flip rate and the corrupted fraction IS the
-    level, because a flipped class label has no magnitude to dose-match.
+    `noise_fraction` is the share of training molecules that receive an error
+    about three times the width every other molecule's receives -- Huber
+    contamination at lambda 3. It is NOT the share that is corrupted, which on a
+    regression dataset is all of them. Calling it the corrupted fraction is what
+    this docstring did until 2026-09-20 and it makes the three cleanups that
+    rewrite only the flagged molecules look like they are addressing the whole
+    injury; see the note in `_evaluate_fold`.
+
+    For classification the level IS the flip rate and the fraction flipped is
+    the level, because a flipped class label has no magnitude to dose-match.
+    There the fraction really is the corrupted share.
 
     `fold_idx` was removed 2026-09-12: the fold must not reach the seed, or a
     molecule's corruption depends on which fold it lands in. See
@@ -836,9 +845,26 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
 
     # How many training rows the four cleanups touch. It was fixed at the 80th
     # percentile of the noise scores, so a fifth of the rows were flagged while
-    # noise_fraction corrupted a tenth — every cleanup was handed twice as many
-    # rows as were damaged. The flag rate is now the corrupted fraction itself:
-    # noise_fraction of 0.1 flags the top tenth, at the 90th percentile.
+    # noise_fraction moved a tenth — every cleanup was handed twice as many rows
+    # as carried the WIDE error. The flag rate is now noise_fraction itself:
+    # 0.1 flags the top tenth, at the 90th percentile.
+    #
+    # ⛔ THAT IS NOT "THE CORRUPTED FRACTION", WHICH IS ONE. This comment used to
+    # call noise_fraction the corrupted fraction and say the flag rate now
+    # matches it. It does not. The Outlier condition is Huber contamination at
+    # lambda 3 (src/noise_inject/noiseInject/core.py:65-67, "a randomly chosen
+    # fraction get a WIDER error"), so EVERY training label is moved and
+    # noise_fraction is the share moved about three times as far. MEASURED
+    # 2026-09-20 on fold 0 of flab_thermo_tresanco at injected level 2.0: the
+    # distance from a training label to its clean value averaged 39.32 label
+    # units over the 39 molecules the injector flagged and 12.67 label units
+    # over the other 409, against a clean label standard deviation of 10.12.
+    #
+    # What follows from it, and it is the whole ranking: a cleanup that rewrites
+    # only the flagged tenth leaves the other nine tenths of the damage in place.
+    # `remove`, `knn_smooth` and `quantile_clip` are all of that kind. The four
+    # that move EVERY label some distance are not, and how far they move is set
+    # by `strength` — see cleaned_training_set.
     #
     # The cut-off now lives in `cleaned_training_set` above, which is where the
     # cleanups moved to on 2026-09-17 so n20 can apply the same cleanup to
