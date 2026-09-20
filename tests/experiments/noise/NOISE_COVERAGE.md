@@ -18,7 +18,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n17 | cleaning where the noise is real, measured against replicates | pass | none | 0 |
 | n18 | cleaning the labels as they come, nothing injected | FAIL (_smoke_n18) | none | 3 (3 kept) |
 | n20 | cleaning before the recipe search rather than after | pass | none | 0 |
-| n21 | which distance the nearest neighbours are found in | 1 file(s), not yet run | 4 file(s), newest 2026-09-20 | 4 (3 kept) |
+| n21 | which distance the nearest neighbours are found in | pass | 4 file(s), newest 2026-09-20 | 4 (3 kept) |
 | n23 | cleaning from a model's own per-molecule uncertainty | 1 file(s), not yet run | none | 0 |
 
 ## Investigations — these need to run and be believed
@@ -32,7 +32,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n15 | whether a noisy search picks a different recipe | 1 file(s), not yet run | none | 0 |
 | n16 | whether feature importance moves as labels get noisier | 1 file(s), not yet run | none | 0 |
 | n19 | what a measurement count and a measurement spread are worth | pass | none | 0 |
-| n22 | whether detectors find the records a human marked wrong | 1 file(s), not yet run | none | 0 |
+| n22 | whether detectors find the records a human marked wrong | pass | none | 0 |
 
 ## Where it stands
 
@@ -55,7 +55,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n02 | 2026-09-20 | the reliability score for regression, from the previous scoring to the neighbour-mean deviation passed through weights_from_scores at a 4-to-1 ratio | within 0.001 on both datasets, in their own metrics | -0.0098 rmse on herg_ki; +0.0192 and +0.0367 spearman on flab_thermo_tresanco | yes |
 | n07 | 2026-09-20 | the injected dose, from the level 0.5 n07 runs to level 2.0, at the same one molecule in ten corrupted | the clean-to-corrupted gap a recovery divides by, 0.0192 spearman against a clean score of 0.5985 spearman | the same gap, 0.1639 spearman against the same clean score of 0.5985 spearman | no |
 | n11 | 2026-09-20 | the iteration harness's n11 cuts rebound onto the two lists the loops actually read, and the extra-target list gated at the place the targets are built | 28 downstream model fits per estimator per estimation space with one downstream model, and one Gaussian-process out-of-fold pass per (fold, draw, space) | 10 downstream model fits per estimator per estimation space with one downstream model, and no Gaussian-process out-of-fold pass | yes |
-| n07 | 2026-09-20 | how far a label moves toward its target, from the alpha of 0.5 that oof_smooth and gp_smooth run at to an alpha of 1.0, with the suspicion score rescaled the same way in both | aiming at a Gaussian-process posterior mean, 0.4743 spearman; aiming at a LightGBM out-of-fold prediction, 0.4740 spearman; aiming at the mean label of the ten nearest molecules, 0.4458 spearman | aiming at a Gaussian-process posterior mean, 0.5106 spearman; aiming at a LightGBM out-of-fold prediction, 0.5122 spearman; aiming at the mean label of the ten nearest molecules, 0.4853 spearman | no |
+| n07 | 2026-09-20 | how far a label moves toward its target, from the alpha of 0.5 that oof_smooth and gp_smooth run at to an alpha of 1.0, with the suspicion score rescaled the same way in both | aiming at a Gaussian-process posterior mean, 0.4509 spearman; aiming at a LightGBM out-of-fold prediction, 0.4581 spearman; aiming at the mean label of the ten nearest molecules, 0.4331 spearman | aiming at a Gaussian-process posterior mean, 0.4996 spearman; aiming at a LightGBM out-of-fold prediction, 0.4703 spearman; aiming at the mean label of the ten nearest molecules, 0.4552 spearman | no |
 | n07 | 2026-09-20 | the fraction of the way a score-proportional correction moves a label, from 0.5 to 1.0, holding the correction's target fixed | share of the 0.1939 spearman clean-to-corrupted gap recovered at 0.5: 25.9% for the gaussian-process target, 11.2% for the neighbour mean, 25.7% for the out-of-fold prediction | at 1.0: 44.6%, 31.5% and 45.4% for the same three targets | no |
 
 Every before and after names its own units. A loop with no before and after number is not a loop and is not listed here.
