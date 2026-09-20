@@ -88,6 +88,16 @@
       "before": "within 0.001 on both datasets, in their own metrics",
       "after": "-0.0098 rmse on herg_ki; +0.0192 and +0.0367 spearman on flab_thermo_tresanco",
       "kept": true
+    },
+    {
+      "experiment": "n07",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, saprot, random forest, spearman",
+      "changed": "the injected dose, from the level 0.5 n07 runs to level 2.0, at the same one molecule in ten corrupted",
+      "before": "the clean-to-corrupted gap a recovery divides by, 0.0192 spearman against a clean score of 0.5985 spearman",
+      "after": "the same gap, 0.1639 spearman against the same clean score of 0.5985 spearman",
+      "kept": false,
+      "note": "Measured over 3 scaffold-grouped folds and 3 noise draws. NOT applied: the injected level is the owner's to set and it is the axis the experiment is about. It is recorded because at level 0.5 the completed run on disk, at 2 folds and 1 noise draw, measured that gap as NEGATIVE -- clean 0.5775 spearman against corrupted 0.5847 -- so every recovery in its hybrid block came back undefined. Level 1.0 gives 0.0656 spearman and level 3.0 gives 0.2758. Doubling the corrupted share from one molecule in ten to one in five moved the gap from 0.0192 to 0.0225 spearman at level 0.5 and from 0.1639 to 0.1643 at level 2.0, so the dose is what damages the model and the count of corrupted molecules barely is."
     }
   ]
 }
