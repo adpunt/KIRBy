@@ -174,6 +174,39 @@ for DS in $DATASETS; do
     fi
 done
 
+# ── datasets whose chain has already ended ──────────────────────────────
+# A dataset only appears above if it still has a precompute job queued. One
+# whose four links have all finished has none, so it is invisible here -- and
+# it is the DANGEROUS case, because its experiment jobs are already past their
+# dependency and free to start on whatever the precompute managed to store.
+# Name them, and say how to include them.
+ORPHANS=""
+for X in $(printf '%s\n' "$QUEUE" \
+           | awk -F'|' '$2 ~ /^x_(complexity|similarity|noise|federated)_/ {n=$2;
+               sub(/^x_(complexity|similarity|noise|federated)_/, "", n); print n}' \
+           | sort -u); do
+    if ! printf '%s\n' "$QUEUE" | awk -F'|' -v p="^pc_${X}_(x?[0-9]+|general_.*)$" \
+         '$2 ~ p {found=1} END {exit !found}'; then
+        ORPHANS="$ORPHANS $X"
+    fi
+done
+ORPHANS=$(echo "$ORPHANS" | xargs)
+if [ -n "$ORPHANS" ]; then
+    echo ""
+    echo "⛔ THESE HAVE EXPERIMENT JOBS QUEUED AND NO PRECOMPUTE LEFT TO WAIT FOR."
+    echo "   Their chains have ended. Nothing above touched them, because there"
+    echo "   was nothing to chain onto. Check what each one stored before you"
+    echo "   decide -- under half and the experiment quits in minutes:"
+    echo ""
+    echo "     python tests/precompute_coverage.py $ORPHANS"
+    echo ""
+    echo "   To give them links anyway (they wait for nothing, which is safe:"
+    echo "   no other job is writing their database):"
+    echo ""
+    echo "     bash $0 --datasets \"$ORPHANS\" --links 2 --go"
+    echo ""
+fi
+
 echo ""
 if [ "$GO" = true ]; then
     echo "Done. Check:  squeue -u \$USER -o '%.10i %.30j %.2t %.10M %.10L %R'"
