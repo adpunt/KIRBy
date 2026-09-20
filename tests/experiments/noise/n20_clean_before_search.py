@@ -444,6 +444,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'models': downstream_models,
         'base_rep': base_rep_name,
         'detector': DETECTOR,
+        'detector_sees_the_folds_groups': True,
+        'detector_groups_note': (
+            "The fold's training groups are handed to the detector. Without "
+            "them CrossValResidualEstimator falls back to a plain KFold and a "
+            "molecule's own cluster trains the out-of-fold forest that "
+            "predicts it. Changed 2026-09-20 after measuring both ways."),
         'detector_takes_no_neighbour_count': (
             'CrossValResidualEstimator takes n_folds, normalize, groups and '
             'random_state. There is no neighbour count to record.'),
@@ -567,8 +573,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # cleaning is decided, once per fold for all four arms.
                 sc = StandardScaler()
                 X_base_tr = sc.fit_transform(train_reps[base_rep_name])
+                # ⛔ THE FOLD'S GROUPS GO TO THE DETECTOR. Without them
+                # CrossValResidualEstimator falls back to a plain KFold, so a
+                # molecule's own scaffold or homology cluster trains the
+                # out-of-fold forest that predicts it and its residual is small
+                # for a reason that has nothing to do with its label. The
+                # estimator's own docstring says so
+                # (kirby/utils/noise_estimation.py:558-561) and n18 passes them
+                # at n18:400; this file did not until 2026-09-20.
+                #
+                # MEASURED on flab_thermo_tresanco, 672 antibodies, in
+                # esm2_cdr, at an injected level of 0.5 of the clean label
+                # spread under outlier_p10, against the training antibodies the
+                # corruption really moved:
+                #   held-out fold 0, 29 corrupted of 336 training antibodies:
+                #     0.2845 detection average precision withheld, 0.3322 given
+                #   held-out fold 1, 31 corrupted of 336 training antibodies:
+                #     0.2056 withheld, 0.2387 given
+                # Giving the detector the groups won both paired passes. Two
+                # passes, one corruption draw, one dataset.
                 suspicion = _compute_noise_scores(X_base_tr, y0, is_clf=is_clf,
-                                                  detector=DETECTOR)
+                                                  detector=DETECTOR,
+                                                  groups=g_tr)
                 if suspicion is None:
                     errors[f'{regime}|{lvl_key}|d{draw}|f{fold_i}|detector'] = (
                         'the detector would not fit on this fold')

@@ -128,6 +128,16 @@
       "after": "at 1.0: 44.6%, 31.5% and 45.4% for the same three targets",
       "kept": false,
       "note": "NOT applied: 2 folds and 1 draw each, and the folds took 1848 and 3757 seconds. Recorded because it refutes the reading that the min-max rescale was what held these corrections back. Replacing the raw score with its rank at the same 1.0, which makes that rescale the identity, LOST at all three targets: 26.5%, 19.3% and 23.1%. Both comparisons held at 3 of 3 targets across the first pass and the second. The TARGET matters less than it looked after one pass: at 1.0 the out-of-fold prediction (45.4%) and the gaussian process (44.6%) are within a point of each other, where after one pass they read 38.7% and 47.5%. Separately, the shape that moved labels closest to their clean values was not the shape that scored best -- rank at 1.0 cut the mean distance from a corrupted training label to its clean value from 15.05 label units to between 7.25 and 7.81 and still lost the held-out spearman to proportional at 1.0, which reached only 10.99 to 11.15 units. The gaussian process ran without importance-weighted kernel inputs. n18's STRENGTHS sweep is what would settle the alpha."
+    },
+    {
+      "experiment": "n20",
+      "date": "2026-09-20",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+      "changed": "the fold's homology groups are handed to the detector that decides which labels are suspect, instead of being withheld",
+      "before": "0.2845 detection average precision on held-out fold 0 and 0.2056 on held-out fold 1, groups withheld",
+      "after": "0.3322 detection average precision on held-out fold 0 and 0.2387 on held-out fold 1, groups given",
+      "kept": true,
+      "note": "Two paired passes, one corruption draw, one dataset, one representation (esm2_cdr, which is what pick_noise_base_rep falls back to here). Giving the groups won both passes, by 0.0477 and by 0.0331 average precision, so the gain is larger than the difference between the two gains. What it does not settle: whether the recipe the search then picks, or the held-out spearman, moves at all. n20 has produced no result file yet, so the downstream effect of a better-ordered flag list is unmeasured."
     }
   ]
 }
