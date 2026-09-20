@@ -643,6 +643,39 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
 # TASK 2: GP WITH IMPORTANCE-WEIGHTED RBF
 # =============================================================================
 
+_GP_LS_BOUNDS = (1e-5, 1e5)
+
+_GP_FIT_BASIS = (
+    "standard_fits / weighted_fits = one entry per fold: the fitted RBF "
+    "length scale, in the units of the z-scored and weighted features; "
+    "at_bound, meaning it finished at an end of (1e-5, 1e5) so the "
+    "marginal-likelihood optimiser ran out of room rather than found an "
+    "optimum; and pred_sd, the spread of that arm's own predictions over the "
+    "held-out molecules, which is 0 for a constant predictor. At the bottom "
+    "bound the kernel is the identity and every held-out molecule gets the "
+    "prior mean; at the top it is constant and every held-out molecule gets "
+    "the training mean. A fold at a bound fitted nothing and its score is not "
+    "a measurement of weighting.")
+
+
+def _gp_fit_report(gp, preds):
+    """What the GP settled on, so a degenerate fit is recorded, not just scored.
+
+    Measured 2026-09-20 on herg_ki with the weights rescaled to sum to 1: pdv
+    fold 0 finished at the 1e-5 bound and scored 5.6330 rmse against a 0.9154
+    pKi label spread, while the same GP on unweighted features settled at a
+    length scale of 21.28 and scored 0.5963.
+    """
+    try:
+        ls = float(np.squeeze(gp.kernel_.k1.k2.length_scale))
+    except Exception:
+        return None
+    lo, hi = _GP_LS_BOUNDS
+    return {'length_scale': ls,
+            'at_bound': bool(ls <= lo * 1.01 or ls >= hi * 0.99),
+            'pred_sd': float(np.std(preds))}
+
+
 def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                      metric_fn, metric_name, n_samples,
                      lower_is_better=False,
@@ -687,6 +720,7 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
     for rep_name in sorted(reps.keys()):
         X_rep = reps[rep_name]
         std_scores, w_scores = [], []
+        std_fits, w_fits = [], []
 
         for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -698,9 +732,12 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
             try:
                 gp = _make_gp()
                 gp.fit(X_tr, y_train)
-                std_scores.append(metric_fn(y_val, gp.predict(X_va)))
+                _p = gp.predict(X_va)
+                std_scores.append(metric_fn(y_val, _p))
+                std_fits.append(_gp_fit_report(gp, _p))
             except Exception:
                 std_scores.append(float('nan'))
+                std_fits.append(None)
 
             # Importance-weighted GP (pre-transform: X * sqrt(w))
             try:
@@ -710,9 +747,12 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                 w = _importance_weights(imp_arr)
                 gp_w = _make_gp()
                 gp_w.fit(X_tr * w, y_train)
-                w_scores.append(metric_fn(y_val, gp_w.predict(X_va * w)))
+                _p = gp_w.predict(X_va * w)
+                w_scores.append(metric_fn(y_val, _p))
+                w_fits.append(_gp_fit_report(gp_w, _p))
             except Exception:
                 w_scores.append(float('nan'))
+                w_fits.append(None)
 
         std_mean = float(np.nanmean(std_scores))
         w_mean = float(np.nanmean(w_scores))
@@ -725,7 +765,18 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
             'n_paired_folds': n_paired,
             'standard_folds': [float(s) for s in std_scores],
             'weighted_folds': [float(s) for s in w_scores],
+            'standard_fits': std_fits,
+            'weighted_fits': w_fits,
+            'n_standard_at_bound': sum(1 for f in std_fits if f and f['at_bound']),
+            'n_weighted_at_bound': sum(1 for f in w_fits if f and f['at_bound']),
+            'fit_basis': _GP_FIT_BASIS,
         }
+        _nb = sum(1 for f in w_fits if f and f['at_bound'])
+        if _nb:
+            print(f"    {rep_name}: the weighted GP's length scale finished at "
+                  f"an end of {_GP_LS_BOUNDS} on {_nb} of {len(w_fits)} folds. "
+                  f"Those folds fitted nothing, and their score is not a "
+                  f"measurement of weighting.")
         print(f"    {rep_name}: std={std_mean:.4f}, weighted={w_mean:.4f} "
               f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
               f"over {n_paired} folds)")
