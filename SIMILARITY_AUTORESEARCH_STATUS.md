@@ -29,7 +29,7 @@ Two categories, and they need different work:
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
 | s04 | method | yes, 3/3 twice | yes | **yes** — four levers, 48 settings |
 | s05 | method | yes, 3/3 | yes | **partial** — knobs added, re-run still in flight (2026-09-21) |
-| s06 | method | yes, 3/3 twice | yes | **none** |
+| s06 | method | yes, 3/3 twice | yes | **yes** — four levers, 2,628 cells per dataset, all three complete |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
 | s10 | method | **partial** — has never completed a full run | yes | **partial** |
@@ -45,7 +45,7 @@ in the table is unassigned.
 | what | who | state |
 |---|---|---|
 | s05 re-run, s09, `similarity_optimized_hybrid` | agent, running | s09 done on all three; s05 re-run in flight |
-| s06 | agent, running | no lever has ever been swept; that is the whole job |
+| s06 | done 2026-09-21 | four levers swept on all three; hybrid is the best arm on caco2 only |
 | s10 | agent, started 02:05 | has never completed a full run; three tasks in it |
 | `similarity_metrics/` | agent, running | ~25 scripts, several of them method experiments |
 | s01 s02 s03 s04 s08 s11 s12 s13 | closed | see the per-method section below |
@@ -90,6 +90,106 @@ molecules, positive means the hybrid won:
     setting                                 herg_ki    caco2   adme_mdr1
     shipped: 5 neighbours, sqrt, 100 feat   -0.0184  -0.0088   -0.0074
     neighbours/exponent/budget/family open  -0.0036  +0.0269   +0.0315
+
+**s06 — the neighbour count was the lever, and it was fixed at 5.** Four
+things decide every distance s06 measures and none of them could be set: the
+pairwise coefficient, the power a feature's importance is raised to, how many
+nearest training molecules the distance is taken over, and which number is taken
+off those distances. The file computed the mean over 5 neighbours under
+manhattan at exponent 0.5, written out inline at twelve places.
+
+Each row is one dataset. The number is the Spearman correlation between a
+held-out molecule's distance to its nearest training molecules and the absolute
+residual of a random forest fitted on every representation glued together — the
+block where the errors come from a model that never saw the hybrid features.
+Higher is better. "Best representation" is whichever of the seven scores highest
+in that same cell.
+
+    dataset    cell                              best hybrid arm   best representation
+    caco2      manhattan 0.5 mean k=5 (shipped)      +0.2402         avalon_w +0.2088
+    caco2      euclidean 0.25 harmonic k=150         +0.3122      atom_pair_w +0.2808
+    herg_ki    manhattan 0.5 mean k=5 (shipped)      +0.2970            pdv_w +0.3024
+    herg_ki    manhattan 0.25 mean k=25              +0.3296            pdv_w +0.3358
+    adme_mdr1  manhattan 0.5 mean k=5 (shipped)      +0.3235      atom_pair_w +0.3840
+    adme_mdr1  euclidean 0.25 harmonic k=15          +0.3328      atom_pair_w +0.3846
+
+The hybrid arm is the best arm on caco2 and on caco2 only. On herg_ki it ends
+0.0062 Spearman behind pdv; on adme_mdr1 0.0518 behind atom_pair. Widening k
+lifts every arm at once, so it raises the hybrid's own number without closing
+either gap. The same three rows under the other two correlation blocks — pooled
+against the hybrid-fitted model's errors, and the within-fold mean — move each
+number by at most 0.015 and change no ranking.
+
+Which lever moved it, largest first. k, from 5 to the dataset's own best, is
+worth +0.007 to +0.072 Spearman: the curve peaks at 150 neighbours on caco2
+(still rising there, and 150 is 8.7% of its 1,727 training molecules), 50 on
+herg_ki and 15 on adme_mdr1. The coefficient is worth up to +0.034 — euclidean
+beats manhattan on caco2 and adme_mdr1, manhattan beats it on herg_ki, and
+cosine is far worse than both on caco2, +0.0960 against +0.2402 at the shipped
+cell. The statistic is worth up to +0.005: k / sum(1/d), which counts a close
+training molecule for more than a far one, wins on caco2 and adme_mdr1 and the
+plain mean wins on herg_ki. The distance to the single nearest training molecule
+is the k=1 column and is the worst k on all three. The exponent moves the
+hybrid's own number least of the four, 0.25 or 0.5 best and 1.0 worst.
+
+**s06 — the exponent decides who wins, the same way it did in s02.** Exponent 0
+means nothing is weighted. At each dataset's own best coefficient, statistic and
+k, hybrid minus best single representation:
+
+    exponent    caco2   herg_ki  adme_mdr1
+    0         +0.0956   -0.0034    +0.0333
+    0.25      +0.0314   -0.0034    -0.0518
+
+Weighting a 2,048-bit fingerprint by its lightgbm_gain importance lifts it far
+more than it lifts the hybrid: atom_pair on adme_mdr1 goes +0.2954 unweighted to
++0.3846 weighted, while the hybrid goes +0.3287 to +0.3328. So the cell where
+the hybrid's own correlation is highest and the cell where its margin is largest
+are different cells, which is the open decision already recorded for s02.
+
+**s06 — the comparator is ranked by prediction and the experiment measures a
+distance.** `comparator_rep` is `extract_top3_base_reps(search, model='knn')[0]`:
+the representation a kNN predicts the label best from, by RMSE. What s06
+measures is which representation's distance ranks error best. Those are
+different orderings. Ranked by how well each weighted distance tracks error at
+the shipped cell, the representation s06 named as the comparator comes 7th of 7
+on caco2, 4th of 7 on herg_ki and 5th of 7 on adme_mdr1:
+
+    dataset    comparator  its rank by prediction  its rank by distance-error
+    caco2         pdv              1 of 7                  7 of 7
+    herg_ki       atom_pair        1 of 7                  4 of 7
+    adme_mdr1     pdv              1 of 7                  5 of 7
+
+No number already stored is wrong because of this: since 2026-09-12 every
+representation and its weighted twin are arms in the correlation, the per-fold
+means, the reliability deciles and the prediction intervals, so the best
+distance representation is in the file whether or not it is the comparator. What
+the rule decides is which arm the printed headline and the conformal
+`hybrid_genuinely_tighter` flag compare the hybrid against. NOT CHANGED — the
+rule is untouched pending the owner's decision.
+
+**s06 — how the cells were held comparable.** The recipe is looked up ONCE per
+dataset and every cell reuses it, so what moves across cells is the distance
+between molecules and never which features the search picked. The two recipes
+are the predictive search's, budget 250 on herg_ki and the similarity search's,
+budget 100; both name all 7 representations. Per fold the two hybrid builds, the
+importance computation and the two random forest fits happen once and every cell
+reads them, which is why 2,628 cells cost about the same as 18 did.
+
+The lookup ran against a COPY of the three result databases, at
+/Volumes/seagate/kirby_s06_cache, with a `distance_metric` column added to the
+copied rows reading manhattan — the coefficient the 2026-09-19 s06 run was
+launched under. Nothing under kirby_simrun_cache was written or deleted. The
+copy reproduces that run exactly: the comparator, the recipe family and 16 of
+the 18 pooled arms match tests/results_local_sim/s06_applicability_domain to
+four decimals on herg_ki. The two that move are `hybrid_similarity` 0.2977 to
+0.2886 and `hybrid_similarity_weighted` 0.2958 to 0.2912, because
+`build_fold_hybrid`'s geometry allocation honours the process coefficient since
+`c5752d4` and did not on 2026-09-19.
+
+minkowski p=0.5 is the one coefficient NOT measured here. Timed on this machine
+at 1,471 s a fold against 414 s a fold for manhattan, euclidean and cosine
+together, which is the 25-50x the rest of this file records. It is a compute
+cut, not a finding: nothing here says how it would rank.
 
 **s10 kNN — distance-weighted voting is the reliable win.** It lowered held-out
 error in 20 of 21 (dataset, representation) pairs and nothing in the suite uses
