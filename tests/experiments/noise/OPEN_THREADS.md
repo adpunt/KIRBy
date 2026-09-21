@@ -40,6 +40,14 @@ study sets a REPORTING level of 1.0 on measured rank movement, 0.75 where the cl
 score is already weak. n07 at 0.5 produced a clean-to-corrupted gap of 3% of the
 clean score on flab, negative on one fold.
 
+MEASURED 2026-09-21, and it weakens the case for moving the level: that 3% was
+saprot. In the onehot `pick_noise_base_rep` now returns for flab, the same level
+0.5 and the same tenth of the training molecules give a gap of 0.0644 spearman
+against a clean score of 0.4068 — 15.8% of it — over 3 folds and 3 corruption
+draws. The realised dose is 0.501 of the clean label standard deviation in both.
+The ladder in onehot: 15.8% at level 0.5, 30.8% at 1.0, 61.9% at 2.0, 80.2% at
+3.0. So the level n07 already runs is readable in its own control arm.
+
 Three consumers: n07 (its single level), n13 (a marker on its curve), and
 `noise_helpers`. Changing it moves all three differently.
 
