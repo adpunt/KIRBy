@@ -282,3 +282,74 @@ left where an experiment names a level itself.
 - **Every n07 result file ever written has an empty detection block.** Eight
   gradings were recorded into a dict built before the loop that fills it. Fixed in
   `0f83448`, but no file written before that has the numbers.
+
+---
+
+## E. Condition coverage — the two kinds of noise almost nothing runs
+
+Added 2026-09-21 at the owner's request. `noiseInject.CONDITIONS` holds eleven.
+What each experiment actually names:
+
+    n07  outlier_p05                  n16  gaussian
+    n09  gaussian                     n20  outlier_p10
+    n11  gaussian                     n21  outlier_p10
+    n12  gaussian                     n23  grouped_wider, outlier_p10
+    n13  censoring, gaussian
+
+### E1. CENSORING is run by exactly one experiment
+n13, and c10. It is the most PREVALENT real mechanism in the sibling study's
+literature review, and the only condition that is not zero-mean: values past the
+assay limit are recorded as the limit, so it biases labels in one direction
+rather than scattering them. That study measured it as **twelve times more
+damaging than any shape difference between the zero-mean types**.
+
+It cannot be dose-matched — no variance parameter — so it has its own axis,
+`CENSORING_LEVELS = (0.0, 0.10, 0.20, 0.25, 0.30, 0.40)`, a fraction of labels
+clipped. That is already correct in `dataset_policy`.
+
+⛔ NEXT: no cleaning or detection method has ever been measured against it.
+Every method result in this suite is against noise that scatters labels
+symmetrically. A detector that scores a molecule by how far its label sits from
+its neighbours' mean has no reason to work when every label above a cut-point
+was moved DOWN to the same value — n23 measured exactly that and found all three
+sources at or below a coin flip under censoring.
+
+### E2. GROUPED_SHIFTED is named in four files and RUN BY NONE
+`grep` finds it in comments in c10, n13, n16 and n23. Only n13 sweeps it, via
+SWEEPS_ALL_CONDITIONS.
+
+⛔ WHY IT MATTERS MORE THAN THE OTHER TYPES. The two grouped conditions are the
+only ones where the noise is PREDICTABLE FROM STRUCTURE — whole scaffold groups
+are affected together. Every other condition picks its victims at random, so a
+method that reads the features has nothing to find. The sibling study says so
+directly of grouped_wider: "the only zero-mean condition where noise is
+predictable from structure, so the only one that tests whether a model can
+*spot* bad data".
+
+`grouped_shifted` is the sourced one: 62% of real measurement variance sits
+BETWEEN laboratories, and laboratory averages differing is an OFFSET, not a
+widening. `rho = 0.62` comes from Bentz et al. 2013 Table 7. Its algebra is
+`eps_i = sqrt(rho)*tau*b_g(i) + sqrt(1-rho)*tau*e_i`, so it is zero-mean in
+expectation but not in any one run, and that asymmetry is its mechanism rather
+than a defect.
+
+So the suite's detection and cleaning methods have been measured almost entirely
+against noise they cannot in principle predict from features, and the one family
+that they could is the one nothing runs.
+
+### E3. What can run it, and what cannot
+`dataset_policy.noise_groups_for` returns no groups for any dataset without
+SMILES, and the grouped conditions are then DROPPED rather than run over invented
+groups. So:
+
+  - caco2, herg_ki and every other molecular set CAN run both grouped conditions.
+  - flab_thermo_tresanco and every antibody, nucleotide and expression set
+    CANNOT. n23 hit this and recorded it.
+
+⛔ That splits the suite: the condition most worth measuring is unavailable on
+the dataset most of this campaign has used.
+
+### E4. Seven experiments can already take a condition and six default to one
+`HONOURS_NOISE_CONDITION = {n09, n11, n12, n16, n20, n21, n23}`. The plumbing
+exists; only the default is narrow. Adding `grouped_shifted` beside `gaussian`
+on a molecular dataset costs one more condition per experiment, not new code.
