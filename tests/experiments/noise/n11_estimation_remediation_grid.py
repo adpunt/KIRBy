@@ -1432,8 +1432,59 @@ def _heldout_recovery(clean_by_fold, noisy_by_fold, denoised_by_fold,
     }
 
 
+# What the number at the end of a remediation key counts, per family. Named
+# here so no field of the summary reports a bare value.
+_CORRECTION_UNITS = {
+    'weighting': ('the row-weight ratio parameter a: the most suspect molecule '
+                  'gets 1/(1+a) of the cleanest one\'s weight, so 1.0 is 2-to-1 '
+                  'and 3.0 is 4-to-1'),
+    'smoothing': ('the fraction of the way from the label to its target that '
+                  'the most suspect molecule\'s label is moved'),
+    'quantile_clip': ('the fraction of the way onto the edge it crossed that a '
+                      'label outside its 10th-to-90th-percentile range is '
+                      'pulled; a label inside its range is untouched'),
+}
+
+
+def _parse_remediation(remed_key):
+    """Split a remediation key into the parts a summary groups by.
+
+    A key is '<model>|<rule>_<setting>' or '<model>|<target>+<rule>_<setting>'.
+    Returns the model, the correction FAMILY (weighting, smoothing or the
+    clip), the rule inside that family, where the label moved to, and the
+    number swept. The family matters because the number means a different
+    quantity in each one — see _CORRECTION_UNITS.
+    """
+    model, _, remed = remed_key.partition('|')
+    rule_and_target, _, num = remed.rpartition('_')
+    try:
+        setting = float(num)
+    except ValueError:
+        rule_and_target, setting = remed, float('nan')
+    target, _, rule = rule_and_target.rpartition('+')
+    if rule in WEIGHT_METHODS:
+        family = 'weighting'
+    elif rule in SMOOTH_METHODS:
+        family = 'smoothing'
+    elif rule == 'quantile_clip':
+        family = 'quantile_clip'
+    else:
+        family = 'unrecognised'
+    return {
+        'model': model,
+        'method': rule_and_target,
+        'correction': family,
+        'rule': rule,
+        # '' is the estimator's own target, which is what a key with no prefix
+        # has always meant.
+        'target': target,
+        'setting': setting,
+    }
+
+
 def _compute_summary(results):
-    """Compute summary: best configs, alpha effect, space comparison."""
+    """Compute summary: best configs, the swept setting per correction family,
+    and the space comparison."""
     summary = {}
 
     for sigma_key, sigma_data in results['per_sigma'].items():
@@ -1451,15 +1502,18 @@ def _compute_summary(results):
                         continue
                     r = rv.get('recovery', float('nan'))
                     if not np.isnan(r):
-                        # Parse alpha from remed_key (e.g. 'inverse_0.1')
-                        parts = remed_key.rsplit('_', 1)
-                        alpha = float(parts[1]) if len(parts) == 2 else 0.0
-                        method = parts[0] if len(parts) == 2 else remed_key
+                        _p = _parse_remediation(remed_key)
                         all_configs.append({
                             'space': space_name,
                             'estimator': est_key,
-                            'method': method,
-                            'alpha': alpha,
+                            'method': _p['method'],
+                            'correction': _p['correction'],
+                            'rule': _p['rule'],
+                            'target': _p['target'],
+                            'setting': _p['setting'],
+                            # Kept under its old name as well: it is what
+                            # top_10 and best_config have always carried.
+                            'alpha': _p['setting'],
                             'recovery': r,
                         })
 
@@ -1470,19 +1524,41 @@ def _compute_summary(results):
         # Sort by recovery (descending)
         all_configs.sort(key=lambda x: x['recovery'], reverse=True)
 
-        # Alpha effect
-        alpha_recoveries = {}
+        # ⛔ ONE FIELD WAS POOLING THE TWO KNOBS THE SWEPT LISTS WERE SPLIT
+        # APART TO SEPARATE. This was `alpha_effect`, keyed by the number at
+        # the end of the remediation key alone. A smoothing row's number is a
+        # FRACTION of the way from the label to its target; a weighting row's
+        # number is an unbounded RATIO parameter, where the most suspect
+        # molecule gets 1/(1+a) of the cleanest one's row weight. 0.3 is in
+        # both swept lists, so the entry keyed '0.3' averaged a label moved
+        # three tenths of the way to its target together with a 1.3-to-1 row
+        # weighting — the exact confusion SMOOTH_ALPHAS and WEIGHT_STRENGTHS
+        # were split apart on 2026-09-18 to end, still merged one field later.
+        #
+        # The effect is now reported per correction family, so the two are
+        # never averaged together, and each family names the unit of its own
+        # number. n07 measured that moving a label further helps and n18
+        # measured the opposite on real labels; this is the field that answers
+        # it here.
+        setting_recoveries = {}
         for c in all_configs:
-            a = str(c['alpha'])
-            if a not in alpha_recoveries:
-                alpha_recoveries[a] = []
-            alpha_recoveries[a].append(c['recovery'])
-        alpha_effect = {
-            a: {
-                'mean_recovery': float(np.mean(rs)),
-                'pct_positive': float(sum(1 for r in rs if r > 0) / len(rs) * 100),
+            setting_recoveries.setdefault(c['correction'], {}).setdefault(
+                str(c['setting']), []).append(c['recovery'])
+        setting_effect = {
+            fam: {
+                'unit': _CORRECTION_UNITS.get(fam, 'the value swept'),
+                'by_setting': {
+                    a: {
+                        'mean_recovery': float(np.mean(rs)),
+                        'n_cells': len(rs),
+                        'n_cells_positive': int(sum(1 for r in rs if r > 0)),
+                        'pct_positive': float(
+                            sum(1 for r in rs if r > 0) / len(rs) * 100),
+                    }
+                    for a, rs in sorted(by_a.items(), key=lambda kv: float(kv[0]))
+                },
             }
-            for a, rs in alpha_recoveries.items()
+            for fam, by_a in setting_recoveries.items()
         }
 
         # Per-space recovery (base rep vs hybrid). This is the hybrid-vs-base
@@ -1535,7 +1611,7 @@ def _compute_summary(results):
             'heldout_recovery': sigma_data.get('heldout_recovery'),
             'best_config': all_configs[0],
             'top_10': all_configs[:10],
-            'alpha_effect': alpha_effect,
+            'setting_effect': setting_effect,
             # Renamed from 'space_effect' to make the bias explicit at the point
             # of consumption: hybrid blueprint selected on clean labels => this
             # is a best-case hybrid, NOT a fair hybrid-vs-base comparison.
