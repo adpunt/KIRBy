@@ -173,11 +173,26 @@ paired folds:
         5            +0.0584       -0.1368
        10            -0.2417       -0.0785
 
-At 2 restarts on caco2 the delta changes sign at every step of the count sweep
-— -0.0517, +0.0174, +0.0343, -0.0466, +0.0492, -0.0567 at 2, 3, 5, 8, 10 and 15
-clusters — which is what a measurement looks like when the noise is larger than
-the effect. There is no right cluster count to be found until the statistic
-stops moving.
+**The count sweep, all three datasets, 2 restarts.** Six counts instead of the
+three that were hardcoded. Held-out label coherence delta, unitless, positive
+means the hybrid won, 4 paired folds on both arms:
+
+    clusters     caco2    herg_ki   adme_mdr1
+        2      -0.0517    +0.0541    +0.0927
+        3      +0.0174    -0.2240    +0.0957
+        5      +0.0343    -0.1368    +0.0456
+        8      -0.0466    -0.1961    +0.0077
+       10      +0.0492    -0.0785    +0.0458
+       15      -0.0567    -0.2353    +0.0278
+
+adme_mdr1 is positive at all six counts, under k-medians as well (+0.0320 at 5
+clusters) and against its own-width PCA control (+0.0858). That is the one
+dataset where the clustering half gives a consistent answer, and it is also the
+one whose winning single representation is the 200-feature descriptor set rather
+than a 2,048-feature fingerprint. herg_ki loses at five of six counts. caco2
+changes sign at every step, which is what a measurement looks like when the
+noise is larger than the effect. There is no right cluster count to be found on
+caco2 or herg_ki until the statistic stops moving.
 
 **The distance mismatch, measured.** k-medians honours the manhattan
 coefficient the retrieval half reads; k-means minimises squared euclidean and
@@ -187,11 +202,12 @@ held-out delta, positive means the hybrid won:
     dataset      k-means (squared euclidean)   k-medians (manhattan)
     herg_ki                -0.1368                   -0.1090
     caco2                  +0.0343                   -0.0514
+    adme_mdr1              +0.0456                   +0.0320
 
-Making the two halves agree moves the delta by +0.0278 on herg_ki and -0.0857
-on caco2, and flips caco2's sign. Both movements sit inside the seed spread
-above, so the mismatch cannot be separated from the noise at this restart
-count. `minkowski p=0.5` has no clusterer of this shape at all — there is no
+Making the two halves agree moves the delta by +0.0278 on herg_ki, -0.0857 on
+caco2 and -0.0136 on adme_mdr1. It flips caco2's sign and leaves the other two
+verdicts standing. All three movements sit inside the seed spread above, so the
+mismatch cannot be separated from the noise at this restart count. `minkowski p=0.5` has no clusterer of this shape at all — there is no
 closed form for the point minimising summed L_0.5 distance — and the file now
 writes that instead of running euclidean silently.
 
