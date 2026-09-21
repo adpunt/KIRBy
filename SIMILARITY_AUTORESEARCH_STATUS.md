@@ -33,7 +33,7 @@ Two categories, and they need different work:
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
 | s10 | method | **partial** — has never completed a full run | yes | **partial** |
-| s11 | method | yes, 3/3 at two budgets | yes | **yes** |
+| s11 | method | yes, 3/3 at two budgets | yes | **re-opened 2026-09-21** — three of the arms it is measured against picked by row number; runs queued |
 | s12 | method | yes, 3/3 twice | yes | **yes** |
 | s13 | method | yes, 3/3 | yes | **retrieval yes; clustering CANNOT BE** — its statistic moves 6-34x the delta on a reseed |
 
@@ -48,7 +48,8 @@ in the table is unassigned.
 | s06 | done 2026-09-21 | four levers swept on all three; hybrid is the best arm on caco2 only |
 | s10 | agent, started 02:05 | has never completed a full run; three tasks in it |
 | `similarity_metrics/` | agent, running | ~25 scripts, several of them method experiments |
-| s01 s02 s03 s04 s08 s11 s12 s13 | closed | see the per-method section below |
+| s11 | this session | re-opened: the length scale, and the arms that picked by row number |
+| s01 s02 s03 s04 s08 s12 s13 | closed | see the per-method section below |
 
 Runs go through `/Volumes/seagate/kirby_simrun_logs/supervisor_jobs.tsv`, not
 straight onto the machine. A supervisor reads that file every 120 seconds,
