@@ -399,6 +399,39 @@ training mean on all three datasets (herg_ki label spread 0.9151, weighted arm
 0.9160). With the arm alive, weighting makes the GP slightly worse, +0.0111 and
 +0.0188 pKi on two folds of herg_ki/pdv.
 
+**s10 GP — the length scale it starts at decides the arm, measured 2026-09-21.**
+s10 standardises its features per fold and starts the RBF length scale at 1.0
+with bounds of 1e-5 to 1e5. Two standardised caco2 molecules sit 50.76 apart in
+ecfp4 at 300 training molecules and 41.99 apart in ecfp4_count, so 1.0 is far
+below anything the data has. Fitted on cached caco2 features with 100 molecules
+held out, against a smooth direction in the features as the label:
+
+    representation      training   start    fitted   spread of the 100   rank correlation
+                        molecules           scale    predictions
+    ecfp4 (2048)             40    1.0           1            2.08e-17            +0.0533
+    ecfp4 (2048)             40    median    20.28              0.0531            +0.6677
+    ecfp4 (2048)            300    1.0           1             0.00825            -0.0401
+    ecfp4 (2048)            300    median    164.2                 0.1            +0.8462
+    ecfp4_count (1024)       40    1.0           1            5.55e-17            +0.2108
+    ecfp4_count (1024)       40    median    27.53               0.104            +0.4889
+    ecfp4_count (1024)      300    1.0    3.632e-4              0.0394            +0.0619
+    ecfp4_count (1024)      300    median    453.3               0.212            +0.9037
+
+A spread of 2.08e-17 across 100 predictions is a constant predictor. maccs at
+167 features and pdv at 200 escape on their own, fitting 3875 and 4057 from a
+start of 1.0, which is what s10's own docstring records about pdv.
+
+`n_restarts_optimizer` does not rescue it. At 300 molecules restarts=0 and
+restarts=2 gave the same fitted length scale of 1, the same prediction spread to
+the last digit and the same rank correlation +0.1442, so the expense buys
+nothing here and KIRBY_S10_GP_RESTARTS is not the lever.
+
+The label used here is a smooth direction in the features, not the real caco2
+permeability, and this was not run through s10. Whether it moves the rmse s10
+reports is unmeasured. The recorded s10 GP null — weighting worse by +0.0111 and
++0.0188 pKi — is on herg_ki pdv, the representation that escapes; the wide ones
+may have been comparing two constant predictors.
+
 **s10 q-RASAR — a null.** The four neighbour features carry real signal alone
 (pdv's four reach 0.6730 pKi against 0.9160 for a mean predictor) and add
 nothing to a forest that already has the features.
