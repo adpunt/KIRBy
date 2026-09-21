@@ -259,6 +259,18 @@ lever and the default is unchanged. Unverified on the real permeability label
 and on the area under the best-found curve, which is what s11 reports — three
 runs at 100 picks are queued to settle it.
 
+A refinement to the sentence above about which spaces collapse. The direction
+holds — random-50 at 102.4 and PCA-50 at 83.1 collapse and maccs at 13.8 does
+not — but the immediate cause is the optimiser stopping where it started rather
+than the distance itself. Fitted from a start of 1.0 on standardised caco2
+features: maccs at a median distance of 13.71 leaves and settles at 3875, pdv at
+16.90 settles at 4057, ecfp4 at 50.15 does not move off 1 at all, ecfp4_count at
+41.99 goes the wrong way to 3.632e-4. Extra optimiser starts do not rescue it:
+at 300 training molecules, none and two gave the same fitted length scale, the
+same prediction spread to the last digit, and the same rank correlation +0.1442.
+So the quantity that decides it is how far the start sits from the data, not the
+distance on its own.
+
 **s12 — wins all three under the calibrated cliff rule.** Held-out delta:
 caco2 +0.0154, herg_ki +0.0107 (was -0.0024), adme_mdr1 +0.0416.
 
