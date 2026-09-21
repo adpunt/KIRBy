@@ -1028,3 +1028,63 @@ work would not change a result: `extra_fingerprints.py` scores map4:cosine at
 0.4042 activity Spearman on herg_ki against the count fingerprint's 0.7087, and
 its structural Spearman is -0.4079, running backwards against shared
 substructure.
+
+### `aggregate.py` — fusing six distance matrices wins activity on one dataset by 0.013 and loses structure on both, and four of its six fusion rules produce an asymmetric distance
+
+It builds six distance matrices — ECFP4 counts under Tanimoto, atom-pair counts
+under cosine, 208 z-scored RDKit descriptors under Euclidean, MACCS under
+Tanimoto, torsions under Tanimoto, the RDKit fingerprint under Tanimoto — and
+fuses them six ways.
+
+Activity Spearman at five neighbours:
+
+    metric or fusion       herg_ki    logd
+    ecfp4_count:tanimoto     0.709   0.618
+    atompair_count:cosine    0.716   0.615
+    desc:euclidean           0.703   0.666
+    maccs:tanimoto           0.651   0.637
+    torsion:tanimoto         0.690   0.577
+    rdkit:tanimoto           0.573   0.553
+    A1 min-max score mean    0.721   0.636
+    A2 mean neighbour rank   0.721   0.649
+    A3 reciprocal rank       0.729   0.664
+    A4 Borda points          0.721   0.649
+    A5 top-20 consensus      0.721   0.644
+    A6 drop-duplicates mean  0.721   0.636
+
+**Reciprocal rank fusion beats the best single metric on herg_ki by 0.013
+Spearman, 0.729 against atom-pair counts under cosine at 0.716, and loses on
+logd by 0.002, 0.664 against the descriptor block under Euclidean at 0.666.**
+
+On structure it loses on both. Best single metric 0.248 on herg_ki (the
+descriptor block) against 0.065 for the best fusion; best single 0.462 on logd
+(torsions under Tanimoto) against 0.407.
+
+On finding corrupted labels, best single 0.668 detection AUROC on herg_ki
+against 0.669 for the best fusion, and 0.649 on logd against 0.637. On
+correcting them, best single 0.837 on herg_ki against 0.835, and 0.775 on logd
+against 0.773.
+
+**Four of the six fusion rules produce a matrix where the distance from
+molecule A to molecule B is not the distance from B to A.** The file prints a
+`sym` column and marks A2, A3, A4 and A5 as `NO`; every single metric and the
+two score-averaging fusions are `yes`. The scorer they are handed,
+`eval_knn_readacross`, fits `KNeighborsRegressor(metric='precomputed')` on the
+training submatrix, and `struct_fidelity` reads one triangle. So the two
+yardsticks are reading two different geometries for those four rules, and the
+one fusion that beat the best single metric on herg_ki, reciprocal rank fusion,
+is one of the four.
+
+Wall clock: 475 s herg_ki.
+
+## The stale result databases do not reach this group
+
+No script in `similarity_metrics/` opens a result database or calls
+`find_best_hybrid`. Grepping the directory for `result_db`, `find_best_hybrid`
+and `StaleResultDB` returns six files, and in every one the hit is a comment
+saying the file does not use them, except `KIRBY_CACHE_DIR` in
+`build_moleculeace.py`, `learned_embeddings.py` and `run_battery_moleculeace.py`,
+where it names `$KIRBY_CACHE_DIR/similarity_metrics/sim_data` and nothing else.
+
+So none of the numbers in this section came from a stored hybrid-search row, and
+moving the 14 files out of `result_db/` changes nothing here.
