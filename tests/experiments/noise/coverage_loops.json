@@ -408,6 +408,16 @@
       "after": "at level 0.75 the gap is +0.0370 rmse against the same clean score, and 3 of the 3 folds clear the floor: per fold +0.0200, +0.0553, +0.0356 rmse",
       "kept": true,
       "note": "Two random forest fits per fold per level, 48 seconds for the whole ladder (loop_n11/gap_ladder_herg_ki.py). The full ladder: 0.2 gives +0.0043 rmse and 0 of 3 folds, 0.3 gives +0.0034 and 0 of 3, 0.5 gives +0.0137 and 1 of 3, 0.75 gives +0.0370 and 3 of 3, 1.0 gives +0.0622 and 3 of 3, 1.5 gives +0.1417 and 3 of 3. The level costs nothing -- the fit count is identical at every level. This does NOT move reference_noise_level(), which returns 0.5 because it was the middle of a superseded grid and is an open thread of its own; it is which level a run that must cut to one spends it on. SEPARATELY: the gaussian condition moves 941 of the 941 training labels at every level, so detection_scores returns None and n11's detection block is empty at any level. Grading a detector on herg_ki needs one of the five conditions in DETECTION_IS_DEFINED, where only some molecules move."
+    },
+    {
+      "experiment": "n07",
+      "date": "2026-09-21",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, 3 scaffold-grouped folds, 3 corruption draws each, random forest, spearman, one molecule in ten given the wide error",
+      "changed": "the representation the control arm is measured in, from saprot at 1280 features to the onehot at 5600 features that pick_noise_base_rep now returns for this dataset",
+      "before": "at the injected level 0.5 that n07 runs, the clean-to-corrupted gap a recovery divides by is 0.0192 spearman against a clean score of 0.5985 spearman, which is 3.2 percent of the clean score against a floor of 2 percent",
+      "after": "at the same level 0.5, the gap is 0.0644 spearman against a clean score of 0.4068 spearman, which is 15.8 percent of the clean score",
+      "kept": true,
+      "note": "⛔ THIS REFUTES 'THE DOSE IS TOO WEAK AT THE LEVEL n07 RUNS' AS A STATEMENT ABOUT THE LEVEL. It was a statement about saprot. Nothing about the injector changed: the realised dose came back at 0.501 of the clean label standard deviation in both representations, and the same tenth of the training molecules was given the wide error. The whole ladder in onehot, gap in spearman and as a share of the clean score: 0.0644 (15.8 percent) at level 0.5, 0.1253 (30.8) at 1.0, 0.2517 (61.9) at 2.0, 0.3264 (80.2) at 3.0. In saprot the same four levels read 0.0192 (3.2), 0.0656 (11.0), 0.1639 (27.4), 0.2758 (46.1). WHY THE SHARE MOVES: onehot predicts this dataset far worse to begin with -- 0.4068 spearman clean against 0.5985 for saprot -- so the same absolute damage is a larger share of a smaller clean score, AND the absolute gap is itself 3.4 times larger at level 0.5. The two are not separated here. WHAT IT DOES NOT SETTLE: the three folds' clean scores in onehot are 0.5905, 0.2688 and 0.3611 spearman, so the fold spread is wider than the level-0.5 gap and a three-fold mean is carrying most of the weight. reference_noise_level() was NOT changed -- it has three consumers and the decision is the owner's. One dataset, one downstream model. 127 seconds for the whole ladder, so this is cheap to repeat on any dataset whose control moved."
     }
   ]
 }
