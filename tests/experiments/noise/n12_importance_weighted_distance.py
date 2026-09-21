@@ -101,6 +101,14 @@ K_VALUES = [5, 10, 20]
 # the shape n18 measured it under, so the number means the same thing here.
 REPAIR_STRENGTH = 3.0
 REPAIR_WEIGHT_METHOD = 'inverse'
+
+# THE SMALLEST CLEAN-TO-NOISY GAP A RECOVERY PERCENTAGE MAY BE DIVIDED BY,
+# as a share of the clean score. Same value and same meaning as
+# n06_bindingdb_ground_truth, n07_remediation.GAP_MIN_FRAC,
+# n11_estimation_remediation_grid.GAP_MIN_FRAC and
+# n21_neighbour_distance.GAP_MIN_FRAC. n12 was the one file in this directory
+# without it; see the recovery block in run() for what that cost.
+GAP_MIN_FRAC = 0.02
 IMPORTANCE_METHODS = ['lightgbm_gain', 'treeshap']
 
 # activity_cliff_aware CUT 2026-09-12 (user decision, measured): it ranks the
@@ -292,6 +300,11 @@ def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
             is also the one the rebuild split its budget by
     """
     shared = {}
+    # The importance method the search that produced this recipe ranked its
+    # features by. Condition 4 of this space weights by it and condition 5
+    # weights by whichever method the sweep is on, so when the two names agree
+    # the two conditions are one condition. See _build_conditions.
+    shared['blueprint_importance_method'] = getattr(bp, 'importance_method', None)
     X_base = train_reps[base_rep_name]
     sc_base = StandardScaler()
     shared['X_base_std'] = sc_base.fit_transform(X_base)
@@ -393,14 +406,22 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
             place of `shared`, which is the same thing for the one space
             'hybrid' and is still accepted.
 
-    Returns ({condition_name: X_standardized}, {condition_name: True}), the
-    second naming every condition whose importance scores were all zero. Such a
-    condition is the unweighted matrix itself, so its estimator scores are a
-    duplicate of its unweighted twin rather than a measurement of the
-    weighting. Conditions that weighted normally are absent from that dict.
+    Returns three dicts.
+      {condition_name: X_standardized}   the spaces to score.
+      {condition_name: True}             every condition whose importance
+            scores were all zero. Such a condition is the unweighted matrix
+            itself, so its estimator scores are a duplicate of its unweighted
+            twin rather than a measurement of the weighting. Conditions that
+            weighted normally are absent.
+      {condition_name: {...}}            every condition that is a second copy
+            of another condition in this same call, with the one it copies and
+            why. Added 2026-09-21: a hybrid space's _imp_own condition is its
+            _imp_base condition whenever the recipe's own importance method is
+            the method the sweep is on. Absent when it did not happen.
     """
     conditions = {}
     zero_importance = {}
+    duplicate = {}
     X_base = train_reps[base_rep_name]
 
     # {space name: the _build_fold_shared output for that space's recipe}.
@@ -463,6 +484,41 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
 
         # Condition 5: hybrid weighted by the sweep's imp_method (the only
         # imp_method-dependent hybrid weighting).
+        #
+        # ⛔ WHEN THE TWO NAMES AGREE, CONDITIONS 4 AND 5 ARE ONE CONDITION.
+        # Condition 4 weights by the recipe's own importance method; condition
+        # 5 weights by the method the sweep is on. Both score the same hybrid
+        # matrix against the same labels, so when those names are the same
+        # string the two calls are the same call and the two spaces are the
+        # same matrix. Measured on flab_thermo_tresanco under outlier_p10 at
+        # level 0.5: both recipes ranked features by lightgbm_gain, and on the
+        # lightgbm_gain half of the sweep hybrid_imp_base and hybrid_imp_own
+        # agreed to 1e-12 in 6 of 6 readings, as did hybrid_similarity_imp_base
+        # and hybrid_similarity_imp_own. Nothing in that result file said so, so
+        # 2 of the 16 (importance method, condition) cells were a duplicate that
+        # read as a measurement -- and each cost one importance computation on
+        # the hybrid matrix.
+        #
+        # The array is reused rather than recomputed, so the condition is still
+        # present under its own name and its numbers are unchanged to the bit.
+        # Which cells are duplicates is recorded in 'duplicate_conditions'.
+        _bp_imp = _sh.get('blueprint_importance_method')
+        if (_bp_imp is not None and _bp_imp == imp_method
+                and imp_hybrid_via_blueprint is not None):
+            duplicate[f'{_space}_imp_own'] = {
+                'duplicate_of': f'{_space}_imp_base',
+                'reason': (f"the recipe for {_space} ranked its features by "
+                           f"{_bp_imp!r}, which is the importance method this "
+                           f"sweep is on, so both conditions weight the same "
+                           f"hybrid matrix by the same scores"),
+                'importance_method': imp_method,
+            }
+            conditions[f'{_space}_imp_own'] = conditions.get(
+                f'{_space}_imp_base',
+                _weight_features(X_hyb_std, imp_hybrid_via_blueprint))
+            if _importance_is_all_zero(imp_hybrid_via_blueprint):
+                zero_importance[f'{_space}_imp_own'] = True
+            continue
         try:
             imp_hybrid_own = compute_feature_importance(
                 {'hybrid': X_hybrid_raw}, y_train, method=imp_method
@@ -474,7 +530,7 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
         except Exception as e:
             print(f"      {_space}_imp_own failed: {e}")
 
-    return conditions, zero_importance
+    return conditions, zero_importance, duplicate
 
 
 def _mean_detection(rows):
@@ -767,6 +823,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # fold, importance method) — 60 over 6 levels, 5 folds and 2 importance
         # methods — and the noise levels it happened at are listed beside it.
         'zero_importance_spaces': {},
+        # Every condition that is a second copy of another condition rather than
+        # a measurement of its own. One entry per (importance method,
+        # condition), absent when it did not happen.
+        #
+        # ⛔ TWO OF THE SIXTEEN CELLS WERE A DUPLICATE AND NOTHING SAID SO.
+        # A hybrid space carries an _imp_base condition, weighted by the
+        # recipe's own importance method, and an _imp_own condition, weighted by
+        # the method the sweep is on. When those two names are the same string
+        # the two conditions weight the same hybrid matrix by the same scores.
+        # Measured on flab_thermo_tresanco under outlier_p10 at level 0.5: both
+        # recipes ranked by lightgbm_gain, so on the lightgbm_gain half of the
+        # sweep hybrid_imp_base and hybrid_imp_own agreed to 1e-12 in 6 of 6
+        # readings, and so did the two hybrid_similarity ones. On the treeshap
+        # half they agreed in 0 of 6, which is what a real second measurement
+        # looks like. Recorded here since 2026-09-21.
+        'duplicate_conditions': {},
         # Hybrid feature matrices built: one round per (noise level, fold),
         # shared by both importance methods. 30 over 6 levels and 5 folds. A
         # round builds one matrix per hybrid space, so with both search
@@ -777,6 +849,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_sigma': {},
     }
     zero_imp_acc = results['zero_importance_spaces']
+    dup_cond_acc = results['duplicate_conditions']
 
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
@@ -903,11 +976,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if imp_method not in grid_acc:
                     grid_acc[imp_method] = {}
 
-                conditions, zero_importance = _build_conditions(
+                conditions, zero_importance, duplicate_conds = _build_conditions(
                     train_reps_fold, y_noisy, train_augs, bp,
                     imp_method, base_rep_name,
                     shared_by_space=fold_shared_by_space,
                 )
+                for _cond_name, _rec in duplicate_conds.items():
+                    _d = (dup_cond_acc.setdefault(imp_method, {})
+                          .setdefault(_cond_name, dict(_rec, n_builds=0,
+                                                       sigmas=[])))
+                    _d['n_builds'] += 1
+                    if sigma not in _d['sigmas']:
+                        _d['sigmas'].append(sigma)
                 for _cond_name in zero_importance:
                     _zi = (zero_imp_acc.setdefault(imp_method, {})
                            .setdefault(_cond_name,
@@ -1011,13 +1091,52 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         _mn = ek.split('|', 1)[0]
                         _c = clean_by_model.get(_mn)
                         _nz = noisy_by_model.get(_mn)
-                        recovery = (float((denoised - _nz) / (_c - _nz) * 100)
-                                    if (_c is not None and _nz is not None
-                                        and abs(gap_by_model[_mn]) > 1e-10)
-                                    else float('nan'))
+                        # ⛔ THE GAP THIS DIVIDES BY HAS A FLOOR.
+                        #
+                        # Recovery is how far the repaired fit moved from the
+                        # noisy fit, as a share of how far the clean fit is
+                        # from the noisy fit. When that second distance is a
+                        # few thousandths, a small swing in the repaired score
+                        # comes out as hundreds of percent. Measured on
+                        # flab_thermo_tresanco under outlier_p10 at level 0.5:
+                        # the random forest's clean-to-noisy gap was 0.008551
+                        # spearman against a clean score of 0.458964 -- 1.86% of
+                        # it -- and 71 of the 192 recovery readings in that
+                        # result file fell outside 0 to 100 percent, the
+                        # extremes reaching -615 and +578 percent. lightgbm's
+                        # gap on the same folds was 0.048543 against a clean
+                        # score of 0.426777, which is 11.4% of it.
+                        #
+                        # n06, n07, n11 and n21 all refuse the figure when the
+                        # gap is under GAP_MIN_FRAC of the clean score. n12 was
+                        # the one file in this directory that did not: its only
+                        # guard was abs(gap) > 1e-10. Same floor, same wording,
+                        # since 2026-09-21. A refused cell keeps its denoised
+                        # score and says in 'recovery_note' why no percentage
+                        # was written.
+                        _floor = (max(1e-10, GAP_MIN_FRAC * abs(_c))
+                                  if (_c is not None and np.isfinite(_c))
+                                  else 1e-10)
+                        _gap_too_small = not (abs(gap_by_model[_mn]) > _floor)
+                        if (_c is not None and _nz is not None
+                                and np.isfinite(_c) and np.isfinite(_nz)
+                                and not _gap_too_small):
+                            recovery = float((denoised - _nz) / (_c - _nz) * 100)
+                            recovery_note = None
+                        else:
+                            recovery = float('nan')
+                            recovery_note = (
+                                f'not computed: the clean-to-noisy gap '
+                                f'({gap_by_model[_mn]:.6g}) is under '
+                                f'{GAP_MIN_FRAC:.0%} of the clean score '
+                                f'({_c:.6g})'
+                                if (_gap_too_small and _c is not None
+                                    and np.isfinite(_c))
+                                else 'not computed: a score was not finite')
                         cond_agg[ek] = {
                             'denoised': denoised,
                             'recovery': recovery,
+                            'recovery_note': recovery_note,
                             # Named, not only encoded in the key.
                             'model': _mn,
                             'estimator': ek.split('|', 1)[-1],

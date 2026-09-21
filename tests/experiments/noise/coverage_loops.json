@@ -1,223 +1,253 @@
 {
-  "_what_this_is": "One entry per closed optimisation loop on a noise experiment. A loop is measured, changed ONE thing, re-measured. An entry without both a before and an after number is not a loop and does not belong here. Read by coverage.py.",
-  "_fields": {
-    "experiment": "nNN",
-    "date": "YYYY-MM-DD",
-    "dataset": "the dataset it was measured on, and how many molecules",
-    "changed": "the one thing that changed, in words",
-    "before": "the number before, with its unit named",
-    "after": "the number after, with its unit named",
-    "kept": "true if the change stayed in the file, false if it was reverted",
-    "note": "optional: what the number does not settle"
+ "_what_this_is": "One entry per closed optimisation loop on a noise experiment. A loop is measured, changed ONE thing, re-measured. An entry without both a before and an after number is not a loop and does not belong here. Read by coverage.py.",
+ "_fields": {
+  "experiment": "nNN",
+  "date": "YYYY-MM-DD",
+  "dataset": "the dataset it was measured on, and how many molecules",
+  "changed": "the one thing that changed, in words",
+  "before": "the number before, with its unit named",
+  "after": "the number after, with its unit named",
+  "kept": "true if the change stayed in the file, false if it was reverted",
+  "note": "optional: what the number does not settle"
+ },
+ "loops": [
+  {
+   "experiment": "n21",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+   "changed": "the row weight ratio the repair applies, from 1.11-to-1 to 4-to-1",
+   "before": "a positive share of the clean-to-corrupted gap recovered in 3 of the 15 distances",
+   "after": "a positive share recovered in 13 of the 15 distances",
+   "kept": true,
+   "note": "4-to-1 against 10-to-1 split the 60 paired readings 30 to 30, so what this bought was leaving the weakest setting behind, not the choice between those two."
   },
-  "loops": [
-    {
-      "experiment": "n21",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
-      "changed": "the row weight ratio the repair applies, from 1.11-to-1 to 4-to-1",
-      "before": "a positive share of the clean-to-corrupted gap recovered in 3 of the 15 distances",
-      "after": "a positive share recovered in 13 of the 15 distances",
-      "kept": true,
-      "note": "4-to-1 against 10-to-1 split the 60 paired readings 30 to 30, so what this bought was leaving the weakest setting behind, not the choice between those two."
-    },
-    {
-      "experiment": "n21",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
-      "changed": "the representation the plain distance is computed in, from the esm2_cdr fallback to saprot",
-      "before": "best of the 15 distances, 0.2455 detection average precision",
-      "after": "best of the 15 distances, 0.2266 detection average precision",
-      "kept": false,
-      "note": "The plain control improved from 0.2101 to 0.2221 and the forest proximity fell from 0.2455 to 0.1885, so the best distance in the run dropped. Reverted; the choice of base representation is the owner's, and changing it means changing pick_noise_base_rep for the whole suite."
-    },
-    {
-      "experiment": "n21",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
-      "changed": "the importance exponent matched to the distance metric rather than fixed at 0.5",
-      "before": "0.2098 detection average precision, lightgbm_gain at exponent 0.5 under manhattan",
-      "after": "0.2388 detection average precision, lightgbm_gain at exponent 1.0 under manhattan",
-      "kept": true,
-      "note": "The matched exponent won 3 of the 4 scorer-and-metric pairs. Four paired readings behind each, so it is a direction. n12 still applies 0.5 under manhattan, which is the mismatched pairing."
-    },
-    {
-      "experiment": "n21",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
-      "changed": "built the similarity-objective hybrid space, which the file had never produced a number for",
-      "before": "no number: the experiment built four distances and its header said four",
-      "after": "0.2182 detection average precision under manhattan, against 0.2045 for the prediction-objective hybrid and 0.2101 for the plain representation",
-      "kept": true,
-      "note": "The two hybrid spaces share no identical reading, so they are genuinely different spaces. Four paired readings behind each comparison."
-    },
-    {
-      "experiment": "n18",
-      "date": "2026-09-20",
-      "dataset": "herg_ki, rmse, lower is better",
-      "changed": "the flag rates swept, from 0.05/0.10/0.20 to 0.01/0.05/0.20, and the detectors from neighbor_residual and activity_cliff_aware to neighbor_residual and cross_val",
-      "before": "downweight best in 5 of 5 folds at 4 of 4 settings, +0.0047 rmse",
-      "after": "downweight best in 5 of 5 folds at 9 of 12 settings, +0.0069 rmse",
-      "kept": true,
-      "note": "remove went from 0 of 12 settings positive to 2 of 12, both of those at the new 0.01 flag rate."
-    },
-    {
-      "experiment": "n18",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, spearman, higher is better",
-      "changed": "swept the correction strength instead of using one value",
-      "before": "no strength sweep",
-      "after": "downweight at a 4-to-1 row weight ratio, best in 5 of 5 folds, +0.0447 spearman against a 0.5985 baseline",
-      "kept": true
-    },
-    {
-      "experiment": "n18",
-      "date": "2026-09-20",
-      "dataset": "caco2",
-      "changed": "added the hybrid and similarity-objective hybrid spaces beside the base representation",
-      "before": "nothing won in the hybrid space",
-      "after": "downweight best in 5 of 5 folds at 6 of 12 settings, +0.0041",
-      "kept": true,
-      "note": "cross_val supplied every best setting on this dataset."
-    },
-    {
-      "experiment": "n02",
-      "date": "2026-09-20",
-      "dataset": "herg_ki (rmse) and flab_thermo_tresanco (spearman)",
-      "changed": "the reliability score for regression, from the previous scoring to the neighbour-mean deviation passed through weights_from_scores at a 4-to-1 ratio",
-      "before": "within 0.001 on both datasets, in their own metrics",
-      "after": "-0.0098 rmse on herg_ki; +0.0192 and +0.0367 spearman on flab_thermo_tresanco",
-      "kept": true
-    },
-    {
-      "experiment": "n07",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, saprot, random forest, spearman",
-      "changed": "the injected dose, from the level 0.5 n07 runs to level 2.0, at the same one molecule in ten corrupted",
-      "before": "the clean-to-corrupted gap a recovery divides by, 0.0192 spearman against a clean score of 0.5985 spearman",
-      "after": "the same gap, 0.1639 spearman against the same clean score of 0.5985 spearman",
-      "kept": false,
-      "note": "Measured over 3 scaffold-grouped folds and 3 noise draws. NOT applied: the injected level is the owner's to set and it is the axis the experiment is about. It is recorded because at level 0.5 the completed run on disk, at 2 folds and 1 noise draw, measured that gap as NEGATIVE -- clean 0.5775 spearman against corrupted 0.5847 -- so every recovery in its hybrid block came back undefined. Level 1.0 gives 0.0656 spearman and level 3.0 gives 0.2758. Doubling the corrupted share from one molecule in ten to one in five moved the gap from 0.0192 to 0.0225 spearman at level 0.5 and from 0.1639 to 0.1643 at level 2.0, so the dose is what damages the model and the count of corrupted molecules barely is."
-    },
-    {
-      "experiment": "n11",
-      "date": "2026-09-20",
-      "dataset": "synthetic, 90 rows, 70 per training fold \u2014 a cost measurement, not a score",
-      "changed": "the iteration harness's n11 cuts rebound onto the two lists the loops actually read, and the extra-target list gated at the place the targets are built",
-      "before": "28 downstream model fits per estimator per estimation space with one downstream model, and one Gaussian-process out-of-fold pass per (fold, draw, space)",
-      "after": "10 downstream model fits per estimator per estimation space with one downstream model, and no Gaussian-process out-of-fold pass",
-      "kept": true,
-      "note": "This settles nothing about which estimator to pair with which correction. The harness had declared these cuts since 2026-09-18 and they reached nothing: it rebound ALPHAS, an alias bound once at import that the result file reports and no loop reads, while the loops read SMOOTH_ALPHAS and WEIGHT_STRENGTHS; and it rebound EXTRA_TARGETS, which run() wrote into the result file while building both targets by hand. So a run under the harness reported two cuts it had not made and paid for a Gaussian process it had asked to drop. n11 still produced no result file on 2026-09-20 \u2014 every result store it reads raises StaleResultDB for a missing distance_metric column."
-    },
-    {
-      "experiment": "n07",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, saprot, random forest, spearman",
-      "changed": "how far a label moves toward its target, from the alpha of 0.5 that oof_smooth and gp_smooth run at to an alpha of 1.0, with the suspicion score rescaled the same way in both",
-      "before": "aiming at a Gaussian-process posterior mean, 0.4509 spearman; aiming at a LightGBM out-of-fold prediction, 0.4581 spearman; aiming at the mean label of the ten nearest molecules, 0.4331 spearman",
-      "after": "aiming at a Gaussian-process posterior mean, 0.4996 spearman; aiming at a LightGBM out-of-fold prediction, 0.4703 spearman; aiming at the mean label of the ten nearest molecules, 0.4552 spearman",
-      "kept": false,
-      "note": "Three folds, one noise draw each, injected level 2.0, one molecule in ten given the wide error. Clean 0.5985 spearman, corrupted 0.4111, so the gap is 0.1874 spearman. The mean of three folds moves the right way for all three targets, but FOLD BY FOLD it is 7 of 9 paired readings, not 9: on the third fold moving the whole way LOST for the LightGBM target (0.4262 down to 0.3866 spearman) and for the neighbour mean (0.4076 down to 0.3951). Only the Gaussian-process target won on all three folds. The best single setting is gp_smooth moving the whole way, 0.4996 spearman and 47.2 percent of the gap, against 0.4509 and 21.2 percent at the half-way setting it runs at -- so the two model-based corrections coming last of seven in the completed run is the ranking of one alpha, not of the targets. WHAT IT DOES NOT SETTLE: for the neighbour-mean target, overwriting the flagged tenth outright scored 0.4829 spearman against 0.4552 for moving every label the whole way, so knn_smooth's shape is not beaten. And rescaling the suspicion score by its rank put the labels closest to clean on all three folds -- 7.12 to 7.69 label units against 10.85 to 12.95 for every other setting -- while recovering the least of the gap, so the correction that repairs the most labels is not the one that recovers the most score. NOT APPLIED: one dataset, one representation, one downstream model, one dose, and n18 already sweeps this same alpha over 0.25, 0.5 and 1.0 for exactly these two cleanups. WHY IT MOVES AT ALL: the Outlier condition is Huber contamination at lambda 3, so every training label carries an error and the flagged tenth carries one about three times wider -- 39.32 label units from clean on the 39 molecules flagged in fold 0 against 12.67 on the other 409, clean label standard deviation 10.12. Run cost 5999 seconds for the three folds on a machine at load 200 to 480."
-    },
-    {
-      "experiment": "n07",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, saprot, 3 scaffold-grouped folds, 1 corruption draw each, injected level 2.0, one molecule in ten corrupted",
-      "changed": "the fraction of the way a score-proportional correction moves a label, from 0.5 to 1.0, holding the correction's target fixed",
-      "before": "share of the 0.1874 spearman clean-to-corrupted gap recovered at 0.5: 21.2% for the gaussian-process target, 11.7% for the neighbour mean, 25.0% for the out-of-fold prediction",
-      "after": "at 1.0: 47.2%, 23.5% and 31.6% for the same three targets",
-      "kept": false,
-      "note": "COMPLETE at 3 folds, 5999 seconds. Clean 0.5985 spearman against corrupted 0.4111. NOT applied: the correction strength is n18's axis to settle and n18 measured the opposite on real labels, so the default is not this loop's to move. Recorded because it refutes the reading that the min-max rescale was what held these corrections back. Replacing the raw score with its rank at the same 1.0, which makes that rescale the identity, LOST at all three targets: 19.4%, 9.4% and 13.3%. \u26d4 CORRECTED 2026-09-21: this entry said both comparisons held at 3 of 3 targets on every one of the three passes. They do not. The partial tables the probe prints are CUMULATIVE means over the passes so far, not per-pass values, and reading them as per-pass is what produced that claim. Recovering each pass from the cumulative means: moving the whole way beat moving half way in 7 of 9 paired readings, losing on the third fold for the out-of-fold target (0.4262 down to 0.3866 spearman) and for the neighbour mean (0.4076 down to 0.3951). The raw score beat its rank in 8 of 9, losing on the second fold for the neighbour mean (0.4963 against 0.4881). Only the gaussian-process target won both comparisons on all three folds. The three-fold MEANS still move the way this entry reports. \u26d4 DUPLICATE: this is the same measurement as the entry whose `changed` begins \"how far a label moves toward its target\"; one run, two rows, so the table counts it twice. The TARGET matters less than one pass suggested: the gaussian process leads at 47.2% but the neighbour mean's best shape is 'replace' at 38.3%, which read 11.0% after one pass and 26.2% after two, so that cell is not settled. Separately, the shape that moved labels closest to their clean values was not the shape that scored best -- rank at 1.0 cut the mean distance from a corrupted training label to its clean value from 14.94 label units to between 7.12 and 7.69 and still lost the held-out spearman to proportional at 1.0, which reached only 10.85 to 11.03 units. The gaussian process ran without importance-weighted kernel inputs. \u26d4 n18 measured the SAME axis on labels nobody corrupted and found alpha 1.0 LOSES at every correction: label_smooth best at 0.25, oof_smooth and gp_smooth best at 0.5, downweight best at a 4-to-1 row weight ratio. The two experiments ask different questions -- share of an injected gap recovered, against held-out spearman on real labels -- and which one sets the default is an open decision."
-    },
-    {
-      "experiment": "n20",
-      "date": "2026-09-20",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
-      "changed": "the fold's homology groups are handed to the detector that decides which labels are suspect, instead of being withheld",
-      "before": "0.2845 detection average precision on held-out fold 0 and 0.2056 on held-out fold 1, groups withheld",
-      "after": "0.3322 detection average precision on held-out fold 0 and 0.2387 on held-out fold 1, groups given",
-      "kept": true,
-      "note": "Two paired passes, one corruption draw, one dataset, one representation (esm2_cdr, which is what pick_noise_base_rep falls back to here). Giving the groups won both passes, by 0.0477 and by 0.0331 average precision, so the gain is larger than the difference between the two gains. Cross-checked by n20's own run the same night, which computed the same score with the groups withheld and wrote 0.2450 average precision averaged over its 2 passes at 30 corrupted of 336 training antibodies, against 0.2451 for the mean of the two withheld readings here. What it does not settle: whether the recipe the search then picks, or the held-out spearman, moves at all. n20's first result file, written that night, came back with its search scoring ONE candidate per fold, so the recipe could not move whatever the flag list said."
-    },
-    {
-      "experiment": "n18",
-      "date": "2026-09-21",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, esm2_cdr, random forest, spearman, 3 scaffold-grouped folds",
-      "changed": "the scale the four score-proportional corrections read a suspicion score on, from the raw score the correction min-max rescales itself to the molecule's position in the ordering",
-      "before": "over the 24 readings the two runs share for those four corrections, the cleaned model beat the uncleaned one on 24 of 72 folds; gp_smooth averaged -0.0093 spearman over its 6 settings",
-      "after": "27 of 72 folds; gp_smooth averaged -0.0267 spearman over the same 6 settings",
-      "kept": false,
-      "note": "Mixed and mostly worse, so the knob was removed rather than left beside the raw score. downweight improved, from winning 7 of 18 folds to 10 of 18; gp_smooth got clearly worse; label_smooth and oof_smooth did not move. The control held exactly: remove, knn_smooth and quantile_clip threshold at a quantile or read no score, and all 14 of their readings came back bit-identical across the two runs, while all 24 score-proportional readings moved. Measured in the base representation only -- both hybrid spaces were unavailable, see the note on the strength loop."
-    },
-    {
-      "experiment": "n18",
-      "date": "2026-09-21",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, esm2_cdr, random forest, spearman, 3 scaffold-grouped folds",
-      "changed": "nothing in the file: the existing strength grid was read out per correction, to settle whether moving a label all the way beats moving it a quarter of the way",
-      "before": "the uncleaned random forest, 0.4590 spearman",
-      "after": "the strongest setting loses at every correction. label_smooth is best at alpha 0.25, 0.4492 spearman against 0.4185 at alpha 1.0. oof_smooth is best at alpha 0.5, 0.4651 against 0.4512 at alpha 1.0. gp_smooth is best at alpha 0.5, 0.4726 against 0.4705 at alpha 1.0. downweight is best at a 4-to-1 row weight ratio, 0.4823 against 0.4687 at 10-to-1",
-      "kept": true,
-      "note": "The grid does not need extending above alpha 1.0; it may need extending below 0.25 for label_smooth. Only one setting of the 44 scored won every fold: gp_smooth at alpha 1.0 with the cross_val detector, 3 of 3 folds, 0.4590 to 0.4705 spearman. Two cautions. Both hybrid spaces were absent -- every stored search on disk is behind the distance_metric column commit 9c6f7d7 added, so this is the base representation alone. And the uncleaned score here is 0.4590 spearman where the earlier n18 entry on this dataset reads 0.5985, because pick_noise_base_rep has no ecfp4, pdv or blosum on an antibody set and falls back to esm2_cdr alphabetically, while the 0.5985 runs elsewhere in this ledger name saprot."
-    },
-    {
-      "experiment": "n07",
-      "date": "2026-09-21",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 in fold 0's training block, saprot, 1280 features",
-      "changed": "weighted the Gaussian process's kernel inputs by each feature's lightgbm gain, which is what cut a Gaussian process's error by 29 percent in n21",
-      "before": "the posterior mean gp_smooth aims every label at spans 1.6899 label units across the 448 molecules and rank-correlates with the labels it was fitted on at -0.0234 spearman",
-      "after": "the same 1.6899 label units and the same -0.0234 spearman; the two posterior means differ by 0.00000000 label units, bit-identical",
-      "kept": false,
-      "note": "THE WEIGHTING IS NOT THE FINDING. It reached the kernel and it was drastic -- lightgbm gives gain to only 361 of saprot's 1280 features, so 919 columns were multiplied by zero and both guards in GaussianProcessEstimator passed. Nothing changed because the process is not reading its inputs. Counted directly: the 448 molecules receive 3 DISTINCT posterior-mean values, 64.0567, 65.7113 and 65.7467 label units, and each is exactly the mean label of the inner fold that molecule was held out of -- inner fold 0 trains on 298 molecules whose mean label is 64.0567 and every molecule it held out received 64.0567. The fitted noise level is 22.7930 label units against a fitted-label standard deviation of 22.8228, so the process assigns all of the variance to noise and its posterior mean is its prior mean. So gp_smooth does not move a label toward what a Gaussian process predicts for that molecule, which is what n07's docstring says it does; it moves every label toward the mean label of its inner fold. It is shrinkage toward the mean under a model's name. This is one representation at 1280 features over 448 molecules, which is the regime where an isotropic RBF kernel flattens because every pair of molecules is nearly the same distance apart; whether a narrower feature set revives it is not measured."
-    },
-    {
-      "experiment": "n07",
-      "date": "2026-09-21",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, saprot, 448 in the training fold, 1280 features, injected level 2.0, one molecule in ten corrupted",
-      "changed": "the gaussian process that gp_smooth corrects toward had its kernel inputs multiplied by feature importance, instead of left unweighted",
-      "before": "share of the 0.2538 spearman clean-to-corrupted gap recovered, unweighted: 28.4% moving a label a quarter of the way, 47.5% all the way, 41.3% by rank, 31.1% replacing outright",
-      "after": "identical to four decimal places at all four shapes: 28.4%, 47.5%, 41.3%, 31.1%",
-      "kept": false,
-      "note": "\u26d4 NOT a null result about weighting. The gaussian process is DEGENERATE at the width n07 fits it at, so there is nothing for a weighting to change. Fitted on all 1280 features it returned 3 distinct posterior-mean values across 448 training molecules -- one constant per inner fold, nothing read from the features -- and the same at the 361 features lightgbm gives any gain. It starts fitting between 361 features and 200: at 200 it returns 226 distinct values and beats the corrupted labels by 0.3303 spearman against -0.0441 at 1280. This is the likely reason gp_smooth ranked second from bottom of the seven corrections at 13.4% -- it was smoothing toward a constant. At 200 features the weighting LOSES, 0.2709 against 0.3303 spearman, one fold only. The width has to be fixed before the weighting question can be asked, and the 29% gain measured for the similarity work is not contradicted by this -- it was measured where the process was actually fitting."
-    },
-    {
-      "experiment": "n23",
-      "date": "2026-09-21",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
-      "changed": "whether gaussian_process is counted as a source that predicts a molecule's noise from its features alone, which decides whether the result file marks it undefined under the default condition outlier_p10",
-      "before": "four of the five uncertainty sources marked undefined under outlier_p10, one of them scoring 0.3016 detection average precision against 0.0863 for a coin flip",
-      "after": "three of the five marked undefined; the source moved out scores that same 0.3016 detection average precision against 0.0863 for a coin flip, the highest of the five measured",
-      "kept": true,
-      "note": "Its score is the posterior spread plus the out-of-fold residual (noise_estimation.py:911-916), and the residual reads the molecule's own label, so it is not a prediction from features. One outer fold of two, one draw, two inner folds. It does not settle whether the cleaning that follows the ranking wins folds."
-    },
-    {
-      "experiment": "n23",
-      "date": "2026-09-21",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
-      "changed": "the injected noise condition, from the default outlier_p10 to censoring, to give the feature-based sources a condition whose corrupted molecules are chosen by something the features encode",
-      "before": "under outlier_p10 at level 0.5, with 29 of the 336 training molecules moved and a coin flip at 0.0863, detection average precision was 0.3016 for gaussian_process, 0.2664 for activity_cliff_aware and 0.0878 for heteroscedastic_nn",
-      "after": "under censoring at level 0.25, with 79 and 86 of the 336 training molecules moved on the two folds and a coin flip at 0.2351 and 0.2560, detection average precision was 0.2663 and 0.2764 for gaussian_process, 0.1947 and 0.2776 for heteroscedastic_nn, and 0.1881 and 0.2340 for activity_cliff_aware",
-      "kept": false,
-      "note": "Every source sits at the coin flip under censoring and two of the three sit below it, so the default stays outlier_p10. Clipping every label above a cut-point pulls the top of the range together, so a clipped label is not far from its neighbours. grouped_wider, the only entry in NOISE_KEYED_TO_STRUCTURE, could not be measured at all: it needs one scaffold-group id per molecule and an antibody set loads no SMILES. ngboost and hetero_gp had not finished under either condition when this was written."
-    },
-    {
-      "experiment": "n23",
-      "date": "2026-09-21",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
-      "changed": "what n23 does when asked for a grouped condition on a dataset with no scaffold groups: it now stops before the first fold instead of injecting",
-      "before": "every one of the outer folds raised inside the injector, each wrote one row into _errors, and the run finished and saved a result file carrying 0 held-out scores",
-      "after": "the run stops with a message naming the 4 conditions in DETECTION_IS_DEFINED that need no scaffold groups, and writes no file",
-      "kept": true,
-      "note": "Only reachable on a dataset that loads no SMILES. caco2 and herg_ki have them and are unaffected. The before number is a count of scores in the file, not a score."
-    },
-    {
-      "experiment": "n07",
-      "date": "2026-09-21",
-      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 in fold 0's training block, saprot narrowed to its highest-gain features",
-      "changed": "weighted the Gaussian process's kernel inputs by each feature's lightgbm gain, at the three widths where the process actually fits rather than at the full 1280 where it returns a constant",
-      "before": "unweighted, the target's agreement with the clean labels is 0.3303 spearman at 200 features, 0.2473 at 50 and 0.4360 at 5; its distance from the clean label of the molecules the injector gave the wide error is 10.4195, 10.4816 and 9.2341 label units",
-      "after": "weighted, 0.2709 spearman at 200 features, 0.2182 at 50 and 0.4463 at 5; the distances are 10.7427, 10.8975 and 9.4700 label units",
-      "kept": false,
-      "note": "This is the weighting question asked where it can be answered. The earlier reading at the full 1280 features said nothing about weighting: the posterior mean there is one constant per inner fold, so weighting the inputs of a constant cannot move it, and the numbers came back bit-identical. NOT A CLEAN NEGATIVE. Weighting loses on agreement with the clean labels at 2 of the 3 live widths and WINS at 5 features, 0.4463 against 0.4360 spearman. It loses on the distance to the damaged molecules' clean labels at 3 of 3, by 0.32, 0.42 and 0.24 label units. So the two readings disagree at 5 features and agree everywhere else. One fold and one noise draw behind each, so this is a direction. The n21 result it was testing -- weighting an RBF kernel's inputs cutting a Gaussian process's error by 29 percent on a similarity task -- does not transfer here on this evidence. NOT APPLIED: nothing in n07 passes feature_weights, and nothing now will."
-    }
-  ]
+  {
+   "experiment": "n21",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+   "changed": "the representation the plain distance is computed in, from the esm2_cdr fallback to saprot",
+   "before": "best of the 15 distances, 0.2455 detection average precision",
+   "after": "best of the 15 distances, 0.2266 detection average precision",
+   "kept": false,
+   "note": "The plain control improved from 0.2101 to 0.2221 and the forest proximity fell from 0.2455 to 0.1885, so the best distance in the run dropped. Reverted; the choice of base representation is the owner's, and changing it means changing pick_noise_base_rep for the whole suite."
+  },
+  {
+   "experiment": "n21",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+   "changed": "the importance exponent matched to the distance metric rather than fixed at 0.5",
+   "before": "0.2098 detection average precision, lightgbm_gain at exponent 0.5 under manhattan",
+   "after": "0.2388 detection average precision, lightgbm_gain at exponent 1.0 under manhattan",
+   "kept": true,
+   "note": "The matched exponent won 3 of the 4 scorer-and-metric pairs. Four paired readings behind each, so it is a direction. n12 still applies 0.5 under manhattan, which is the mismatched pairing."
+  },
+  {
+   "experiment": "n21",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+   "changed": "built the similarity-objective hybrid space, which the file had never produced a number for",
+   "before": "no number: the experiment built four distances and its header said four",
+   "after": "0.2182 detection average precision under manhattan, against 0.2045 for the prediction-objective hybrid and 0.2101 for the plain representation",
+   "kept": true,
+   "note": "The two hybrid spaces share no identical reading, so they are genuinely different spaces. Four paired readings behind each comparison."
+  },
+  {
+   "experiment": "n18",
+   "date": "2026-09-20",
+   "dataset": "herg_ki, rmse, lower is better",
+   "changed": "the flag rates swept, from 0.05/0.10/0.20 to 0.01/0.05/0.20, and the detectors from neighbor_residual and activity_cliff_aware to neighbor_residual and cross_val",
+   "before": "downweight best in 5 of 5 folds at 4 of 4 settings, +0.0047 rmse",
+   "after": "downweight best in 5 of 5 folds at 9 of 12 settings, +0.0069 rmse",
+   "kept": true,
+   "note": "remove went from 0 of 12 settings positive to 2 of 12, both of those at the new 0.01 flag rate."
+  },
+  {
+   "experiment": "n18",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, spearman, higher is better",
+   "changed": "swept the correction strength instead of using one value",
+   "before": "no strength sweep",
+   "after": "downweight at a 4-to-1 row weight ratio, best in 5 of 5 folds, +0.0447 spearman against a 0.5985 baseline",
+   "kept": true
+  },
+  {
+   "experiment": "n18",
+   "date": "2026-09-20",
+   "dataset": "caco2",
+   "changed": "added the hybrid and similarity-objective hybrid spaces beside the base representation",
+   "before": "nothing won in the hybrid space",
+   "after": "downweight best in 5 of 5 folds at 6 of 12 settings, +0.0041",
+   "kept": true,
+   "note": "cross_val supplied every best setting on this dataset."
+  },
+  {
+   "experiment": "n02",
+   "date": "2026-09-20",
+   "dataset": "herg_ki (rmse) and flab_thermo_tresanco (spearman)",
+   "changed": "the reliability score for regression, from the previous scoring to the neighbour-mean deviation passed through weights_from_scores at a 4-to-1 ratio",
+   "before": "within 0.001 on both datasets, in their own metrics",
+   "after": "-0.0098 rmse on herg_ki; +0.0192 and +0.0367 spearman on flab_thermo_tresanco",
+   "kept": true
+  },
+  {
+   "experiment": "n07",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, saprot, random forest, spearman",
+   "changed": "the injected dose, from the level 0.5 n07 runs to level 2.0, at the same one molecule in ten corrupted",
+   "before": "the clean-to-corrupted gap a recovery divides by, 0.0192 spearman against a clean score of 0.5985 spearman",
+   "after": "the same gap, 0.1639 spearman against the same clean score of 0.5985 spearman",
+   "kept": false,
+   "note": "Measured over 3 scaffold-grouped folds and 3 noise draws. NOT applied: the injected level is the owner's to set and it is the axis the experiment is about. It is recorded because at level 0.5 the completed run on disk, at 2 folds and 1 noise draw, measured that gap as NEGATIVE -- clean 0.5775 spearman against corrupted 0.5847 -- so every recovery in its hybrid block came back undefined. Level 1.0 gives 0.0656 spearman and level 3.0 gives 0.2758. Doubling the corrupted share from one molecule in ten to one in five moved the gap from 0.0192 to 0.0225 spearman at level 0.5 and from 0.1639 to 0.1643 at level 2.0, so the dose is what damages the model and the count of corrupted molecules barely is."
+  },
+  {
+   "experiment": "n11",
+   "date": "2026-09-20",
+   "dataset": "synthetic, 90 rows, 70 per training fold \u2014 a cost measurement, not a score",
+   "changed": "the iteration harness's n11 cuts rebound onto the two lists the loops actually read, and the extra-target list gated at the place the targets are built",
+   "before": "28 downstream model fits per estimator per estimation space with one downstream model, and one Gaussian-process out-of-fold pass per (fold, draw, space)",
+   "after": "10 downstream model fits per estimator per estimation space with one downstream model, and no Gaussian-process out-of-fold pass",
+   "kept": true,
+   "note": "This settles nothing about which estimator to pair with which correction. The harness had declared these cuts since 2026-09-18 and they reached nothing: it rebound ALPHAS, an alias bound once at import that the result file reports and no loop reads, while the loops read SMOOTH_ALPHAS and WEIGHT_STRENGTHS; and it rebound EXTRA_TARGETS, which run() wrote into the result file while building both targets by hand. So a run under the harness reported two cuts it had not made and paid for a Gaussian process it had asked to drop. n11 still produced no result file on 2026-09-20 \u2014 every result store it reads raises StaleResultDB for a missing distance_metric column."
+  },
+  {
+   "experiment": "n07",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, saprot, random forest, spearman",
+   "changed": "how far a label moves toward its target, from the alpha of 0.5 that oof_smooth and gp_smooth run at to an alpha of 1.0, with the suspicion score rescaled the same way in both",
+   "before": "aiming at a Gaussian-process posterior mean, 0.4509 spearman; aiming at a LightGBM out-of-fold prediction, 0.4581 spearman; aiming at the mean label of the ten nearest molecules, 0.4331 spearman",
+   "after": "aiming at a Gaussian-process posterior mean, 0.4996 spearman; aiming at a LightGBM out-of-fold prediction, 0.4703 spearman; aiming at the mean label of the ten nearest molecules, 0.4552 spearman",
+   "kept": false,
+   "note": "Three folds, one noise draw each, injected level 2.0, one molecule in ten given the wide error. Clean 0.5985 spearman, corrupted 0.4111, so the gap is 0.1874 spearman. The mean of three folds moves the right way for all three targets, but FOLD BY FOLD it is 7 of 9 paired readings, not 9: on the third fold moving the whole way LOST for the LightGBM target (0.4262 down to 0.3866 spearman) and for the neighbour mean (0.4076 down to 0.3951). Only the Gaussian-process target won on all three folds. The best single setting is gp_smooth moving the whole way, 0.4996 spearman and 47.2 percent of the gap, against 0.4509 and 21.2 percent at the half-way setting it runs at -- so the two model-based corrections coming last of seven in the completed run is the ranking of one alpha, not of the targets. WHAT IT DOES NOT SETTLE: for the neighbour-mean target, overwriting the flagged tenth outright scored 0.4829 spearman against 0.4552 for moving every label the whole way, so knn_smooth's shape is not beaten. And rescaling the suspicion score by its rank put the labels closest to clean on all three folds -- 7.12 to 7.69 label units against 10.85 to 12.95 for every other setting -- while recovering the least of the gap, so the correction that repairs the most labels is not the one that recovers the most score. NOT APPLIED: one dataset, one representation, one downstream model, one dose, and n18 already sweeps this same alpha over 0.25, 0.5 and 1.0 for exactly these two cleanups. WHY IT MOVES AT ALL: the Outlier condition is Huber contamination at lambda 3, so every training label carries an error and the flagged tenth carries one about three times wider -- 39.32 label units from clean on the 39 molecules flagged in fold 0 against 12.67 on the other 409, clean label standard deviation 10.12. Run cost 5999 seconds for the three folds on a machine at load 200 to 480."
+  },
+  {
+   "experiment": "n07",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, saprot, 3 scaffold-grouped folds, 1 corruption draw each, injected level 2.0, one molecule in ten corrupted",
+   "changed": "the fraction of the way a score-proportional correction moves a label, from 0.5 to 1.0, holding the correction's target fixed",
+   "before": "share of the 0.1874 spearman clean-to-corrupted gap recovered at 0.5: 21.2% for the gaussian-process target, 11.7% for the neighbour mean, 25.0% for the out-of-fold prediction",
+   "after": "at 1.0: 47.2%, 23.5% and 31.6% for the same three targets",
+   "kept": false,
+   "note": "COMPLETE at 3 folds, 5999 seconds. Clean 0.5985 spearman against corrupted 0.4111. NOT applied: the correction strength is n18's axis to settle and n18 measured the opposite on real labels, so the default is not this loop's to move. Recorded because it refutes the reading that the min-max rescale was what held these corrections back. Replacing the raw score with its rank at the same 1.0, which makes that rescale the identity, LOST at all three targets: 19.4%, 9.4% and 13.3%. \u26d4 CORRECTED 2026-09-21: this entry said both comparisons held at 3 of 3 targets on every one of the three passes. They do not. The partial tables the probe prints are CUMULATIVE means over the passes so far, not per-pass values, and reading them as per-pass is what produced that claim. Recovering each pass from the cumulative means: moving the whole way beat moving half way in 7 of 9 paired readings, losing on the third fold for the out-of-fold target (0.4262 down to 0.3866 spearman) and for the neighbour mean (0.4076 down to 0.3951). The raw score beat its rank in 8 of 9, losing on the second fold for the neighbour mean (0.4963 against 0.4881). Only the gaussian-process target won both comparisons on all three folds. The three-fold MEANS still move the way this entry reports. \u26d4 DUPLICATE: this is the same measurement as the entry whose `changed` begins \"how far a label moves toward its target\"; one run, two rows, so the table counts it twice. The TARGET matters less than one pass suggested: the gaussian process leads at 47.2% but the neighbour mean's best shape is 'replace' at 38.3%, which read 11.0% after one pass and 26.2% after two, so that cell is not settled. Separately, the shape that moved labels closest to their clean values was not the shape that scored best -- rank at 1.0 cut the mean distance from a corrupted training label to its clean value from 14.94 label units to between 7.12 and 7.69 and still lost the held-out spearman to proportional at 1.0, which reached only 10.85 to 11.03 units. The gaussian process ran without importance-weighted kernel inputs. \u26d4 n18 measured the SAME axis on labels nobody corrupted and found alpha 1.0 LOSES at every correction: label_smooth best at 0.25, oof_smooth and gp_smooth best at 0.5, downweight best at a 4-to-1 row weight ratio. The two experiments ask different questions -- share of an injected gap recovered, against held-out spearman on real labels -- and which one sets the default is an open decision."
+  },
+  {
+   "experiment": "n20",
+   "date": "2026-09-20",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+   "changed": "the fold's homology groups are handed to the detector that decides which labels are suspect, instead of being withheld",
+   "before": "0.2845 detection average precision on held-out fold 0 and 0.2056 on held-out fold 1, groups withheld",
+   "after": "0.3322 detection average precision on held-out fold 0 and 0.2387 on held-out fold 1, groups given",
+   "kept": true,
+   "note": "Two paired passes, one corruption draw, one dataset, one representation (esm2_cdr, which is what pick_noise_base_rep falls back to here). Giving the groups won both passes, by 0.0477 and by 0.0331 average precision, so the gain is larger than the difference between the two gains. Cross-checked by n20's own run the same night, which computed the same score with the groups withheld and wrote 0.2450 average precision averaged over its 2 passes at 30 corrupted of 336 training antibodies, against 0.2451 for the mean of the two withheld readings here. What it does not settle: whether the recipe the search then picks, or the held-out spearman, moves at all. n20's first result file, written that night, came back with its search scoring ONE candidate per fold, so the recipe could not move whatever the flag list said."
+  },
+  {
+   "experiment": "n18",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, esm2_cdr, random forest, spearman, 3 scaffold-grouped folds",
+   "changed": "the scale the four score-proportional corrections read a suspicion score on, from the raw score the correction min-max rescales itself to the molecule's position in the ordering",
+   "before": "over the 24 readings the two runs share for those four corrections, the cleaned model beat the uncleaned one on 24 of 72 folds; gp_smooth averaged -0.0093 spearman over its 6 settings",
+   "after": "27 of 72 folds; gp_smooth averaged -0.0267 spearman over the same 6 settings",
+   "kept": false,
+   "note": "Mixed and mostly worse, so the knob was removed rather than left beside the raw score. downweight improved, from winning 7 of 18 folds to 10 of 18; gp_smooth got clearly worse; label_smooth and oof_smooth did not move. The control held exactly: remove, knn_smooth and quantile_clip threshold at a quantile or read no score, and all 14 of their readings came back bit-identical across the two runs, while all 24 score-proportional readings moved. Measured in the base representation only -- both hybrid spaces were unavailable, see the note on the strength loop."
+  },
+  {
+   "experiment": "n18",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, esm2_cdr, random forest, spearman, 3 scaffold-grouped folds",
+   "changed": "nothing in the file: the existing strength grid was read out per correction, to settle whether moving a label all the way beats moving it a quarter of the way",
+   "before": "the uncleaned random forest, 0.4590 spearman",
+   "after": "the strongest setting loses at every correction. label_smooth is best at alpha 0.25, 0.4492 spearman against 0.4185 at alpha 1.0. oof_smooth is best at alpha 0.5, 0.4651 against 0.4512 at alpha 1.0. gp_smooth is best at alpha 0.5, 0.4726 against 0.4705 at alpha 1.0. downweight is best at a 4-to-1 row weight ratio, 0.4823 against 0.4687 at 10-to-1",
+   "kept": true,
+   "note": "The grid does not need extending above alpha 1.0; it may need extending below 0.25 for label_smooth. Only one setting of the 44 scored won every fold: gp_smooth at alpha 1.0 with the cross_val detector, 3 of 3 folds, 0.4590 to 0.4705 spearman. Two cautions. Both hybrid spaces were absent -- every stored search on disk is behind the distance_metric column commit 9c6f7d7 added, so this is the base representation alone. And the uncleaned score here is 0.4590 spearman where the earlier n18 entry on this dataset reads 0.5985, because pick_noise_base_rep has no ecfp4, pdv or blosum on an antibody set and falls back to esm2_cdr alphabetically, while the 0.5985 runs elsewhere in this ledger name saprot."
+  },
+  {
+   "experiment": "n07",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 448 in fold 0's training block, saprot, 1280 features",
+   "changed": "weighted the Gaussian process's kernel inputs by each feature's lightgbm gain, which is what cut a Gaussian process's error by 29 percent in n21",
+   "before": "the posterior mean gp_smooth aims every label at spans 1.6899 label units across the 448 molecules and rank-correlates with the labels it was fitted on at -0.0234 spearman",
+   "after": "the same 1.6899 label units and the same -0.0234 spearman; the two posterior means differ by 0.00000000 label units, bit-identical",
+   "kept": false,
+   "note": "THE WEIGHTING IS NOT THE FINDING. It reached the kernel and it was drastic -- lightgbm gives gain to only 361 of saprot's 1280 features, so 919 columns were multiplied by zero and both guards in GaussianProcessEstimator passed. Nothing changed because the process is not reading its inputs. Counted directly: the 448 molecules receive 3 DISTINCT posterior-mean values, 64.0567, 65.7113 and 65.7467 label units, and each is exactly the mean label of the inner fold that molecule was held out of -- inner fold 0 trains on 298 molecules whose mean label is 64.0567 and every molecule it held out received 64.0567. The fitted noise level is 22.7930 label units against a fitted-label standard deviation of 22.8228, so the process assigns all of the variance to noise and its posterior mean is its prior mean. So gp_smooth does not move a label toward what a Gaussian process predicts for that molecule, which is what n07's docstring says it does; it moves every label toward the mean label of its inner fold. It is shrinkage toward the mean under a model's name. This is one representation at 1280 features over 448 molecules, which is the regime where an isotropic RBF kernel flattens because every pair of molecules is nearly the same distance apart; whether a narrower feature set revives it is not measured."
+  },
+  {
+   "experiment": "n07",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, saprot, 448 in the training fold, 1280 features, injected level 2.0, one molecule in ten corrupted",
+   "changed": "the gaussian process that gp_smooth corrects toward had its kernel inputs multiplied by feature importance, instead of left unweighted",
+   "before": "share of the 0.2538 spearman clean-to-corrupted gap recovered, unweighted: 28.4% moving a label a quarter of the way, 47.5% all the way, 41.3% by rank, 31.1% replacing outright",
+   "after": "identical to four decimal places at all four shapes: 28.4%, 47.5%, 41.3%, 31.1%",
+   "kept": false,
+   "note": "\u26d4 NOT a null result about weighting. The gaussian process is DEGENERATE at the width n07 fits it at, so there is nothing for a weighting to change. Fitted on all 1280 features it returned 3 distinct posterior-mean values across 448 training molecules -- one constant per inner fold, nothing read from the features -- and the same at the 361 features lightgbm gives any gain. It starts fitting between 361 features and 200: at 200 it returns 226 distinct values and beats the corrupted labels by 0.3303 spearman against -0.0441 at 1280. This is the likely reason gp_smooth ranked second from bottom of the seven corrections at 13.4% -- it was smoothing toward a constant. At 200 features the weighting LOSES, 0.2709 against 0.3303 spearman, one fold only. The width has to be fixed before the weighting question can be asked, and the 29% gain measured for the similarity work is not contradicted by this -- it was measured where the process was actually fitting."
+  },
+  {
+   "experiment": "n23",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+   "changed": "whether gaussian_process is counted as a source that predicts a molecule's noise from its features alone, which decides whether the result file marks it undefined under the default condition outlier_p10",
+   "before": "four of the five uncertainty sources marked undefined under outlier_p10, one of them scoring 0.3016 detection average precision against 0.0863 for a coin flip",
+   "after": "three of the five marked undefined; the source moved out scores that same 0.3016 detection average precision against 0.0863 for a coin flip, the highest of the five measured",
+   "kept": true,
+   "note": "Its score is the posterior spread plus the out-of-fold residual (noise_estimation.py:911-916), and the residual reads the molecule's own label, so it is not a prediction from features. One outer fold of two, one draw, two inner folds. It does not settle whether the cleaning that follows the ranking wins folds."
+  },
+  {
+   "experiment": "n23",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+   "changed": "the injected noise condition, from the default outlier_p10 to censoring, to give the feature-based sources a condition whose corrupted molecules are chosen by something the features encode",
+   "before": "under outlier_p10 at level 0.5, with 29 of the 336 training molecules moved and a coin flip at 0.0863, detection average precision was 0.3016 for gaussian_process, 0.2664 for activity_cliff_aware and 0.0878 for heteroscedastic_nn",
+   "after": "under censoring at level 0.25, with 79 and 86 of the 336 training molecules moved on the two folds and a coin flip at 0.2351 and 0.2560, detection average precision was 0.2663 and 0.2764 for gaussian_process, 0.1947 and 0.2776 for heteroscedastic_nn, and 0.1881 and 0.2340 for activity_cliff_aware",
+   "kept": false,
+   "note": "Every source sits at the coin flip under censoring and two of the three sit below it, so the default stays outlier_p10. Clipping every label above a cut-point pulls the top of the range together, so a clipped label is not far from its neighbours. grouped_wider, the only entry in NOISE_KEYED_TO_STRUCTURE, could not be measured at all: it needs one scaffold-group id per molecule and an antibody set loads no SMILES. ngboost and hetero_gp had not finished under either condition when this was written."
+  },
+  {
+   "experiment": "n23",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 336 per training fold",
+   "changed": "what n23 does when asked for a grouped condition on a dataset with no scaffold groups: it now stops before the first fold instead of injecting",
+   "before": "every one of the outer folds raised inside the injector, each wrote one row into _errors, and the run finished and saved a result file carrying 0 held-out scores",
+   "after": "the run stops with a message naming the 4 conditions in DETECTION_IS_DEFINED that need no scaffold groups, and writes no file",
+   "kept": true,
+   "note": "Only reachable on a dataset that loads no SMILES. caco2 and herg_ki have them and are unaffected. The before number is a count of scores in the file, not a score."
+  },
+  {
+   "experiment": "n07",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 448 in fold 0's training block, saprot narrowed to its highest-gain features",
+   "changed": "weighted the Gaussian process's kernel inputs by each feature's lightgbm gain, at the three widths where the process actually fits rather than at the full 1280 where it returns a constant",
+   "before": "unweighted, the target's agreement with the clean labels is 0.3303 spearman at 200 features, 0.2473 at 50 and 0.4360 at 5; its distance from the clean label of the molecules the injector gave the wide error is 10.4195, 10.4816 and 9.2341 label units",
+   "after": "weighted, 0.2709 spearman at 200 features, 0.2182 at 50 and 0.4463 at 5; the distances are 10.7427, 10.8975 and 9.4700 label units",
+   "kept": false,
+   "note": "This is the weighting question asked where it can be answered. The earlier reading at the full 1280 features said nothing about weighting: the posterior mean there is one constant per inner fold, so weighting the inputs of a constant cannot move it, and the numbers came back bit-identical. NOT A CLEAN NEGATIVE. Weighting loses on agreement with the clean labels at 2 of the 3 live widths and WINS at 5 features, 0.4463 against 0.4360 spearman. It loses on the distance to the damaged molecules' clean labels at 3 of 3, by 0.32, 0.42 and 0.24 label units. So the two readings disagree at 5 features and agree everywhere else. One fold and one noise draw behind each, so this is a direction. The n21 result it was testing -- weighting an RBF kernel's inputs cutting a Gaussian process's error by 29 percent on a similarity task -- does not transfer here on this evidence. NOT APPLIED: nothing in n07 passes feature_weights, and nothing now will."
+  },
+  {
+   "experiment": "n12",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 448 per training fold, 3 outer folds, 1 corruption draw, condition outlier_p10",
+   "changed": "n12 now refuses to write a recovery percentage when the clean-to-noisy gap it divides by is under 2 percent of the clean score, which is the floor n06, n07, n11 and n21 already apply; the gap was measured at five injected levels before any recovery number was read",
+   "before": "n12's only guard was a gap larger than 1e-10. In its result file of 2026-09-20, measured in the esm2_cdr representation, the random forest's clean-to-noisy gap under outlier_p10 at level 0.5 was 0.008551 spearman against a clean score of 0.458964 -- 1.86 percent of it -- and 71 of the 192 recovery readings in that file fell outside 0 to 100 percent, the extremes reaching -615 and +578 percent",
+   "after": "measured today in the onehot representation, which pick_noise_base_rep now returns for this dataset, the random forest's gap at level 0.5 is 0.062572 spearman against a clean score of 0.406820 -- 15.38 percent of it -- and lightgbm's is 0.027025 spearman against a clean score of 0.375947 -- 7.19 percent. Both clear the 2 percent floor, so no recovery reading at level 0.5 is refused. At level 1.5 the random forest reads 0.128583 spearman (31.61 percent of its clean score) and lightgbm 0.120551 (32.07 percent)",
+   "kept": true,
+   "note": "THE DOSE WAS NOT RAISED and the level was not changed. The unreadable figure was the esm2_cdr control arm, not the level: the same condition and the same level in onehot gives the random forest a gap 7.3 times larger as a share of its clean score. The two sets of numbers are NOT comparable as measurements of anything but the gap, because the control arm changed. 40 of the 448 training molecules had their label moved at every level -- outlier_p10 moves a fixed share and the level sets how far, so the count does not rise with the level. The random forest's gap is not monotonic in the level: 31.61 percent at 1.5 then 28.79 percent at 2.0. One draw and three folds behind each number, and the three folds' clean random forest scores were 0.590534, 0.268802 and 0.361124 spearman, so the fold spread is wider than most of the gaps. Nothing here measures whether a better detector repairs better."
+  },
+  {
+   "experiment": "n12",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, condition outlier_p10 at level 0.5, from the result file of 2026-09-20 plus a synthetic check of the new code",
+   "changed": "n12 records which of its conditions are a second copy of another condition rather than a measurement of their own, and reuses the importance array instead of computing it a second time",
+   "before": "each hybrid space carries an _imp_base condition weighted by the recipe's own importance method and an _imp_own condition weighted by the method the sweep is on. Both recipes ranked their features by lightgbm_gain, so on the lightgbm_gain half of the sweep hybrid_imp_base and hybrid_imp_own agreed to 1e-12 in 6 of 6 detection average precision readings, and hybrid_similarity_imp_base and hybrid_similarity_imp_own agreed in 6 of 6. 2 of the 16 importance-method-by-condition cells were duplicates and nothing in the result file said so",
+   "after": "those 2 cells are named in results['duplicate_conditions'] with the condition each copies and why, and each one saves one importance computation on the hybrid matrix per fold and per space. On the treeshap half the same two pairs agreed in 0 of 6 readings and nothing is recorded, which is what a second measurement looks like",
+   "kept": true,
+   "note": "The reused array makes the duplicate condition bit-identical to the one it copies, checked on a 120-row synthetic matrix: identical under lightgbm_gain, different under treeshap. The condition keeps its own name in the result file, so nothing that reads it breaks. NOT RE-MEASURED on the real dataset -- flab_thermo_tresanco's stored search is missing the distance_metric column commit 9c6f7d7 added, so n12.run cannot open the pool and cannot build a hybrid space at all until that store is rebuilt."
+  },
+  {
+   "experiment": "n07",
+   "date": "2026-09-21",
+   "dataset": "flab_thermo_tresanco, 672 antibodies, 448 in fold 0's training block, saprot, 1280 features, injected level 2.0 of the clean label standard deviation, one molecule in ten given the wide error",
+   "changed": "the RBF kernel's length scale starts at the median distance between the training molecules it is fitted on, instead of at 1.0, in GaussianProcessEstimator.estimate (src/kirby/utils/noise_estimation.py)",
+   "before": "the posterior mean gp_smooth aims every label at took 3 distinct values across the 448 molecules, rank-correlated with the CLEAN labels at -0.0441 spearman, and sat 11.0137 label units from the clean label of the 39 molecules the injector gave the wide error",
+   "after": "358 distinct values across the same 448 molecules, 0.5630 spearman against the clean labels, and 9.5756 label units from those 39 molecules' clean labels",
+   "kept": true,
+   "note": "THE MECHANISM, not a tuning choice. An RBF kernel is exp(-d^2 / 2l^2). Two standardised molecules described by saprot's 1280 features sit about sqrt(2 * 1280) = 50.6 apart, so at a length scale of 1.0 every off-diagonal entry of the kernel matrix underflows, the matrix is the identity and the marginal likelihood is flat in the length scale. Recorded per inner fold: the three fitted length scales came back 1.01, 1.00 and 1.01, having never left the start, and the white-noise level pinned at 1.0, its own upper bound. After the change they are 61.87, 54.26 and 41.85 with noise levels 0.8884, 0.8328 and 0.8446. sklearn's n_restarts_optimizer=3 does not rescue it because each restart is sampled log-uniformly across the length-scale bounds, which were (1e-5, 1e5) -- ten orders of magnitude -- so a restart almost never lands near the data's own distance; the bounds are now a factor of 100 either side of the start. NARROWING THE FEATURE SET IS NO LONGER NEEDED: at 1280 features the fixed start reaches 0.5630 spearman against the clean labels, beating every narrowed width measured against the broken start (0.3303 at 200 features, 0.2473 at 50, 0.4360 at 5). At 200 features the fixed start reaches 0.6014, so width still buys something, and at 5 features the two starts agree to four decimals (0.4360 both) because a median distance of about 3 and a start of 1.0 are close enough. WHAT IT DOES NOT SETTLE: one fold, one noise draw, one dataset, one representation. This is the TARGET's quality, not a recovery figure -- what it does to the share of the clean-to-corrupted gap gp_smooth puts back is the next measurement. It also changes every other caller of GaussianProcessEstimator: n07's own 'gaussian_process' detector and n11's gp target and detector. Neither was re-measured here. The same median heuristic was already in this file's heteroscedastic Gaussian process (torch.cdist(...).median())."
+  }
+ ]
 }
