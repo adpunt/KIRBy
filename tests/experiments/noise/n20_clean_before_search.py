@@ -74,8 +74,10 @@ carries at NOISE_AUDIT_2026_09_10.md section 4, n15 defect 3. It is reported as
 
 BOTH REGIMES, because they answer different questions.
 
-  injected       outlier_p10 on the shared grid (0.0, 0.15, 0.3, 0.5, 0.75,
-                 1.0 of the clean label spread). A corrupted subset exists, so
+  injected       outlier_p10 on the shared grid (0.0, 0.2, 0.3, 0.5, 0.75,
+                 1.0, 1.5 of the clean label spread; `dataset_policy.
+                 _DEFAULT_NOISE_LEVELS`, read 2026-09-21). A corrupted subset
+                 exists, so
                  `noise_helpers.detection_scores` is defined and is written.
                  Three draws per level, one at level 0.0 on a regression set
                  because the draw delivers exactly zero there.
@@ -1197,6 +1199,23 @@ def _print_summary(results, metric_name):
         print(f"  refused a per-molecule weight, so absent from the "
               f"downweight arms: "
               f"{', '.join(results['models_refusing_sample_weight'])}")
+    rss = s.get('recipe_the_search_selected') or {}
+    if rss.get('per_cleanup'):
+        print("\n  THE RECIPE THE SEARCH SELECTED. One cell is one held-out "
+              "fold and one\n  downstream model. A cell counts as moved when "
+              "the search on the labels as\n  they are and the search on the "
+              "cleaned labels picked different recipes:")
+        for cleanup, row in rss['per_cleanup'].items():
+            tail = '' if cleanup != IDENTITY_CONTROL else '   (identity control: must be 0)'
+            print(f"    {cleanup:13s} the recipe moved in "
+                  f"{row['n_cells_where_the_recipe_moved']} of "
+                  f"{row['n_cells']} cells{tail}")
+            def _rc(v):
+                return ', '.join('all ten' if x is None else str(x) for x in v)
+            print(f"      representations the recipe used, one entry per cell: "
+                  f"searching on the labels as they are {_rc(row['rep_count_asis'])}; "
+                  f"searching on the cleaned labels {_rc(row['rep_count_cleaned'])}")
+
     idt = s['search_path_identity']
     print(f"\n  the two searches are one code path, checked on "
           f"{idt['n_folds_probed']} folds:")
