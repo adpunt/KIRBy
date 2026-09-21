@@ -208,6 +208,16 @@
       "after": "the run stops with a message naming the 4 conditions in DETECTION_IS_DEFINED that need no scaffold groups, and writes no file",
       "kept": true,
       "note": "Only reachable on a dataset that loads no SMILES. caco2 and herg_ki have them and are unaffected. The before number is a count of scores in the file, not a score."
+    },
+    {
+      "experiment": "n07",
+      "date": "2026-09-21",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, 448 in fold 0's training block, saprot narrowed to its highest-gain features",
+      "changed": "weighted the Gaussian process's kernel inputs by each feature's lightgbm gain, at the three widths where the process actually fits rather than at the full 1280 where it returns a constant",
+      "before": "unweighted, the target's agreement with the clean labels is 0.3303 spearman at 200 features, 0.2473 at 50 and 0.4360 at 5; its distance from the clean label of the molecules the injector gave the wide error is 10.4195, 10.4816 and 9.2341 label units",
+      "after": "weighted, 0.2709 spearman at 200 features, 0.2182 at 50 and 0.4463 at 5; the distances are 10.7427, 10.8975 and 9.4700 label units",
+      "kept": false,
+      "note": "This is the weighting question asked where it can be answered. The earlier reading at the full 1280 features said nothing about weighting: the posterior mean there is one constant per inner fold, so weighting the inputs of a constant cannot move it, and the numbers came back bit-identical. NOT A CLEAN NEGATIVE. Weighting loses on agreement with the clean labels at 2 of the 3 live widths and WINS at 5 features, 0.4463 against 0.4360 spearman. It loses on the distance to the damaged molecules' clean labels at 3 of 3, by 0.32, 0.42 and 0.24 label units. So the two readings disagree at 5 features and agree everywhere else. One fold and one noise draw behind each, so this is a direction. The n21 result it was testing -- weighting an RBF kernel's inputs cutting a Gaussian process's error by 29 percent on a similarity task -- does not transfer here on this evidence. NOT APPLIED: nothing in n07 passes feature_weights, and nothing now will."
     }
   ]
 }
