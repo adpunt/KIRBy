@@ -32,6 +32,15 @@ every row in the representation the control is now.
 ⛔ ROWS ARE NEVER CUT. All 672 antibodies, every fold. KIRBY_SMOKE_N is
 refused.
 
+IT PICKS UP WHERE IT WAS KILLED. One pass -- one fold under one corruption
+draw -- is about 11 minutes here, and the machine went down on 2026-09-21 with
+8 of the 15 finished. The result file is written after every pass now, not
+after every fold, and a run that starts with one on disk scores only the
+passes missing from it. A pass is taken from disk only when it was read in the
+same representation, at the same level and condition, over the same distances,
+detectors and neighbour counts; if any of those differ the file is ignored and
+every pass runs again. N21_FORCE=1 starts from nothing.
+
 THE SPACES ARE n21's OWN. `space_specs` and `_spaces_for_pass` are imported and
 called, not copied, so the fifteen distances here are the fifteen distances n21
 scores and cannot drift from them.
@@ -112,6 +121,64 @@ def _claim(out_dir, name):
     return True
 
 
+def _restore(prior, ctx):
+    """Fill the tables from a result file this run wrote earlier.
+
+    Returns the set of (fold, draw) passes that are already on disk and must
+    not be run again, and a record of what was recovered for the result file.
+    A pass is trusted only when the run that wrote it scored the same spaces,
+    in the same representation, at the same level and condition, with the same
+    detectors and the same neighbour counts. If any of those differ the whole
+    file is ignored and every pass runs again, because a table half-read in
+    one representation and half in another is not a table.
+    """
+    note = {'passes_from_disk': [], 'ignored_because': None}
+    if not prior:
+        return set(), note
+    same = []
+    for field, here in (('plain_representation', ctx['base_rep']),
+                        ('noise_condition', ctx['CONDITION']),
+                        ('level', ctx['LEVEL']),
+                        ('detectors', ctx['detectors']),
+                        ('k_values', ctx['k_values'])):
+        there = prior.get(field)
+        if there != here:
+            same.append(f'{field} was {there!r}, is {here!r}')
+    if set(prior.get('spaces') or {}) != set(ctx['specs']):
+        same.append('the set of distances differs')
+    if same:
+        note['ignored_because'] = '; '.join(same)
+        print(f"  the result file on disk is not comparable "
+              f"({note['ignored_because']}), so every pass runs again")
+        return set(), note
+
+    cells = prior.get('average_precision_per_cell') or {}
+    pk_cells = prior.get('precision_at_k_per_cell') or {}
+    done = set(prior.get('seconds_per_pass') or {})
+    for space_key in ctx['specs']:
+        for cell, v in (cells.get(space_key) or {}).items():
+            if cell.split('|')[-1] in done:
+                ctx['ap'][space_key][cell] = v
+        for cell, v in (pk_cells.get(space_key) or {}).items():
+            if cell.split('|')[-1] in done:
+                ctx['pk'][space_key][cell] = v
+    for pass_key, secs in (prior.get('seconds_per_pass') or {}).items():
+        ctx['timings'][pass_key] = secs
+    for pass_key, n in (prior.get('molecules_corrupted_per_pass')
+                        or {}).items():
+        ctx['counts']['n_corrupted'][pass_key] = n
+    note['passes_from_disk'] = sorted(done)
+    note['precision_at_k_recovered'] = bool(pk_cells)
+    if done:
+        print(f"  {len(done)} pass(es) of (fold, draw) are already on disk "
+              f"and are not re-run: {', '.join(sorted(done))}")
+        if not pk_cells:
+            print("  that file stored precision at k only as a mean per "
+                  "distance, so the precision-at-k column here covers the "
+                  "passes this run computes, not those")
+    return done, note
+
+
 def main():
     from experiments._shared import (load_data, pick_noise_base_rep, cv_split,
                                      get_domain_metric, get_model_factories,
@@ -123,11 +190,16 @@ def main():
 
     os.makedirs(OUT, exist_ok=True)
     out_path = os.path.join(OUT, f'{DATASET}__folds_and_draws.json')
-    if os.path.exists(out_path) and not os.environ.get('N21_FORCE'):
-        print(f"already done: {out_path}")
-        return
     if not _claim(OUT, 'folds_and_draws'):
         return
+    prior = {}
+    if os.path.exists(out_path) and not os.environ.get('N21_FORCE'):
+        try:
+            with open(out_path) as fh:
+                prior = json.load(fh)
+        except Exception as exc:
+            print(f"  the result file on disk could not be read "
+                  f"({type(exc).__name__}), so this run starts from nothing")
 
     t_start = time.time()
     data = load_data(DATASET)
@@ -196,7 +268,7 @@ def main():
 
     ap = {s: {} for s in specs}
     pk = {s: {} for s in specs}
-    counts = {'n_corrupted': [], 'n_training': []}
+    counts = {'n_corrupted': {}, 'n_training': {}}
     errors = {}
     zero_imp = {}
     timings = {}
@@ -211,9 +283,15 @@ def main():
         'detectors': detectors, 'k_values': k_values, 'metrics': metrics,
         'importance_methods': importance_methods, 'exponents': exponents,
         'forest_kw': forest_kw, 'hybrid_meta': hybrid_meta,
+        'resume_note': None,
     }
 
+    done_passes, resume_note = _restore(prior, ctx)
+    ctx['resume_note'] = resume_note
+
     for fold_i, (train_idx, val_idx) in enumerate(splits):
+        if all(f'f{fold_i}s{d}' in done_passes for d in DRAWS):
+            continue
         X_raw = reps[base_rep][train_idx]
         X_std = StandardScaler().fit_transform(
             np.asarray(X_raw, dtype=np.float64))
@@ -227,14 +305,16 @@ def main():
 
         for draw in DRAWS:
             pass_key = f'f{fold_i}s{draw}'
+            if pass_key in done_passes:
+                continue
             t_pass = time.time()
             spec = noise_spec_for(DATASET, CONDITION, LEVEL,
                                   noise_seed=draw, is_clf=is_clf)
             y_noisy, cmask, _prov = inject_train_labels(
                 labels, spec, train_idx=train_idx, is_clf=is_clf,
                 groups=noise_groups, dataset_name=DATASET)
-            counts['n_corrupted'].append(int(np.sum(cmask)))
-            counts['n_training'].append(int(cmask.size))
+            counts['n_corrupted'][pass_key] = int(np.sum(cmask))
+            counts['n_training'][pass_key] = int(cmask.size)
 
             hybrid_X = hybrid_sim_X = None
             for fam, blueprint in (('hybrid', bp),
@@ -286,13 +366,14 @@ def main():
                             pk[space_key][cell] = \
                                 d['detection_precision_at_k']
             timings[pass_key] = time.time() - t_pass
+            # Written after every PASS, not every fold. A pass is 11 minutes
+            # on this dataset and a fold is three of them, so a run that dies
+            # mid-fold used to lose every pass of that fold; now it loses
+            # none. The crash on 2026-09-21 lost 2 finished passes this way.
+            _write(out_path, ctx)
             print(f"  {pass_key} done in {timings[pass_key]:.0f}s, "
                   f"{len(errors)} failures so far "
                   f"[{time.time() - t_start:.0f}s]", flush=True)
-
-        # Written after every fold, so a run that is killed still leaves the
-        # folds it finished behind.
-        _write(out_path, ctx)
 
     _write(out_path, ctx)
     _report(ap, specs, metrics, out_path, t_start)
@@ -355,11 +436,13 @@ def _write(path, ns):
         'forest': dict(ns['forest_kw']),
         'hybrid': ns['hybrid_meta'],
         'spaces': ns['specs'],
-        'molecules_corrupted_mean': float(np.mean(ns['counts']['n_corrupted']))
+        'molecules_corrupted_mean':
+            float(np.mean(list(ns['counts']['n_corrupted'].values())))
             if ns['counts']['n_corrupted'] else None,
         'molecules_in_training_fold_mean':
-            float(np.mean(ns['counts']['n_training']))
+            float(np.mean(list(ns['counts']['n_training'].values())))
             if ns['counts']['n_training'] else None,
+        'molecules_corrupted_per_pass': dict(ns['counts']['n_corrupted']),
         'average_precision_by_space': {s: v for s, v in _ranked(ap, specs)},
         'precision_at_k_by_space': {
             s: (float(np.mean(list(pk[s].values()))) if pk[s] else None)
@@ -367,8 +450,10 @@ def _write(path, ns):
         'cells_per_space': {s: len(ap[s]) for s in specs},
         'comparisons_paired': _comparisons(ap, specs, ns['metrics']),
         'average_precision_per_cell': {s: dict(ap[s]) for s in specs},
+        'precision_at_k_per_cell': {s: dict(pk[s]) for s in specs},
         'builds_with_all_zero_importance': ns['zero_imp'],
         'seconds_per_pass': ns['timings'],
+        'resumed': ns.get('resume_note'),
         'errors': ns['errors'],
     }
     with open(path, 'w') as fh:

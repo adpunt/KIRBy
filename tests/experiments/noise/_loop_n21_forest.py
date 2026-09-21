@@ -41,6 +41,13 @@ compared against are in the same representation.
 ⛔ ROWS ARE NEVER CUT. All 672 antibodies, every fold. KIRBY_SMOKE_N is
 refused.
 
+IT PICKS UP WHERE IT WAS KILLED. One pass -- one fold under one corruption
+draw -- is about 16 minutes here. This file used to write nothing until all six
+were done, so the crash on 2026-09-21 threw away five finished passes and left
+no result file at all. The result file is written after every pass now, and a
+run that starts with one on disk scores only the passes missing from it, on the
+same terms the folds-and-draws script uses. N21_FORCE=1 starts from nothing.
+
 WHAT IT DOES NOT TOUCH. No cache file is deleted, moved or renamed.
 KIRBY_CACHE_DIR points where every earlier flab run read its representations
 from. No hybrid recipe is fetched, so no stored search is opened at all.
@@ -143,11 +150,16 @@ def main():
 
     os.makedirs(OUT, exist_ok=True)
     out_path = os.path.join(OUT, f'{DATASET}__forest_shape.json')
-    if os.path.exists(out_path):
-        print(f"already done: {out_path}")
-        return
     if not _claim(OUT, 'forest_shape'):
         return
+    prior = {}
+    if os.path.exists(out_path) and not os.environ.get('N21_FORCE'):
+        try:
+            with open(out_path) as fh:
+                prior = json.load(fh)
+        except Exception as exc:
+            print(f"  the result file on disk could not be read "
+                  f"({type(exc).__name__}), so this run starts from nothing")
 
     t_start = time.time()
     data = load_data(DATASET)
@@ -186,23 +198,152 @@ def main():
     # {arm: {cell_key: average precision}}
     ap = {a: {} for a in arms}
     pk = {a: {} for a in arms}
-    counts = {'n_corrupted': [], 'n_training': []}
+    counts = {'n_corrupted': {}, 'n_training': {}}
     timings = {}
     errors = {}
+    passes_done = set()
+
+    # ── what an earlier copy of this run already scored ────────────────────
+    # A pass is 16 minutes on this dataset and the run used to write nothing
+    # until all six were finished, so the crash on 2026-09-21 threw away five
+    # finished passes. A pass is trusted only if it was scored on the same
+    # arms, in the same representation, at the same level and condition.
+    if prior:
+        mismatch = []
+        for field, here in (('plain_representation', base_rep),
+                            ('noise_condition', CONDITION),
+                            ('level', LEVEL),
+                            ('detectors', detectors),
+                            ('k_values', k_values)):
+            if prior.get(field) != here:
+                mismatch.append(f'{field} was {prior.get(field)!r}, '
+                                f'is {here!r}')
+        if set(prior.get('cells_per_arm') or {}) != set(arms):
+            mismatch.append('the set of arms differs')
+        if mismatch:
+            print(f"  the result file on disk is not comparable "
+                  f"({'; '.join(mismatch)}), so every pass runs again")
+        else:
+            passes_done = set(prior.get('passes_finished') or [])
+            for arm in arms:
+                for cell, v in ((prior.get('average_precision_per_cell')
+                                 or {}).get(arm) or {}).items():
+                    if cell.split('|')[-1] in passes_done:
+                        ap[arm][cell] = v
+                for cell, v in ((prior.get('precision_at_k_per_cell')
+                                 or {}).get(arm) or {}).items():
+                    if cell.split('|')[-1] in passes_done:
+                        pk[arm][cell] = v
+            counts['n_corrupted'].update(
+                prior.get('molecules_corrupted_per_pass') or {})
+            counts['n_training'].update(
+                prior.get('molecules_in_training_fold_per_pass') or {})
+            timings.update(prior.get('timings_seconds') or {})
+            if passes_done:
+                print(f"  {len(passes_done)} pass(es) of (fold, draw) are "
+                      f"already on disk and are not re-run: "
+                      f"{', '.join(sorted(passes_done))}", flush=True)
+
+    def _write():
+        """The whole result file, written after every pass.
+
+        Called per pass so a killed run keeps what it finished, and
+        again at the end. Reads the tables above as they stand.
+        """
+        shipped_arm = _forest_arm(*SHIPPED)
+        ranked = sorted(((a, float(np.mean(list(ap[a].values()))) if ap[a]
+                          else float('nan')) for a in arms),
+                        key=lambda t: -t[1])
+
+        refs = tuple(f'plain|{m}' for m in metrics)
+        if shipped_arm in ap:
+            refs = (shipped_arm,) + refs
+        comparisons = {}
+        for arm in arms:
+            for ref in refs:
+                if arm == ref:
+                    continue
+                comparisons[f'{arm} vs {ref}'] = N21._compare(
+                    ap[arm], ap[ref], True,
+                    'one (fold, draw, detector, neighbour count)')
+
+        result = {
+            'what_this_is': (
+                "n21's forest proximity, swept over how many trees the leaf share "
+                "is taken across and how many molecules a leaf must keep. "
+                "Detection average precision only; the repair is not measured "
+                "here."),
+            'dataset': DATASET,
+            'molecules': int(len(labels)),
+            'plain_representation': base_rep,
+            'plain_representation_features': int(reps[base_rep].shape[1]),
+            'base_rep_note': (
+                'pick_noise_base_rep no longer falls back alphabetically, so this '
+                'is the control the suite now uses. Every n21 number recorded '
+                'before 2026-09-21 was read in esm2_cdr and is on a different '
+                'footing.'),
+            'dataset_metric': metric_name,
+            'noise_condition': CONDITION,
+            'level': LEVEL,
+            'folds': len(splits),
+            'draws': list(DRAWS),
+            'detectors': detectors,
+            'k_values': k_values,
+            'distance_metrics': metrics,
+            'tree_counts': list(TREE_COUNTS),
+            'min_samples_leaf_values': list(MIN_SAMPLES_LEAF),
+            'shipped_setting': {'n_trees': SHIPPED[0],
+                                'min_samples_leaf': SHIPPED[1],
+                                'arm': shipped_arm},
+            'molecules_corrupted_mean':
+                float(np.mean(list(counts['n_corrupted'].values())))
+                if counts['n_corrupted'] else None,
+            'molecules_in_training_fold_mean':
+                float(np.mean(list(counts['n_training'].values())))
+                if counts['n_training'] else None,
+            'molecules_corrupted_per_pass': dict(counts['n_corrupted']),
+            'molecules_in_training_fold_per_pass':
+                dict(counts['n_training']),
+            'passes_finished': sorted(
+                set(counts['n_corrupted']) | set(passes_done)),
+            'average_precision_by_arm': {a: v for a, v in ranked},
+            'precision_at_k_by_arm': {
+                a: (float(np.mean(list(pk[a].values()))) if pk[a] else None)
+                for a in arms},
+            'cells_per_arm': {a: len(ap[a]) for a in arms},
+            'comparisons_paired': comparisons,
+            'average_precision_per_cell': {a: dict(ap[a]) for a in arms},
+            'precision_at_k_per_cell': {a: dict(pk[a]) for a in arms},
+            'neighbours_asked_for_once_per_count': (
+                'yes. Asking once at 20 and keeping the first 5 was measured on '
+                'fold 0 and gives a DIFFERENT set of five: 135 of the 537 '
+                'training molecules have two others at exactly the distance of '
+                'their fifth nearest.'),
+            'timings_seconds': timings,
+            'errors': errors,
+            'seconds_total': time.time() - t_start,
+        }
+        with open(out_path, 'w') as fh:
+            json.dump(result, fh, indent=2)
+        return shipped_arm, ranked, comparisons
 
     for fold_i, (train_idx, _val_idx) in enumerate(splits):
+        if all(f'f{fold_i}s{d}' in passes_done for d in DRAWS):
+            continue
         X_std = StandardScaler().fit_transform(
             np.asarray(reps[base_rep][train_idx], dtype=np.float64))
 
         for draw in DRAWS:
             pass_key = f'f{fold_i}s{draw}'
+            if pass_key in passes_done:
+                continue
             spec = noise_spec_for(DATASET, CONDITION, LEVEL,
                                   noise_seed=draw, is_clf=is_clf)
             y_noisy, cmask, _prov = inject_train_labels(
                 labels, spec, train_idx=train_idx, is_clf=is_clf,
                 groups=noise_groups, dataset_name=DATASET)
-            counts['n_corrupted'].append(int(np.sum(cmask)))
-            counts['n_training'].append(int(cmask.size))
+            counts['n_corrupted'][pass_key] = int(np.sum(cmask))
+            counts['n_training'][pass_key] = int(cmask.size)
 
             # ── the plain rows, re-read in the representation the control is
             # now. One sklearn query per neighbour count, which is what n21
@@ -263,74 +404,12 @@ def main():
                                     d['detection_average_precision']
                                 pk[arm][cell] = \
                                     d['detection_precision_at_k']
+            _write()
             print(f"  {pass_key} done [{time.time() - t_start:.0f}s]",
                   flush=True)
 
-    shipped_arm = _forest_arm(*SHIPPED)
-    ranked = sorted(((a, float(np.mean(list(ap[a].values()))) if ap[a]
-                      else float('nan')) for a in arms),
-                    key=lambda t: -t[1])
 
-    refs = tuple(f'plain|{m}' for m in metrics)
-    if shipped_arm in ap:
-        refs = (shipped_arm,) + refs
-    comparisons = {}
-    for arm in arms:
-        for ref in refs:
-            if arm == ref:
-                continue
-            comparisons[f'{arm} vs {ref}'] = N21._compare(
-                ap[arm], ap[ref], True,
-                'one (fold, draw, detector, neighbour count)')
-
-    result = {
-        'what_this_is': (
-            "n21's forest proximity, swept over how many trees the leaf share "
-            "is taken across and how many molecules a leaf must keep. "
-            "Detection average precision only; the repair is not measured "
-            "here."),
-        'dataset': DATASET,
-        'molecules': int(len(labels)),
-        'plain_representation': base_rep,
-        'plain_representation_features': int(reps[base_rep].shape[1]),
-        'base_rep_note': (
-            'pick_noise_base_rep no longer falls back alphabetically, so this '
-            'is the control the suite now uses. Every n21 number recorded '
-            'before 2026-09-21 was read in esm2_cdr and is on a different '
-            'footing.'),
-        'dataset_metric': metric_name,
-        'noise_condition': CONDITION,
-        'level': LEVEL,
-        'folds': len(splits),
-        'draws': list(DRAWS),
-        'detectors': detectors,
-        'k_values': k_values,
-        'distance_metrics': metrics,
-        'tree_counts': list(TREE_COUNTS),
-        'min_samples_leaf_values': list(MIN_SAMPLES_LEAF),
-        'shipped_setting': {'n_trees': SHIPPED[0],
-                            'min_samples_leaf': SHIPPED[1],
-                            'arm': shipped_arm},
-        'molecules_corrupted_mean': float(np.mean(counts['n_corrupted'])),
-        'molecules_in_training_fold_mean': float(np.mean(counts['n_training'])),
-        'average_precision_by_arm': {a: v for a, v in ranked},
-        'precision_at_k_by_arm': {
-            a: (float(np.mean(list(pk[a].values()))) if pk[a] else None)
-            for a in arms},
-        'cells_per_arm': {a: len(ap[a]) for a in arms},
-        'comparisons_paired': comparisons,
-        'average_precision_per_cell': {a: dict(ap[a]) for a in arms},
-        'neighbours_asked_for_once_per_count': (
-            'yes. Asking once at 20 and keeping the first 5 was measured on '
-            'fold 0 and gives a DIFFERENT set of five: 135 of the 537 '
-            'training molecules have two others at exactly the distance of '
-            'their fifth nearest.'),
-        'timings_seconds': timings,
-        'errors': errors,
-        'seconds_total': time.time() - t_start,
-    }
-    with open(out_path, 'w') as fh:
-        json.dump(result, fh, indent=2)
+    shipped_arm, ranked, comparisons = _write()
 
     print("\n  one row is one forest shape, or the plain representation it is "
           "compared against")
