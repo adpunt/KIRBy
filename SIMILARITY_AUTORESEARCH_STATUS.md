@@ -275,8 +275,11 @@ Tied at the maximum counts the molecules in the pool sharing the largest
 Expected Improvement; when all 200 tie, `np.argmax` returns the lowest row
 number and the pick is made by row order. `KIRBY_S11_LENGTHSCALE=median` is the
 lever and the default is unchanged. Unverified on the real permeability label
-and on the area under the best-found curve, which is what s11 reports — three
-runs at 100 picks are queued to settle it.
+and on the area under the best-found curve, which is what s11 reports. Six runs
+are queued to settle it: both settings on all three datasets, at full molecule
+count and 100 picks, so the pair is computed on the same molecules under the
+same code. The recorded `fixed` numbers cannot serve as that half of the pair —
+they were read off stored search configurations that no longer exist.
 
 A refinement to the sentence above about which spaces collapse. The direction
 holds — random-50 at 102.4 and PCA-50 at 83.1 collapse and maccs at 13.8 does
