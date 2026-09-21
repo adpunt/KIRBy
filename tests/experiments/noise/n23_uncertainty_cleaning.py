@@ -47,14 +47,30 @@ WHICH UNCERTAINTY NUMBERS, AND WHAT IS KNOWN ABOUT THEM.
                       under a condition that picks its corrupted molecules at
                       random. The thing to beat.
 
-⛔ FOUR OF THE FIVE CAN ONLY ANSWER WHEN THE NOISE IS A PROPERTY OF THE
-STRUCTURE. They predict a molecule's noise from its features and they are scored
-out of fold, so a held-out molecule can only be ranked when its own features say
-how noisy it is. `outlier_p01`, `outlier_p05` and `outlier_p10` choose the
-molecules that get the wider error AT RANDOM, with no reference to the features
+⛔ THREE OF THE FIVE CAN ONLY ANSWER WHEN THE NOISE IS A PROPERTY OF THE
+STRUCTURE -- hetero_gp, ngboost and heteroscedastic_nn. They predict a
+molecule's noise from its features and they are scored out of fold, so a
+held-out molecule can only be ranked when its own features say how noisy it is.
+`outlier_p01`, `outlier_p05` and `outlier_p10` choose the molecules that get the
+wider error AT RANDOM, with no reference to the features
 (NOISE_AUDIT_2026_09_10.md 6.7). `grouped_wider` gives the wider error to whole
-scaffold families, which a representation encodes, and it is the one
-dose-matched condition where the question has an answer.
+scaffold families, which a representation encodes.
+
+The other two read the molecule's OWN LABEL, so they answer under any condition
+that moves a subset of labels. activity_cliff_aware compares the label to its
+neighbours'. gaussian_process adds the out-of-fold residual to the posterior
+spread, and that residual is the same kind of quantity -- see the note below,
+which said so while LEARNS_NOISE_FROM_FEATURES listed it anyway until
+2026-09-21.
+
+⛔ `grouped_wider` CANNOT RUN ON EVERY DATASET, AND IT IS THE ONLY ENTRY IN
+NOISE_KEYED_TO_STRUCTURE. It needs one scaffold-group id per molecule, built by
+`kirby.noise_spec.assign_noise_groups(smiles)`. `dataset_policy.noise_groups_for`
+returns None for any set that loads no SMILES -- antibody, nucleotide or
+expression -- and the injector then raises. So on flab_thermo_tresanco there is
+no condition at all under which the three feature-based sources are defined, and
+the guard in run() says so rather than letting every fold raise and writing a
+file with no score in it.
 
 MEASURED 2026-09-18 on a 300-molecule fixture, out of fold over three folds, the
 rank correlation between each source's number and the true noise width:
@@ -96,11 +112,37 @@ dated 2026-08-30 and 2026-08-31, and re-check before repeating them:
 ⛔ KIRBY'S `gaussian_process` ESTIMATOR DOES NOT RETURN THE NUMBER THAT PASSED.
 Read out of `src/kirby/utils/noise_estimation.py:726-800` this session. Its
 per-molecule score is the posterior standard deviation PLUS the out-of-fold
-residual, which is the model-unsure term. Its label-noise term is
-`k2__noise_level`, one number for the whole fold, identical for every molecule,
-so it cannot rank molecules at all. It is swept here anyway, because the
-difference between it and the two that do predict a spread per molecule is then
-measured on this data rather than carried over from another repository's table.
+residual. Its label-noise term is `k2__noise_level`, one number for the whole
+fold, identical for every molecule, so it cannot rank molecules at all. It is
+swept here anyway, because the difference between it and the two that do predict
+a spread per molecule is then measured on this data rather than carried over
+from another repository's table.
+
+AND THE RESIDUAL HALF OF THAT SUM IS WHY IT IS THE BEST OF THE FIVE UNDER THE
+DEFAULT CONDITION. `np.abs(y - y_pred)` reads the molecule's own label against
+what a model that did not see it predicted, which finds a label that moved
+however the condition chose it. MEASURED 2026-09-21, flab_thermo_tresanco, 672
+antibodies, base representation esm2_cdr at 1280 features, two inner folds, one
+outer fold of two, draw 0. Average precision at ranking the training molecules
+whose label actually moved, each against the share that moved:
+
+  outlier_p10 at level 0.5, 29 of the 336 training molecules moved,
+  so a coin flip scores 0.0863
+      gaussian_process      0.3016
+      activity_cliff_aware  0.2664
+      heteroscedastic_nn    0.0878
+
+  censoring at level 0.25, 79 and 86 of the 336 training molecules moved on the
+  two folds, so a coin flip scores 0.2351 and 0.2560
+      gaussian_process      0.2663 and 0.2764
+      heteroscedastic_nn    0.1947 and 0.2776
+      activity_cliff_aware  0.1881 and 0.2340
+
+Clipping every label above a cut-point does NOT give the three a condition they
+can see: all three sit at the coin flip, and two of them below it. A clipped
+label is not far from its neighbours -- clipping pulls the top of the range
+together -- so it is the one condition in DETECTION_IS_DEFINED that makes the
+neighbour comparison worse rather than better.
 
 THE CHECK THAT DOES NOT NEED A MODEL FIT AT ALL. Under injection there is a list
 of the molecules whose label actually moved. `noise_helpers.detection_scores`
@@ -169,9 +211,10 @@ from experiments.dataset_policy import (
 )
 from experiments.noise.noise_helpers import (
     noise_spec_for, inject_train_labels, detection_scores,
-    detection_is_defined, hybrid_for_fold,
+    detection_is_defined, hybrid_for_fold, DETECTION_IS_DEFINED,
 )
 from experiments.noise.n07_remediation import _predict_for_metric
+from kirby.noise_spec import GROUPED_STRATEGIES
 from kirby.utils.noise_estimation import get_noise_estimator, smooth_by_scores
 
 # Which per-molecule number the cleaning is keyed on. The first two predict a
@@ -181,12 +224,33 @@ from kirby.utils.noise_estimation import get_noise_estimator, smooth_by_scores
 SOURCES = ('hetero_gp', 'ngboost', 'heteroscedastic_nn', 'gaussian_process',
            'activity_cliff_aware')
 
-# Which sources predict a molecule's noise FROM ITS FEATURES. Every one of these
-# is scored out of fold, so it can only rank a held-out molecule when that
-# molecule's own features say how noisy it is. See LEARNS_NOISE_FROM_FEATURES
-# below and the condition note in the docstring.
-LEARNS_NOISE_FROM_FEATURES = ('hetero_gp', 'ngboost', 'heteroscedastic_nn',
-                              'gaussian_process')
+# Which sources predict a molecule's noise FROM ITS FEATURES ALONE. Every one of
+# these is scored out of fold, so it can only rank a held-out molecule when that
+# molecule's own features say how noisy it is. A source NOT in here reads the
+# molecule's own label as well, which is what lets it find a label that moved
+# whatever the condition picked.
+#
+# ⛔ gaussian_process WAS IN THIS TUPLE AND DOES NOT BELONG IN IT. Read out of
+# noise_estimation.py:911-916 on 2026-09-21: its score is `y_std + residuals`,
+# where `residuals` is `np.abs(y - y_pred)` against its own out-of-fold
+# prediction. Half that number is the molecule's own label compared to what a
+# model that did not see it predicted, which is a residual detector and has
+# nothing to do with whether the features say the molecule is noisy. This file's
+# own docstring already said so -- "the posterior standard deviation PLUS the
+# out-of-fold residual" -- and the tuple disagreed with it.
+#
+# MEASURED, flab_thermo_tresanco, 672 antibodies, base representation esm2_cdr
+# at 1280 features, outlier_p10 at level 0.5, draw 0, fold 0 of two, two inner
+# folds, 29 of the 336 training molecules moved so a coin flip scores 0.0863
+# average precision:
+#
+#     gaussian_process      0.3016   marked undefined here, and the best of all five
+#     activity_cliff_aware  0.2664   marked defined
+#     heteroscedastic_nn    0.0878   marked undefined, and at chance as recorded
+#
+# So the file was writing `sources_defined_under_this_condition['gaussian_process']
+# = False` onto the best detector of the five under its own default condition.
+LEARNS_NOISE_FROM_FEATURES = ('hetero_gp', 'ngboost', 'heteroscedastic_nn')
 
 # The dose-matched conditions whose corrupted molecules are chosen by something
 # the features encode. Only `grouped_wider` is: it gives whole scaffold families
@@ -454,6 +518,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     base_rep_name = (kwargs.get('base_rep')
                      or pick_noise_base_rep(reps, dataset_name))
     noise_groups = noise_groups_for(data)[0]
+
+    # ⛔ A GROUPED CONDITION NEEDS SCAFFOLD GROUPS, AND AN ANTIBODY SET HAS NONE.
+    #
+    # `grouped_wider` is the only entry in NOISE_KEYED_TO_STRUCTURE, so it is the
+    # one condition this file records as making its four feature-based sources
+    # defined. It gives a three-times wider error to whole scaffold families, and
+    # `kirby.noise_spec.make_noisy_labels_verbose` refuses to run it without one
+    # scaffold-group id per molecule built by `assign_noise_groups(smiles)`.
+    # `noise_groups_for` returns None for any dataset that loads no SMILES -- an
+    # antibody, nucleotide or expression set -- and says so in its own docstring:
+    # the grouped conditions are dropped rather than run over invented groups.
+    #
+    # Measured 2026-09-21 on flab_thermo_tresanco, 672 antibodies: the injector
+    # raises. Without this check every fold raised inside the loop below, was
+    # caught, wrote one row into `_errors`, and continued -- so the run finished
+    # and wrote a result file with no score in it at all. Say it here instead,
+    # where a reader sees it.
+    if str(condition) in GROUPED_STRATEGIES and noise_groups is None:
+        raise RuntimeError(
+            f"n23: condition {condition!r} gives whole scaffold families a wider "
+            f"error, and {dataset_name} loads no SMILES, so there are no "
+            f"scaffold groups to give it to. noise_groups_for returned None. "
+            f"Every fold would raise inside the injector and the run would write "
+            f"a file with no score in it. Datasets with SMILES -- caco2, herg_ki "
+            f"-- can run this condition; an antibody set cannot. Pick a "
+            f"condition whose corrupted molecules are chosen without groups: "
+            f"{', '.join(c for c in DETECTION_IS_DEFINED if c not in GROUPED_STRATEGIES)}.")
+
     arms = _arms(drop_shares, move_strengths, move_methods)
 
     results = {
@@ -545,6 +637,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── The hybrid recipe, fetched once. n18's block, for n18's reason. ──
     bp = None
+    results_hybrid_lookup_error = None
     try:
         _search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
@@ -555,7 +648,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception as exc:
         _meta = None
-        print(f"  hybrid recipe lookup failed: {type(exc).__name__}: {exc}")
+        # ⛔ WHAT WENT WRONG IS WRITTEN DOWN, NOT JUST PRINTED. Without this the
+        # only trace in the result file was `hybrid_unavailable_reason`, which
+        # says "no recipe came back from the pool subset" -- and a reader takes
+        # that to mean the pool holds nothing for this dataset. On 2026-09-20 it
+        # meant something else: every result_db file on the machine was written
+        # before `distance_metric` joined the search identity, so opening one
+        # raises StaleResultDB, and `_shared._iter_pool_searches` re-raises it
+        # rather than skipping the pool member. This `except Exception` then
+        # caught it and the run continued in the base representation alone.
+        # Same shape of loss the three re-raise sites in result_cache.py were
+        # added to stop. The exception text goes on the file so the two cases
+        # can be told apart.
+        results_hybrid_lookup_error = f'{type(exc).__name__}: {exc}'
+        print(f"  hybrid recipe lookup failed: {results_hybrid_lookup_error}")
     # One recipe per family the pool holds, and a written reason for each family
     # that produced none. `bp` stays the recipe the pool RETURNED, which is what
     # every 'hybrid_*' key below already described.
@@ -564,14 +670,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
     recipe_for_space = {r['space']: r['blueprint'] for r in hybrid_recipes}
     results['hybrid_spaces_unavailable'] = hybrid_unavailable
+    results['hybrid_lookup_error'] = results_hybrid_lookup_error
 
     if not hybrid_recipes:
         spaces = ('base',)
         results['hybrid_available'] = False
         results['hybrid_unavailable_reason'] = (
-            f'no recipe came back from the pool subset {POOL_SUBSET!r}, so '
-            'every arm ran in the base representation only. Dropping the run '
-            'would lose real answers because one of several spaces is missing.')
+            (f'the pool lookup RAISED {results_hybrid_lookup_error} — the pool '
+             f'was never read, so this is not a statement about what it holds. '
+             f'Every arm ran in the base representation only.')
+            if results_hybrid_lookup_error else
+            (f'no recipe came back from the pool subset {POOL_SUBSET!r}, so '
+             'every arm ran in the base representation only. Dropping the run '
+             'would lose real answers because one of several spaces is missing.'))
         print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
               f"base representation only")
     else:
