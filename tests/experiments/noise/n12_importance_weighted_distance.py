@@ -40,6 +40,7 @@ Usage:
     python n12_importance_weighted_distance.py --dataset logd --mode intermediary
     python n12_importance_weighted_distance.py --dataset caco2 --mode full
 """
+import copy
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -864,6 +865,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # half they agreed in 0 of 6, which is what a real second measurement
         # looks like. Recorded here since 2026-09-21.
         'duplicate_conditions': {},
+        # {importance method: {condition: how many times its scoring was
+        # COPIED from its twin rather than run}}. A duplicate condition is the
+        # same matrix object as the one it copies, so every estimator and every
+        # model fitted on it returns the twin's number. Scoring it again cost 6
+        # neighbour searches and 6 fits per model in the roster, per level and
+        # per fold. Copying is bit-identical and is what the numbers already
+        # were. Added 2026-09-21.
+        'duplicate_conditions_copied': {},
         # {importance method: {condition: [widths seen]}}. How many features
         # the distance was computed over in each condition, which is not the
         # same number for every condition and was never recorded. A weighted
@@ -884,6 +893,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
     zero_imp_acc = results['zero_importance_spaces']
     dup_cond_acc = results['duplicate_conditions']
+    _dup_copied = results['duplicate_conditions_copied']
     features_in_space = results['features_in_space']
 
     for sigma in sigmas:
@@ -1048,15 +1058,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if sigma not in _zi['sigmas']:
                         _zi['sigmas'].append(sigma)
 
+                # What each condition returned on THIS (level, fold,
+                # importance method), so a condition that is a second copy of
+                # another one is not scored twice. Cleared every build.
+                _scored_here = {}
                 for cond_name, X_space in conditions.items():
                     if cond_name not in grid_acc[imp_method]:
                         grid_acc[imp_method][cond_name] = {}
 
-                    cond_results = _run_condition(
-                        X_space, y_noisy, X_eval_train_s, X_eval_val_s,
-                        y_val, model_factories, metric_fn, is_clf=is_clf,
-                        corrupted_mask=_cmask, noise_condition=noise_condition,
-                    )
+                    # ⛔ A DUPLICATE CONDITION IS COPIED, NOT SCORED AGAIN.
+                    # _build_conditions hands back the SAME matrix object for
+                    # both, so every estimator and every model fitted on it
+                    # would return the number the twin already returned.
+                    # Scoring it a second time costs 6 neighbour searches and
+                    # 6 fits per model in the roster, per level and per fold,
+                    # and buys a column of numbers that are already in the
+                    # result file under another name.
+                    _twin = (duplicate_conds.get(cond_name) or {}).get(
+                        'duplicate_of')
+                    if _twin is not None and _twin in _scored_here:
+                        cond_results = copy.deepcopy(_scored_here[_twin])
+                        _dup_copied.setdefault(imp_method, {}).setdefault(
+                            cond_name, {'copied_from': _twin,
+                                        'n_scorings_skipped': 0,
+                                        'sigmas': []})
+                        _dc = _dup_copied[imp_method][cond_name]
+                        _dc['n_scorings_skipped'] += 1
+                        if sigma not in _dc['sigmas']:
+                            _dc['sigmas'].append(sigma)
+                    else:
+                        cond_results = _run_condition(
+                            X_space, y_noisy, X_eval_train_s, X_eval_val_s,
+                            y_val, model_factories, metric_fn, is_clf=is_clf,
+                            corrupted_mask=_cmask,
+                            noise_condition=noise_condition,
+                        )
+                    _scored_here[cond_name] = cond_results
 
                     for ek, score in cond_results.items():
                         if ek == '_detection':
