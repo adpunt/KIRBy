@@ -524,6 +524,35 @@ being compared in the section above were not computed from the same rows, and
 that has to be ruled out before the commit window between `9c6f7d7` and
 `c5752d4` is blamed.
 
+## The held-out z-score defect does not reach this campaign's numbers
+
+`pdv` is one of the seven representations every run here uses, and `create_pdv`
+used to end by centring and scaling each descriptor over every molecule handed
+in — held-out ones included, so a held-out molecule's own mean and spread sat
+inside the training features. Cached matrices written before that was removed
+still carry it, and there are two cache layers for the same matrix, of which the
+content-keyed one is read first and has no identity file.
+
+Checked directly, 2026-09-21, by loading all six `pdv.npy` files under
+`/Volumes/seagate/kirby_simrun_cache` and counting how many non-constant
+features sit at mean 0 and standard deviation 1. A whole-dataset z-score leaves
+every one of them there. None of them are:
+
+    layer, dataset          molecules  features  at mean 0  at std 1
+    rep_cache/herg_ki           1412     200      0 of 179   0 of 179
+    rep_cache/caco2             2158     200      0 of 165   0 of 165
+    rep_cache/adme_mdr1         2641     200      0 of 179   0 of 179
+    reps/fb871584b0a9de3a       1412     200      0 of 179   0 of 179
+    reps/8b2a3b48894e07d4       2158     200      0 of 165   0 of 165
+    reps/a02150e79f9353a1       2641     200      0 of 179   0 of 179
+
+Both layers hold raw descriptors and both agree per dataset. The remaining 21
+features on herg_ki and adme_mdr1, and 35 on caco2, are constant across every
+molecule and carry no spread to test.
+
+This says nothing about the caches on the server, which is where the defect was
+found; it says the three datasets in this campaign are not affected by it.
+
 ## Compute flags for the cluster
 
 - s10's Gaussian process task is the longest block in the wave. It builds the GP
