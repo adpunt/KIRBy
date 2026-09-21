@@ -1038,32 +1038,37 @@ fuses them six ways.
 
 Activity Spearman at five neighbours:
 
-    metric or fusion       herg_ki    logd
-    ecfp4_count:tanimoto     0.709   0.618
-    atompair_count:cosine    0.716   0.615
-    desc:euclidean           0.703   0.666
-    maccs:tanimoto           0.651   0.637
-    torsion:tanimoto         0.690   0.577
-    rdkit:tanimoto           0.573   0.553
-    A1 min-max score mean    0.721   0.636
-    A2 mean neighbour rank   0.721   0.649
-    A3 reciprocal rank       0.729   0.664
-    A4 Borda points          0.721   0.649
-    A5 top-20 consensus      0.721   0.644
-    A6 drop-duplicates mean  0.721   0.636
+    metric or fusion       herg_ki    logd   adme_solubility
+    ecfp4_count:tanimoto     0.709   0.618   0.399
+    atompair_count:cosine    0.716   0.615   0.399
+    desc:euclidean           0.703   0.666   0.381
+    maccs:tanimoto           0.651   0.637   0.329
+    torsion:tanimoto         0.690   0.577   0.373
+    rdkit:tanimoto           0.573   0.553   0.293
+    A1 min-max score mean    0.721   0.636   0.395
+    A2 mean neighbour rank   0.721   0.649   0.378
+    A3 reciprocal rank       0.729   0.664   0.415
+    A4 Borda points          0.721   0.649   0.378
+    A5 top-20 consensus      0.721   0.644   0.403
+    A6 drop-duplicates mean  0.721   0.636   0.395
 
-**Reciprocal rank fusion beats the best single metric on herg_ki by 0.013
-Spearman, 0.729 against atom-pair counts under cosine at 0.716, and loses on
-logd by 0.002, 0.664 against the descriptor block under Euclidean at 0.666.**
+**Reciprocal rank fusion beats the best single metric on two of three.** On
+herg_ki it reaches 0.729 against atom-pair counts under cosine at 0.716. On
+adme_solubility 0.415 against the count fingerprint at 0.399. On logd it loses,
+0.664 against the descriptor block under Euclidean at 0.666. It is the best
+fusion rule on all three, and the other five never beat the best single metric
+on more than one dataset.
 
-On structure it loses on both. Best single metric 0.248 on herg_ki (the
-descriptor block) against 0.065 for the best fusion; best single 0.462 on logd
-(torsions under Tanimoto) against 0.407.
+On structure it loses on all three. Best single metric 0.248 on herg_ki (the
+descriptor block) against 0.065 for the best fusion; 0.462 on logd (torsions
+under Tanimoto) against 0.407; 0.308 on adme_solubility (torsions again)
+against 0.207.
 
-On finding corrupted labels, best single 0.668 detection AUROC on herg_ki
-against 0.669 for the best fusion, and 0.649 on logd against 0.637. On
-correcting them, best single 0.837 on herg_ki against 0.835, and 0.775 on logd
-against 0.773.
+On finding corrupted labels, best single against best fusion: 0.668 detection
+AUROC against 0.669 on herg_ki, 0.649 against 0.637 on logd, 0.668 against
+0.665 on adme_solubility. On correcting them: 0.837 against 0.835, 0.775
+against 0.773, 0.828 against 0.820. Fusion never wins either by more than
+0.001.
 
 **Four of the six fusion rules produce a matrix where the distance from
 molecule A to molecule B is not the distance from B to A.** The file prints a
@@ -1075,7 +1080,7 @@ yardsticks are reading two different geometries for those four rules, and the
 one fusion that beat the best single metric on herg_ki, reciprocal rank fusion,
 is one of the four.
 
-Wall clock: 475 s herg_ki.
+Wall clock: 475 s herg_ki, about 50 minutes for all three.
 
 ## The stale result databases do not reach this group
 
