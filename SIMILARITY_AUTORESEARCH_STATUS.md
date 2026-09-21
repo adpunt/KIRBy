@@ -1105,10 +1105,21 @@ Wall clock: seconds per dataset with `sim_<ds>_augmented.npz` warm.
 builds the distance matrix from that, and hands the matrix to
 `eval_knn_readacross`, which only then cuts five folds by scaffold group. The
 same order holds in `creative_hybrids.py`, `creative_hybrids_v2.py`,
-`aggregate.py`, `aug3d_similarity.py`, `shape_similarity.py`,
-`structural_embeddings.py`, `extra_fingerprints.py` and `nary_similarity.py`.
-So each fold's held-out molecules contributed to the mean and standard
+`aug3d_similarity.py`, `shape_similarity.py` and `structural_embeddings.py`,
+which all call `zscore()` on the whole matrix, and in `aggregate.py`, which
+writes the same thing inline at line 61 as `X.mean(0), X.std(0)`. Seven scripts,
+not nine. So each fold's held-out molecules contributed to the mean and standard
 deviation that scaled the features they are scored on.
+
+`extra_fingerprints.py` and `nary_similarity.py` were named here and do not
+belong: both build tanimoto and cosine distances on bit fingerprints and
+standardise nothing, so there is no scale for a held-out molecule to influence.
+Checked 2026-09-21 by grepping every scaling call in the directory.
+
+`feature_ablation.py` is on both sides and says which is which. Its held-out arm
+calls `zscore_fit(m, fit_rows)` at line 176, taking the mean and standard
+deviation from the fit rows only; its in-sample arm calls plain `zscore(m)` at
+line 174. The headline numbers above are from the held-out arm.
 
 No labels are involved — the z-score reads features only — so this is a scaling
 fitted on molecules the fold does not see, not a label leak.
