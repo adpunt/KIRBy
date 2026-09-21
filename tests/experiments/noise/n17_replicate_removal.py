@@ -1190,9 +1190,11 @@ def _summarise(results, models, spaces, metric_name, lower_is_better,
 
             base = _mean('no_cleaning')
             ceil = _mean('ceiling')
-            # Each pick is read against the floor drawn from the same entities it
-            # could have picked from. The ceiling reaches only the entities measured
-            # twice or more; drop and repair reach all of training.
+            # Each pick is read against the floor drawn from the same entities
+            # it could have picked from. The ceiling reaches only the entities
+            # the ranking quantity is defined on; `remove` reaches all of
+            # training, because its detector reads features and labels.
+            #
             # ⛔ ONLY AN ARM THAT REMOVES ENTITIES GETS A REMOVAL FLOOR.
             # `repair` was given `floor_any` until 2026-09-21 although it
             # removed no entity at all, so it was read against a control that
@@ -1214,7 +1216,7 @@ def _summarise(results, models, spaces, metric_name, lower_is_better,
                     return float('nan')
                 return float(_base - x) if lower_is_better else float(x - _base)
 
-            # The distance the detector arms are measured against. It is only a
+            # The distance a removing arm is measured against. It is only a
             # distance when the ceiling actually beats the floor. When it does not,
             # removing the entities that really disagree most did not help, so there
             # is nothing on the table and no arm can be a fraction of it.

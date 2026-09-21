@@ -216,7 +216,14 @@ arm, with 43 of the 448 training molecules moved on average:
 Every forest shape beats the plain representation: the plain euclidean row wins
 1 of the 12 cells against the shipped forest, mean -0.0516 average precision.
 
-⛔ NOTHING HAS BEEN CHANGED AND THE TWO READINGS DISAGREE. On average precision
+CHANGED 2026-09-21: `FOREST_TREES` 100 → 200. Against 100 trees at the shipped
+leaf size, 200 gained +0.0082 detection average precision on 3 of the 3 passes
+-- per pass +0.0049, +0.0091, +0.0107, spread over passes 0.0030 -- and 300
+gained +0.0081, the same number, so the extra hundred trees were not taken. The
+forest fit is most of the cost of a proximity and 200 trees is twice the fit of
+100: about 84 seconds against 42 on 448 training molecules over 5600 features.
+
+⛔ THE LEAF SIZE HAS NOT BEEN CHANGED AND THE TWO READINGS DISAGREE. On average precision
 the smallest leaf leads; on precision at the number of molecules that really
 moved, the SHIPPED leaf size of 5 is first at 0.2895 and one molecule a leaf is
 sixth at 0.2685. So one molecule a leaf ranks more moved molecules highly across
@@ -224,8 +231,8 @@ the whole ranking and the shipped size is better at the very top of it. 50
 molecules a leaf is last on both readings, -0.0344 average precision against the
 shipped setting in 10 of 12 cells.
 
-⛔ NEXT: 4 passes left. Do not move FOREST_TREES or FOREST_MIN_SAMPLES_LEAF
-until they land and the two readings are read together.
+⛔ NEXT: 3 passes left. Do not move FOREST_MIN_SAMPLES_LEAF until they land and
+the two readings are read together. One dataset, one condition.
 
 ### B5d. n21 has never run under a condition its distances could predict —
 ### RUNNING on caco2
@@ -594,3 +601,23 @@ identical at every level.
 ⛔ NEXT: A3's decision is still open, and this is a second dataset pointing the
 same way. The n11 loop moved its own run to 0.75 and left
 `reference_noise_level()` untouched.
+
+### E5. n17's ceiling can rank on two quantities and the default has not moved
+`measurement_spread` is the standard deviation of all of a molecule's repeat
+measurements. `training_label_error` is how far the one measurement that became
+its training label sits from the mean of its others. Counted on herg_ic50, no
+model fitted, at three draws of which measurement trains: of the 65 molecules
+the spread ranking takes first, 51 are measured exactly TWICE. Below three
+measurements `build_entities` holds nothing out, so those 51 train on the mean
+of both their measurements and no single laboratory's error survives whole in
+the label. Only 14 of the 65 trained on one measurement. The two rankings pick
+13 of 65 molecules in common.
+
+Over the 405 molecules measured three or more times the two agree at 0.96, 0.95
+and 0.95 spearman, so the disagreement is about which molecules each can reach,
+not how it orders the ones both can.
+
+⛔ NEXT: owner's decision, not taken. It changes which molecules the ceiling AND
+`floor_measured` can reach, so it changes what n17's headline distance means. A
+run is registered as `n17_ceiling_ranks_label_error` to measure what it does to
+the held-out rmse first.
