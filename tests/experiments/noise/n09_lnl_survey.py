@@ -57,6 +57,7 @@ Usage:
 """
 import sys
 import os
+import hashlib
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -447,6 +448,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _rf_factory = get_model_factories(
                     ['rf'], task_type=task_type,
                     n_samples=len(train_idx))['rf']
+                # THIS SEARCH IS STORED. It used to run with cache=False, so
+                # a second run of the same passes searched again from cold, and
+                # the search is the largest single cost in the file: on
+                # flab_thermo_tresanco at level 0.5, fold 1 of 3, 448 antibodies
+                # trained on, it took 677 seconds, against 3.6 seconds to read
+                # back what a previous call wrote. Writing costs 160 seconds the
+                # first time. Measured 2026-09-21; the stored call and the
+                # unstored call chose the same feature mix and the same inner
+                # score, 0.489755 spearman.
+                #
+                # WHAT KEEPS TWO PASSES APART. The file is named by the fold
+                # index and by a hash of the exact training labels this pass
+                # holds, so the clean pass and the corrupted pass of one fold
+                # never share a file, and neither do two folds whose training
+                # blocks are the same size. Naming it by (level, fold, draw)
+                # instead would give three separate files to the three draws of
+                # level 0.0, which move no label and are the same search.
+                #
+                # find_best_hybrid then content-checks the labels, the
+                # representation names and shapes, the groups, the budgets, the
+                # metric and the seed before it serves anything, and recomputes
+                # on any disagreement. It does NOT check representation VALUES:
+                # a neural embedding is not bit-reproducible across thread
+                # counts, so those hashes are ignored by design, which is why
+                # the fold index is in the name.
+                #
+                # The namespace also separates the per-representation baselines
+                # this search fits. Without one all six passes wrote to the same
+                # baseline filenames, whose names carry no label hash, so each
+                # pass evicted the one before it and none was ever reused.
+                _label_token = hashlib.sha1(
+                    np.ascontiguousarray(y_train).tobytes()).hexdigest()[:12]
                 inner_search = find_best_hybrid(
                     base_reps={k: v[train_idx] for k, v in reps.items()},
                     labels=y_train,
@@ -459,7 +492,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # NOISY_SEARCH_BUDGETS grid and the small inner n_folds.
                     seed=42 + fold_idx,
                     n_folds=inner_n_folds,
-                    cache=False,
+                    cache=True,
+                    dataset_name=dataset_name,
+                    tier='n09_noisy_search',
+                    cache_namespace=f'n09search_f{fold_idx}_y{_label_token}',
                     augmentations=({k: v[train_idx] for k, v in augmentations.items()}
                                    if augmentations else None),
                     augmentation_strategy=meta.get('aug_condition', 'uncapped') if meta else 'uncapped',
