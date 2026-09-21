@@ -699,23 +699,23 @@ where it says measured.
 | `scaffold_feature_isolation.py` | which of five property scales carry the agreement with BLOSUM62 | investigation | needs three FLAb libraries | not timed |
 | `scaffold_reps.py` | is blosum_matrix a distance | library, no main | yes | n/a |
 | `feature_type_study.py` | do 14 property scales each earn their place in the distance | METHOD | **library only — no `if __name__` block.** Its one caller is `tests/experiments/opig_scaffold_similarity.py` | — |
-| `feature_ablation.py` | which of four feature groups help, and does any combination beat ECFP4-count Tanimoto | METHOD | yes | not timed |
+| `feature_ablation.py` | which of four feature groups help, and does any combination beat ECFP4-count Tanimoto | METHOD | yes | measured, 1,309 s herg_ki for both arms |
 | `base_rep_comparison.py` | does describing the edit beat describing the whole sequence at neighbour prediction | METHOD | needs four FLAb libraries | not timed |
-| `aggregate.py` | does fusing six distance matrices beat the best single one | METHOD | yes | not timed |
+| `aggregate.py` | does fusing six distance matrices beat the best single one | METHOD | yes | measured, 475 s herg_ki, about 50 min for three |
 | `creative_hybrids.py` | does stacking descriptors, MACCS and fine 2D features onto ecfp4_count beat it | METHOD, superseded by v2 | yes | not timed |
-| `creative_hybrids_v2.py` | same, on three datasets, with a per-dataset greedy descriptor drop | METHOD | yes | measured, see below |
+| `creative_hybrids_v2.py` | same, on three datasets, with a per-dataset greedy descriptor drop | METHOD | yes | measured, 845 s, 854 s, 819 s |
 | `winning_recipe_reselected.py` | does the stacked space still win once selection and scoring sit on disjoint molecules | METHOD | **the doc names a file that has never existed in this repository's history.** The file on disk is `winning_recipe_honest.py` | — |
-| `winning_recipe_vs_standard.py` | does the stacked space beat two field-standard fingerprint metrics | METHOD, the headline table | yes | not timed |
-| `structural_embeddings.py` | do MAP4, TDA or mol2vec beat ecfp4_count Tanimoto | METHOD | yes, `map4` and `mhfp` both import | not timed |
+| `winning_recipe_vs_standard.py` | does the stacked space beat two field-standard fingerprint metrics | METHOD, the headline table | yes | measured, 377 s, 371 s, 354 s |
+| `structural_embeddings.py` | do MAP4, TDA or mol2vec beat ecfp4_count Tanimoto | METHOD | yes, via a direct `map4.map4.MAP4` import; the `src/kirby` wrapper raises | measured on herg_ki, MAP4 244 s, TDA 4,473 s, mol2vec 136 s |
 | `structural_yardstick.py` | which representation-and-coefficient pair wins when the judge is shared substructure | investigation | yes | not timed |
-| `shape_similarity.py` | do USR, USRCAT or a pharmacophore descriptor beat ecfp4_count Tanimoto | METHOD | yes, conformers cached in `sim_<ds>_spatial.npz` | not timed |
-| `aug3d_similarity.py` | do E3FP or Coulomb eigenvalues beat ecfp4_count Tanimoto | METHOD | yes, `e3fp` imports, cached in `sim_<ds>_3daug.npz` | not timed |
+| `shape_similarity.py` | do USR, USRCAT or a pharmacophore descriptor beat ecfp4_count Tanimoto | METHOD | yes, but its 19 July cache is refused | measured, 4,504 s for one of three descriptors on herg_ki; handed to the supervisor |
+| `aug3d_similarity.py` | do E3FP or Coulomb eigenvalues beat ecfp4_count Tanimoto | METHOD | yes, `e3fp` imports, cache warm | measured, 39-47 s per dataset |
 | `learned_embeddings.py` | cache one ChemBERTa and one MoLFormer vector per molecule | precompute plus one library function | `torch` and `transformers` both import; needs the model weights downloaded | not timed |
-| `extra_fingerprints.py` | do Avalon, SECFP6 or MHFP6 beat count-ECFP4 Tanimoto | METHOD | yes | not timed |
-| `augmented_descriptor_reps.py` | does a descriptor block beat count-ECFP4 Tanimoto | METHOD | PDV and Mordred yes, `padelpy` absent | not timed |
+| `extra_fingerprints.py` | do Avalon, SECFP6 or MHFP6 beat count-ECFP4 Tanimoto | METHOD | yes | measured, Avalon 97-149 s, MAP4 184-347 s, MHFP6 570-1,097 s |
+| `augmented_descriptor_reps.py` | does a descriptor block beat count-ECFP4 Tanimoto | METHOD | PDV and Mordred yes, `padelpy` absent | measured, seconds per dataset with the cache warm |
 | `nary_similarity.py` | does complementary similarity rank activity-vs-neighbour disagreement better than two naive scores, and does reweighting the distance by it help | METHOD | yes | measured, 6.1 s herg_ki, 14.5 s logd |
-| `triplet_similarity.py` | does a triplet-trained embedding beat count-ECFP4 Tanimoto on held-out folds | METHOD | yes, `torch` imports | not timed |
-| `similarity_noise_cleaning.py` | does a distance chosen for structural fidelity find corrupted activity labels better than count-ECFP4 Tanimoto | METHOD | yes | not timed |
+| `triplet_similarity.py` | does a triplet-trained embedding beat count-ECFP4 Tanimoto on held-out folds | METHOD | yes, `torch` imports | measured, about 40 min per fold for three arms, five folds |
+| `similarity_noise_cleaning.py` | does a distance chosen for structural fidelity find corrupted activity labels better than count-ECFP4 Tanimoto | METHOD | yes, but it alone reads logd uncapped at 5,039 molecules | measured, 681 s herg_ki, 1,059 s adme_solubility |
 | `run_battery_moleculeace.py` | which representation and coefficient wins the full nine-statistic battery across MoleculeACE targets | METHOD | **no — the `MoleculeACE` package is not installed here, so there are no target CSVs and no npz files to score** | — |
 | `mcs_cache.py` | maximum-common-substructure distance for a fixed set of 8,000 molecule pairs | precompute | yes, already cached for herg_ki, logd, adme_solubility | n/a |
 | `_data.py` | which molecules, in which row order, every script indexes over | loader | yes | n/a |
@@ -1284,3 +1284,43 @@ expensive one by a factor of eighteen and it is the one that loses most.
 
 logd and adme_solubility for this script and for `feature_ablation.py` were
 still running when this was written.
+
+## `similarity_metrics/` — where each method experiment now stands
+
+One row is one method experiment. "Beats the count fingerprint" is the
+five-nearest-neighbour activity Spearman against `ecfp4_count` under Tanimoto,
+the baseline every script in the group uses.
+
+| experiment | datasets run | beats the count fingerprint on activity | optimised |
+|---|---|---|---|
+| `triplet_similarity` (activity positives) | herg_ki, 5 folds | **5 of 5 folds**, mean 0.7526 against 0.7011 | the two triplet definitions were compared; margin and epochs untouched |
+| `triplet_similarity` (scaffold positives) | herg_ki, 5 folds | 0 of 5 folds | same |
+| `aggregate` (reciprocal rank fusion) | all 3 | 2 of 3, +0.013 and +0.016, -0.002 on logd | all six fusion rules compared |
+| `feature_ablation` | herg_ki | 4 of 12 combinations, best +0.038 held out | all twelve combinations, both arms |
+| `winning_recipe_vs_standard` | all 3 | 1 of 3, +0.0613 on herg_ki | no lever swept; the coefficient was isolated |
+| `augmented_descriptor_reps` | all 3 | pdv cosine 2 of 3, Mordred cosine 2 of 3 | cosine against Euclidean on each block |
+| `creative_hybrids_v2` | all 3 | 2 of 3 for the full stack | two block weightings |
+| `structural_embeddings` | herg_ki | mol2vec Euclidean ties at +0.0011; TDA and MAP4 lose | two coefficients per representation |
+| `nary_similarity` | all 3 | 0 of 3 at the shipped setting | **yes** — lam swept over 10 values and k over 4; lam = 0 is best or tied on all three |
+| `similarity_noise_cleaning` | herg_ki, adme_solubility | not its question; detection AUROC moves by at most 0.011 | top-3 by two rankings |
+| `extra_fingerprints` | all 3 | 0 of 3, for all four fingerprints | two coefficients each |
+| `aug3d_similarity` | all 3 | 0 of 3, for both representations | three coefficients each |
+| `shape_similarity` | none yet | — | handed to the supervisor as `sm_shape_similarity` |
+| `run_battery_moleculeace` | none | — | cannot run, `MoleculeACE` not installed |
+| `ranker_experiment` | none | — | file not on disk |
+
+**The count fingerprint under Tanimoto is hard to beat and three things beat
+it.** A learned distance whose positives are the molecules with the closest
+activity, on every held-out fold. Reciprocal rank fusion of six metrics, on two
+of three datasets. A 375-feature descriptor-and-keys space, on herg_ki, but only
+when its selection is fitted on molecules it is not scored on.
+
+**Nothing that adds 3D information beats it on activity.** E3FP, Coulomb
+eigenvalues and TDA all lose by 0.07 to 0.36 Spearman. The 3D pharmacophore
+block inside `creative_hybrids_v2` is the second-best space on herg_ki at +0.0230
+and the worst on logd at -0.2665.
+
+**The two yardsticks disagree on most of the group.** SECFP6 and MHFP6 beat the
+count fingerprint on agreement with shared substructure by 0.10 to 0.16 Spearman
+on all three datasets and lose to it on activity on all three. The stacked
+recipe beats it on structure on all three and on activity on one.
