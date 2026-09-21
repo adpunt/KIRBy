@@ -659,3 +659,39 @@ field existed, so it is trusted.
 
 Nothing in this group was fixed by editing it. Every script that runs today ran
 unmodified.
+
+### `extra_fingerprints.py` — none of Avalon, MAP4, SECFP6 or MHFP6 beats the count fingerprint on activity, and three of them beat it on structure
+
+Activity Spearman at five neighbours, five folds by scaffold group:
+
+    metric                      herg_ki    logd
+    ecfp4_count:tanimoto         0.7087  0.6180
+    avalon:tanimoto              0.6786  0.5721
+    avalon:cosine                0.6733  0.5729
+    map4:tanimoto                0.5049  0.5497
+    map4:cosine                  0.4042  0.5426
+    secfp6:tanimoto              0.6940  0.6030
+    secfp6:cosine                0.6945  0.6025
+    mhfp6:minhash_jaccard        0.6872  0.5906
+
+Structural Spearman over the same 8,000 cached pairs:
+
+    metric                      herg_ki    logd
+    ecfp4_count:tanimoto         0.0431  0.3661
+    avalon:tanimoto             -0.0340  0.2216
+    map4:tanimoto               -0.4079 -0.0507
+    secfp6:tanimoto              0.1542  0.5280
+    mhfp6:minhash_jaccard        0.1911  0.5256
+
+**The two yardsticks disagree and they disagree the same way on both datasets.**
+SECFP6 and MHFP6 beat the count fingerprint on structure by 0.11 to 0.16
+Spearman and lose to it on activity by 0.014 to 0.027. Nothing here beats it on
+activity at all.
+
+MAP4 is the outlier in both directions. Its structural Spearman is -0.4079 on
+herg_ki, so its pairwise distance runs backwards against shared substructure,
+and its activity Spearman falls to 0.4042 under cosine against the count
+fingerprint's 0.7087. MAP4 is a 1,024-slot MinHash folded to bits with a mean
+of 514 bits set per molecule on herg_ki, against SECFP6's 75.
+
+Wall clock per dataset: Avalon 97-149 s, MAP4 184-347 s, MHFP6 570-932 s.
