@@ -131,13 +131,62 @@ most consistent effect in that file. Two of its eight conditions are secretly on
 condition, agreeing to 1e-15, because the blueprint's own importance method is
 `lightgbm_gain`.
 
-### B5. Only one n21 comparison beat its own spread
-Importance-weighted at exponent 1.0, lightgbm_gain, euclidean: +0.0120 average
-precision over plain, spread 0.0056, won 4 of 4. Every other row of that table is
-within its own noise at 2 folds and 1 draw.
+### B5. n21's table at more passes: the top clears the plain row, the top two
+### do not clear each other
+The reading that opened this thread, in esm2_cdr at 2 folds and 1 corruption
+draw and 5 neighbours, 4 paired readings per comparison: importance-weighted at
+exponent 1.0 under lightgbm_gain and euclidean was the ONE comparison whose mean
+gain beat the spread of the per-cell gains behind it, +0.0120 average precision
+over the plain row, spread 0.0056, ahead in 4 of the 4 cells.
 
-⛔ NEXT: raise folds and draws until the top of the table separates, or establish
-that it does not.
+RE-READ 2026-09-21 in `onehot`, which is what `pick_noise_base_rep` now returns
+for this dataset, at 2 folds by 3 draws and all three neighbour counts -- 36
+paired readings per comparison, in
+`/Volumes/seagate/local_noise_run/loop_n21/flab_thermo_tresanco__folds_and_draws.json`:
+
+    imp_pow1|treeshap|euclidean        0.2292 detection average precision
+    forest_proximity                   0.2251
+    imp_pow0.5|treeshap|euclidean      0.2196
+    imp_pow1|treeshap|manhattan        0.2170
+    imp_pow1|lightgbm_gain|euclidean   0.2130
+    plain|euclidean                    0.1905
+    plain|manhattan                    0.1875
+
+4 of the 10 comparisons against a plain row now beat their own spread, where 1
+did: treeshap at exponent 1.0 under euclidean +0.0387 (spread 0.0350) and under
+manhattan +0.0295 (spread 0.0257), and forest proximity +0.0346 against the
+plain euclidean row (spread 0.0326) and +0.0376 against the plain manhattan row
+(spread 0.0312).
+
+⛔ THE TOP TWO STILL DO NOT SEPARATE. Treeshap at exponent 1.0 under euclidean
+is 0.0041 average precision ahead of forest proximity, the spread of that gain
+over the 6 passes is 0.0239, and it wins 4 of the 6. 9 of the 15 passes asked
+for are still running.
+
+⛔ NOT TWO READINGS OF ONE THING. The control representation differs, the
+neighbour counts differ, and the old table was one corruption draw.
+
+⛔ THE TWO HYBRID DISTANCES ARE MISSING FROM THE NEW TABLE, so the
+similarity-objective space -- the one the owner suspects should win, because its
+features were chosen so the distance predicts a molecule's activity from its
+five nearest neighbours -- has no number in onehot. Every stored search this
+needs is unusable: flab_thermo_tresanco's is missing the `distance_metric`
+column, and caco2's and herg_ki's hold 0 rows each, counted on 2026-09-21.
+
+### B5b. The neighbour count only matters for one of the two detectors
+From the same 36 cells per distance. Averaged over all 11 distances and the 6
+passes, detection average precision is 0.1996 at 5 neighbours, 0.2129 at 10 and
+0.2176 at 20. Paired within (distance, pass, detector), 20 neighbours beat 5 by
++0.0180 average precision in 85 of the 132 paired readings.
+
+That average hides the split. For `local_variance_ratio` 20 neighbours beat 5 by
++0.0392 in 53 of 66 readings; for `neighbor_residual` they lose by 0.0032 in 32
+of 66. `neighbor_residual` is also the stronger detector, +0.0285 average
+precision over `local_variance_ratio` in 140 of 198 paired readings.
+
+⛔ NEXT: nobody owns whether a detector that reads a spread should be given more
+neighbours than one that reads a residual. Both are swept, so nothing is
+currently decided by this.
 
 ### B6. CLOSED 2026-09-21. n23's cleaning wins folds, and the zero-noise
 ### control says it is not removing the hard molecules
@@ -153,10 +202,27 @@ At level 0.0, where the injector moves no label, that same arm loses all 3 folds
 at mean -0.0630 spearman. Over the three sources, 2 of 27 settings still beat the
 uncleaned fit on most folds at level 0.0 against 8 of 27 at level 0.5.
 
-⛔ NEXT, and it is not a defect: one draw. The 3-of-3 count is the headline and
-nothing has repeated it on a second draw. `hetero_gp` and `ngboost` were not in
-that run's source list; the five-source run in onehot is with the supervisor as
-`n23_cleaning_vs_no_cleaning`.
+⛔ BUT THE RANKING IS NOT WHAT WINS IT. Run beside two controls it never had,
+same folds, same 45 of the 448 molecules removed: removing them AT RANDOM won 3
+of 3 folds at +0.0688 spearman on one seed, 3 of 3 at +0.0349 on a second, 1 of
+3 at -0.0628 on a third. Removing the molecules whose labels actually moved --
+42, 35 and 43 of the 448 on the three folds -- won 2 of 3 folds at +0.0167
+spearman. So +0.0697 sits at the top of the span a random drop of that size
+covers and not outside it, and identifying the moved labels is worth less than
+a random draw of the same size. The probe returns n23's own two numbers,
+-0.1157 for activity_cliff_aware and +0.0697 for heteroscedastic_nn, from the
+same folds, which is why the controls beside them can be read.
+
+HOW MANY OF THE MOVED MOLECULES EACH ARM REMOVES, fold 0, 45 removed of 448
+where chance takes 4.2 of the 42 that moved: activity_cliff_aware 14,
+gaussian_process 11, ngboost 9, heteroscedastic_nn 5. The ordering by how well
+an arm finds the moved molecules is the REVERSE of the ordering by folds won.
+
+⛔ NEXT: one draw, one flag rate, three random seeds, 3 folds. A second draw is
+with the supervisor as `n23_second_draw`, the random control as
+`n23_random_drop_control`. What nobody owns is whether `folds won against no
+cleaning` can carry n23's claim at all when a random drop of the same size wins
+3 of 3 folds on one seed in three.
 
 ### B6b. Detection and cleaning do not pick the same source
 `heteroscedastic_nn` has the weakest detection of the three, 0.1041 average
@@ -344,6 +410,19 @@ than a defect.
 So the suite's detection and cleaning methods have been measured almost entirely
 against noise they cannot in principle predict from features, and the one family
 that they could is the one nothing runs.
+
+STARTED 2026-09-21. `n23.NOISE_KEYED_TO_STRUCTURE` was `('grouped_wider',)` and
+is now `('grouped_wider', 'grouped_shifted')`, so n23 records its three
+feature-reading sources as DEFINED under grouped_shifted. Keyed to structure and
+detection-gradeable are two different things and grouped_shifted is the
+condition that separates them: on herg_ki at level 0.5 it moves 941 of the 941
+training molecules, so `detection_scores` returns None and the only reading is
+whether cleaning wins folds. Measured the same day, same fold: grouped_wider
+moves 172 of 941, censoring at 0.25 moves 231, outlier_p10 at 0.5 moves 93.
+All four inject on herg_ki, which has 769 scaffold groups over its 1412
+molecules. A job `n23_conditions_herg` is with the supervisor and runs them in
+that order, one condition per invocation, each with its own level 0.0 control.
+herg_ki is rmse where LOWER wins, unlike flab's spearman.
 
 ### E3. What can run it, and what cannot
 `dataset_policy.noise_groups_for` returns no groups for any dataset without
