@@ -474,3 +474,58 @@ GAP_MIN_FRAC. Nobody owns that yet.
 `HONOURS_NOISE_CONDITION = {n09, n11, n12, n16, n20, n21, n23}`. The plumbing
 exists; only the default is narrow. Adding `grouped_shifted` beside `gaussian`
 on a molecular dataset costs one more condition per experiment, not new code.
+
+### E5. FOUR EXPERIMENTS DEFAULT TO A CONDITION WHERE DETECTION CANNOT BE GRADED
+Found 2026-09-21 by the n11 loop, verified here.
+
+`DETECTION_IS_DEFINED = ('outlier_p01', 'outlier_p05', 'outlier_p10',
+'grouped_wider', 'censoring')` at noise_helpers.py:499. `gaussian` is not in it,
+and cannot be: gaussian moves EVERY training label — 941 of the 941 on herg_ki,
+at every level of the ladder — so there is no untouched set to score a ranking
+against and `detection_scores` returns None.
+
+`NOISE_CONDITION = 'gaussian'` is the default in **n09:95, n11:119, n12:87 and
+n16:152**.
+
+⛔ n12's stated purpose is FINDING NOISY LABELS by an importance-weighted
+distance. Under its own default its detection block is empty by construction.
+Every detection number n12 has ever produced came from a loop running it under
+`outlier_p10` by hand.
+
+⛔ SO THE CONDITION PROBLEM IS SHARPER THAN E2 SAID. Of the five conditions
+where detection can be graded at all, four are outlier variants that pick their
+victims at random, and the fifth — `grouped_wider` — is the only one where the
+features could predict the corruption. `grouped_shifted` is not in the list at
+all, so the best-sourced structure-linked condition cannot currently grade a
+detector even if an experiment ran it.
+
+⛔ NEXT: whether `grouped_shifted` belongs in DETECTION_IS_DEFINED is a question
+about the injector, not a preference. It moves every molecule in an affected
+group and leaves the rest alone, so a "which molecules moved" set exists for it
+in a way it does not for gaussian. Nobody has checked whether the injector
+records that set.
+
+### E6. The level that clears the floor, measured on herg_ki
+From the n11 loop, 2026-09-21. ecfp4, 3 scaffold-grouped folds, clean 0.6032
+rmse, so n11's 2%-of-clean floor is 0.0121 rmse. One row is one injected level.
+
+    level   gap          folds clearing the floor
+    0.20    +0.0043      0 of 3
+    0.30    +0.0034      0 of 3
+    0.50    +0.0137      1 of 3
+    0.75    +0.0370      3 of 3
+    1.00    +0.0622      3 of 3
+    1.50    +0.1417      3 of 3
+
+`reference_noise_level()` returns 0.5. Its three-fold MEAN clears the floor, but
+`_heldout_recovery` reads each configuration on one fold at a time against that
+fold's own gap, and two of the three folds are +0.0034 and +0.0109 rmse, both
+under it. So a recovery number at 0.5 would come from one fold.
+
+This is the same disease as n07's dose (A3), measured independently on a
+different dataset and metric. The level costs nothing — the fit count is
+identical at every level.
+
+⛔ NEXT: A3's decision is still open, and this is a second dataset pointing the
+same way. The n11 loop moved its own run to 0.75 and left
+`reference_noise_level()` untouched.
