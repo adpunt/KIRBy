@@ -168,6 +168,16 @@
       "after": "the same 1.6899 label units and the same -0.0234 spearman; the two posterior means differ by 0.00000000 label units, bit-identical",
       "kept": false,
       "note": "THE WEIGHTING IS NOT THE FINDING. It reached the kernel and it was drastic -- lightgbm gives gain to only 361 of saprot's 1280 features, so 919 columns were multiplied by zero and both guards in GaussianProcessEstimator passed. Nothing changed because the process is not reading its inputs. Counted directly: the 448 molecules receive 3 DISTINCT posterior-mean values, 64.0567, 65.7113 and 65.7467 label units, and each is exactly the mean label of the inner fold that molecule was held out of -- inner fold 0 trains on 298 molecules whose mean label is 64.0567 and every molecule it held out received 64.0567. The fitted noise level is 22.7930 label units against a fitted-label standard deviation of 22.8228, so the process assigns all of the variance to noise and its posterior mean is its prior mean. So gp_smooth does not move a label toward what a Gaussian process predicts for that molecule, which is what n07's docstring says it does; it moves every label toward the mean label of its inner fold. It is shrinkage toward the mean under a model's name. This is one representation at 1280 features over 448 molecules, which is the regime where an isotropic RBF kernel flattens because every pair of molecules is nearly the same distance apart; whether a narrower feature set revives it is not measured."
+    },
+    {
+      "experiment": "n07",
+      "date": "2026-09-21",
+      "dataset": "flab_thermo_tresanco, 672 antibodies, saprot, 448 in the training fold, 1280 features, injected level 2.0, one molecule in ten corrupted",
+      "changed": "the gaussian process that gp_smooth corrects toward had its kernel inputs multiplied by feature importance, instead of left unweighted",
+      "before": "share of the 0.2538 spearman clean-to-corrupted gap recovered, unweighted: 28.4% moving a label a quarter of the way, 47.5% all the way, 41.3% by rank, 31.1% replacing outright",
+      "after": "identical to four decimal places at all four shapes: 28.4%, 47.5%, 41.3%, 31.1%",
+      "kept": false,
+      "note": "\u26d4 NOT a null result about weighting. The gaussian process is DEGENERATE at the width n07 fits it at, so there is nothing for a weighting to change. Fitted on all 1280 features it returned 3 distinct posterior-mean values across 448 training molecules -- one constant per inner fold, nothing read from the features -- and the same at the 361 features lightgbm gives any gain. It starts fitting between 361 features and 200: at 200 it returns 226 distinct values and beats the corrupted labels by 0.3303 spearman against -0.0441 at 1280. This is the likely reason gp_smooth ranked second from bottom of the seven corrections at 13.4% -- it was smoothing toward a constant. At 200 features the weighting LOSES, 0.2709 against 0.3303 spearman, one fold only. The width has to be fixed before the weighting question can be asked, and the 29% gain measured for the similarity work is not contradicted by this -- it was measured where the process was actually fitting."
     }
   ]
 }
