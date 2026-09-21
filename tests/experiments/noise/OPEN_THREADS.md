@@ -621,3 +621,61 @@ not how it orders the ones both can.
 `floor_measured` can reach, so it changes what n17's headline distance means. A
 run is registered as `n17_ceiling_ranks_label_error` to measure what it does to
 the held-out rmse first.
+
+---
+
+## F. ⛔⛔ THE NEGATIVE CONTROL THAT EVERY CLEANING CLAIM IN THIS SUITE NEEDS
+
+Measured 2026-09-21 by the n23 loop, verified from
+`/Volumes/seagate/local_noise_run/loop_n23/random_drop_probe.json`.
+This is the most consequential result of the campaign so far and it is not about
+n23.
+
+flab_thermo_tresanco, 672 antibodies, 448 per training block, onehot at 5600
+features, 3 outer folds, random forest, outlier_p10 at level 0.5 with 40 of the
+448 training molecules moved. Every arm removes the SAME NUMBER of molecules,
+45 of 448, from the SAME folds. Only WHICH 45 differs.
+
+    arm                                   folds won   mean gain, spearman
+    heteroscedastic_nn drop                  3 of 3        +0.0697
+    random, seed 1                           3 of 3        +0.0688
+    random, seed 2                           3 of 3        +0.0349
+    random, seed 0                           1 of 3        -0.0628
+    oracle: the labels that actually moved   2 of 3        +0.0167
+    activity_cliff_aware drop                0 of 3        -0.1157
+
+⛔ THE CLEANING GAIN SITS INSIDE THE SPAN A RANDOM DROP COVERS. One random seed
+in three matches it to within 0.0009 spearman. And the ORACLE -- removing
+exactly the molecules whose labels moved, the best any detector could do -- is
+worth LESS than two of the three random draws.
+
+⛔ THE ORDERING BY DETECTION IS THE REVERSE OF THE ORDERING BY FOLDS WON. On
+fold 0, 45 removed of 448 where chance takes 4.2 of the 42 that moved:
+activity_cliff_aware 14, gaussian_process 11, ngboost 9, heteroscedastic_nn 5,
+hetero_gp 2. The arm that finds the moved molecules at 3.3 times chance loses
+every fold; the arm that barely beats chance wins every fold.
+
+So on this dataset the gain is about removing a tenth of the training rows, not
+about removing the RIGHT tenth.
+
+### What this means beyond n23
+EVERY cleaning method in this suite is scored as "folds won against no
+cleaning": n02, n07, n11, n17, n18, n20, n23. None has ever been measured
+against a same-size random removal on the same folds.
+
+⛔ A "folds won" count cannot carry a cleaning claim without that control beside
+it. A method that removes rows at all may win folds for a reason that has
+nothing to do with which rows it removed.
+
+⛔ NEXT, AND IT IS THE OWNER'S: whether a random-drop arm is ADDED to the
+experiments. The n23 loop deliberately did not add one -- it is an arm, and
+adding arms is not a loop's call. Two shapes are available and they are not the
+same:
+  - a random arm INSIDE each experiment, run every time, so every folds-won
+    count has its control in the same file;
+  - a one-off probe per method, cheaper, but it goes stale the moment anything
+    about the fits changes.
+
+Note what is NOT in doubt: the DETECTION numbers. How well a source ranks the
+molecules that moved is measured against a known set and needs no such control.
+It is the step from a good ranking to a better model that this breaks.
