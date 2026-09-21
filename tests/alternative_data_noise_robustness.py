@@ -171,6 +171,15 @@ TUNED_LAB = _load_tuned_lab()
 # measured: these four gain a median +0.19 validation R-squared and no other
 # family gains more than 0.04.
 TUNED_MODEL_LABEL = {
+    # THE TWO PLAIN NETWORKS ARE HERE FROM 2026-09-21, and they were not before.
+    # The author's decision that day: the deterministic model and its
+    # probabilistic form must run at the SAME setting, or their comparison reads
+    # an architecture difference as well as the probabilistic machinery. That is
+    # only deliverable if the plain network can receive a tuned setting at all,
+    # and on this pipeline it could not -- `dnn` and `mlp` were absent from this
+    # map, so a tuned entry for either was silently never applied.
+    'dnn': 'dnn',
+    'mlp': 'mlp',
     'full-bnn': 'dnn_bnn_full',
     'mlp-full-bnn': 'mlp_bnn_full',
     'full-vbll': 'dnn_bnn_full_variational',
@@ -3349,6 +3358,16 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         experiments.append(('RF', rname,
             lambda: RandomForestRegressor(random_state=42, n_jobs=-1,
                                           **sklearn_params('rf')), None))
+        # RF300 -- the plain forest at the quantile forest's 300 trees, so the
+        # RF300-against-QRF pair differs by the quantile machinery alone. `RF`
+        # above has 100 trees and QRF has 300, and that 200-tree gap was being
+        # read as part of the deterministic-against-probabilistic comparison.
+        # Added on the author's decision, 2026-09-21; RF keeps its 100 trees and
+        # its rows stay valid. The parameters come from the shared spec, where
+        # 'rf300' and 'qrf' are identical entries.
+        experiments.append(('RF300', rname,
+            lambda: RandomForestRegressor(random_state=42, n_jobs=-1,
+                                          **sklearn_params('rf300')), None))
         # QRF
         if HAS_QRF:
             experiments.append(('QRF', rname,
