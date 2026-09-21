@@ -217,12 +217,31 @@ know which pairs are one arm.
 
 ## C. Defects found and not fixed
 
-### C1. n11 discards its own primary claim to protect a caveated one
-It returns `{'error': 'no_blueprint'}` at n11:760 and n11:804 when the pool holds no
-recipe, before its level loop starts. The estimator-by-correction recovery needs no
-recipe and is computed in every estimation space. Only the hybrid-versus-base
-comparison needs one, and n11's own header calls that comparison oracle-biased and
-says it must not be headlined.
+### C1. CLOSED 2026-09-21. n11 no longer discards its own primary claim to
+### protect a caveated one
+It returned `{'error': 'no_blueprint'}` when the pool held no recipe, before its
+level loop started. Commit `2f1ceb6` drops the hybrid estimation space instead
+and carries on, recording what was dropped and why in
+`results['pool_selection']['hybrid_arm']`.
+
+MEASURED: a run that used to end at 0 scored cells now scores the cross. On
+`herg_ki`, 1,412 molecules in ecfp4, 941 per training fold, it reached 8 of the
+10 estimators at 44 cells each on the first of three folds — 352 cells — before
+the machine restarted.
+
+⛔ NEXT, and it is the remaining half: n11 has still never written a result file.
+One is being produced under the supervisor as `n11_first_result`. Every estimator
+call it finishes is cached to `loop_n11/grid_cache` keyed on the exact arrays it
+was given, so a restart resumes rather than refitting; the first attempt lost
+8,328 seconds of fits to the crash because nothing was written until the end.
+
+### C1b. n11's `GP_MAX` is a constant nothing reads
+`GP_MAX = 1000` at n11:261 is referenced only by a comment. The cap that applies
+is hardcoded inside `GaussianProcessEstimator.estimate`, also 1000, per inner
+fold. On `herg_ki` each inner fold trains on about 753 of the 941 training
+molecules, so nothing is subsampled and the detector costs 4,248 seconds per
+fold — 34% of the run's measured estimator time. Not changed: the cost lives in
+what the estimator computes, and the estimator axis is the experiment.
 
 ### C2. Four callers swallow a halted result store
 n18, n23 and two others catch `StaleResultDB` and carry on in the base
@@ -254,7 +273,8 @@ left where an experiment names a level itself.
 
 ## D. Never measured
 
-- **n09, n11, n17 on the three local datasets**: no result file exists for n11. n17
+- **n09, n11, n17 on the three local datasets**: no result file exists for n11 yet;
+  see C1 for the run producing one, and for why it could not before today. n17
   ran only on `herg_ic50`, because the three local datasets have no repeat
   measurements at all.
 - **n17's one result is negative**: on `herg_ic50` in ecfp4, the ceiling did not
