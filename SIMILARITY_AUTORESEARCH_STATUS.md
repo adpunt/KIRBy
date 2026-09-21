@@ -35,7 +35,7 @@ Two categories, and they need different work:
 | s10 | method | **partial** — has never completed a full run | yes | **partial** |
 | s11 | method | yes, 3/3 at two budgets | yes | **yes** |
 | s12 | method | yes, 3/3 twice | yes | **yes** |
-| s13 | method | yes, 3/3 | yes | **partial** — retrieval swept, clustering untouched |
+| s13 | method | yes, 3/3 | yes | **retrieval yes; clustering CANNOT BE** — its statistic moves 6-34x the delta on a reseed |
 
 ## Never opened
 
@@ -117,7 +117,8 @@ arms (fold 0 excluded because the pool pruned on its scores):
       10           -0.0381   -0.2417    +0.0264
     each arm free  -0.0381   -0.1183    +0.0264
 
-At 5 clusters the hybrid wins all three.
+At 5 clusters the hybrid wins all three. ⛔ That win does not survive a reseed —
+see the instability note below before quoting it.
 
 **A cluster holding fewer than 2 held-out molecules contributes no term, and
 which spaces lose clusters is not even.** Summed over 5 folds on herg_ki at 10
@@ -136,6 +137,63 @@ in 29 on adme_mdr1, 15 on herg_ki and 5 on caco2 — 24 of caco2's 30 are 250
 features wide. The per-width controls added in `df7c7fe` did not fix it: a width
 that occurred on one fold produced a control scored on one fold beside a hybrid
 scored on five, and the two means were read side by side.
+
+**⛔ THE CLUSTERING HALF CANNOT RESOLVE THE DELTA IT REPORTS.** Label coherence
+is not what k-means minimises, so two clusterings of one space with almost the
+same inertia can score far apart, and running k-means again from a different
+seed changes the number by much more than the hybrid-minus-best-single gap.
+Measured on herg_ki fold 1 at 5 clusters, 1,129 training and 283 held-out
+molecules, one space at a time, over four `random_state` values. The column is
+the highest coherence minus the lowest, unitless:
+
+    restarts   top_torsion 2048 feat   ecfp4 2048 feat   pdv 200 feat
+        1              0.3719               0.4174          0.0293
+        2              0.2235               0.3491          0.0453
+        5              0.4475               0.2259          0.0464
+       10 (shipped)    0.2986               0.3416          0.0176
+       20             0.2149               0.1398          0.0124
+       40             0.2149                  —            0.0124
+
+The delta the clustering half reports is 0.01 to 0.05 coherence. At the shipped
+10 restarts the seed alone moves a 2,048-feature fingerprint by 0.30 and 0.34 —
+6 to 34 times the gap being measured. Raising the restarts to 20 halves it and
+still leaves 0.14 to 0.21. Only the 200-feature descriptor set settles: 0.0124
+from 20 restarts on, and 40 buys nothing over 20. The single representations
+the hybrid is scored against are the 2,048-feature fingerprints, so it is the
+COMPARATOR that will not hold still.
+
+Two whole-experiment re-runs on herg_ki, same folds and same pool, 10 restarts
+against 2, differ by up to 0.19 coherence on one space (rep_top_torsion at 3
+clusters, 0.2869 against 0.0925) and flip the sign of the delta at 3, 5 and 10
+clusters. Held-out label coherence delta, positive means the hybrid won, 4
+paired folds:
+
+    clusters       10 restarts   2 restarts
+        3            -0.0129       -0.2240
+        5            +0.0584       -0.1368
+       10            -0.2417       -0.0785
+
+At 2 restarts on caco2 the delta changes sign at every step of the count sweep
+— -0.0517, +0.0174, +0.0343, -0.0466, +0.0492, -0.0567 at 2, 3, 5, 8, 10 and 15
+clusters — which is what a measurement looks like when the noise is larger than
+the effect. There is no right cluster count to be found until the statistic
+stops moving.
+
+**The distance mismatch, measured.** k-medians honours the manhattan
+coefficient the retrieval half reads; k-means minimises squared euclidean and
+takes no metric argument. Same run, same folds, same 2 restarts, 5 clusters,
+held-out delta, positive means the hybrid won:
+
+    dataset      k-means (squared euclidean)   k-medians (manhattan)
+    herg_ki                -0.1368                   -0.1090
+    caco2                  +0.0343                   -0.0514
+
+Making the two halves agree moves the delta by +0.0278 on herg_ki and -0.0857
+on caco2, and flips caco2's sign. Both movements sit inside the seed spread
+above, so the mismatch cannot be separated from the noise at this restart
+count. `minkowski p=0.5` has no clusterer of this shape at all — there is no
+closed form for the point minimising summed L_0.5 distance — and the file now
+writes that instead of running euclidean silently.
 
 **s10 GP — a null, and a correction.** Multiplying features by the square root
 of their importance destroys an RBF kernel: the weighted arm returned the
