@@ -1409,3 +1409,29 @@ and the worst on logd at -0.2665.
 count fingerprint on agreement with shared substructure by 0.10 to 0.16 Spearman
 on all three datasets and lose to it on activity on all three. The stacked
 recipe beats it on structure on all three and on activity on one.
+
+## Still running when this was written
+
+Three runs were in flight and will finish on their own. None of them changes a
+conclusion above; each adds the datasets its experiment has not reached.
+
+| run | where it had got to | writes |
+|---|---|---|
+| `structural_embeddings.py` | herg_ki done, logd on its TDA build | `structural_embeddings.json` |
+| `feature_ablation.py` | all three datasets done, writing out | the scratchpad json passed to `--out` |
+| `shape_similarity.py` | herg_ki, one of three descriptors built | under the supervisor as `sm_shape_similarity`, output `/Volumes/seagate/kirby_simrun_logs/sm_shape_similarity_all.json` |
+
+## What this group has never been asked
+
+The four antibody scripts — `scaffold_experiment.py`,
+`scaffold_ddg_experiment.py`, `scaffold_feature_isolation.py` and
+`base_rep_comparison.py` — load FLAb variant libraries and the graphinity ddG
+set through `kirby.datasets`, not through `_data.load_prepared`. They index
+protein variants, not molecules, and none of them was run here. Their result
+files are dated 12 and 13 September, so they ran then.
+
+`winning_recipe_honest.py` was not run. It asks the same held-out question as
+`winning_recipe_vs_standard.py`, which was run on all three, and differs by
+using `kirby.similarity.selection.select_saboteur_drop` for the descriptor drop
+instead of the in-file greedy. Whether those two selections pick the same
+descriptors is not measured.
