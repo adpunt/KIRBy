@@ -1293,22 +1293,41 @@ the count fingerprint's 0.581:
     count+descriptors+keys            1399      0.563
     count+MACCS keys                  1191      0.508
 
-**The same 375-feature space wins on both datasets, by 0.038 Spearman on herg_ki
-and 0.034 on logd, and it is a quarter the width of the fingerprint it beats.**
+adme_solubility, held out on 1,087 of its 2,173 molecules, against the count
+fingerprint's 0.344:
+
+    blocks                        features   held out
+    descriptors alone                  208      0.383
+    descriptors+fine 2D                308      0.370
+    descriptors+keys+fine 2D           475      0.370
+    ecfp4_count:tanimoto              1024      0.344
+    count+descriptors                 1232      0.250
+    count+fine 2D                     1124      0.248
+
+**A physicochemical descriptor block beats the 1,024-bit count fingerprint on
+all three datasets, held out, and it is a fifth to a quarter of its width.**
+With MACCS keys beside it, 375 features, it reaches 0.618 against 0.580 on
+herg_ki and 0.615 against 0.581 on logd. Alone, 208 features, it reaches 0.383
+against 0.344 on adme_solubility.
 
 Averaged over the combinations that contain a block against those that do not,
 held out:
 
-    block            herg_ki activity   herg_ki structure   logd activity   logd structure
-    count                    +0.007            -0.002          -0.061          -0.249
-    descriptors              +0.029            +0.004          +0.062          +0.049
-    MACCS keys               +0.005            -0.050          +0.033          -0.033
-    100 fine 2D              -0.005            +0.103          -0.008          +0.161
+    block            herg_ki   logd   adme_solubility      (activity Spearman)
+    count             +0.007  -0.061      -0.096
+    descriptors       +0.029  +0.062      +0.065
+    MACCS keys        +0.005  +0.033        —
+    100 fine 2D       -0.005  -0.008        —
 
-On logd, putting the count fingerprint into a space lowers activity Spearman by
-0.061 and structural Spearman by 0.249 on average. On herg_ki it does neither.
-The 100 fine 2D features are the reverse everywhere: they raise structure by
-0.10 to 0.16 and lower activity slightly.
+**The descriptor block raises the activity Spearman on all three datasets and
+the count fingerprint block lowers it on two of three.** Putting the count
+fingerprint into a space costs 0.096 Spearman on average on adme_solubility and
+0.061 on logd; on herg_ki it is worth +0.007. Its structural effect on logd is
+-0.249 and on adme_solubility +0.043, so it does not point one way there either.
+
+The 100 fine 2D features are the reverse of the descriptors: on herg_ki and logd
+they raise structural Spearman by 0.103 and 0.161 and lower activity Spearman by
+0.005 and 0.008.
 
 **The drop-one descriptor selection's gain shrinks when it is scored on pairs it
 did not choose on.** On herg_ki it drops 153 of 208 descriptors and the
@@ -1316,7 +1335,7 @@ structural Spearman goes 0.290 to 0.419 on held-out pairs, against 0.483 on the
 pairs the sequence was chosen on. On logd it drops 138 and goes 0.454 to 0.628
 held out, against 0.676 in sample.
 
-Wall clock: 1,309 s herg_ki, 1,111 s logd, both arms each.
+Wall clock: 1,309 s herg_ki, 1,111 s logd, 1,329 s adme_solubility, both arms each.
 
 ### `structural_embeddings.py` — mol2vec ties the count fingerprint, TDA and MAP4 lose heavily
 
@@ -1354,7 +1373,7 @@ the baseline every script in the group uses.
 | `triplet_similarity` (activity positives) | herg_ki, 5 folds | **5 of 5 folds**, mean 0.7526 against 0.7011 | the two triplet definitions were compared; margin and epochs untouched |
 | `triplet_similarity` (scaffold positives) | herg_ki, 5 folds | 0 of 5 folds | same |
 | `aggregate` (reciprocal rank fusion) | all 3 | 2 of 3, +0.013 and +0.016, -0.002 on logd | all six fusion rules compared |
-| `feature_ablation` | herg_ki, logd | 4 of 12 on herg_ki, 4 of 12 on logd; the same 375-feature space wins both, +0.038 and +0.034 | all twelve combinations, both arms |
+| `feature_ablation` | all 3 | **3 of 3.** A descriptor block beats it by +0.038, +0.034, +0.039 held out, at a fifth to a quarter of its width | all twelve combinations, both arms |
 | `winning_recipe_vs_standard` | all 3 | 1 of 3, +0.0613 on herg_ki | no lever swept; the coefficient was isolated |
 | `augmented_descriptor_reps` | all 3 | pdv cosine 2 of 3, Mordred cosine 2 of 3 | cosine against Euclidean on each block |
 | `creative_hybrids_v2` | all 3 | 2 of 3 for the full stack | two block weightings |
@@ -1367,11 +1386,19 @@ the baseline every script in the group uses.
 | `run_battery_moleculeace` | none | — | cannot run, `MoleculeACE` not installed |
 | `ranker_experiment` | none | — | file not on disk |
 
-**The count fingerprint under Tanimoto is hard to beat and three things beat
-it.** A learned distance whose positives are the molecules with the closest
-activity, on every held-out fold. Reciprocal rank fusion of six metrics, on two
-of three datasets. A 375-feature descriptor-and-keys space, on herg_ki, but only
-when its selection is fitted on molecules it is not scored on.
+**The count fingerprint under Tanimoto is hard to beat and two things beat it
+everywhere they were measured.** A physicochemical descriptor block, on all
+three datasets, held out, at a fifth to a quarter of the fingerprint's width. A
+learned distance whose positives are the molecules with the closest activity, on
+every one of five held-out folds of herg_ki. Reciprocal rank fusion of six
+metrics beats it on two of three.
+
+**The descriptor block is the one to take forward.** It needs no training, no
+conformers and no package that is missing here, it is 208 features against
+1,024, and `feature_ablation.py` measures its average effect as +0.029, +0.062
+and +0.065 activity Spearman across the twelve combinations on the three
+datasets. The count fingerprint's own average effect is +0.007, -0.061 and
+-0.096.
 
 **Nothing that adds 3D information beats it on activity.** E3FP, Coulomb
 eigenvalues and TDA all lose by 0.07 to 0.36 Spearman. The 3D pharmacophore
