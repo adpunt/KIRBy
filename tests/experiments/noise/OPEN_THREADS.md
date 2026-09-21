@@ -447,6 +447,11 @@ lopsided groups with 675 of them in the training block, 5 corruption draws each:
     outlier_p10        60,  62,  65,  75,  59
     censoring         338, 338, 338, 338, 338
 
+Repeated on caco2 itself, 2158 molecules in 1086 scaffold groups, 1438 of them
+in the first training fold, 3 draws each: grouped_shifted moved all 1438 every
+time, grouped_wider moved 289, 300 and 238, and outlier_p10 moved 151, 139 and
+128.
+
 grouped_shifted's own algebra is why: `eps_i = sqrt(rho)*tau*b_g(i) +
 sqrt(1-rho)*tau*e_i` gives every molecule its own second term on top of its
 group's shared offset, so every label moves and only the OFFSET is shared.
