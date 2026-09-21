@@ -426,6 +426,11 @@ restarts=2 gave the same fitted length scale of 1, the same prediction spread to
 the last digit and the same rank correlation +0.1442, so the expense buys
 nothing here and KIRBY_S10_GP_RESTARTS is not the lever.
 
+s10 already carries this lever: `_make_gp(X, start='median')` at
+s10_importance_downstream.py:1013 runs one arm per starting length scale, on the
+same median-distance basis and the same bounds. The numbers above were measured
+independently of it and agree with it.
+
 The label used here is a smooth direction in the features, not the real caco2
 permeability, and this was not run through s10. Whether it moves the rmse s10
 reports is unmeasured. The recorded s10 GP null — weighting worse by +0.0111 and
