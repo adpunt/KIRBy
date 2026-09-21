@@ -79,6 +79,39 @@ DOWNSTREAM_MODEL = 'rf'     # only used to fetch the recipe and test a build
 OUT = os.environ.get('N21_OUT', '/Volumes/seagate/local_noise_run/loop_n21')
 
 
+def _claim(out_dir, name):
+    """Refuse to start while another copy of this script is already running.
+
+    The supervisor tracks a job by a pid file it writes itself, so a run
+    started by hand is invisible to it and it would start a second one. This
+    is the lock both can see: the pid of whoever is running, in the output
+    directory, removed on the way out. A stale file whose pid is gone is
+    ignored.
+    """
+    import atexit
+    os.makedirs(out_dir, exist_ok=True)
+    lock = os.path.join(out_dir, f'.{name}.running')
+    if os.path.exists(lock):
+        try:
+            other = int(open(lock).read().strip())
+            os.kill(other, 0)
+            print(f"already running as pid {other}; this copy exits")
+            return False
+        except (ValueError, ProcessLookupError, PermissionError, OSError):
+            pass
+    with open(lock, 'w') as fh:
+        fh.write(str(os.getpid()))
+
+    def _release():
+        try:
+            if int(open(lock).read().strip()) == os.getpid():
+                os.remove(lock)
+        except Exception:
+            pass
+    atexit.register(_release)
+    return True
+
+
 def main():
     from experiments._shared import (load_data, pick_noise_base_rep, cv_split,
                                      get_domain_metric, get_model_factories,
@@ -92,6 +125,8 @@ def main():
     out_path = os.path.join(OUT, f'{DATASET}__folds_and_draws.json')
     if os.path.exists(out_path) and not os.environ.get('N21_FORCE'):
         print(f"already done: {out_path}")
+        return
+    if not _claim(OUT, 'folds_and_draws'):
         return
 
     t_start = time.time()
@@ -165,6 +200,18 @@ def main():
     errors = {}
     zero_imp = {}
     timings = {}
+    # Everything _write needs, in one place, because the module-level
+    # constants are not in a function's locals().
+    ctx = {
+        'ap': ap, 'pk': pk, 'specs': specs, 'counts': counts,
+        'errors': errors, 'zero_imp': zero_imp, 'timings': timings,
+        'DATASET': DATASET, 'CONDITION': CONDITION, 'LEVEL': LEVEL,
+        'DRAWS': DRAWS, 'labels': labels, 'reps': reps,
+        'base_rep': base_rep, 'metric_name': metric_name, 'splits': splits,
+        'detectors': detectors, 'k_values': k_values, 'metrics': metrics,
+        'importance_methods': importance_methods, 'exponents': exponents,
+        'forest_kw': forest_kw, 'hybrid_meta': hybrid_meta,
+    }
 
     for fold_i, (train_idx, val_idx) in enumerate(splits):
         X_raw = reps[base_rep][train_idx]
@@ -245,9 +292,9 @@ def main():
 
         # Written after every fold, so a run that is killed still leaves the
         # folds it finished behind.
-        _write(out_path, locals())
+        _write(out_path, ctx)
 
-    _write(out_path, locals())
+    _write(out_path, ctx)
     _report(ap, specs, metrics, out_path, t_start)
 
 

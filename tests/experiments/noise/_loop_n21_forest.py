@@ -83,8 +83,14 @@ DRAWS = tuple(int(x) for x in os.environ.get('N21_DRAWS', '0,1').split(','))
 OUT = os.environ.get('N21_OUT', '/Volumes/seagate/local_noise_run/loop_n21')
 
 # The two numbers being swept. n21 ships (100, 5).
+# A tree count costs nothing beyond the largest one: sklearn draws each tree's
+# seed in turn from one RandomState, so the first 100 leaf-id columns of a
+# 300-tree forest ARE the 100-tree forest at the same seed. Measured on fold 0
+# of this dataset -- the leaf matrices are equal element for element and the
+# two proximity matrices differ by 0.00000000 -- so three tree counts are read
+# off one fit.
 TREE_COUNTS = tuple(int(x) for x in
-                    os.environ.get('N21_TREES', '100,300').split(','))
+                    os.environ.get('N21_TREES', '100,200,300').split(','))
 MIN_SAMPLES_LEAF = tuple(int(x) for x in
                          os.environ.get('N21_LEAVES', '1,5,20,50').split(','))
 SHIPPED = (100, 5)
@@ -92,6 +98,39 @@ SHIPPED = (100, 5)
 
 def _forest_arm(n_trees, leaf):
     return f'forest|trees{n_trees}|leaf{leaf}'
+
+
+def _claim(out_dir, name):
+    """Refuse to start while another copy of this script is already running.
+
+    The supervisor tracks a job by a pid file it writes itself, so a run
+    started by hand is invisible to it and it would start a second one. This
+    is the lock both can see: the pid of whoever is running, in the output
+    directory, removed on the way out. A stale file whose pid is gone is
+    ignored.
+    """
+    import atexit
+    os.makedirs(out_dir, exist_ok=True)
+    lock = os.path.join(out_dir, f'.{name}.running')
+    if os.path.exists(lock):
+        try:
+            other = int(open(lock).read().strip())
+            os.kill(other, 0)
+            print(f"already running as pid {other}; this copy exits")
+            return False
+        except (ValueError, ProcessLookupError, PermissionError, OSError):
+            pass
+    with open(lock, 'w') as fh:
+        fh.write(str(os.getpid()))
+
+    def _release():
+        try:
+            if int(open(lock).read().strip()) == os.getpid():
+                os.remove(lock)
+        except Exception:
+            pass
+    atexit.register(_release)
+    return True
 
 
 def main():
@@ -106,6 +145,8 @@ def main():
     out_path = os.path.join(OUT, f'{DATASET}__forest_shape.json')
     if os.path.exists(out_path):
         print(f"already done: {out_path}")
+        return
+    if not _claim(OUT, 'forest_shape'):
         return
 
     t_start = time.time()
@@ -230,11 +271,14 @@ def main():
                       else float('nan')) for a in arms),
                     key=lambda t: -t[1])
 
+    refs = tuple(f'plain|{m}' for m in metrics)
+    if shipped_arm in ap:
+        refs = (shipped_arm,) + refs
     comparisons = {}
     for arm in arms:
-        if arm == shipped_arm:
-            continue
-        for ref in (shipped_arm,) + tuple(f'plain|{m}' for m in metrics):
+        for ref in refs:
+            if arm == ref:
+                continue
             comparisons[f'{arm} vs {ref}'] = N21._compare(
                 ap[arm], ap[ref], True,
                 'one (fold, draw, detector, neighbour count)')
@@ -293,10 +337,11 @@ def main():
     for a, v in ranked:
         print(f"    {a:28s} average precision {v:.4f}  "
               f"over {len(ap[a])} cells")
-    print("\n  against the shipped forest, paired per "
-          "(fold, draw, detector, neighbour count):")
+    head = shipped_arm if shipped_arm in ap else refs[0]
+    print(f"\n  against {head}, paired per "
+          f"(fold, draw, detector, neighbour count):")
     for name, c in comparisons.items():
-        if not name.endswith(shipped_arm):
+        if not name.endswith(f' vs {head}'):
             continue
         if not c.get('cells_paired'):
             print(f"    {name}: {c.get('absent_because')}")
