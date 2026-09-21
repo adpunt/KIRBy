@@ -82,7 +82,26 @@ def main():
     from experiments.dataset_policy import noise_groups_for
     from experiments.noise.noise_helpers import (
         inject_train_labels, noise_spec_for, detection_scores,
+        detection_is_defined, DETECTION_IS_DEFINED,
     )
+
+    # ⛔ REFUSE A CONDITION THIS SCRIPT CANNOT READ, BEFORE ANYTHING LOADS.
+    # The only reading here is detection average precision, and
+    # detection_scores returns None under a condition where EVERY label moves
+    # -- precision is then 1.0 by construction. `gaussian` is one of those, and
+    # it is n12's own default condition, so it is the easy one to pass by
+    # mistake. This script was registered with the supervisor under `gaussian`
+    # and ran to completion four times between 03:26 and 08:04 on 2026-09-21,
+    # each time computing every importance array and every neighbour search and
+    # then printing `no complete row` and writing no file -- so the supervisor
+    # saw no result and started it again.
+    if not detection_is_defined(a.condition):
+        raise SystemExit(
+            f"condition {a.condition!r} moves every training label, so "
+            f"detection average precision is 1.0 by construction and "
+            f"noise_helpers.detection_scores returns None for every reading. "
+            f"This script has no other reading. Pass one of "
+            f"{list(DETECTION_IS_DEFINED)}.")
     from experiments.noise import n12_importance_weighted_distance as n12
     from kirby.hybrid import compute_feature_importance
     from kirby.similarity.distance_config import get_distance_metric
@@ -180,32 +199,43 @@ def main():
                                 float(det['detection_average_precision']))
                 n12.IMPORTANCE_EXPONENT = 0.5
 
+            # WRITE AFTER EVERY PASS, NOT ONLY AT THE END. Nine passes take
+            # hours and the four runs of 2026-09-21 that were killed part way
+            # left nothing on disk at all. The file is rewritten each time and
+            # carries `passes_behind_each_number`, so a reader always knows how
+            # many fold-and-draw passes are averaged in what they are looking
+            # at.
+            report(a, base_rep_name, rows, unweighted, n_corrupt_seen,
+                   n_train_seen, verbose=False)
+
     report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen)
     return 0
 
 
-def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen):
+def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen,
+           verbose=True):
     from experiments.noise import n12_importance_weighted_distance as n12
-    print('\n' + '=' * 78)
-    print('DETECTION AVERAGE PRECISION, averaged over the fold-and-draw passes.')
-    print(f'Dataset {a.dataset}, condition {a.condition}, injected level '
+    _p = print if verbose else (lambda *a, **k: None)
+    _p('\n' + '=' * 78)
+    _p('DETECTION AVERAGE PRECISION, averaged over the fold-and-draw passes.')
+    _p(f'Dataset {a.dataset}, condition {a.condition}, injected level '
           f'{a.level}, {a.folds} outer folds.')
     if n_corrupt_seen:
-        print(f'Molecules whose label moved, per training fold: '
+        _p(f'Molecules whose label moved, per training fold: '
               f'{float(np.mean(n_corrupt_seen)):.1f} of '
               f'{float(np.mean(n_train_seen)):.1f} training molecules, '
               f'averaged over {len(n_corrupt_seen)} passes.')
-    print(f'The space is the {base_rep_name} representation, z-scored, each '
+    _p(f'The space is the {base_rep_name} representation, z-scored, each '
           f'feature multiplied by its importance raised to the exponent.')
-    print('One row is one importance scorer and one neighbour count. Higher '
+    _p('One row is one importance scorer and one neighbour count. Higher '
           'is better.')
-    print('=' * 78)
+    _p('=' * 78)
     ests = sorted({k[1] for k in rows})
     imps = sorted({k[0] for k in rows})
     hdr = f'{"scorer":<15}{"neighbours":<20}{"unweighted":>12}'
     for e in EXPONENTS:
         hdr += f'{("e=" + str(e)):>10}'
-    print(hdr)
+    _p(hdr)
     per_exp_wins = {e: 0 for e in EXPONENTS}
     per_exp_vals = {e: [] for e in EXPONENTS}
     n_rows = 0
@@ -224,15 +254,15 @@ def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen):
                 line += f'{m[e]:>10.4f}'
                 per_exp_vals[e].append(m[e])
             per_exp_wins[best] += 1
-            print(line)
+            _p(line)
     if not n_rows:
-        print('no complete row')
+        _p('no complete row')
         return
-    print()
-    print(f'Rows above: {n_rows}. Each is one importance scorer and one '
+    _p()
+    _p(f'Rows above: {n_rows}. Each is one importance scorer and one '
           f'neighbour count.')
     for e in EXPONENTS:
-        print(f'  exponent {e}: mean average precision over those {n_rows} '
+        _p(f'  exponent {e}: mean average precision over those {n_rows} '
               f'rows {float(np.mean(per_exp_vals[e])):.4f}; it was the best '
               f'exponent in {per_exp_wins[e]} of {n_rows} rows')
     cur, matched = 0.5, 1.0
@@ -240,12 +270,12 @@ def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen):
     a_mat = float(np.mean(per_exp_vals[matched]))
     beat = sum(1 for i in range(n_rows)
                if per_exp_vals[matched][i] > per_exp_vals[cur][i])
-    print(f'\nExponent {matched} against exponent {cur}, the value in the file '
+    _p(f'\nExponent {matched} against exponent {cur}, the value in the file '
           f'now: {a_mat:.4f} against {a_cur:.4f} mean average precision, and '
           f'{matched} scored higher in {beat} of {n_rows} rows.')
     ctrl = float(np.mean(per_exp_vals[0.0]))
     uall = [float(np.mean(v)) for v in unweighted.values() if v]
-    print(f'CONTROL: exponent 0.0 reads {ctrl:.4f}, the unweighted space reads '
+    _p(f'CONTROL: exponent 0.0 reads {ctrl:.4f}, the unweighted space reads '
           f'{float(np.mean(uall)):.4f}. These must agree.')
     os.makedirs(a.out, exist_ok=True)
     path = os.path.join(
@@ -265,12 +295,15 @@ def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen):
             'rows_best_exponent_counts': {
                 str(e): per_exp_wins[e] for e in EXPONENTS},
             'n_rows': n_rows,
+            'passes_behind_each_number': len(n_corrupt_seen),
+            'rows_where_exponent_1p0_beat_0p5': beat,
+            'exponent_in_the_file_when_this_ran': 0.5,
             'per_row': {f'{k[0]}|{k[1]}|{k[2]}': float(np.mean(v))
                         for k, v in rows.items()},
             'base_unweighted': {k: float(np.mean(v))
                                 for k, v in unweighted.items()},
         }, f, indent=1)
-    print('wrote', path)
+    _p('wrote', path)
 
 
 if __name__ == '__main__':
