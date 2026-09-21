@@ -456,8 +456,14 @@ def _write(path, ns):
         'resumed': ns.get('resume_note'),
         'errors': ns['errors'],
     }
-    with open(path, 'w') as fh:
+    # Written to a temporary file and moved into place, because this is now
+    # called after every pass and a kill during the write would leave a
+    # truncated file -- which, with the resume above, is every finished pass
+    # gone.
+    tmp = f'{path}.writing'
+    with open(tmp, 'w') as fh:
         json.dump(payload, fh, indent=2, default=str)
+    os.replace(tmp, path)
 
 
 def _report(ap, specs, metrics, out_path, t_start):

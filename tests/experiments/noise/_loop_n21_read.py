@@ -92,12 +92,24 @@ def read(path):
     for k, v in ranked:
         print(f"    {k:42s} {v:.4f}")
 
-    top = ranked[0][0]
-    print(f"\n  {top} against each of the others. One pass is one (fold, "
-          f"draw): the six readings inside a pass -- two detectors by three "
-          f"neighbour counts -- are averaged first, because they are the same "
-          f"molecules under the same corruption.")
-    for k, _v in ranked[1:]:
+    _against(cells, ranked, ranked[0][0],
+             'the distance that leads the table')
+    shipped = (d.get('shipped_setting') or {}).get('arm')
+    if shipped and shipped in cells and shipped != ranked[0][0]:
+        _against(cells, ranked, shipped,
+                 'the setting n21 ships, which is what this file exists to '
+                 'test')
+    return d
+
+
+def _against(cells, ranked, top, what):
+    print(f"\n  {top} -- {what} -- against each of the others. One pass is "
+          f"one (fold, draw): the six readings inside a pass -- two "
+          f"detectors by three neighbour counts -- are averaged first, "
+          f"because they are the same molecules under the same corruption.")
+    for k, _v in ranked:
+        if k == top:
+            continue
         c = compare_by_pass(cells.get(top, {}), cells.get(k, {}))
         if c is None:
             print(f"    {k}: no pass was scored on both sides")
@@ -108,7 +120,6 @@ def read(path):
               f"passes, mean {c['mean_gain_over_passes']:+.4f} average "
               f"precision (spread over passes "
               f"{c['spread_over_passes']:.4f}){sep}")
-    return d
 
 
 if __name__ == '__main__':
