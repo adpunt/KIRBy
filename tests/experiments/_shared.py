@@ -8727,6 +8727,7 @@ def get_config(args) -> dict:
     Pulls allocations/importance/evaluators from the DEFAULT_* constants.
     Models and budgets are experiment-controlled (set via CLI or experiment code).
     """
+    import os as _os
     from kirby.find_best_hybrid import (
         DEFAULT_N_FOLDS, DEFAULT_ALLOCATION_METHODS,
         DEFAULT_IMPORTANCE_METHODS, DEFAULT_INTERNAL_EVALUATORS)
@@ -8751,6 +8752,20 @@ def get_config(args) -> dict:
         # Same correction as above — the default set from the model tiers.
         'models': list(DOWNSTREAM_MODELS),
     }
+
+    # Smoke shrink, gated on KIRBY_SMOKE_N, applied BEFORE the CLI overrides so
+    # an explicit --budgets still wins. Five opig files carry this same shrink
+    # in their own _smoke_search_kwargs; every experiment that reaches its
+    # search through get_config instead had none, so a local run searched the
+    # full 8,160 configurations with deeplift. Measured 2026-09-19:
+    # opig_scaffold_hybrid ran 8,160 per outer fold where its siblings ran 5.
+    # deeplift is also the recorded local segfault trigger, so dropping it here
+    # removes that from every get_config caller at once. No-op when the
+    # variable is unset, so a cluster run is unchanged.
+    if _os.environ.get('KIRBY_SMOKE_N', '').strip():
+        config['internal_evaluators'] = ['rf']
+        config['importance_methods'] = ['lightgbm_gain']
+        config['budgets'] = smoke_budgets()
 
     # CLI overrides
     if getattr(args, 'models', None):
