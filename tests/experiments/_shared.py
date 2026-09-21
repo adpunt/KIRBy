@@ -4678,7 +4678,34 @@ def flatten_weights(fitted) -> np.ndarray:
 # Preference order for the single "plain base representation" control arm that
 # the noise experiments compare their treatments against. One per domain:
 # molecular, DTA/protein-descriptor, sequence.
-NOISE_BASE_REP_PREFERENCE = ('ecfp4', 'pdv', 'blosum')
+# The control arm of a noise experiment, in preference order. Every name here is
+# a PLAIN, unlearned encoding of the molecule or sequence -- a fingerprint, a
+# descriptor set, a substitution matrix, a one-hot. None is a learned embedding,
+# because the control is meant to be the representation a study did nothing to.
+#
+# `onehot` was added 2026-09-21. Before it, an antibody set holding none of the
+# first three fell through to whichever name sorted first among its ten, which
+# on flab_thermo_tresanco is `esm2_cdr` -- a learned embedding, and 8th of the
+# 10 by how well it predicts, at 0.391 spearman with a random forest against
+# 0.594 for the best. That is a control chosen by spelling.
+#
+# ⛔ DO NOT put a learned embedding in this list, and do not order it by how
+# well the representations score. The molecular sets take `ecfp4` rather than
+# their best representation; the antibody sets take `onehot` on the same
+# principle. A control that is the best-scoring representation makes the
+# hybrid's margin over it the wrong comparison.
+NOISE_BASE_REP_PREFERENCE = (
+    # small molecules: a fingerprint, then a descriptor set
+    'ecfp4', 'pdv', 'maccs', 'avalon', 'atom_pair', 'top_torsion', 'mordred',
+    # sequences: a substitution matrix, a one-hot, a composition, a k-mer count
+    'blosum', 'onehot', 'aac', 'protein_kmer',
+    # nucleotide sequences: k-mer frequencies, longest first
+    'kmer6', 'kmer5', 'kmer4', 'kmer3', 'tetranuc_freq',
+    # drug-target pairs and reactions: the same fingerprints under their own names
+    'drug_ecfp4', 'drug_pdv', 'drug_maccs', 'drug_avalon', 'drug_mordred',
+    'reactant_ecfp4', 'cgr_morgan', 'diff_maccs', 'diff_avalon',
+    'reactant_mordred',
+)
 
 
 def pick_noise_base_rep(reps, dataset_name=None, verbose=True):
@@ -4719,13 +4746,30 @@ def pick_noise_base_rep(reps, dataset_name=None, verbose=True):
             f"treatment in this study and must not become the control arm. "
             f"Add a plain base representation to this dataset's rep list.")
 
-    chosen = eligible[0]
-    if verbose:
-        print(f"  [base-rep] {dataset_name or ''}: none of "
-              f"{NOISE_BASE_REP_PREFERENCE} present; falling back to "
-              f"{chosen!r} (first alphabetically among "
-              f"{len(eligible)} non-sim_* reps)")
-    return chosen
+    # ⛔ THERE IS NO ALPHABETICAL FALLBACK ANY MORE. It used to take
+    # `eligible[0]`, so the control arm of every noise experiment on a dataset
+    # holding none of the preferred names was decided by spelling. On
+    # flab_thermo_tresanco that gave `esm2_cdr`, a learned embedding and 8th of
+    # the 10 representations by how well it predicts. It also put two recorded
+    # results for one dataset against different baselines -- 0.4590 and 0.5985
+    # spearman -- because one experiment took the fallback and another named
+    # `saprot` itself, and it confounded the largest disagreement in the suite,
+    # where two experiments measured the same axis in different representations
+    # and disagreed.
+    #
+    # Stopping is the honest move. A dataset with no plain encoding has no
+    # control arm, and the fix is to add one to its rep list, not to let the
+    # sort order choose.
+    raise ValueError(
+        f"pick_noise_base_rep: no plain control representation for "
+        f"{dataset_name or '<dataset>'}. None of {NOISE_BASE_REP_PREFERENCE} "
+        f"is in its rep list, and the remaining {len(eligible)} "
+        f"({eligible}) are learned embeddings or study treatments. A noise "
+        f"experiment needs a control that the study did nothing to. Add a "
+        f"plain encoding to this dataset's rep list -- `onehot` for a "
+        f"sequence set, `ecfp4` or `pdv` for a molecular one -- or name the "
+        f"control explicitly at the call site. Choosing whichever name sorts "
+        f"first is what this replaced.")
 
 
 def flatten_fold_weights(feat_info) -> np.ndarray:
