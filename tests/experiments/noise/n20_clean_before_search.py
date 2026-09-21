@@ -543,6 +543,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # each one's candidate list was, and what recipe each one picked. That is
     # the check read directly rather than inferred from a score.
     identity_probe = {}
+    # THE SAME THING, FOR THE CLEANUPS THAT ARE NOT THE CONTROL, and it is the
+    # half of this file's question that nothing was reporting. The control
+    # answers "are the two searches one code path". It cannot answer "does
+    # cleaning first make the search pick a different recipe", because under
+    # the control the two label columns are identical by construction and the
+    # recipes MUST match. That question is about `remove` and the smoothers,
+    # and their recipes were computed and then thrown away.
+    recipe_probe = {}
     refuses_weight = set()
     t0 = time.time()
 
@@ -786,11 +794,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 cache=cache, cache_dir=cache_dir,
                                 verbose=search_verbose)
 
-                        if (cleanup == IDENTITY_CONTROL
-                                and search_cleaned is not None):
-                            identity_probe[f'{regime}|{lvl_key}|{fold_key}'] = {
+                        if search_cleaned is not None:
+                            probe_row = {
                                 'label_columns_identical': bool(
-                                    np.array_equal(y0, col)),
+                                    col is not None and keep is None
+                                    and np.array_equal(y0, col)),
+                                'n_training_rows_the_search_saw_asis':
+                                    int(len(y0)),
+                                'n_training_rows_the_search_saw_cleaned':
+                                    int(len(y_s)),
                                 'n_candidates_searched_asis':
                                     len(search_asis.all_results or []),
                                 'n_candidates_searched_cleaned':
@@ -806,6 +818,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                 budget=None)),
                                     } for m in downstream_models},
                             }
+                            recipe_probe[f'{regime}|{lvl_key}|{fold_key}|'
+                                         f'{cleanup}|{rate:g}'] = probe_row
+                            if cleanup == IDENTITY_CONTROL:
+                                identity_probe[
+                                    f'{regime}|{lvl_key}|{fold_key}'] = probe_row
 
                         rate_cell = (cell.setdefault(cleanup, {})
                                          .setdefault(f'{rate:g}', {}))
@@ -915,7 +932,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['_errors'] = errors
     results['summary'] = convert_numpy(
         _summarise(acc, downstream_models, run_cleanups, flag_rates,
-                   metric_name, lower_is_better, identity_probe))
+                   metric_name, lower_is_better, identity_probe,
+                   recipe_probe))
     _print_summary(results, metric_name)
     return results
 
@@ -965,7 +983,7 @@ def _paired(a, b, lower_is_better):
 
 
 def _summarise(acc, models, cleanups, flag_rates, metric_name, lower_is_better,
-               identity_probe=None):
+               identity_probe=None, recipe_probe=None):
     """What the ordering cost, paired per fold, plus the identity control.
 
     Two comparisons answer the question and one checks the machinery.
@@ -1094,6 +1112,54 @@ def _summarise(acc, models, cleanups, flag_rates, metric_name, lower_is_better,
             'What IS exact is the candidate count and the chosen recipe, both '
             'above. A real disagreement moves the score in the third or fourth '
             'decimal, which is where the real cleanups sit.'),
+    }
+
+    # ── DID THE SEARCH PICK A DIFFERENT RECIPE, per cleanup ──
+    # The other half of the question. The scores above say what the ordering
+    # cost; this says whether the recipe the search SELECTED moved at all, and
+    # a run where it did not move is a run whose gain came entirely from the
+    # per-fold feature ranking and budget split.
+    rp = recipe_probe or {}
+    per_cleanup = {}
+    for key, p in rp.items():
+        cleanup = key.split('|')[3]
+        c = per_cleanup.setdefault(cleanup, {
+            'n_cells': 0, 'n_cells_where_the_recipe_moved': 0,
+            'cells_where_it_moved': [],
+            'candidate_counts_asis': [], 'candidate_counts_cleaned': [],
+            'rep_count_asis': [], 'rep_count_cleaned': []})
+        for m, pair in p['recipe_by_model'].items():
+            c['n_cells'] += 1
+            if pair['asis'] != pair['cleaned']:
+                c['n_cells_where_the_recipe_moved'] += 1
+                c['cells_where_it_moved'].append(f'{key}/{m}')
+            c['rep_count_asis'].append(
+                (pair['asis'] or {}).get('rep_count'))
+            c['rep_count_cleaned'].append(
+                (pair['cleaned'] or {}).get('rep_count'))
+        c['candidate_counts_asis'].append(p['n_candidates_searched_asis'])
+        c['candidate_counts_cleaned'].append(p['n_candidates_searched_cleaned'])
+    out['recipe_the_search_selected'] = {
+        'what_it_reports': (
+            'One cell is one (regime, level, held-out fold, cleanup, flag '
+            'rate, downstream model). For each, the recipe the search on the '
+            'labels as they are picked and the recipe the search on the '
+            'cleaned labels picked. They are compared on the representations, '
+            'the allocation method, the importance method, the budget, the '
+            'internal evaluator and the representation count. '
+            'n_cells_where_the_recipe_moved is the count this experiment '
+            'exists to produce: cleaning first changed what KIRBy selected in '
+            'that many cells of that many.'),
+        'candidate_count_note': (
+            'n_candidates_searched is how many configurations the search '
+            'returned in all_results. A count of 1 does NOT by itself mean the '
+            'search compared one configuration: a configuration whose score is '
+            'already in the per-dataset result store is read from there and '
+            'never re-enters all_results, and the pruning schedule drops the '
+            'tail of the list before the last folds are scored. Read it '
+            'together with the representation counts below, which differ '
+            'across folds exactly when the axis was live.'),
+        'per_cleanup': per_cleanup,
     }
     return out
 
