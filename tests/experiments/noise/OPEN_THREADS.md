@@ -142,7 +142,9 @@ over the plain row, spread 0.0056, ahead in 4 of the 4 cells.
 RE-READ 2026-09-21 in `onehot`, which is what `pick_noise_base_rep` now returns
 for this dataset, at 2 folds by 3 draws and all three neighbour counts -- 36
 paired readings per comparison, in
-`/Volumes/seagate/local_noise_run/loop_n21/flab_thermo_tresanco__folds_and_draws.json`:
+`/Volumes/seagate/local_noise_run/loop_n21/flab_thermo_tresanco__folds_and_draws__11distances_6passes.json`
+-- a copy kept under that name because the live file is being overwritten, see
+below:
 
     imp_pow1|treeshap|euclidean        0.2292 detection average precision
     forest_proximity                   0.2251
@@ -166,12 +168,19 @@ for are still running.
 ⛔ NOT TWO READINGS OF ONE THING. The control representation differs, the
 neighbour counts differ, and the old table was one corruption draw.
 
-⛔ THE TWO HYBRID DISTANCES ARE MISSING FROM THE NEW TABLE, so the
+⛔ THE TWO HYBRID DISTANCES ARE MISSING FROM THOSE 11, so the
 similarity-objective space -- the one the owner suspects should win, because its
 features were chosen so the distance predicts a molecule's activity from its
-five nearest neighbours -- has no number in onehot. Every stored search this
-needs is unusable: flab_thermo_tresanco's is missing the `distance_metric`
-column, and caco2's and herg_ki's hold 0 rows each, counted on 2026-09-21.
+five nearest neighbours -- has no number in that table. When those 6 passes ran,
+every stored search was unusable: flab_thermo_tresanco's was missing the
+`distance_metric` column and caco2's and herg_ki's held 0 rows each.
+
+THE STORE CAME BACK AT 08:04 on 2026-09-21. The run restarted after that opens
+it, and the recipe lookup now builds a hybrid 499 features wide. So the table
+being written from 08:23 has 13 distances, not 11, and it starts from no passes
+rather than the 6 -- a table half read with the hybrid distances and half
+without is not a table, and the resume refuses it by design. The 11-distance
+reading above is the copy named in this section and is not overwritten.
 
 ### B5b. The neighbour count only matters for one of the two detectors
 From the same 36 cells per distance. Averaged over all 11 distances and the 6
