@@ -10,16 +10,16 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 
 | | What it is | Smoke | Result | Loops |
 |---|---|---|---|---|
-| n02 | weights training rows by how reliable their label looks | pass | 2 file(s), newest 2026-09-19 | 3 (2 kept) |
-| n07 | seven corrections applied after noise is detected | FAIL (_smoke_n04_n07, _smoke_repair_targets) | 1 file(s), newest 2026-09-20 | 7 (1 kept) |
+| n02 | weights training rows by how reliable their label looks | pass | 2 file(s), newest 2026-09-19 | 4 (2 kept) |
+| n07 | seven corrections applied after noise is detected | FAIL (_smoke_n04_n07) | 1 file(s), newest 2026-09-20 | 7 (1 kept) |
 | n09 | a survey of learning-with-noisy-labels methods | pass | none | 0 |
-| n11 | every noise estimator crossed against every correction | FAIL (_smoke_repair_targets) | none | 1 (1 kept) |
+| n11 | every noise estimator crossed against every correction | pass | none | 1 (1 kept) |
 | n12 | weights the distance by feature importance to find noisy labels | pass | 1 file(s), newest 2026-09-20 | 4 (3 kept) |
 | n17 | cleaning where the noise is real, measured against replicates | pass | none | 1 (0 kept) |
 | n18 | cleaning the labels as they come, nothing injected | pass | none | 5 (4 kept) |
-| n20 | cleaning before the recipe search rather than after | pass | 2 file(s), newest 2026-09-21 | 2 (2 kept) |
+| n20 | cleaning before the recipe search rather than after | pass | 4 file(s), newest 2026-09-21 | 4 (3 kept) |
 | n21 | which distance the nearest neighbours are found in | pass | 4 file(s), newest 2026-09-20 | 4 (3 kept) |
-| n23 | cleaning from a model's own per-molecule uncertainty | pass | none | 5 (4 kept) |
+| n23 | cleaning from a model's own per-molecule uncertainty | pass | 1 file(s), newest 2026-09-21 | 6 (5 kept) |
 
 ## Investigations — these need to run and be believed
 
@@ -28,9 +28,9 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n01 | measures prediction error on cliff vs non-cliff molecules | pass | none | 0 |
 | n06 | checks a detector against a real disagreement between sources | pass | none | 0 |
 | n13 | how the result moves as the injected noise changes shape | pass | none | 0 |
-| n14 | the cliff landscape and the stage-0 diagnostics | 1 file(s), not yet run | 1 file(s), newest 2026-09-18 | 0 |
-| n15 | whether a noisy search picks a different recipe | 1 file(s), not yet run | none | 0 |
-| n16 | whether feature importance moves as labels get noisier | 1 file(s), not yet run | none | 0 |
+| n14 | the cliff landscape and the stage-0 diagnostics | pass | 1 file(s), newest 2026-09-18 | 0 |
+| n15 | whether a noisy search picks a different recipe | pass | none | 0 |
+| n16 | whether feature importance moves as labels get noisier | pass | none | 0 |
 | n19 | what a measurement count and a measurement spread are worth | pass | none | 0 |
 | n22 | whether detectors find the records a human marked wrong | pass | none | 0 |
 
@@ -38,7 +38,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 
 - 18 experiments, 10 of them methods.
 - 0 have no smoke file at all.
-- 12 have never written a result file.
+- 11 have never written a result file.
 - 1 of the 10 methods have had no optimisation loop.
 
 ## The loops, newest first
@@ -64,6 +64,10 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n23 | 2026-09-21 | ngboost's boosting schedule, from 500 stages at learning rate 0.01 to 50 stages at learning rate 0.1, holding the product of the two at 5 | 219.6 CPU-seconds for one uncertainty estimate, and 0.1500 average precision at ranking the 29 of the 336 training molecules whose label moved, against 0.0863 average precision for a coin flip | 21.9 CPU-seconds for the same estimate, and 0.1313 average precision at ranking the same 29 of 336 training molecules, against the same 0.0863 for a coin flip | yes |
 | n23 | 2026-09-21 | nothing in the file: hetero_gp was run on one outer fold on its own, instead of behind every arm and every fold of a full n23 run | no number at all -- hetero_gp is the one of the five uncertainty sources that had never been reached, and the two n23 runs that asked for it were abandoned first | 0.0850 average precision at ranking the 29 of the 336 training molecules whose label moved, against 0.0863 average precision for a coin flip, in 41.7 CPU-seconds, giving 278 distinct scores over the 336 molecules | yes |
 | n20 | 2026-09-21 | the recipe search was given three representation counts to choose between -- three of the ten, five of the ten, all ten -- where the iteration cuts had left it one; in the same run the representation the detector runs in went from esm2_cdr to onehot, because pick_noise_base_rep stopped falling back alphabetically | under knn_smooth, cleaning before the search won 1 of 2 held-out folds and lost the other: 0.4929 spearman cleaning after the search against 0.4784 cleaning before it, averaged over the 2 folds. remove was not run | under knn_smooth, cleaning before the search won 2 of 2 held-out folds: 0.4307 spearman cleaning after the search against 0.5284 cleaning before it, per-fold gains +0.1544 and +0.0410 spearman. Under remove it also won 2 of 2: 0.4550 against 0.5023 spearman, per-fold gains +0.0347 and +0.0600 spearman | yes |
+| n23 | 2026-09-21 | nothing in the method: this is the first n23 run in which a cleaned training set was fitted and scored on held-out antibodies, so the claim n23 exists to make has a number for the first time, with the zero-noise control at level 0.0 in the same file | no cleaning arm had a held-out score at all. Every n23 number recorded until now was detection -- how well an uncertainty number ranks the training molecules whose label the injector moved -- and the best of those was 0.3016 detection average precision for gaussian_process against 0.0863 for a coin flip | under outlier_p10 at level 0.5, with 40 of the 448 training molecules moved, dropping the 10 percent of training molecules with the widest heteroscedastic_nn spread beat the uncleaned fit on 3 of 3 outer folds: 0.3442 spearman uncleaned, mean gain +0.0697 spearman, spread over the three fold gains 0.0223 spearman. The same arm at level 0.0, where no label was moved, lost all 3 folds at mean -0.0630 spearman | yes |
+| n20 | 2026-09-21 | the recipe each of the two searches selected is now written into the result file and printed in the summary. It was computed on every fold and thrown away, so n20's own question -- does cleaning first change what KIRBy selects -- had no number anywhere | 0 of the cells that are not the identity control had their selected recipe recorded, out of 4 such cells over 2 held-out folds and 2 cleanups | 4 of 4 recorded. The recipe MOVED in 1 of 2 cells under knn_smooth and in 1 of 2 cells under remove, and in 0 of 2 under the identity control. Both moves are on held-out fold 0: the search on the corrupted labels selected five of the ten representations there, the search on the knn_smooth-cleaned labels selected all ten, and the search on the remove-cleaned labels selected three of the ten. On held-out fold 1 all three selected all ten | yes |
+| n20 | 2026-09-21 | what the recipe search scored its candidates on inside the cleaned arm, `search_scores_on`. It was built, defaulted to 'asis' and had never been run the other way. 'asis' scores a smoother's candidates on the training labels the practitioner holds, which under injected noise are the corrupted ones, while the candidate TRAINS on the smoothed column. 'cleaned' scores them on the same smoothed column they train on | under knn_smooth, 0.5284 spearman held out, searching and fitting on the cleaned labels, averaged over 2 folds: 0.5428 on fold 0 and 0.5139 on fold 1. Under remove, 0.5023 spearman | under knn_smooth, 0.5348 spearman over the same 2 folds: 0.5428 on fold 0, unchanged to every digit, and 0.5268 on fold 1, up 0.0129 spearman. Under remove, 0.5023 spearman, unchanged to every digit on both folds | no |
+| n02 | 2026-09-21 | the reliability score that decides how much each training row weighs, swept over the neighbour-mean deviation n02 computes today and seven estimators from ESTIMATOR_REGISTRY that score the same quantity: neighbor_residual, local_variance_ratio, distance_weighted, activity_cliff_aware, hybrid_noise, cross_val, ensemble. The row weight ratio is held at the 4-to-1 n02 ships and the rows are weighted in the representation they are fitted in | the neighbour-mean deviation, which loses to no weighting at all by 0.0074 rmse on herg_ki and by 0.0034 spearman on flab_thermo_tresanco, averaged over the three models | no score beats it on both datasets. On herg_ki the best of the eight is hybrid_noise at -0.0026 rmse against the shipped score's -0.0074, where a negative number means the weights made the error worse. On flab_thermo_tresanco hybrid_noise is the WORST of the eight at -0.0290 spearman and the shipped score is the best at -0.0034. All eight scores lose to no weighting on both datasets, at every one of the 48 score-model-dataset readings but 4 | no |
 | n21 | 2026-09-20 | the row weight ratio the repair applies, from 1.11-to-1 to 4-to-1 | a positive share of the clean-to-corrupted gap recovered in 3 of the 15 distances | a positive share recovered in 13 of the 15 distances | yes |
 | n21 | 2026-09-20 | the representation the plain distance is computed in, from the esm2_cdr fallback to saprot | best of the 15 distances, 0.2455 detection average precision | best of the 15 distances, 0.2266 detection average precision | no |
 | n21 | 2026-09-20 | the importance exponent matched to the distance metric rather than fixed at 0.5 | 0.2098 detection average precision, lightgbm_gain at exponent 0.5 under manhattan | 0.2388 detection average precision, lightgbm_gain at exponent 1.0 under manhattan | yes |
