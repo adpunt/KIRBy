@@ -388,6 +388,26 @@
       "after": "weighted, at the same four shapes: 32.7 percent, 41.6 percent, 46.7 percent and 31.1 percent of the same gap",
       "kept": false,
       "note": "Clean 0.4590 spearman, corrupted 0.2478, so the gap is 0.2112 spearman against a floor of 0.0092 -- 2 percent of the clean score -- and it clears. Weighting wins the three-fold mean at 4 of 4 shapes. PER FOLD IT IS 9 OF 12 paired readings, recovered from the cumulative means the probe prints: weighting wins all three folds at the half-way and whole-way proportional moves, and loses folds 0 and 2 at the rank rescale, where it wins the mean only on fold 1 (0.5345 against 0.4659 spearman). THIS CONTRADICTS the reading of 2026-09-21 that importance-weighting an RBF kernel loses where the process actually fits, which was one fold in saprot at narrowed feature widths with the length scale still pinned at 1.0 -- 0.2709 against 0.3303 spearman at 200 features. It agrees instead with the 29 percent error cut n21 measured for the same weighting. WHAT ELSE THIS RUN HOLDS, and it is the reason the job was registered: rescaling the suspicion score by its RANK beats moving each label in proportion to the raw score, 42.8 percent against 11.1 percent of the gap, which is the REVERSE of saprot, where proportional beat rank 47.2 to 19.4. The two are not a clean pair -- the saprot numbers were measured before the length-scale fix, so the representation and whether the process was fitting both changed. NOT APPLIED: nothing in n07 passes feature_weights, and the correction's shape is n18's axis."
+    },
+    {
+      "experiment": "n11",
+      "date": "2026-09-21",
+      "dataset": "herg_ki, 1412 molecules, 941 per training fold, ecfp4 at 2048 features, rmse, lower is better",
+      "changed": "an absent stored-search recipe stopped ending the run before its first fold, and now drops the hybrid estimation space and carries on in the control representation",
+      "before": "no result file had ever been written for n11, and a run ended at 0 scored cells: get_best_search_for_downstream returned nothing for herg_ki, and n11 returned {'error': 'no_blueprint'} before the level loop started",
+      "after": "the estimator x correction cross runs: 8 of the 10 estimators scored 44 cells each on the first of three folds, 352 cells, in 8328 seconds, before the machine restarted",
+      "kept": true,
+      "note": "The change is commit 2f1ceb6, not this loop's. What this loop adds is the measurement that the cross runs without a recipe, which is what the change claimed and nothing had shown. The recipe buys one arm of the space axis, the hybrid-versus-base comparison, and n11's own header calls that arm oracle-biased and refuses to headline it; results['pool_selection']['hybrid_arm'] records that it was dropped and why. What this does not settle: whether the hybrid arm would change the ranking, which needs herg_ki's stored search rebuilt."
+    },
+    {
+      "experiment": "n11",
+      "date": "2026-09-21",
+      "dataset": "herg_ki, 1412 molecules, 941 per training fold, ecfp4 at 2048 features, 3 scaffold-grouped folds, rf, rmse, lower is better",
+      "changed": "which single level of the seven-level ladder the cut-down run injects at, from 0.5 to 0.75 of the clean label standard deviation",
+      "before": "at level 0.5 the clean-to-noisy gap is +0.0137 rmse against a clean score of 0.6032 rmse, and 1 of the 3 folds clears the 0.0121 rmse floor n11 requires before it will report a recovery: per fold +0.0034, +0.0266, +0.0109 rmse",
+      "after": "at level 0.75 the gap is +0.0370 rmse against the same clean score, and 3 of the 3 folds clear the floor: per fold +0.0200, +0.0553, +0.0356 rmse",
+      "kept": true,
+      "note": "Two random forest fits per fold per level, 48 seconds for the whole ladder (loop_n11/gap_ladder_herg_ki.py). The full ladder: 0.2 gives +0.0043 rmse and 0 of 3 folds, 0.3 gives +0.0034 and 0 of 3, 0.5 gives +0.0137 and 1 of 3, 0.75 gives +0.0370 and 3 of 3, 1.0 gives +0.0622 and 3 of 3, 1.5 gives +0.1417 and 3 of 3. The level costs nothing -- the fit count is identical at every level. This does NOT move reference_noise_level(), which returns 0.5 because it was the middle of a superseded grid and is an open thread of its own; it is which level a run that must cut to one spends it on. SEPARATELY: the gaussian condition moves 941 of the 941 training labels at every level, so detection_scores returns None and n11's detection block is empty at any level. Grading a detector on herg_ki needs one of the five conditions in DETECTION_IS_DEFINED, where only some molecules move."
     }
   ]
 }

@@ -51,6 +51,11 @@ RESULT_DIRS = [
     '/Volumes/seagate/local_noise_run/fast/D_strong',
     '/Volumes/seagate/local_noise_run/loop_n07',
     '/Volumes/seagate/local_noise_run/loop_n11',
+    # n11's first result file is written one level deeper than the other
+    # loop directories, because its driver passes loop_n11/results as the
+    # output root. Without this line the file exists and this table still
+    # reports n11 as having none.
+    '/Volumes/seagate/local_noise_run/loop_n11/results',
     '/Volumes/seagate/local_noise_run/loop_n18',
     '/Volumes/seagate/local_noise_run/loop_n20',
     '/Volumes/seagate/local_noise_run/loop_n23',
