@@ -113,7 +113,7 @@ uncleaned fit on 3 of 3 folds, 0.3442 spearman uncleaned, mean gain +0.0697
 spearman, spread over the three fold gains 0.0223 spearman.
 
 At level 0.0, where the injector moves no label, that same arm loses all 3 folds
-at mean -0.0630 spearman. Over the three sources, 1 of 27 settings still beat the
+at mean -0.0630 spearman. Over the three sources, 2 of 27 settings still beat the
 uncleaned fit on most folds at level 0.0 against 8 of 27 at level 0.5.
 
 ⛔ NEXT, and it is not a defect: one draw. The 3-of-3 count is the headline and
