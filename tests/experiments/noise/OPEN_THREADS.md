@@ -276,6 +276,20 @@ seconds per uncertainty estimate against 74 for `heteroscedastic_nn`.
 ⛔ NEXT: whether ranking the moved molecules is the right thing to select an
 uncertainty source on at all. Nobody owns this.
 
+### B6c. hetero_gp is the expensive source at 5600 features, not ngboost
+All five measured side by side in one process on one fold of
+flab_thermo_tresanco, 448 training molecules, onehot at 5600 features, wall
+seconds on a machine carrying a one-minute load of 79: activity_cliff_aware 12,
+heteroscedastic_nn 30, ngboost 49, gaussian_process 88, **hetero_gp 1070**.
+
+The earlier reading said the opposite — 42 CPU-seconds at 1280 features,
+recorded the same day as "hetero_gp is NOT expensive". At 5600 it is 12 times
+the next slowest, and it is why a five-source n23 run in onehot takes hours.
+`pick_noise_base_rep` returning `onehot` on every antibody set is what put the
+five sources at 5600 features in the first place.
+
+⛔ NEXT: owner's decision. Nothing has been cut.
+
 ### B7. n20 answered its own question on 8 cells and that is the whole denominator
 On `flab_thermo_tresanco`, 672 antibodies, 2 held-out folds, one corruption draw
 at 0.5 of the clean label spread, the recipe search choosing between three of the
