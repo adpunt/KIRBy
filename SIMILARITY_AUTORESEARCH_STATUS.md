@@ -375,6 +375,32 @@ Each sat under a number that had been reported as a result.
   euclidean on all seven representations by 0.012 to 0.051 Spearman. The code
   was using the worse one by accident.
 
+## The stored search results were unreadable and were moved aside, 2026-09-21
+
+`distance_metric` was added to the cache's identity columns during this
+campaign. That column list is what `result_cache.py` checks on open. Every
+database written before the change is missing the column, so opening one raises
+`StaleResultDB` and the job dies at the first hybrid search.
+
+All 14 databases under `/Volumes/seagate/kirby_simrun_cache/result_db/` were in
+that state. Between them they held 530 stored search configurations: herg_ki
+168, caco2 168, adme_mdr1 150, and 4 each in eleven per-seed files. Two
+supervised runs, `s05_tuned_adme_mdr1` and `s05_tuned_herg_ki`, died on it.
+
+The files are moved, not deleted, to
+`/Volumes/seagate/kirby_simrun_cache/result_db_stale_2026-09-21/`. Opening one
+still raises — the column list is what is wrong with them, and `result_cache.py`
+says three times there is no migration path by design.
+
+What this costs from here: every search configuration is computed from scratch.
+A run that finished in minutes off stored rows will not.
+
+What it means for the s05 numbers below: the 2026-09-19 run read those stored
+configurations and any run after 01:55 on 2026-09-21 does not. The two runs
+being compared in the section above were not computed from the same rows, and
+that has to be ruled out before the commit window between `9c6f7d7` and
+`c5752d4` is blamed.
+
 ## Compute flags for the cluster
 
 - s10's Gaussian process task is the longest block in the wave. It builds the GP
