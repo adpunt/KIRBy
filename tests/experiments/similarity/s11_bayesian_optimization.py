@@ -52,6 +52,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
+from scipy.spatial.distance import pdist
 from scipy.stats import norm
 from sklearn.decomposition import PCA
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -157,6 +158,49 @@ def expected_improvement(mu, sigma, y_best, xi=0.01):
 # SURROGATE MODEL FITTING (GP, NGBoost, BNN)
 # =============================================================================
 
+# Where the RBF length scale starts, and how far the optimiser may take it.
+#
+#   'fixed'  — start at 1.0 with scikit-learn's default bounds of 1e-5 to 1e5.
+#              This is what every run before 2026-09-21 used.
+#   'median' — start at the median Euclidean distance between two molecules in
+#              the labelled set, and allow two orders of magnitude either side.
+#
+# Why the second exists. The distance between two molecules in these spaces was
+# measured on caco2: 6.6 in the 50 selected features, 13.8 in maccs, 16.7 in
+# pdv, 45.3 in ecfp4, 83.1 in PCA-50, 102.4 in random-50. A length scale of 1.0
+# is below every one of them, and the fitted value on caco2 ECFP4 comes out at
+# 3.6e-4, at which every molecule in the pool is effectively infinitely far from
+# every labelled one. The posterior is then the prior everywhere, Expected
+# Improvement is flat, and np.argmax picks the lowest row number among the ties
+# — the pick is made by dataset row order, not by the surrogate. The loop
+# already counts those iterations as flat_acquisition_iters and nothing acted
+# on the count.
+#
+# This is a swept axis, not a replacement. Both settings run. The raw-ECFP4 arm
+# exists to show the RBF failing in high dimension, and reading that arm needs
+# the setting it was measured under.
+LENGTH_SCALE_INIT = os.environ.get('KIRBY_S11_LENGTHSCALE', 'fixed')
+
+
+def _rbf_with_init(X, init=None):
+    """An RBF whose length scale starts where the data's distances are.
+
+    Returns scikit-learn's default under 'fixed'. Under 'median' the starting
+    point is the median Euclidean distance between two rows of X, which is the
+    median heuristic, and the bounds are that value divided and multiplied by
+    100 so the optimiser cannot leave the scale the data sits on.
+    """
+    mode = LENGTH_SCALE_INIT if init is None else init
+    if mode != 'median' or X is None or len(X) < 3:
+        return RBF(length_scale=1.0)
+    d = pdist(np.asarray(X, dtype=float))
+    d = d[d > 0]
+    if d.size == 0:
+        return RBF(length_scale=1.0)
+    ls = float(np.median(d))
+    return RBF(length_scale=ls, length_scale_bounds=(ls / 100.0, ls * 100.0))
+
+
 def fit_gp(X_train, y_train, optimize=True, kernel_type='rbf'):
     """Fit a GP with specified kernel. Returns (model, success).
 
@@ -169,7 +213,8 @@ def fit_gp(X_train, y_train, optimize=True, kernel_type='rbf'):
     if kernel_type == 'tanimoto':
         kernel = ConstantKernel(1.0) * TanimotoKernel() + WhiteKernel(noise_level=0.1)
     else:
-        kernel = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(noise_level=0.1)
+        kernel = (ConstantKernel(1.0) * _rbf_with_init(X_train)
+                  + WhiteKernel(noise_level=0.1))
     gp = GaussianProcessRegressor(
         kernel=kernel,
         n_restarts_optimizer=2 if optimize else 0,
