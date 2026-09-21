@@ -775,3 +775,28 @@ Three files do it the other way and fit the scale on one half of the molecules:
 same spaces on the same datasets, which is what their smaller reference pool
 would do on its own, so the two effects are not separated by anything measured
 here.
+
+### `structural_embeddings.py` — `create_map4` in `src/` names a class the installed package does not have
+
+Its feasibility block prints, before any molecule is scored:
+
+    create_map4 KIRBy wrapper: FAIL -> ImportError: MAP4 requires the map4 package: pip install map4
+    map4 (direct build)      : OK
+    create_tda               : OK
+    create_mol2vec           : OK
+
+`create_map4` at `src/kirby/representations/molecular.py:3915` does `from map4
+import MAP4Calculator`. The installed `map4` exposes `MAP4` at the top level and
+`MAP4` inside `map4.map4`. It has no `MAP4Calculator`. So the wrapper's error
+message says the package is missing when the package is installed and only the
+class name is wrong. `structural_embeddings.py` already works around it by
+importing `map4.map4.MAP4` directly, and its own header says so.
+
+This was not fixed here. `create_map4` lives in `src/kirby`, outside this
+directory, and other sweeps are running against that file.
+
+MAP4 is the worst metric measured in this whole group, so making the wrapper
+work would not change a result: `extra_fingerprints.py` scores map4:cosine at
+0.4042 activity Spearman on herg_ki against the count fingerprint's 0.7087, and
+its structural Spearman is -0.4079, running backwards against shared
+substructure.
