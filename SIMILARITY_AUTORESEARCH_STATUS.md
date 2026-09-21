@@ -711,3 +711,52 @@ fingerprint's 0.7087. MAP4 is a 1,024-slot MinHash folded to bits with a mean
 of 514 bits set per molecule on herg_ki, against SECFP6's 75.
 
 Wall clock per dataset: Avalon 97-149 s, MAP4 184-347 s, MHFP6 570-932 s.
+
+### `augmented_descriptor_reps.py` — a 200-descriptor block under cosine beats the 1,024-bit count fingerprint on two of three
+
+Activity Spearman at five neighbours, delta against ecfp4_count Tanimoto in the
+same column:
+
+    metric             herg_ki            logd          adme_solubility
+    ecfp4_count:tan     0.7087          0.6180          0.3995
+    pdv:cosine          0.6998 -0.0088  0.6881 +0.0701  0.4045 +0.0050
+    pdv:euclidean       0.7028 -0.0059  0.6652 +0.0472  0.3814 -0.0181
+    mordred:cosine      0.7042 -0.0044  0.6457 +0.0277  0.4210 +0.0215
+    mordred:euclidean   0.7085 -0.0002  0.6458 +0.0278  0.3715 -0.0280
+
+pdv is 200 RDKit descriptors, Mordred is 1,613. Structural Spearman: pdv
+Euclidean beats the count fingerprint on herg_ki, 0.2559 against 0.0431, and
+loses on adme_solubility, 0.2552 against 0.3006.
+
+**Cosine beats Euclidean on the same features on five of the six
+dataset-and-block pairs where the two differ by more than 0.01 Spearman.** On
+logd pdv reaches 0.6881 under cosine and 0.6652 under Euclidean; on
+adme_solubility Mordred reaches 0.4210 under cosine and 0.3715 under Euclidean.
+The coefficient is doing as much work as the choice of descriptor block.
+
+`padelpy` is absent, so the PaDEL arm printed `INFEASIBLE` on all three and
+nothing was scored for it.
+
+Wall clock: seconds per dataset with `sim_<ds>_augmented.npz` warm.
+
+## One thing that applies to most of the group
+
+**The per-feature z-score is fitted on every molecule, then the folds are cut.**
+`augmented_descriptor_reps.py` calls `zscore(Xraw)` at line 214 over all n rows,
+builds the distance matrix from that, and hands the matrix to
+`eval_knn_readacross`, which only then cuts five folds by scaffold group. The
+same order holds in `creative_hybrids.py`, `creative_hybrids_v2.py`,
+`aggregate.py`, `aug3d_similarity.py`, `shape_similarity.py`,
+`structural_embeddings.py`, `extra_fingerprints.py` and `nary_similarity.py`.
+So each fold's held-out molecules contributed to the mean and standard
+deviation that scaled the features they are scored on.
+
+No labels are involved — the z-score reads features only — so this is a scaling
+fitted on molecules the fold does not see, not a label leak.
+
+Three files do it the other way and fit the scale on one half of the molecules:
+`winning_recipe_vs_standard.py`, `winning_recipe_honest.py` and
+`similarity_noise_cleaning.py`. Those three also report lower numbers for the
+same spaces on the same datasets, which is what their smaller reference pool
+would do on its own, so the two effects are not separated by anything measured
+here.
