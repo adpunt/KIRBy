@@ -37,6 +37,29 @@ Two categories, and they need different work:
 | s12 | method | yes, 3/3 twice | yes | **yes** |
 | s13 | method | yes, 3/3 | yes | **retrieval yes; clustering CANNOT BE** — its statistic moves 6-34x the delta on a reseed |
 
+## Who is covering what, as of 2026-09-21 02:05
+
+Every row above with an incomplete optimisation now has someone on it. Nothing
+in the table is unassigned.
+
+| what | who | state |
+|---|---|---|
+| s05 re-run, s09, `similarity_optimized_hybrid` | agent, running | s09 done on all three; s05 re-run in flight |
+| s06 | agent, running | no lever has ever been swept; that is the whole job |
+| s10 | agent, started 02:05 | has never completed a full run; three tasks in it |
+| `similarity_metrics/` | agent, running | ~25 scripts, several of them method experiments |
+| s01 s02 s03 s04 s08 s11 s12 s13 | closed | see the per-method section below |
+
+Runs go through `/Volumes/seagate/kirby_simrun_logs/supervisor_jobs.tsv`, not
+straight onto the machine. A supervisor reads that file every 120 seconds,
+launches a job when free swap and load allow, defers it when they do not,
+restarts it if it dies, and marks it done when its output file appears. Logs sit
+beside it. Five jobs are queued there now.
+
+The machine is the binding constraint, not the code. Load has sat above 400 for
+hours and free swap between 0.75 and 1.7 GB of 16 GB, and about 19 of the 27
+running python jobs belong to other sessions.
+
 ## Never opened
 
 | group | scripts | note |
