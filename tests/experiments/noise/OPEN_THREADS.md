@@ -60,6 +60,12 @@ They differ in three ways: injected against real noise, share-of-gap against
 held-out spearman, and saprot against esm2_cdr. A job `n07_shape_in_esm2_cdr` is
 registered to remove the third.
 
+A THIRD READING, 2026-09-21, and it sides with n18. n23 injects noise and sweeps
+the same score-proportional move at 0.25, 0.5 and 1.0 on flab, 3 folds, level
+0.5. The gentlest strength 0.25 is the best of the three in 2 of its 3
+uncertainty sources, and the furthest strength 1.0 is negative in 2 of the 3.
+So injected-against-real is not on its own the reason n07 and n18 disagree.
+
 ⛔ NEXT: which one sets the default is undecided. No default has moved.
 
 ### B2. The Gaussian process `gp_smooth` corrects toward is degenerate
@@ -96,11 +102,69 @@ within its own noise at 2 folds and 1 draw.
 ⛔ NEXT: raise folds and draws until the top of the table separates, or establish
 that it does not.
 
-### B6. Nothing shows that n23's uncertainty ranking CLEANS anything
-Every n23 number is detection — how well a source ranks the molecules whose labels
-moved. `gaussian_process` reaches 0.3016 average precision against a coin flip of
-0.0863. No arm has been scored, so nothing says a correction driven by that ranking
-improves a held-out score, which is the claim n23 exists to make.
+### B6. CLOSED 2026-09-21. n23's cleaning wins folds, and the zero-noise
+### control says it is not removing the hard molecules
+`flab_thermo_tresanco__outlier_p10_cleanwin3.json`, 672 antibodies, 448 per
+training block, onehot at 5600 features, 3 outer folds, rf, one draw.
+
+Under outlier_p10 at level 0.5, with 40 of the 448 training molecules moved:
+dropping the 10 percent with the widest `heteroscedastic_nn` spread beat the
+uncleaned fit on 3 of 3 folds, 0.3442 spearman uncleaned, mean gain +0.0697
+spearman, spread over the three fold gains 0.0223 spearman.
+
+At level 0.0, where the injector moves no label, that same arm loses all 3 folds
+at mean -0.0630 spearman. Over the three sources, 1 of 27 settings still beat the
+uncleaned fit on most folds at level 0.0 against 8 of 27 at level 0.5.
+
+⛔ NEXT, and it is not a defect: one draw. The 3-of-3 count is the headline and
+nothing has repeated it on a second draw. `hetero_gp` and `ngboost` were not in
+that run's source list; the five-source run in onehot is with the supervisor as
+`n23_cleaning_vs_no_cleaning`.
+
+### B6b. Detection and cleaning do not pick the same source
+`heteroscedastic_nn` has the weakest detection of the three, 0.1041 average
+precision against 0.0893 for a coin flip, and owns the only arm that wins every
+fold. `gaussian_process` has the strongest detection, 0.2495, its best arm wins 2
+of 3 folds at +0.0234 spearman inside its own spread of 0.0544, and it costs 391
+seconds per uncertainty estimate against 74 for `heteroscedastic_nn`.
+
+⛔ NEXT: whether ranking the moved molecules is the right thing to select an
+uncertainty source on at all. Nobody owns this.
+
+### B7. n20 answered its own question on 8 cells and that is the whole denominator
+On `flab_thermo_tresanco`, 672 antibodies, 2 held-out folds, one corruption draw
+at 0.5 of the clean label spread, the recipe search choosing between three of the
+ten representations, five of the ten and all ten:
+
+Cleaning the labels BEFORE the search changed the recipe the search selected in 1
+of 2 cells under `knn_smooth` and 1 of 2 under `remove`, against 0 of 2 under the
+identity control. Both moves are on held-out fold 0, where the search on the
+corrupted labels took five of the ten representations, the search on the
+knn_smooth-cleaned labels took all ten, and the search on the remove-cleaned
+labels took three of the ten.
+
+The held-out score moved the same way: searching on the cleaned labels won 2 of 2
+folds under both cleanups, mean +0.0977 spearman under knn_smooth (spread over
+the two fold gains 0.0567) and +0.0473 under remove (spread 0.0127).
+
+One cell is one held-out fold and one downstream model, so there are 2 cells per
+cleanup and 1 of 2 is one fold, not a rate.
+
+⛔ NEXT: `n20_next_passes` is with the supervisor and takes each cleanup to 6
+cells by adding two more corruption draws. It also runs `label_smooth`, the third
+cleanup that hands back a full-length cleaned column, which no n20 run has ever
+included, and re-runs `search_scores_on=cleaned` so that setting has a record of
+which recipe it selected.
+
+### B8. `downweight` cannot be asked this question and is not a null result
+`sample_weight` appears zero times in `src/kirby/hybrid.py` and zero times in
+`src/kirby/find_best_hybrid.py`, re-grepped 2026-09-21. Nothing in the feature
+selection reads a per-row weight, so `downweight`'s two searched-on-cleaned arms
+are undefined rather than zero, and n20 names them that way rather than running
+them.
+
+⛔ NEXT: nothing, unless the owner wants the feature ranking to read a weight.
+That is a change to `hybrid.py`, not to n20.
 
 ---
 
