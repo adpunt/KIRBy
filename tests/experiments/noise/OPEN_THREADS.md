@@ -188,6 +188,48 @@ precision over `local_variance_ratio` in 140 of 198 paired readings.
 neighbours than one that reads a residual. Both are swept, so nothing is
 currently decided by this.
 
+### B5c. n21's forest proximity, swept over its shape for the first time — RUNNING
+The forest whose leaves the proximity is read off ships at 100 trees and 5
+molecules a leaf, and the comment beside the second says "5 is stated, recorded
+and overridable, not tuned". `_loop_n21_forest.py` sweeps 100, 200 and 300 trees
+against 1, 5, 20 and 50 molecules a leaf, on flab_thermo_tresanco in onehot,
+under outlier_p10 at level 0.5, detection only.
+
+At 2 of its 6 passes, one pass being one (fold, corruption draw), 12 cells per
+arm, with 43 of the 448 training molecules moved on average:
+
+    forest, 300 trees, 1 per leaf     0.2636 detection average precision
+    forest, 200 trees, 5 per leaf     0.2607
+    forest, 100 trees, 5 per leaf     0.2537   ← what n21 ships
+    forest, 300 trees, 50 per leaf    0.2193
+    plain representation, manhattan   0.2026
+
+Every forest shape beats the plain representation: the plain euclidean row wins
+1 of the 12 cells against the shipped forest, mean -0.0516 average precision.
+
+⛔ NOTHING HAS BEEN CHANGED AND THE TWO READINGS DISAGREE. On average precision
+the smallest leaf leads; on precision at the number of molecules that really
+moved, the SHIPPED leaf size of 5 is first at 0.2895 and one molecule a leaf is
+sixth at 0.2685. So one molecule a leaf ranks more moved molecules highly across
+the whole ranking and the shipped size is better at the very top of it. 50
+molecules a leaf is last on both readings, -0.0344 average precision against the
+shipped setting in 10 of 12 cells.
+
+⛔ NEXT: 4 passes left. Do not move FOREST_TREES or FOREST_MIN_SAMPLES_LEAF
+until they land and the two readings are read together.
+
+### B5d. n21 has never run under a condition its distances could predict —
+### RUNNING on caco2
+Every n21 reading on record is under `outlier_p10`, which picks the molecules it
+damages at random, so no distance that reads the features can have an edge from
+structure. `_loop_n21_conditions.py` runs n21's distances on caco2, 2,158
+molecules in ecfp4, under `grouped_wider` and `censoring` beside `outlier_p10`,
+3 folds by 2 draws, detection only, registered with the supervisor as
+`n21_conditions_grouped_and_censoring`. Section E is the reasoning.
+
+⛔ The flab table and this one are on different conditions and different
+molecules and neither transfers to the other.
+
 ### B6. CLOSED 2026-09-21. n23's cleaning wins folds, and the zero-noise
 ### control says it is not removing the hard molecules
 `flab_thermo_tresanco__outlier_p10_cleanwin3.json`, 672 antibodies, 448 per
