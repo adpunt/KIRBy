@@ -65,6 +65,8 @@ def compare_by_pass(a_cells, b_cells):
 def read(path):
     with open(path) as fh:
         d = json.load(fh)
+    if d.get('per_condition'):
+        return _read_conditions(path, d)
     cells = (d.get('average_precision_per_cell')
              or d.get('average_precision_per_arm') or {})
     ranked = sorted(((k, v) for k, v in
@@ -120,6 +122,56 @@ def _against(cells, ranked, top, what):
               f"passes, mean {c['mean_gain_over_passes']:+.4f} average "
               f"precision (spread over passes "
               f"{c['spread_over_passes']:.4f}){sep}")
+
+
+def _read_conditions(path, d):
+    """A result file whose distances were scored under several noise conditions.
+
+    Printed one condition at a time and never pooled, because the three damage
+    different numbers of molecules: what a coin flip scores is the damaged
+    share, so an average precision under one condition is not on the same scale
+    as one under another. The comparison that carries across is each distance
+    against the plain representation inside its own condition.
+
+    The run writes this file after every (fold, draw, condition), so this reads
+    a run that is still going.
+    """
+    print(f"\n{path}")
+    print(f"  {d.get('dataset')}, {d.get('molecules')} molecules, "
+          f"{d.get('scaffold_groups')} scaffold groups, {d.get('folds')} "
+          f"folds, draws {d.get('draws')}")
+    print(f"  plain representation {d.get('plain_representation')}, "
+          f"{d.get('plain_representation_features')} features")
+    print(f"  {len(d.get('passes_finished') or [])} pass(es) of (fold, draw, "
+          f"condition) finished")
+    cells = d.get('average_precision_per_cell') or {}
+    for condition, block in (d.get('per_condition') or {}).items():
+        ranked = [(k, v) for k, v in
+                  (block.get('average_precision_by_space') or {}).items()
+                  if v is not None and np.isfinite(v)]
+        if not ranked:
+            print(f"\n  {condition}: no finished reading")
+            continue
+        moved = block.get('molecules_moved_mean')
+        in_fold = block.get('molecules_in_training_fold_mean')
+        flip = block.get('what_a_coin_flip_scores')
+        print(f"\n  {condition} at level {block.get('level')}, which is "
+              f"{block.get('level_means')}")
+        if moved and in_fold:
+            print(f"    the injector moved the label of {moved:.0f} of the "
+                  f"{in_fold:.0f} molecules in a training fold, so a coin "
+                  f"flip scores {flip:.4f} detection average precision")
+        for k, v in ranked:
+            print(f"    {k:40s} {v:.4f}")
+        top = ranked[0][0]
+        for ref, c in (block.get('top_against_plain_by_pass') or {}).items():
+            if not c:
+                continue
+            print(f"    {top} over {ref}: won {c['passes_won']} of "
+                  f"{c['passes_paired']} passes, mean "
+                  f"{c['mean_gain_over_passes']:+.4f} average precision "
+                  f"(spread over passes {c['spread_over_passes']:.4f})")
+    return d
 
 
 if __name__ == '__main__':
