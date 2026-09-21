@@ -270,7 +270,32 @@ def _weight_features(X_standardized, importance):
     # Normalize to mean ≈ 1 (not sum ≈ 1) so unit-variance columns are
     # rescaled around their original magnitude rather than crushed to ~1/d.
     w = w * (len(w) / w.sum())
-    return X_standardized * w
+    Xw = X_standardized * w
+
+    # A FEATURE WITH ZERO IMPORTANCE IS A COLUMN OF EXACT ZEROS, AND IT WAS
+    # STILL BEING CARRIED THROUGH EVERY NEIGHBOUR SEARCH.
+    #
+    # At any exponent above zero a feature the scorer gave no importance gets
+    # weight zero, so its column is zeros in every row. Measured on
+    # flab_thermo_tresanco: lightgbm_gain scored 181 of onehot's 5600 features
+    # above zero on the first fold, so 5419 of the 5600 columns the estimators
+    # computed distances over were zeros -- 97 percent of the width, carrying
+    # nothing.
+    #
+    # Dropping them is exact, not an approximation, for every metric
+    # kirby.similarity.distance_config sweeps. manhattan, euclidean and
+    # minkowski_p0.5 all sum a per-feature term that is zero when both values
+    # are zero; cosine's dot product and both its norms gain zero from such a
+    # column. There is no per-row centring anywhere in that list, which is the
+    # one thing that would make a zero column change an answer.
+    #
+    # ⛔ At exponent 0.0 numpy gives 0 ** 0 == 1, so no column is dropped and
+    # the space is the unweighted one. That is the control and it still holds.
+    live = w > 0
+    n_live = int(live.sum())
+    if 0 < n_live < len(w):
+        return Xw[:, live]
+    return Xw
 
 
 def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
@@ -839,6 +864,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # half they agreed in 0 of 6, which is what a real second measurement
         # looks like. Recorded here since 2026-09-21.
         'duplicate_conditions': {},
+        # {importance method: {condition: [widths seen]}}. How many features
+        # the distance was computed over in each condition, which is not the
+        # same number for every condition and was never recorded. A weighted
+        # space carries only the features the scorer gave importance above
+        # zero; the rest are exact-zero columns and are dropped, which changes
+        # no neighbour under any of the four distances the suite sweeps. A list
+        # rather than one number because the scorer is refitted per fold and
+        # can keep a different count each time.
+        'features_in_space': {},
         # Hybrid feature matrices built: one round per (noise level, fold),
         # shared by both importance methods. 30 over 6 levels and 5 folds. A
         # round builds one matrix per hybrid space, so with both search
@@ -850,6 +884,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
     zero_imp_acc = results['zero_importance_spaces']
     dup_cond_acc = results['duplicate_conditions']
+    features_in_space = results['features_in_space']
 
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
@@ -981,6 +1016,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     imp_method, base_rep_name,
                     shared_by_space=fold_shared_by_space,
                 )
+                # How many features each condition's distance was actually
+                # computed over. It is not the same for every condition and it
+                # was never written down: a weighted space drops the features
+                # the scorer gave no importance, because their column is exact
+                # zeros and adds nothing to any of the four distances the suite
+                # sweeps. On flab_thermo_tresanco lightgbm_gain scored 181 of
+                # onehot's 5600 features above zero and treeshap 1086, so the
+                # two scorers were compared over spaces of very different width
+                # and the result file said only 'base_imp_weighted' for both.
+                for _cond_name, _X in conditions.items():
+                    _fw = (features_in_space.setdefault(imp_method, {})
+                           .setdefault(_cond_name, []))
+                    _n = int(np.asarray(_X).shape[1])
+                    if _n not in _fw:
+                        _fw.append(_n)
                 for _cond_name, _rec in duplicate_conds.items():
                     _d = (dup_cond_acc.setdefault(imp_method, {})
                           .setdefault(_cond_name, dict(_rec, n_builds=0,
