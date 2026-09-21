@@ -871,22 +871,114 @@ _GP_FIT_BASIS = (
     "a measurement of weighting.")
 
 
-def _gp_fit_report(gp, preds):
+def _gp_normalize_y():
+    """Whether the GP centres and scales the labels before fitting.
+
+    False, which is what this file has always done, leaves the prior mean at 0.
+    A fit that finishes at the bottom of the length-scale bounds then predicts 0
+    for every held-out molecule. True centres the labels, so the same fit
+    predicts the training mean instead. Reads KIRBY_S10_GP_NORMALIZE_Y; unset
+    gives False.
+    """
+    raw = os.environ.get('KIRBY_S10_GP_NORMALIZE_Y', '').strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
+
+
+def _gp_lengthscale_starts():
+    """Where the RBF's length scale starts, one arm each.
+
+    'fixed' is 1.0 with bounds 1e-5 to 1e5, which is what this file always
+    fitted and what every number reported from it was measured under. 'median'
+    starts at the median euclidean distance between two training molecules in
+    the features the arm is fitted on, with bounds that value divided and
+    multiplied by 100 — the same lever s11 carries as KIRBY_S11_LENGTHSCALE and
+    the same convention, so the two files can be read side by side.
+
+    Why it is swept and not replaced: the arms that collapse are part of what
+    the comparison is about. A fit that finished at a bound is recorded by
+    _gp_fit_report either way.
+
+    Each arm takes the median of ITS OWN training features. The weighted arm
+    multiplies every feature by its importance, so its distances are not the
+    unweighted arm's and one median would mis-start one of them. The start is
+    read off the data the GP sees, not chosen.
+
+    Reads KIRBY_S10_GP_LENGTHSCALE as a comma-separated list; unset gives
+    fixed then median, and the FIRST entry is the one the unsuffixed blocks
+    report.
+    """
+    raw = os.environ.get('KIRBY_S10_GP_LENGTHSCALE', '').strip()
+    if not raw:
+        return ['fixed', 'median']
+    return [v.strip() for v in raw.split(',') if v.strip()]
+
+
+def _median_pair_distance(X):
+    """Median euclidean distance between two rows of X, or None.
+
+    Zero distances are dropped: two identical molecules carry no scale.
+    """
+    try:
+        A = np.asarray(X, dtype=np.float64)
+        if A.shape[0] < 3:
+            return None
+        d2 = _sqdist(A, A)
+        iu = np.triu_indices(d2.shape[0], k=1)
+        d = np.sqrt(d2[iu])
+        d = d[d > 0]
+        return float(np.median(d)) if d.size else None
+    except Exception:
+        return None
+
+
+def _gp_fit_report(gp, preds, start=None, start_value=None):
     """What the GP settled on, so a degenerate fit is recorded, not just scored.
 
     Measured 2026-09-20 on herg_ki with the weights rescaled to sum to 1: pdv
     fold 0 finished at the 1e-5 bound and scored 5.6330 rmse against a 0.9154
     pKi label spread, while the same GP on unweighted features settled at a
     length scale of 21.28 and scored 0.5963.
+
+    'at_bound' is read against the bounds the fitted kernel actually carries,
+    which are 1e-5 to 1e5 under the 'fixed' start and the median distance
+    divided and multiplied by 100 under 'median'.
     """
     try:
         ls = float(np.squeeze(gp.kernel_.k1.k2.length_scale))
     except Exception:
         return None
-    lo, hi = _GP_LS_BOUNDS
+    try:
+        lo, hi = (float(v) for v in
+                  np.ravel(gp.kernel_.k1.k2.length_scale_bounds)[:2])
+    except Exception:
+        lo, hi = _GP_LS_BOUNDS
     return {'length_scale': ls,
+            'length_scale_bounds': [lo, hi],
+            'lengthscale_start': start,
+            'lengthscale_start_value': start_value,
             'at_bound': bool(ls <= lo * 1.01 or ls >= hi * 0.99),
             'pred_sd': float(np.std(preds))}
+
+
+def _gp_block(std_scores, w_scores, std_fits, w_fits):
+    """One GP arm's two means, its difference and its fit records."""
+    std_mean = float(np.nanmean(std_scores))
+    w_mean = float(np.nanmean(w_scores))
+    paired, n_paired = _paired_delta(w_scores, std_scores)
+    return {
+        'standard': std_mean,
+        'weighted': w_mean,
+        'delta': w_mean - std_mean,
+        'delta_paired': paired,
+        'n_paired_folds': n_paired,
+        'standard_folds': [float(s) for s in std_scores],
+        'weighted_folds': [float(s) for s in w_scores],
+        'standard_fits': std_fits,
+        'weighted_fits': w_fits,
+        'n_standard_at_bound': sum(1 for f in std_fits if f and f['at_bound']),
+        'n_weighted_at_bound': sum(1 for f in w_fits if f and f['at_bound']),
+        'fit_basis': _GP_FIT_BASIS,
+    }
 
 
 def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
@@ -913,12 +1005,33 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
         print(f"    SKIPPED: n_samples={n_samples} > {_GP_MAX_SAMPLES}")
         return {'skipped': True, 'reason': f'n_samples={n_samples} > {_GP_MAX_SAMPLES}'}
 
-    results = {'per_rep': {}, 'hybrid': {}}
+    ls_starts = _gp_lengthscale_starts()
+    # The start the unsuffixed blocks report. Every start is under
+    # 'per_rep_by_lengthscale' and 'hybrid_by_budget_by_lengthscale'.
+    ls_reported = ls_starts[0]
+    results = {'per_rep': {}, 'hybrid': {},
+               'per_rep_by_lengthscale': {},
+               'lengthscale_starts': list(ls_starts),
+               'lengthscale_reported': ls_reported,
+               'lengthscale_basis': (
+                   "One arm per starting length scale. 'fixed' starts the RBF "
+                   'at 1.0 with bounds 1e-5 to 1e5, which is what every number '
+                   "this file reported before was measured under. 'median' "
+                   'starts at the median euclidean distance between two '
+                   "training molecules in that arm's own features, with bounds "
+                   "that value divided and multiplied by 100. 'per_rep' and "
+                   "'hybrid_by_budget' hold the start named in "
+                   "'lengthscale_reported'.")}
 
-    def _make_gp():
-        _rbf = (RBF(length_scale=1.0)
+    def _make_gp(X=None, start='fixed'):
+        ls, bounds = 1.0, _GP_LS_BOUNDS
+        if start == 'median' and X is not None:
+            _m = _median_pair_distance(X)
+            if _m:
+                ls, bounds = _m, (_m / 100.0, _m * 100.0)
+        _rbf = (RBF(length_scale=ls, length_scale_bounds=bounds)
                 if _gp_kernel_in_use() == 'sklearn'
-                else _CachedRBF(length_scale=1.0))
+                else _CachedRBF(length_scale=ls, length_scale_bounds=bounds))
         kernel = ConstantKernel(1.0) * _rbf + WhiteKernel(1e-3)
         # n_restarts_optimizer counts EXTRA starts of the marginal-likelihood
         # optimiser, so 2 ran the whole Cholesky sequence three times per fit.
@@ -926,18 +1039,32 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
         # weighted-minus-unweighted difference this task reports, and on
         # herg_ki at 1130 training rows a fold they were most of the ~7 hours
         # six feature spaces took. KIRBY_S10_GP_RESTARTS puts them back.
+        # normalize_y decides what the GP predicts when the kernel carries no
+        # information. Left at False, which is what this file has always
+        # fitted, the prior mean is 0: a fit that finishes at the BOTTOM of the
+        # length-scale bounds has an identity kernel and predicts 0 for every
+        # held-out molecule, which on herg_ki is an rmse of about 5.6 against a
+        # pKi label spread of 0.9154 — measured, in
+        # /Volumes/seagate/kirby_simrun_logs/gp_arms.log. s11 passes
+        # normalize_y=True at three places, so the same collapse there predicts
+        # the training mean and scores about 0.92. Same collapse, two different
+        # numbers, in one suite. The default here is unchanged so no number
+        # moves; KIRBY_S10_GP_NORMALIZE_Y=1 fits the other one.
         return GaussianProcessRegressor(
             kernel=kernel,
             n_restarts_optimizer=int(os.environ.get('KIRBY_S10_GP_RESTARTS', '0')),
             alpha=1e-6, random_state=42,
+            normalize_y=_gp_normalize_y(),
         )
 
     # Per-rep evaluation
     for rep_name in _per_rep_arms_to_score(reps, per_rep_cache, results,
                                            'weighted_gp'):
         X_rep = reps[rep_name]
-        std_scores, w_scores = [], []
-        std_fits, w_fits = [], []
+        std_by_ls = {st: [] for st in ls_starts}
+        w_by_ls = {st: [] for st in ls_starts}
+        std_fits_by_ls = {st: [] for st in ls_starts}
+        w_fits_by_ls = {st: [] for st in ls_starts}
 
         for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -945,60 +1072,73 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
             X_tr = scaler.fit_transform(X_rep[train_idx])
             X_va = scaler.transform(X_rep[val_idx])
 
-            # Standard GP
-            try:
-                gp = _make_gp()
-                gp.fit(X_tr, y_train)
-                _p = gp.predict(X_va)
-                std_scores.append(metric_fn(y_val, _p))
-                std_fits.append(_gp_fit_report(gp, _p))
-            except Exception:
-                std_scores.append(float('nan'))
-                std_fits.append(None)
-
-            # Importance-weighted GP (pre-transform: X * sqrt(w))
+            # The importance-weighted features, built once per fold and fitted
+            # once per starting length scale.
             try:
                 imp_arr = fold_importance.get(fold_i, {}).get(rep_name)
                 if imp_arr is None:
                     raise RuntimeError(f"missing precomputed importance for fold={fold_i} rep={rep_name}")
                 w = _importance_weights(imp_arr)
-                gp_w = _make_gp()
-                gp_w.fit(X_tr * w, y_train)
-                _p = gp_w.predict(X_va * w)
-                w_scores.append(metric_fn(y_val, _p))
-                w_fits.append(_gp_fit_report(gp_w, _p))
+                X_tr_w, X_va_w = X_tr * w, X_va * w
             except Exception:
-                w_scores.append(float('nan'))
-                w_fits.append(None)
+                X_tr_w = X_va_w = None
 
-        std_mean = float(np.nanmean(std_scores))
-        w_mean = float(np.nanmean(w_scores))
-        paired, n_paired = _paired_delta(w_scores, std_scores)
-        results['per_rep'][rep_name] = {
-            'standard': std_mean,
-            'weighted': w_mean,
-            'delta': w_mean - std_mean,
-            'delta_paired': paired,
-            'n_paired_folds': n_paired,
-            'standard_folds': [float(s) for s in std_scores],
-            'weighted_folds': [float(s) for s in w_scores],
-            'standard_fits': std_fits,
-            'weighted_fits': w_fits,
-            'n_standard_at_bound': sum(1 for f in std_fits if f and f['at_bound']),
-            'n_weighted_at_bound': sum(1 for f in w_fits if f and f['at_bound']),
-            'fit_basis': _GP_FIT_BASIS,
-        }
-        _nb = sum(1 for f in w_fits if f and f['at_bound'])
-        if _nb:
-            print(f"    {rep_name}: the weighted GP's length scale finished at "
-                  f"an end of {_GP_LS_BOUNDS} on {_nb} of {len(w_fits)} folds. "
-                  f"Those folds fitted nothing, and their score is not a "
-                  f"measurement of weighting.")
-        print(f"    {rep_name}: std={std_mean:.4f}, weighted={w_mean:.4f} "
-              f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
-              f"over {n_paired} folds)")
+            for st in ls_starts:
+                _sv = (_median_pair_distance(X_tr) if st == 'median' else 1.0)
+                # Standard GP
+                try:
+                    gp = _make_gp(X_tr, st)
+                    gp.fit(X_tr, y_train)
+                    _p = gp.predict(X_va)
+                    std_by_ls[st].append(metric_fn(y_val, _p))
+                    std_fits_by_ls[st].append(_gp_fit_report(gp, _p, st, _sv))
+                except Exception:
+                    std_by_ls[st].append(float('nan'))
+                    std_fits_by_ls[st].append(None)
 
-    _store_per_rep(results, per_rep_cache, 'weighted_gp')
+                # Importance-weighted GP
+                try:
+                    if X_tr_w is None:
+                        raise RuntimeError(
+                            f"no importance-weighted features for "
+                            f"fold={fold_i} rep={rep_name}")
+                    _svw = (_median_pair_distance(X_tr_w)
+                            if st == 'median' else 1.0)
+                    gp_w = _make_gp(X_tr_w, st)
+                    gp_w.fit(X_tr_w, y_train)
+                    _p = gp_w.predict(X_va_w)
+                    w_by_ls[st].append(metric_fn(y_val, _p))
+                    w_fits_by_ls[st].append(_gp_fit_report(gp_w, _p, st, _svw))
+                except Exception:
+                    w_by_ls[st].append(float('nan'))
+                    w_fits_by_ls[st].append(None)
+
+        for st in ls_starts:
+            results['per_rep_by_lengthscale'].setdefault(st, {})[rep_name] = \
+                _gp_block(std_by_ls[st], w_by_ls[st],
+                          std_fits_by_ls[st], w_fits_by_ls[st])
+        # A COPY: _orient_deltas negates in place and must not reach one dict
+        # twice.
+        _rb = copy.deepcopy(
+            results['per_rep_by_lengthscale'][ls_reported][rep_name])
+        results['per_rep'][rep_name] = _rb
+        for st in ls_starts:
+            _blk = results['per_rep_by_lengthscale'][st][rep_name]
+            _nb = _blk['n_weighted_at_bound']
+            if _nb:
+                print(f"    {rep_name} [{st} start]: the weighted GP's length "
+                      f"scale finished at an end of its bounds on {_nb} of "
+                      f"{len(_blk['weighted_fits'])} folds. Those folds fitted "
+                      f"nothing, and their score is not a measurement of "
+                      f"weighting.")
+            print(f"    {rep_name} [{st} start]: std={_blk['standard']:.4f}, "
+                  f"weighted={_blk['weighted']:.4f} "
+                  f"(delta={_blk['delta']:+.4f}, "
+                  f"delta_paired={_blk['delta_paired']:+.4f} "
+                  f"over {_blk['n_paired_folds']} folds)")
+
+    _store_per_rep(results, per_rep_cache, 'weighted_gp',
+                   extra_keys=('per_rep_by_lengthscale',))
 
     # Hybrid evaluation — one arm per swept number of features.
     if fold_blueprints:
@@ -1006,10 +1146,13 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
         budgets = list(hybrid_budgets or [None])
         results['hybrid_by_budget'] = {}
 
+        results['hybrid_by_budget_by_lengthscale'] = {}
         for budget in budgets:
             bkey = _budget_key(budget)
-            std_scores, w_scores = [], []
-            std_fits, w_fits = [], []
+            std_by_ls = {st: [] for st in ls_starts}
+            w_by_ls = {st: [] for st in ls_starts}
+            std_fits_by_ls = {st: [] for st in ls_starts}
+            w_fits_by_ls = {st: [] for st in ls_starts}
 
             for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
                 blueprint = fold_blueprints.get(fold_i)
@@ -1026,8 +1169,11 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                         train_reps, val_reps, y_train, blueprint,
                         augmentations_train=aug_tr, augmentations_val=aug_va,
                         # The number of features this arm is built with, one of
-                        # the eight swept in run(). None leaves the number this
-                        # fold's own recipe was searched at.
+                        # the nine swept in run(). None leaves the number this
+                        # fold's own recipe was searched at. The starting
+                        # length scale below does not reach the build: the GP
+                        # handed to the accept/reject test is always the
+                        # 1.0 one, so one build serves every start.
                         budget_override=budget,
                         groups=(groups[train_idx] if groups is not None else None),
                         **fold_hybrid_scoring_kwargs(
@@ -1043,55 +1189,64 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                 X_tr = scaler.fit_transform(X_tr_h)
                 X_va = scaler.transform(X_va_h)
 
-                # Standard GP
-                try:
-                    gp = _make_gp()
-                    gp.fit(X_tr, y_train)
-                    _p = gp.predict(X_va)
-                    std_scores.append(metric_fn(y_val, _p))
-                    std_fits.append(_gp_fit_report(gp, _p))
-                except Exception:
-                    std_scores.append(float('nan'))
-                    std_fits.append(None)
-
-                # Weighted GP
                 try:
                     w = _compute_importance_for_hybrid(feat_info)
                     assert w.shape[0] == X_tr.shape[1], (
                         f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
-                    gp_w = _make_gp()
-                    gp_w.fit(X_tr * w, y_train)
-                    _p = gp_w.predict(X_va * w)
-                    w_scores.append(metric_fn(y_val, _p))
-                    w_fits.append(_gp_fit_report(gp_w, _p))
+                    X_tr_w, X_va_w = X_tr * w, X_va * w
                 except Exception:
-                    w_scores.append(float('nan'))
-                    w_fits.append(None)
+                    X_tr_w = X_va_w = None
 
-            if std_scores:
-                std_mean = float(np.nanmean(std_scores))
-                w_mean = float(np.nanmean(w_scores))
-                paired, n_paired = _paired_delta(w_scores, std_scores)
-                results['hybrid_by_budget'][bkey] = {
-                    'standard': std_mean,
-                    'weighted': w_mean,
-                    'delta': w_mean - std_mean,
-                    'delta_paired': paired,
-                    'n_paired_folds': n_paired,
-                    'standard_folds': [float(s) for s in std_scores],
-                    'weighted_folds': [float(s) for s in w_scores],
-                    'standard_fits': std_fits,
-                    'weighted_fits': w_fits,
-                    'n_standard_at_bound': sum(
-                        1 for f in std_fits if f and f['at_bound']),
-                    'n_weighted_at_bound': sum(
-                        1 for f in w_fits if f and f['at_bound']),
-                    'fit_basis': _GP_FIT_BASIS,
-                }
-                print(f"    hybrid [{bkey} features]: std={std_mean:.4f}, "
-                      f"weighted={w_mean:.4f} "
-                      f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
-                      f"over {n_paired} folds)")
+                for st in ls_starts:
+                    _sv = (_median_pair_distance(X_tr) if st == 'median' else 1.0)
+                    # Standard GP
+                    try:
+                        gp = _make_gp(X_tr, st)
+                        gp.fit(X_tr, y_train)
+                        _p = gp.predict(X_va)
+                        std_by_ls[st].append(metric_fn(y_val, _p))
+                        std_fits_by_ls[st].append(
+                            _gp_fit_report(gp, _p, st, _sv))
+                    except Exception:
+                        std_by_ls[st].append(float('nan'))
+                        std_fits_by_ls[st].append(None)
+
+                    # Weighted GP
+                    try:
+                        if X_tr_w is None:
+                            raise RuntimeError(
+                                f"no importance-weighted hybrid features for "
+                                f"fold={fold_i} budget={bkey}")
+                        _svw = (_median_pair_distance(X_tr_w)
+                                if st == 'median' else 1.0)
+                        gp_w = _make_gp(X_tr_w, st)
+                        gp_w.fit(X_tr_w, y_train)
+                        _p = gp_w.predict(X_va_w)
+                        w_by_ls[st].append(metric_fn(y_val, _p))
+                        w_fits_by_ls[st].append(
+                            _gp_fit_report(gp_w, _p, st, _svw))
+                    except Exception:
+                        w_by_ls[st].append(float('nan'))
+                        w_fits_by_ls[st].append(None)
+
+            if std_by_ls[ls_reported]:
+                for st in ls_starts:
+                    results['hybrid_by_budget_by_lengthscale'].setdefault(
+                        st, {})[bkey] = _gp_block(
+                            std_by_ls[st], w_by_ls[st],
+                            std_fits_by_ls[st], w_fits_by_ls[st])
+                # A COPY, so _orient_deltas does not reach one dict twice.
+                results['hybrid_by_budget'][bkey] = copy.deepcopy(
+                    results['hybrid_by_budget_by_lengthscale'][
+                        ls_reported][bkey])
+                for st in ls_starts:
+                    _b = results['hybrid_by_budget_by_lengthscale'][st][bkey]
+                    print(f"    hybrid [{bkey} features, {st} start]: "
+                          f"std={_b['standard']:.4f}, "
+                          f"weighted={_b['weighted']:.4f} "
+                          f"(delta={_b['delta']:+.4f}, "
+                          f"delta_paired={_b['delta_paired']:+.4f} "
+                          f"over {_b['n_paired_folds']} folds)")
 
         # 'hybrid' stays the arm built at each fold's own recipe width.
         results['hybrid'] = results['hybrid_by_budget'].get('recipe', {})
@@ -2236,6 +2391,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'qrasar_neighbour_counts': _qrasar_ks(),
         'gp_restarts': int(os.environ.get('KIRBY_S10_GP_RESTARTS', '0')),
         'gp_kernel': _gp_kernel_in_use(),
+        'gp_lengthscale_starts': _gp_lengthscale_starts(),
+        'gp_normalize_y': _gp_normalize_y(),
         'gp_kernel_largest_prediction_difference': _gp_kernel_equivalence(),
         'basis': (
             'Every feature is z-scored, then multiplied by its importance '
