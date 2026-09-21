@@ -37,6 +37,17 @@ Two categories, and they need different work:
 | s12 | method | yes, 3/3 twice | yes | **yes** |
 | s13 | method | yes, 3/3 | yes | **retrieval yes; clustering CANNOT BE** — its statistic moves 6-34x the delta on a reseed |
 
+## minkowski p=0.5 is queued, not cut
+
+s06's sweep ran manhattan, euclidean and cosine and left minkowski p=0.5 out on
+cost: 1,471 seconds a fold against 414 seconds for the other three together.
+Cost is not one of the three reasons a cut needs. Three runs are queued, one per
+dataset, at `S06_COEFFS=minkowski_p0.5 S06_TAG=mink`, writing
+`sweep_<dataset>_mink.json` beside the others. Roughly two hours a dataset, and
+the supervisor runs them when the machine has room.
+
+Nothing here says how it will rank.
+
 ## Who is covering what, as of 2026-09-21 02:05
 
 Every row above with an incomplete optimisation now has someone on it. Nothing
