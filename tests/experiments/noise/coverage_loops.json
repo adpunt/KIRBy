@@ -468,6 +468,16 @@
    "after": "the duplicate is copied from the twin it was recorded as copying, so 6 neighbour searches and 30 model fits are skipped per duplicate cell per injected level per fold. Two cells duplicate on the lightgbm_gain half of the sweep, hybrid_imp_own and hybrid_similarity_imp_own, so at n12's full configuration of 7 injected levels and 5 folds that is 70 skipped scorings, and at iteration grade of 2 levels and 3 folds it is 12",
    "kept": true,
    "note": "The numbers in the result file are unchanged: the two calls on the same matrix returned identical readings before the change, which is what makes copying exact rather than an approximation. The 168.9 seconds was measured while the machine was at a one-minute load of 88, so it is an upper bound on an idle machine and not a claim about either. Which cells were copied and how many scorings that skipped is recorded in results['duplicate_conditions_copied']. NOT RE-MEASURED end to end on a real dataset: flab_thermo_tresanco's search store holds 4 rows and caco2's and herg_ki's were rebuilt empty at 08:10 today, so no hybrid recipe exists for n12.run to build a hybrid space from."
+  },
+  {
+   "experiment": "n02",
+   "date": "2026-09-21",
+   "dataset": "herg_ki, 1412 molecules, 941 in each fold's training block, control representation ecfp4; and flab_thermo_tresanco, 672 antibodies, 448 in each fold's training block, control representation onehot. 3 outer folds each, models random forest, lightgbm and svm",
+   "changed": "the power each feature's importance is raised to before it scales the axes of the space a molecule's ten nearest neighbours are found in, swept over 0.0, the 0.5 n02 ships, and 1.0. At 0.0 every feature keeps the width the scaler gave it, which is the space n18's downweight finds its neighbours in. The score, the row weight ratio and the fitting space are all held fixed",
+   "before": "0.5, the square root, which n02 has used since the file was written and had never been run at any other power",
+   "after": "0.5 is the best of the three on both datasets. herg_ki, weighted minus unweighted rmse averaged over the three models: -0.0074 at 0.5, -0.0080 at 1.0, -0.0103 at 0.0, where a negative number means the weights made the error worse. flab_thermo_tresanco, the same average in spearman: -0.0035 at 0.5, -0.0131 at 1.0, -0.0263 at 0.0. Over the 6 dataset-model readings 0.5 is the best power in 5 and 0.0 is the best in none",
+   "kept": true,
+   "note": "Nothing changed: 0.5 is what n02 already computes. This was run because n18 runs the same score through the same weights_from_scores at the same 4-to-1 row weight ratio, finds its neighbours in the unscaled features, and WINS on herg_ki at +0.0047 rmse where n02's weights lose at -0.0074 rmse. The unscaled space is not the reason \u2014 it is the worst of the three powers on both datasets. What still differs between the two files is the number of outer folds, 5 against 3, and n18's detectors, neighbor_residual and cross_val, against n02's own neighbour-mean deviation."
   }
  ]
 }
