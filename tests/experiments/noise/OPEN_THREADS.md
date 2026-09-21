@@ -57,8 +57,13 @@ label_smooth best at 0.25, oof_smooth and gp_smooth at 0.5, downweight at a 4-to
 row weight ratio.
 
 They differ in three ways: injected against real noise, share-of-gap against
-held-out spearman, and saprot against esm2_cdr. A job `n07_shape_in_esm2_cdr` is
-registered to remove the third.
+held-out spearman, and saprot against esm2_cdr. `n07_shape_in_esm2_cdr` RAN on
+2026-09-21, 3 folds, and the answer REVERSES: in esm2_cdr, rescaling the
+suspicion score by its rank recovers 42.8% of a 0.2112 spearman gap against
+11.1% for moving each label the whole way in proportion to the raw score. In
+saprot the same pair read 19.4% against 47.2%. ⛔ THAT PAIR IS NOT CLEAN: the
+saprot numbers were measured before the length-scale fix, so the representation
+and whether the Gaussian process was fitting both changed between them.
 
 A THIRD READING, 2026-09-21, and it sides with n18. n23 injects noise and sweeps
 the same score-proportional move at 0.25, 0.5 and 1.0 on flab, 3 folds, level
@@ -68,24 +73,48 @@ So injected-against-real is not on its own the reason n07 and n18 disagree.
 
 ⛔ NEXT: which one sets the default is undecided. No default has moved.
 
-### B2. The Gaussian process `gp_smooth` corrects toward is degenerate
-At n07's width it returns 3 distinct posterior-mean values across 448 molecules —
-the train mean. Collapsed at 1280, 361 and 20 features with bit-identical numbers;
-fits at 200, 50 and 5. Best measured is 5 features at 0.4360 spearman against clean,
-better than 200 by 0.1057.
+### B2. CLOSED 2026-09-21. The Gaussian process was not reading its inputs, and
+### the seven-way ranking has been re-run with one that does
+The RBF length scale started at 1.0 and never left: the three inner folds fitted
+1.01, 1.00 and 1.01 with the white-noise level pinned at its own upper bound, so
+the posterior mean was one constant per inner fold. Fixed in
+`GaussianProcessEstimator.estimate` — the length scale now starts at the median
+distance between the training molecules it is fitted on.
 
-That the collapsed rows are bit-identical across a sixty-fourfold range of widths
-says optimiser fallback, not genuine flatness. A job `n07_gp_kernel_bounds` is
-registered to print the fitted length-scale at each width and settle it.
+The seven-way ranking re-run on flab in saprot, 3 folds, injected level 2.0,
+clean 0.5985 spearman against corrupted 0.4111 so the gap is 0.1874: remove
+35.7% of the gap, quantile_clip 34.1%, knn_smooth 33.6%, oof_smooth 28.2%,
+gp_smooth 27.2%, downweight 18.7%, label_smooth 14.3%. `gp_smooth` is fifth of
+seven where it was second from bottom.
 
-⛔ NEXT: `gp_smooth` ranked second from bottom of the seven corrections at 13.4%
-while smoothing toward a constant. The whole seven-way ranking may change.
+⛔ NEXT, and it is not a defect: THE TOP THREE ARE NOT SEPARATED. remove,
+quantile_clip and knn_smooth sit 0.0039 spearman apart on the three-fold mean
+and each wins a different fold outright. The run's own floor, measured inside
+it: two gp arms whose targets differ by 0.0000002 label units scored 0.0402
+spearman apart on fold 1.
 
-### B3. Importance-weighting a kernel loses where the process actually fits
-0.2709 against 0.3303 spearman at 200 features, 0.2182 against 0.2473 at 50. Two of
-two, one fold. This is the opposite of the 29% gain the similarity work measured.
+⛔ ALSO NOT MEASURED HERE: what the fix bought in share of the gap. The bake-off
+names two gp arms, one supposedly started at 1.0, but the repo fix had already
+landed and both fitted the median-started process — its own log says 358
+distinct posterior means either way. `n07_gp_lengthscale_payoff` is with the
+supervisor and restores the pinned start inside the fit.
 
-⛔ NEXT: unexplained. One fold.
+### B3. Importance-weighting a kernel: the two readings disagree, and the newer
+### one has more behind it
+AGAINST: 0.2709 against 0.3303 spearman at 200 features, 0.2182 against 0.2473
+at 50. Two of two, ONE fold, in saprot narrowed by hand, with the length scale
+still pinned at 1.0.
+
+FOR, 2026-09-21: in esm2_cdr at the full 1280 features with the length scale
+fixed, multiplying the kernel's inputs by the square root of each feature's
+lightgbm gain wins the three-fold mean at 4 of 4 shapes — 32.7%, 41.6%, 46.7%
+and 31.1% of a 0.2112 spearman gap against 10.9%, 11.1%, 42.8% and 15.9%
+unweighted — and 9 of 12 paired fold readings. It loses folds 0 and 2 at the
+rank rescale and wins the mean there on fold 1 alone.
+
+⛔ NEXT: nothing in n07 passes `feature_weights`, so neither reading has changed
+any default. Whether it is the representation or the fixed length scale that
+flipped the sign is not measured.
 
 ### B4. n12's largest effect has never been followed up
 In its existing result file the unweighted HYBRID beat the unweighted base
@@ -165,6 +194,24 @@ them.
 
 ⛔ NEXT: nothing, unless the owner wants the feature ranking to read a weight.
 That is a change to `hybrid.py`, not to n20.
+
+
+### B7. `remove` and `knn_smooth` act on exactly the same molecules
+Both read the same cut-off: `remove` keeps the training rows whose suspicion
+score falls below the (1 - noise_fraction) percentile, and `knn_smooth` rewrites
+the rows at or above it. So they are the same selection under two treatments —
+drop the flagged tenth, or give it the mean label of its ten nearest molecules.
+On flab in saprot at injected level 2.0, 3 folds, that head-to-head is 35.7% of
+the gap for dropping and 33.6% for rewriting, which is inside the fold spread.
+
+The consequence for anything that composes them: `knn_smooth` then `remove` IS
+`remove`. CHECKED on 120 synthetic molecules — same kept rows, and the largest
+difference between the two label columns over those rows is 0.0000000000 label
+units. The other four label repairs move EVERY label some distance, so none of
+them collapses this way.
+
+⛔ NEXT: nothing is broken. It is written down because a combination run has to
+know which pairs are one arm.
 
 ---
 
