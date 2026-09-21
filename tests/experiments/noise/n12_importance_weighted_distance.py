@@ -1101,11 +1101,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # flab_thermo_tresanco under outlier_p10 at level 0.5:
                         # the random forest's clean-to-noisy gap was 0.008551
                         # spearman against a clean score of 0.458964 -- 1.86% of
-                        # it -- and 71 of the 192 recovery readings in that
-                        # result file fell outside 0 to 100 percent, the
-                        # extremes reaching -615 and +578 percent. lightgbm's
-                        # gap on the same folds was 0.048543 against a clean
-                        # score of 0.426777, which is 11.4% of it.
+                        # it. Of the 192 recovery readings in that result file,
+                        # 104 fell outside 0 to 100 percent: 68 below 0 and 36
+                        # above 100. The random forest's 96 readings ran from
+                        # -615.6 to +578.0 percent. lightgbm's gap on the same
+                        # folds was 0.048543 against a clean score of 0.426777,
+                        # which is 11.37% of it, and its 96 readings ran from
+                        # -33.9 to +149.3 percent. This floor refuses all 96 of
+                        # the random forest's and keeps all 96 of lightgbm's,
+                        # which removes 79 of those 104 and leaves 25.
                         #
                         # n06, n07, n11 and n21 all refuse the figure when the
                         # gap is under GAP_MIN_FRAC of the clean score. n12 was

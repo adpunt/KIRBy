@@ -143,9 +143,14 @@ class _Patched:
     """
 
     def __init__(self, metric_name, metric_fn, lower_is_better,
-                 estimators=('neighbor_residual', 'cross_val')):
+                 estimators=('neighbor_residual', 'cross_val'),
+                 pool=None):
         self.metric = (metric_name, metric_fn, lower_is_better)
         self.estimators = list(estimators)
+        # What the pool lookup hands back. The default is one family with a
+        # blueprint on it; test 7 passes one that finds nothing, which is the
+        # state every molecular dataset's stored search was in on 2026-09-20.
+        self.pool = pool or _fake_pool
         self._saved = {}
 
     def __enter__(self):
@@ -154,7 +159,7 @@ class _Patched:
                   'NEIGHBOR_METRICS', 'SMOOTH_ALPHAS', 'WEIGHT_STRENGTHS',
                   'ALPHAS'):
             self._saved[k] = getattr(n11, k)
-        n11.get_best_search_for_downstream = _fake_pool
+        n11.get_best_search_for_downstream = self.pool
         n11.get_domain_metric = lambda _d: self.metric
         n11.BASE_ESTIMATORS = self.estimators
         n11.TORCH_ESTIMATORS = []
@@ -375,6 +380,42 @@ def test_extra_targets_list_is_honoured():
           str(sorted({k.split('|', 1)[1] for k in keys if '|gp+' in k})[:3]))
 
 
+# ---------------------------------------------------------------------------
+# 7. A pool that hands back nothing. Until 2026-09-21 run() returned
+#    {'error': 'no_blueprint'} before its first level, so a dataset whose
+#    stored search was absent produced no file at all — and every molecular
+#    dataset's store was in that state on 2026-09-20. The recipe is needed for
+#    the hybrid estimation space, one arm of the space axis, which this file's
+#    own header calls oracle-biased; the estimator x correction cross needs no
+#    recipe. So the cross has to survive an empty pool, and the file has to say
+#    the hybrid arm is missing rather than leave a silent gap.
+# ---------------------------------------------------------------------------
+def test_empty_pool_keeps_the_cross():
+    print("an empty pool drops the hybrid arm and keeps the cross:")
+
+    def _no_pool(*_a, **_kw):
+        return None, None
+
+    data = _tiny_data()
+    with _Patched('spearman', _spearman, False,
+                  estimators=['neighbor_residual'], pool=_no_pool):
+        res = n11.run(data, {'n_splits': 2, 'models': ['rf']}, None,
+                      'smoke_n11', sigmas=[0.5], noise_seeds=[0])
+    check('no early return', 'error' not in res, res.get('error', ''))
+    sr = res.get('per_sigma', {}).get('0.5', {})
+    cells = _cells(sr)
+    check('the estimator x correction cross still produced scored cells',
+          len(cells) > 0, f'{len(cells)} cells')
+    spaces = {sp for sp, _, _, _ in cells}
+    check('every space is a plain representation, none is a hybrid',
+          spaces and not any(s.startswith('hybrid_') for s in spaces),
+          str(sorted(spaces)))
+    arm = (res.get('pool_selection') or {}).get('hybrid_arm') or {}
+    check('the file records that no hybrid space was built, and why',
+          arm.get('spaces_built') == [] and bool(arm.get('dropped_reason')),
+          str(arm))
+
+
 def main():
     print("=" * 66)
     print("SMOKE: n11 estimation x remediation grid, whole run")
@@ -385,6 +426,7 @@ def main():
     test_gap_sign_both_directions()
     test_swept_lists_are_the_lists_the_loops_read()
     test_extra_targets_list_is_honoured()
+    test_empty_pool_keeps_the_cross()
     print("=" * 66)
     if FAILS:
         print(f"RESULT: {len(FAILS)} FAILURES: {FAILS}")

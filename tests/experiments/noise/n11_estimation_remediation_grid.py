@@ -755,9 +755,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         data=data,
         pool_subset=pool_subset,
     )
+    # ⛔ A POOL WITH NO RECIPE IN IT IS NOT A REASON TO ABANDON THE CROSS.
+    # Until 2026-09-21 this check and the one below both returned
+    # {'error': 'no_blueprint'} before the level loop started, so a dataset
+    # whose stored search was absent produced no file at all — and n11 had
+    # produced none since it was written.
+    #
+    # What the recipe buys is the hybrid estimation space, one arm of the space
+    # axis, and the header above calls that arm oracle-biased and refuses to
+    # headline it. The estimator × correction cross — what this file names as
+    # its primary claim — needs no recipe: it scores every training molecule in
+    # the control representation and repairs the labels there.
+    #
+    # So an absent recipe now drops the hybrid arm and records why, and the run
+    # continues in the representation spaces. `hybrid_arm` is written into
+    # results['pool_selection'], so a file with no hybrid space in it reads as
+    # a recorded decision rather than as a silent gap.
+    hybrid_arm = {'spaces_built': [], 'dropped_reason': None}
     if meta is None:
-        print("  WARNING: No recipe found in the pool, skipping")
-        return {'error': 'no_blueprint', 'metric': metric_name}
+        print("  no recipe in the pool for this dataset: the hybrid "
+              "estimation spaces are not built, and the estimator x "
+              "correction cross runs in the representation spaces.")
+        hybrid_arm['dropped_reason'] = (
+            'the pool returned no entry for this dataset, so no hybrid '
+            'estimation space was built; every space in this file is a plain '
+            'representation')
+        meta = {}
 
     # 2026-09-12: one hybrid space per family the pool holds. meta['objective']
     # names the family the pool returned as its winner; meta['by_objective']
@@ -800,8 +823,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         })
 
     if not hybrid_recipes:
-        print("  WARNING: No blueprint found, skipping")
-        return {'error': 'no_blueprint', 'metric': metric_name}
+        print("  no blueprint on any family the pool holds: the hybrid "
+              "estimation spaces are not built, and the estimator x "
+              "correction cross runs in the representation spaces.")
+        hybrid_arm['dropped_reason'] = hybrid_arm['dropped_reason'] or (
+            'the pool answered but carried no blueprint on any family, so no '
+            'hybrid estimation space was built; every space in this file is a '
+            'plain representation')
+    hybrid_arm['spaces_built'] = [_r['space'] for _r in hybrid_recipes]
 
     for _r in hybrid_recipes:
         print(f"  hybrid space {_r['space']}: family {_r['objective']!r}, "
@@ -1269,6 +1298,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #   family's own score sits beside its own metric name; nothing stored puts
     #   the two on one ruler and the pool does not rank them against each other.
     results['pool_selection'] = {
+        # Which hybrid estimation spaces this run holds, and — when it holds
+        # none — why. An empty list with a reason beside it is a run that kept
+        # its estimator x correction cross and dropped the space axis's hybrid
+        # arm; before 2026-09-21 that case wrote no file at all.
+        'hybrid_arm': hybrid_arm,
         'pool_subset': meta.get('pool_subset'),
         'pool_winner_objective': meta.get('objective'),
         'pool_winner_objective_choice': meta.get('objective_choice'),
