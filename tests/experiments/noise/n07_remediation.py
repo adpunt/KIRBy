@@ -34,12 +34,19 @@ molecules predicts for this one, and gp_smooth at the posterior mean of a
 Gaussian process fitted the same way; both inner splits are scaffold-group
 aware.
 
-⛔ BUT gp_smooth's TARGET IS A CONSTANT PER INNER FOLD ON A WIDE REPRESENTATION,
-not a prediction for the molecule. Measured 2026-09-21 on saprot, 448 training
-molecules and 1280 features: the 448 molecules received 3 distinct values and
-each was exactly the mean label of the inner fold they were held out of. Read
-the note in `cleaned_training_set`'s gp_smooth branch before treating that arm
-as a model-based repair.
+⛔ gp_smooth's TARGET WAS A CONSTANT PER INNER FOLD UNTIL 2026-09-21, not a
+prediction for the molecule. On saprot, 448 training molecules and 1280
+features, the 448 molecules received 3 distinct posterior-mean values and each
+was exactly the mean label of the inner fold they were held out of. The cause
+was the starting value of the RBF kernel's length scale, 1.0, against a median
+distance between two standardised molecules of about 50: every off-diagonal
+entry of the kernel matrix underflowed and the optimiser had no gradient to
+follow. Starting it at the median distance instead
+(src/kirby/utils/noise_estimation.py, GaussianProcessEstimator.estimate) gives
+358 distinct values over the same 448 molecules and moves the target's rank
+correlation with the clean labels from -0.0441 to 0.5630 spearman. Every result
+for this arm measured before 2026-09-21 is a result for shrinkage toward the
+inner fold's mean label, not for a Gaussian process.
 
 quantile_clip aims at nothing — a quantile regression forest gives each
 molecule the 10th-to-90th-percentile range of the labels its own leaves'
@@ -586,31 +593,43 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # already computed this on every call and kept it on the fitted object
         # as predictions_; nothing in this file read it before today.
         #
-        # ⛔ ON A WIDE REPRESENTATION THAT POSTERIOR MEAN IS A CONSTANT PER
-        # INNER FOLD, NOT A PREDICTION FOR THIS MOLECULE. MEASURED 2026-09-21,
-        # fold 0 of flab_thermo_tresanco, saprot, 448 training molecules and
-        # 1280 features, REPAIR_OOF_SPLITS cut to 3 for the probe: the 448
-        # molecules received 3 distinct values -- 64.0567, 65.7113 and 65.7467
-        # label units -- and each one is exactly the mean label of the inner
-        # fold that molecule was held out of. The fitted noise level came back
-        # at 22.7930 label units against a fitted-label standard deviation of
-        # 22.8228, so the process assigns all of the variance to noise and its
-        # posterior mean falls back to its prior mean. Its rank correlation
-        # with the labels it was fitted on is -0.0234 spearman.
+        # ⛔ UNTIL 2026-09-21 THAT POSTERIOR MEAN WAS A CONSTANT PER INNER FOLD,
+        # NOT A PREDICTION FOR THIS MOLECULE. MEASURED on fold 0 of
+        # flab_thermo_tresanco, saprot, 448 training molecules and 1280
+        # features, REPAIR_OOF_SPLITS cut to 3 for the probe: the 448 molecules
+        # received 3 distinct values -- 64.0567, 65.7113 and 65.7467 label units
+        # -- and each one is exactly the mean label of the inner fold that
+        # molecule was held out of. The fitted noise level came back at 22.7930
+        # label units against a fitted-label standard deviation of 22.8228, so
+        # the process assigned all of the variance to noise and its posterior
+        # mean fell back to its prior mean. Its rank correlation with the CLEAN
+        # labels was -0.0441 spearman.
         #
-        # Why: the kernel is an RBF with ONE length scale for every feature, and
-        # over 1280 features on 448 molecules every pair of molecules sits at
-        # nearly the same distance, so the kernel carries no information to
-        # optimise against. Weighting the inputs by lightgbm gain, which zeroes
-        # 919 of the 1280 columns, changed the posterior mean by 0.00000000
-        # label units -- bit-identical, because nothing was reading the columns.
+        # WHAT WAS WRONG, AND IT WAS NOT THE WIDTH. The RBF kernel's length
+        # scale started at 1.0. Two standardised molecules described by 1280
+        # features sit about sqrt(2 * 1280) = 50.6 apart, exp(-50.6^2 / 2)
+        # underflows, so the kernel matrix is the identity and the gradient of
+        # the marginal likelihood in the length scale is flat. The three inner
+        # folds came back with length scales of 1.01, 1.00 and 1.01 -- the
+        # optimiser never moved -- and the white-noise level pinned at 1.0, its
+        # own upper bound.
         #
-        # So this branch is shrinkage toward the inner fold's mean label. That
-        # is not nothing -- at strength 1.0 it recovered 47.2% of the
-        # clean-to-corrupted gap over 3 folds, the best of the twelve settings
-        # measured -- but it is not what "aiming at a Gaussian process's
-        # prediction" says, and no amount of work on the TARGET will change it
-        # while the process is fitted at this width.
+        # FIXED in GaussianProcessEstimator.estimate
+        # (src/kirby/utils/noise_estimation.py): the length scale now starts at
+        # the median distance between the training molecules it is fitted on.
+        # Same fold, same features, same noise draw: 358 distinct posterior-mean
+        # values over the 448 molecules, fitted length scales 61.87, 54.26 and
+        # 41.85, and 0.5630 spearman against the clean labels where it was
+        # -0.0441. The target sits 9.5756 label units from the clean label of
+        # the molecules the injector damaged, against 11.0137 before.
+        #
+        # ⛔ EVERY gp_smooth NUMBER RECORDED BEFORE 2026-09-21 IS A NUMBER FOR
+        # SHRINKAGE TOWARD THE INNER FOLD'S MEAN LABEL, not for a Gaussian
+        # process: the 13.4% of the clean-to-corrupted gap it recovered on esmc,
+        # which put it second from bottom of the seven, and the 47.2% it
+        # recovered at strength 1.0. Weighting the kernel inputs by feature
+        # importance was measured against the broken process too and came back
+        # bit-identical, so that question is open again now the process fits.
         target = (targets or {}).get('gp')
         if target is None:
             # ⛔ THE ROW CAP LIVES HERE TOO, BECAUSE THE FIT IS HERE.

@@ -811,13 +811,36 @@ class GaussianProcessEstimator(NoiseEstimator):
     
     def __init__(self, kernel: str = 'rbf', n_restarts: int = 3,
                  normalize: bool = True, n_folds: int = 5, groups=None,
-                 random_state: int = 42):
+                 random_state: int = 42, feature_weights=None):
         super().__init__(random_state)
         self.kernel = kernel
         self.n_restarts = n_restarts
         self.normalize = normalize
         self.n_folds = n_folds
         self.groups = groups
+        # ⛔ ONE WEIGHT PER FEATURE, APPLIED AFTER THIS CLASS'S OWN
+        # STANDARDISATION, AND THAT IS THE ONLY PLACE IT CAN GO.
+        #
+        # An RBF kernel is exp(-||x - x'||^2 / 2l^2) with ONE isotropic length
+        # scale, so every feature counts equally in the distance. On a
+        # representation where a handful of features carry the signal and
+        # thousands are noise, the kernel is the noise. Scaling feature j by
+        # sqrt(w_j) makes it anisotropic with per-feature length scales, which
+        # is the same operation n12 and n21 sweep for the kNN distance.
+        #
+        # A caller CANNOT do this by scaling X before calling estimate().
+        # fold_fn below runs StandardScaler().fit_transform on the training
+        # fold, and dividing each column by its own standard deviation removes
+        # a constant per-column scaling exactly. MEASURED 2026-09-19 on a
+        # synthetic set where 2 of 20 features carry the signal and a tenth of
+        # the labels are corrupted: scaling the inputs beforehand gave average
+        # precision 0.8359 against 0.8359 unweighted, identical to four
+        # decimals, because the weighting was erased before the kernel saw it.
+        #
+        # None keeps the isotropic kernel, which is what every caller before
+        # 2026-09-19 got.
+        self.feature_weights = (None if feature_weights is None
+                                else np.asarray(feature_weights, dtype=float))
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         from sklearn.gaussian_process import GaussianProcessRegressor
@@ -834,12 +857,17 @@ class GaussianProcessEstimator(NoiseEstimator):
             y_tr_s = scaler_y.fit_transform(y_tr.reshape(-1, 1)).ravel()
             X_ev_s = scaler_X.transform(X_ev)
 
-            if self.kernel == 'matern':
-                base_kernel = ConstantKernel(1.0) * Matern(length_scale=1.0, nu=2.5)
-            else:
-                base_kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
-            kernel = base_kernel + WhiteKernel(noise_level=0.1,
-                                               noise_level_bounds=(1e-5, 1.0))
+            # After the standardisation, never before it -- see the note on
+            # feature_weights. sqrt because the kernel squares the difference,
+            # so a multiplier of sqrt(w) gives feature j a weight of w in the
+            # squared distance. Normalised to mean 1 so the overall length
+            # scale the optimiser starts from does not move with the weights.
+            if self.feature_weights is not None:
+                w = np.maximum(np.asarray(self.feature_weights, float), 0.0)
+                if w.shape[0] == X_tr_s.shape[1] and w.sum() > 0:
+                    m = np.sqrt(w / w.mean())
+                    X_tr_s = X_tr_s * m
+                    X_ev_s = X_ev_s * m
 
             # Cap the training-fold size for tractability (deterministic subset).
             n_max = min(1000, len(y_tr_s))
@@ -849,6 +877,61 @@ class GaussianProcessEstimator(NoiseEstimator):
                 X_fit, y_fit = X_tr_s[idx], y_tr_s[idx]
             else:
                 X_fit, y_fit = X_tr_s, y_tr_s
+
+            # ⛔ THE LENGTH SCALE STARTS AT THE MEDIAN DISTANCE BETWEEN TRAINING
+            # MOLECULES. IT USED TO START AT 1.0 AND THAT MADE THE PROCESS
+            # RETURN ITS PRIOR MEAN ON ANY WIDE REPRESENTATION.
+            #
+            # An RBF kernel is exp(-d^2 / 2l^2). Two standardised molecules
+            # described by 1280 features sit about sqrt(2 * 1280) = 50.6 apart,
+            # so at l = 1 every off-diagonal entry of the kernel matrix
+            # underflows to zero, the matrix is the identity, and the gradient
+            # of the marginal likelihood in l is flat. The optimiser cannot
+            # leave its starting point and every bit of the variance goes to
+            # the white-noise term.
+            #
+            # MEASURED 2026-09-21, fold 0 of flab_thermo_tresanco, 448 training
+            # molecules, saprot's 1280 features, 3 inner folds. Starting at 1.0:
+            # the three inner folds fitted length scales 1.01, 1.00 and 1.01 --
+            # the optimiser never moved -- the white-noise level came back at
+            # 1.0, its own upper bound, and the 448 molecules received 3
+            # distinct posterior-mean values, one constant per inner fold. That
+            # posterior mean rank-correlates with the clean labels at -0.0441
+            # spearman. Starting at the median distance: length scales 61.87,
+            # 54.26 and 41.85, noise levels 0.8884, 0.8328 and 0.8446, 358
+            # distinct posterior-mean values over the 448 molecules, and
+            # 0.5630 spearman against the clean labels.
+            #
+            # n_restarts_optimizer does not rescue it. sklearn samples each
+            # restart log-uniformly across the length-scale bounds, which were
+            # (1e-5, 1e5) -- ten orders of magnitude -- so a restart almost
+            # never lands in the narrow band around the data's own distance.
+            # The bounds below are a factor of 100 either side of the start.
+            #
+            # This is the same median heuristic the heteroscedastic Gaussian
+            # process further down this file already uses (search
+            # `torch.cdist(probe, probe).flatten().median()`).
+            ls0 = 1.0
+            if len(X_fit) > 1:
+                from sklearn.metrics import pairwise_distances
+                _rs = np.random.RandomState(self.random_state)
+                _take = (_rs.choice(len(X_fit), 256, replace=False)
+                         if len(X_fit) > 256 else np.arange(len(X_fit)))
+                _d = pairwise_distances(X_fit[_take])
+                _med = float(np.median(_d[np.triu_indices(len(_take), 1)]))
+                if np.isfinite(_med) and _med > 0:
+                    ls0 = _med
+            ls_bounds = (ls0 / 100.0, ls0 * 100.0)
+
+            if self.kernel == 'matern':
+                base_kernel = ConstantKernel(1.0) * Matern(
+                    length_scale=ls0, length_scale_bounds=ls_bounds, nu=2.5)
+            else:
+                base_kernel = ConstantKernel(1.0) * RBF(
+                    length_scale=ls0, length_scale_bounds=ls_bounds)
+            kernel = base_kernel + WhiteKernel(noise_level=0.1,
+                                               noise_level_bounds=(1e-5, 1.0))
+            self.length_scale_init_ = float(ls0)
 
             gp = GaussianProcessRegressor(
                 kernel=kernel, n_restarts_optimizer=self.n_restarts,
