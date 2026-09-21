@@ -963,6 +963,12 @@ def run_all(dataset_name: str, output_dir: str,
                 f"or add it to DATASET_REPS in complexity_helpers.py."
             )
         rep_names = ds_reps['general']
+        # Compute cut for a local run, owner's call: fewer representations is
+        # allowed, fewer molecules is not. Unset, nothing changes. This call was
+        # lost once to a concurrent edit and run_all silently went back to all
+        # ten representations -- see cut_pool's own note.
+        from experiments._local_grid import cut_pool
+        rep_names = cut_pool(dataset_name, rep_names)
 
     print(f"\n{'=' * 70}")
     print(f"COMPLEXITY EXPERIMENTS: {dataset_name.upper()}")

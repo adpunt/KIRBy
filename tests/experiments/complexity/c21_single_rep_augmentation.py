@@ -509,7 +509,14 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
     # predictive one. It stays available to a caller that names it. The three
     # that remain are the tree and boosting pair plus lightgbm, all in the
     # default downstream set.
-    model_names = list(model_names) if model_names else ['rf', 'xgboost', 'lightgbm']
+    # The runner's own model list wins when the caller named none. c21 ignored
+    # config['models'] entirely and always ran rf, xgboost and lightgbm, so a run
+    # configured for two downstream models still paid for three here and c21's
+    # rows were scored under a model list no other experiment in the same run
+    # used. A caller that names models still wins over both.
+    if not model_names:
+        model_names = list(config.get('models') or []) or ['rf', 'xgboost', 'lightgbm']
+    model_names = list(model_names)
     models = get_model_factories(model_names, task_type=task_type, n_samples=n_samples)
     print(f"  Models: {list(models.keys())}  (x{n_seeds} seeds averaged per fold)")
 

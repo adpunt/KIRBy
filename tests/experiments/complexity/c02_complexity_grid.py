@@ -70,6 +70,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     model_instances = {name: factory() for name, factory in models.items()}
 
     augs = data.get('augmentations')
+    # c02 builds its OWN searches, so KIRBY_LOCAL_AUG_CONDITIONS -- which cuts
+    # the augmented conditions out of the shared precompute -- never reached it.
+    # Measured 2026-09-20: c02 ran four searches and took 33,174 s on caco2, over
+    # any per-experiment wall cap, so it could never write a result file and c08
+    # and c09, which read c02's file, could never run either. Unset -- the
+    # cluster -- nothing changes.
+    from experiments._shared import _local_aug_conditions
+    if augs and 'uncapped' not in _local_aug_conditions(['none', 'uncapped', 'capped']):
+        print("  [local] KIRBY_LOCAL_AUG_CONDITIONS drops the uncapped and "
+              "capped conditions; the augmentation-condition question has no "
+              "answer in this run.")
+        augs = None
     from experiments.complexity.complexity_helpers import DATASET_REPS
 
     # --- All reps, no augmentation ---
@@ -173,6 +185,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # factories hit the $KIRBY_CACHE_DIR/finetuned_reps/ cache populated by
     # precompute_ft_reps.py. Empty on datasets with no 'ft_reps' entry.
     search_ft = None
+    ft_search_error = None
     ft_factories = _build_rep_factories(dataset_name, data)
     if ft_factories:
         # Stable id so the search cache for FT doesn't collide with non-FT
@@ -187,27 +200,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         print(f"\n  --- Frozen + FT ({len(reps)} frozen + "
               f"{len(ft_factories)} FT: {', '.join(sorted(ft_factories))}) ---")
-        search_ft = find_best_hybrid(
-            base_reps=reps,
-            labels=labels,
-            groups=groups,
-            models=None,
-            budgets=full_budgets,
-            allocation_methods=allocation_methods,
-            importance_methods=importance_methods,
-            n_folds=n_folds,
-            augmentations=None,
-            augmentation_strategy='none',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            metric=metric_name,
-            task_type=data['task_type'],
-            verbose=True,
-            cache=True,
-            dataset_name=dataset_name,
-            tier='general_ft',
-            rep_factories=ft_factories,
-            rep_factories_id=ft_id,
-        )
+        # A fine-tuned representation that will not build takes this arm down,
+        # and nothing else. On caco2 lora_molformer raises ModuleNotFoundError:
+        # No module named 'transformers.masking_utils' on all five folds, and
+        # _precompute_fold_reps refuses the search rather than average folds
+        # over different representation pools -- which is right. What was not
+        # right is that the exception escaped run(), so caco2 lost the WHOLE of
+        # c02: the no-augmentation, uncapped and capped searches had all
+        # finished and not one of their numbers was written.
+        try:
+            search_ft = find_best_hybrid(
+                base_reps=reps,
+                labels=labels,
+                groups=groups,
+                models=None,
+                budgets=full_budgets,
+                allocation_methods=allocation_methods,
+                importance_methods=importance_methods,
+                n_folds=n_folds,
+                augmentations=None,
+                augmentation_strategy='none',
+                internal_evaluators=INTERNAL_EVALUATORS,
+                metric=metric_name,
+                task_type=data['task_type'],
+                verbose=True,
+                cache=True,
+                dataset_name=dataset_name,
+                tier='general_ft',
+                rep_factories=ft_factories,
+                rep_factories_id=ft_id,
+            )
+        except Exception as _ft_exc:
+            search_ft = None
+            ft_search_error = f'{type(_ft_exc).__name__}: {_ft_exc}'
+            print(f'  Frozen + FT arm FAILED, the other conditions stand: '
+                  f'{ft_search_error}')
 
     # Use uncapped as the primary search (best overall)
     search = search_uncapped
@@ -827,6 +854,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     return {
         'configs': configs,
+        # None when the frozen-plus-fine-tuned arm ran or was never asked
+        # for; otherwise the exception that stopped it, other conditions intact.
+        'ft_search_error': ft_search_error,
         'fold_reselection': fold_reselection_block,
         # Report this, not best_by_model minus baselines.
         'reselected_delta': reselected_delta,
