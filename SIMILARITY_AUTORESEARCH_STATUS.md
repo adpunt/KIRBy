@@ -1220,3 +1220,67 @@ number produced in this campaign, because nothing that runs locally calls MODI.
 It would change the MODI column of the MoleculeACE battery for at most 6.2 in
 100 molecules on the representation where ties are worst, and for none on the
 two representations where nothing ties. `simeval.py` was not edited.
+
+### `feature_ablation.py` — four of twelve block combinations beat the count fingerprint when the selection is held out, and none of them do when it is not
+
+It builds 1,024 ECFP4 counts, 208 RDKit descriptors, 167 MACCS keys and 100
+features chosen from atom-pair and torsion counts, and scores twelve
+combinations. On herg_ki it splits 709 fit molecules and 706 score molecules by
+whole scaffold group, and of 8,000 cached pairs keeps the 2,005 with both ends
+in the score half.
+
+Activity Spearman, herg_ki, both arms, the count fingerprint's own value first:
+
+    blocks                        features   held out   same molecules
+    ecfp4_count:tanimoto              1024      0.580            0.709
+    descriptors+MACCS keys             375      0.618            0.692
+    descriptors alone                  208      0.598            0.703
+    descriptors+keys+fine 2D           475      0.595            0.686
+    count+fine 2D                     1124      0.591            0.671
+    count alone, z-Euclidean          1024      0.579            0.674
+    count+descriptors+keys+fine2D     1499      0.564            0.683
+    count+MACCS keys                  1191      0.558            0.674
+
+**The 375-feature descriptor-and-keys space beats the 1,024-feature count
+fingerprint by 0.038 Spearman when the feature selection and the z-score are
+fitted on molecules it is not scored on. On the arm that fits and scores on the
+same 1,415 molecules, nothing in the table beats it and that same space loses by
+0.016.** The two arms rank the twelve combinations differently and the file
+prints both.
+
+Averaged over the combinations that contain a block against those that do not,
+held out: descriptors move activity Spearman by +0.029 and structure by +0.004;
+the 100 fine 2D features move activity by -0.005 and structure by +0.103; MACCS
+keys move activity by +0.005 and structure by -0.050.
+
+**The drop-one descriptor selection's gain shrinks by a quarter when it is
+scored on pairs it did not choose on.** On herg_ki it drops 153 of 208
+descriptors and the structural Spearman goes 0.290 to 0.419 on the held-out
+pairs, against 0.483 on the pairs the sequence was chosen on.
+
+Wall clock: 1,309 s for herg_ki, both arms.
+
+### `structural_embeddings.py` — mol2vec ties the count fingerprint, TDA and MAP4 lose heavily
+
+herg_ki, activity Spearman at five neighbours and structural Spearman over 8,000
+pairs:
+
+    metric                 activity   structure
+    ecfp4_count:tanimoto     0.7087      0.0431
+    mol2vec:euclidean        0.7098      0.0227
+    mol2vec:cosine           0.6957      0.1611
+    tda:euclidean            0.4951      0.0863
+    tda:cosine               0.4848      0.0951
+    map4:tanimoto            0.5049     -0.4079
+    map4:cosine              0.4042     -0.4244
+
+mol2vec's 300 features under Euclidean reach 0.7098 against the 1,024-bit count
+fingerprint's 0.7087, which is a tie, not a win. TDA's 28 features lose 0.21
+Spearman. Three of the six beat the count fingerprint on structure, and mol2vec
+is the only one that still does once molecule size is partialled out.
+
+Wall clock on herg_ki: MAP4 244 s, TDA 4,473 s, mol2vec 136 s. TDA is the
+expensive one by a factor of eighteen and it is the one that loses most.
+
+logd and adme_solubility for this script and for `feature_ablation.py` were
+still running when this was written.
