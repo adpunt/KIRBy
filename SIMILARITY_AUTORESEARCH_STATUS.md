@@ -187,6 +187,14 @@ four decimals on herg_ki. The two that move are `hybrid_similarity` 0.2977 to
 `build_fold_hybrid`'s geometry allocation honours the process coefficient since
 `c5752d4` and did not on 2026-09-19.
 
+s06 itself was then run end to end on herg_ki through
+`_local_autoresearch.py` with the three levers set away from their defaults —
+the distance-weighted statistic, k=5 and 25, exponent 0.25 — and its four
+neutral-model arms reproduce the sweep to four decimals at both neighbour
+counts. The file writes `distance_statistic`, `k_values` and
+`importance_exponent` into its result, so a stored number now says what its
+distance was.
+
 minkowski p=0.5 is the one coefficient NOT measured here. Timed on this machine
 at 1,471 s a fold against 414 s a fold for manhattan, euclidean and cosine
 together, which is the 25-50x the rest of this file records. It is a compute
