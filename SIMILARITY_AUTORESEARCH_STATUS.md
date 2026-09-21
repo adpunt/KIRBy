@@ -138,6 +138,21 @@ features wide. The per-width controls added in `df7c7fe` did not fix it: a width
 that occurred on one fold produced a control scored on one fold beside a hybrid
 scored on five, and the two means were read side by side.
 
+Each control is now named for the hybrid slot it controls and refitted per fold
+at that fold's slot width, so the two always rest on the same folds, and both
+axes now report the re-pick against it. Held-out delta, hybrid minus its
+own-width PCA control, 4 paired folds, 2 restarts, positive means the hybrid
+won:
+
+    dataset      clustering (k-means)   clustering (k-medians)   retrieval
+    caco2               -0.0307                +0.0200            +0.0337
+    herg_ki             -0.0648                +0.0256            +0.0230
+    adme_mdr1           +0.0858                +0.1146            +0.1104
+
+The retrieval half beats the control on all three. The clustering half beats it
+on one, and changes sign on the other two when the clusterer changes — the same
+instability as everywhere else in this axis.
+
 **⛔ THE CLUSTERING HALF CANNOT RESOLVE THE DELTA IT REPORTS.** Label coherence
 is not what k-means minimises, so two clusterings of one space with almost the
 same inertia can score far apart, and running k-means again from a different
