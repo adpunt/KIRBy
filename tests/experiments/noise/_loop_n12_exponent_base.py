@@ -238,6 +238,9 @@ def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen,
     _p(hdr)
     per_exp_wins = {e: 0 for e in EXPONENTS}
     per_exp_vals = {e: [] for e in EXPONENTS}
+    # The unweighted reading of the SAME row, so the weighting can be compared
+    # against plain within the row rather than between two column means.
+    plain_vals = []
     n_rows = 0
     for imp in imps:
         for est in ests:
@@ -249,6 +252,7 @@ def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen,
             u = unweighted.get(est)
             um = float(np.mean(u)) if u else float('nan')
             line = f'{imp:<15}{est:<20}{um:>12.4f}'
+            plain_vals.append(um)
             best = max(m, key=lambda e: m[e])
             for e in EXPONENTS:
                 line += f'{m[e]:>10.4f}'
@@ -273,6 +277,25 @@ def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen,
     _p(f'\nExponent {matched} against exponent {cur}, the value in the file '
           f'now: {a_mat:.4f} against {a_cur:.4f} mean average precision, and '
           f'{matched} scored higher in {beat} of {n_rows} rows.')
+    # THE MARGIN THE WEIGHTING BUYS, WITHIN EACH ROW.
+    # Each row is one importance scorer and one neighbour count, and its
+    # unweighted reading is the same estimator and the same neighbour count in
+    # the plain z-scored representation. Subtracting within the row is what
+    # says whether weighting helped; two column means do not, because the
+    # estimators differ from each other by more than the weighting moves any
+    # of them.
+    margin_mean = {}
+    margin_rows_won = {}
+    for e in EXPONENTS:
+        _d = [per_exp_vals[e][i] - plain_vals[i] for i in range(n_rows)
+              if plain_vals[i] == plain_vals[i]]
+        margin_mean[e] = float(np.mean(_d)) if _d else float('nan')
+        margin_rows_won[e] = int(sum(1 for x in _d if x > 0))
+    _p('\nWHAT THE WEIGHTING BUYS OVER THE PLAIN SPACE, within each row:')
+    for e in EXPONENTS:
+        _p(f'  exponent {e}: {margin_mean[e]:+.4f} mean average precision over '
+           f'the unweighted reading of the same estimator and neighbour count, '
+           f'and it was higher in {margin_rows_won[e]} of {n_rows} rows')
     ctrl = float(np.mean(per_exp_vals[0.0]))
     uall = [float(np.mean(v)) for v in unweighted.values() if v]
     _p(f'CONTROL: exponent 0.0 reads {ctrl:.4f}, the unweighted space reads '
@@ -297,6 +320,10 @@ def report(a, base_rep_name, rows, unweighted, n_corrupt_seen, n_train_seen,
             'n_rows': n_rows,
             'passes_behind_each_number': len(n_corrupt_seen),
             'rows_where_exponent_1p0_beat_0p5': beat,
+            'mean_margin_over_unweighted_by_exponent': {
+                str(e): margin_mean[e] for e in EXPONENTS},
+            'rows_where_exponent_beat_unweighted': {
+                str(e): margin_rows_won[e] for e in EXPONENTS},
             'exponent_in_the_file_when_this_ran': 0.5,
             'per_row': {f'{k[0]}|{k[1]}|{k[2]}': float(np.mean(v))
                         for k, v in rows.items()},
