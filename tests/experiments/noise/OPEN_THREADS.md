@@ -357,6 +357,35 @@ groups. So:
 ⛔ That splits the suite: the condition most worth measuring is unavailable on
 the dataset most of this campaign has used.
 
+### E3b. MEASURED 2026-09-21: grouped_shifted moves EVERY training label, so
+### a detection score cannot be read under it
+Through `noise_helpers.inject_train_labels`, on 900 synthetic labels in 601
+lopsided groups with 675 of them in the training block, 5 corruption draws each:
+
+    grouped_shifted   675, 675, 675, 675, 675 of 675 training labels moved
+    gaussian          675, 675, 675, 675, 675
+    grouped_wider     120, 106, 113, 116, 112
+    outlier_p10        60,  62,  65,  75,  59
+    censoring         338, 338, 338, 338, 338
+
+grouped_shifted's own algebra is why: `eps_i = sqrt(rho)*tau*b_g(i) +
+sqrt(1-rho)*tau*e_i` gives every molecule its own second term on top of its
+group's shared offset, so every label moves and only the OFFSET is shared.
+Average precision against "which molecules moved" is then 1.0 by construction,
+which is why `noise_helpers.DETECTION_IS_DEFINED` lists grouped_wider and not
+grouped_shifted. That tuple is right and does not need changing.
+
+⛔ So an experiment whose reading is DETECTION cannot use grouped_shifted, and
+the structure-linked condition it can use is **grouped_wider**. n12 runs
+neither: a job `n12_grouped_vs_random_caco2` is registered with the supervisor
+to measure the weighting's margin over the plain space under grouped_wider and
+under outlier_p10 on caco2, the same folds and the same draws, reported
+separately.
+
+⛔ Reading n12's weighting under grouped_shifted means reading RECOVERY, which
+needs a hybrid recipe from the pool and a clean-to-noisy gap above
+GAP_MIN_FRAC. Nobody owns that yet.
+
 ### E4. Seven experiments can already take a condition and six default to one
 `HONOURS_NOISE_CONDITION = {n09, n11, n12, n16, n20, n21, n23}`. The plumbing
 exists; only the default is narrow. Adding `grouped_shifted` beside `gaussian`
