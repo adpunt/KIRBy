@@ -686,8 +686,12 @@ def build_best_single_features(reps, labels, seed_idx, pool_idx, groups,
         try:
             # Use a fresh GP estimator per fold via cross_val_score with
             # scoring='r2'. Wrap in try/except since GP can fail on small folds.
+            # Same length-scale start as the loop surrogate. This GP picks
+            # which representation the best_single arm uses, and it is fitted on
+            # the same standardised features, so a start below every distance
+            # they have makes the choice as arbitrary here as it does there.
             gp_est = GaussianProcessRegressor(
-                kernel=ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(1e-3),
+                kernel=ConstantKernel(1.0) * _rbf_with_init(X_s) + WhiteKernel(1e-3),
                 normalize_y=True, n_restarts_optimizer=0,
                 random_state=42,
             )
