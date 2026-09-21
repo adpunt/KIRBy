@@ -1170,3 +1170,48 @@ where it names `$KIRBY_CACHE_DIR/similarity_metrics/sim_data` and nothing else.
 
 So none of the numbers in this section came from a stored hybrid-search row, and
 moving the 14 files out of `result_db/` changes nothing here.
+
+## MODI's nearest neighbour is picked by row order when molecules tie, and it reaches nothing that runs here
+
+`eval_modi_binary` at simeval.py:183 takes `np.argmin(Dm, axis=1)`. When several
+molecules sit at the same smallest distance, `argmin` returns the lowest row
+number, so the neighbour is chosen by the order of the npz file.
+
+**It is reached by one caller.** `eval_modi_binary` is called only from
+`simeval.run_battery` at line 489, and `run_battery` is called only from
+`run_battery_moleculeace.py:119`. That is the script `MoleculeACE` is not
+installed for. So no number anywhere in this section passes through it, and the
+tie matters only when the MoleculeACE battery runs on the cluster.
+
+Counted on this group's own molecules, under Tanimoto, over all ten stored
+representations. The first count is molecules whose smallest distance is shared
+by more than one other molecule. The second is how many of those have tied
+candidates in both activity classes, so that the MODI term for that molecule
+changes with which tied neighbour is picked:
+
+    representation     herg_ki (of 1,415)    logd (of 1,427)   adme_solubility (of 2,173)
+                        tied / ambiguous     tied / ambiguous      tied / ambiguous
+    maccs                  387 / 88             365 / 96             105 / 34
+    fcfp4                  210 / 40             204 / 24              58 / 19
+    torsion                126 / 20             197 / 37              38 / 19
+    ecfp4                  127 / 28             175 / 22              26 / 16
+    ecfp4_count             89 / 11             146 / 17               6 / 4
+    rdkit                   86 / 2              111 / 4                2 / 0
+    desc                    55 / 9              106 / 4                0 / 0
+    atompair_count          43 / 1               92 / 4                0 / 0
+
+The largest single tie is 10 molecules, on herg_ki under MACCS.
+
+**The share that actually moves is smaller than the tie count.** On herg_ki
+under MACCS, 387 molecules tie but only 88 have tied candidates in more than one
+activity class; the other 299 get the same MODI term whichever neighbour is
+picked. So 88 of 1,415 molecules, 6.2 in 100, carry a MODI term that depends on
+row order. On logd under MACCS it is 96 of 1,427. On adme_solubility under
+atom-pair counts and under the descriptor block, nothing ties at all.
+
+**A decision for the owner, not taken here.** The alternative is to average the
+class agreement over every tied neighbour rather than take one. It changes no
+number produced in this campaign, because nothing that runs locally calls MODI.
+It would change the MODI column of the MoleculeACE battery for at most 6.2 in
+100 molecules on the representation where ties are worst, and for none on the
+two representations where nothing ties. `simeval.py` was not edited.
