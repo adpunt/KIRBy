@@ -238,6 +238,56 @@ nothing to a forest that already has the features.
 
 ---
 
+## s05's herg_ki numbers moved between 2026-09-19 and 2026-09-21 at one setting
+
+Both runs are s05 on herg_ki at the shipped settings — 5 and 10 neighbours,
+uniform vote, importance exponent 0.5. RMSE in pKi, and for the held-out delta
+positive means the hybrid beat the best single representation:
+
+    quantity                        2026-09-19   2026-09-21
+    pre-registered cell delta          -0.0003      +0.0008
+    max over the grid, delta           +0.0248      +0.0185
+    held-out delta                     -0.0105      -0.0210
+    held-out hybrid RMSE                0.6331       0.6437
+    held-out best single rep RMSE       0.6226       0.6226
+
+**It was not an empty pool.** Both files stamp `search_status: ok`, and the
+base-representation side of the pool is identical to sixteen digits: fold 0
+ranks atom_pair at 0.6108291357787444 in both. The best single representation
+arm is byte-identical at 0.6226, which is why only the hybrid arm moved.
+
+**The two families inside the pool disagree, and only one of them.** The three
+predictive hybrids the pool served for fold 0 reproduce: 0.670692 against
+0.670656, 0.674870 against 0.674794, 0.705837 against 0.705828 — same recipes,
+same ranks, agreeing to four decimals. The three similarity hybrids do not:
+0.474060 against 0.434943, 0.441785 against 0.422708, 0.431918 against 0.418093,
+in the Spearman the similarity search stores, and rank 3's allocation method
+changed from power_2 to performance_weighted. So one family moved in the fifth
+decimal and the other in the second, a hundredfold apart.
+
+`c5752d4`, committed 2026-09-20 20:02, is between the two runs. It stops
+`objective='similarity'` searches building a hand-written Euclidean whatever
+coefficient was asked for. The predictive family never ran through that code, so
+it reproduces; the similarity family did, so it does not. On herg_ki the stored
+run's held-out winner was a similarity hybrid on 3 of its 4 paired folds, so the
+arm that was winning is the arm whose geometry changed. The commit states the
+older numbers are reproduced bit-for-bit by asking for euclidean — unverified
+here, no run has tested it.
+
+⛔ **Do not backfill the old databases with a constant coefficient to recover
+the old numbers.** The 14 files moved to `result_db_stale_2026-09-21/` hold 530
+stored configurations, and roughly half of each dataset's rows are
+similarity-family. Stamping those `distance_metric='manhattan'` labels them with
+a coefficient they were not computed under, because the hand-written Euclidean
+ignored the coefficient. The predictive rows would be labelled correctly and the
+similarity rows would not, in one table, with nothing recording which.
+
+**So −0.0105 is superseded.** At shipped settings under the fixed geometry
+herg_ki's held-out delta is −0.0210. Any tuned re-run has to be read against
+that, and against a pool built from the same store.
+
+---
+
 ## What s09 says across three datasets
 
 Ran 2026-09-21 against `tests/results_local_sim`. All five inputs loaded for all
