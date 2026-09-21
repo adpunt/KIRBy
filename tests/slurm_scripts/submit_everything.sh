@@ -56,6 +56,14 @@
 #   --skip "A B"         datasets to leave out (e.g. ones you did by hand)
 #   --no-cold-refusal    let an experiment build a missing search instead of
 #                        failing fast. Default is to fail fast.
+#   --begin TIME         no job may START before this. It still enters the queue
+#                        now and still accrues its place; it simply is not
+#                        eligible until then, and after that it waits its turn
+#                        like anything else. Slurm's own format:
+#                          --begin 2026-09-26T19:00:00
+#                          --begin now+7days
+#                        Use it when the code these jobs will read is going to
+#                        change before then -- they read it WHEN THEY START.
 #
 # EXISTING JOBS ARE NEVER CANCELLED. A dataset that already has jobs queued
 # keeps them, and its new links wait for them -- so no queue position is lost
@@ -80,6 +88,7 @@ EXPLICIT=""
 SKIP=""
 DO_PRE=true
 DO_EXP=true
+BEGIN=""          # --begin=<time> passed to every sbatch, or empty
 COLD_REFUSAL=1
 CATEGORIES="complexity similarity noise"
 
@@ -135,6 +144,7 @@ while [[ $# -gt 0 ]]; do
         --partition)        PARTITION=$2; shift 2 ;;
         --account)          ACCOUNT=$2; shift 2 ;;
         --categories)       CATEGORIES=$2; shift 2 ;;
+        --begin)            BEGIN=$2; shift 2 ;;
         --precompute-only)  DO_EXP=false; shift ;;
         --experiments-only) DO_PRE=false; shift ;;
         --no-cold-refusal)  COLD_REFUSAL=0; shift ;;
@@ -143,6 +153,11 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
+
+# Empty expands to no argument at all under `set -u` on bash 3.2, which an
+# empty array would not. Same reason as MODEL_FLAG in run_precompute_dataset.sh.
+BEGIN_FLAG=""
+[ -n "$BEGIN" ] && BEGIN_FLAG="--begin=${BEGIN}"
 
 # ── account ─────────────────────────────────────────────────────────────
 if [ -z "$ACCOUNT" ]; then
@@ -189,6 +204,7 @@ echo " federated      $N_FED jobs (lhasa_herg, caco2, logd only)"
 echo " opig           $N_OPIG jobs, each after the datasets it reads"
 echo " TOTAL          $((N_PRE + N_EXP + N_FED + N_OPIG)) jobs"
 echo ""
+echo " begin          ${BEGIN:-as soon as the queue allows}"
 echo " account        $ACCOUNT"
 echo " partition      $PARTITION"
 echo " speed          ${SPEED:-per dataset class: 15 SMALL full+unpruned, 14 MEDIUM full+pruned, 12 LARGE fast}"
@@ -252,7 +268,7 @@ for DS in $DATASETS; do
             elif [ -n "$EXISTING" ]; then
                 DEP="--dependency=afterany:${EXISTING}"
             fi
-            JID=$(sbatch --parsable \
+            JID=$(sbatch --parsable $BEGIN_FLAG \
                 --account="$ACCOUNT" --partition="$PARTITION" --time="$WALL" \
                 --mem="$MEM" --cpus-per-task=8 \
                 --job-name="pc_${DS}_${L}" \
@@ -286,7 +302,7 @@ for DS in $DATASETS; do
             # tcga_brca_pam50's conditions, damaging 17 of its 25.
             EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
             [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
-            JID=$(sbatch --parsable \
+            JID=$(sbatch --parsable $BEGIN_FLAG \
                 --account="$ACCOUNT" --partition="$PARTITION" \
                 --job-name="x_${C}_${DS}" \
                 --mail-user="$EMAIL" --mail-type=FAIL \
@@ -305,7 +321,7 @@ for DS in $DATASETS; do
             elif [ -n "$EXISTING" ]; then DEP="--dependency=afterany:${EXISTING}"; fi
             EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
             [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
-            JID=$(sbatch --parsable \
+            JID=$(sbatch --parsable $BEGIN_FLAG \
                 --account="$ACCOUNT" --partition="$PARTITION" \
                 --job-name="x_federated_${DS}" \
                 --mail-user="$EMAIL" --mail-type=FAIL \
@@ -343,7 +359,7 @@ if [ "$DO_OPIG" = true ]; then
         # argparse error, which is why it is not appended blindly.
         CMD=${CMD/ PM/ --pruning-mode ${PRUNING}}
         WRAP="cd ${REPO} && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && python -u tests/experiments/${CMD}"
-        JID=$(sbatch --parsable \
+        JID=$(sbatch --parsable $BEGIN_FLAG \
             --account="$ACCOUNT" --partition="$PARTITION" \
             --job-name="opig_${NAME}" \
             --nodes=1 --ntasks=1 --cpus-per-task=8 \
