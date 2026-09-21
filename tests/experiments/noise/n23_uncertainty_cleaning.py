@@ -252,14 +252,28 @@ SOURCES = ('hetero_gp', 'ngboost', 'heteroscedastic_nn', 'gaussian_process',
 # = False` onto the best detector of the five under its own default condition.
 LEARNS_NOISE_FROM_FEATURES = ('hetero_gp', 'ngboost', 'heteroscedastic_nn')
 
-# The dose-matched conditions whose corrupted molecules are chosen by something
-# the features encode. Only `grouped_wider` is: it gives whole scaffold families
-# the wider error. The three outlier conditions draw the corrupted molecules at
-# RANDOM with no reference to the features (NOISE_AUDIT_2026_09_10.md 6.7), so a
-# feature-based source is being asked something undefined under them -- it is not
-# that the method failed. The five constant-width conditions give every molecule
-# the same width, so nothing can rank anything under those.
-NOISE_KEYED_TO_STRUCTURE = ('grouped_wider',)
+# The conditions whose noise is decided by something the features encode. Both
+# grouped conditions are: `grouped_wider` gives whole scaffold families the
+# wider error, and `grouped_shifted` gives whole scaffold families a common
+# OFFSET, `eps_i = sqrt(rho)*tau*b_g(i) + sqrt(1-rho)*tau*e_i` with rho 0.62
+# from Bentz et al. 2013 Table 7. The three outlier conditions draw the
+# corrupted molecules at RANDOM with no reference to the features
+# (NOISE_AUDIT_2026_09_10.md 6.7), so a feature-based source is being asked
+# something undefined under them -- it is not that the method failed. The five
+# constant-width conditions give every molecule the same width, so nothing can
+# rank anything under those.
+#
+# ⛔ KEYED TO STRUCTURE AND DETECTION-GRADEABLE ARE TWO DIFFERENT THINGS, and
+# grouped_shifted is the one condition that separates them. Detection needs
+# some molecules corrupted and some not, which is what `DETECTION_IS_DEFINED`
+# in noise_helpers lists; under grouped_shifted EVERY training molecule moves,
+# so there is no corrupted subset to rank and `detection_scores` returns None.
+# Its noise is still predictable from the features, because a molecule's offset
+# is its group's offset. So a feature-reading source is DEFINED under it and
+# the only thing that can be read off it is whether cleaning wins folds.
+# `grouped_shifted` was added here on 2026-09-21: until then it was named in
+# four files and run by nothing but n13's sweep-everything mode.
+NOISE_KEYED_TO_STRUCTURE = ('grouped_wider', 'grouped_shifted')
 
 # The share of training molecules `drop` removes. n18's, for n18's reason:
 # nobody knows the right share here, so it is swept rather than looked up.
@@ -395,6 +409,34 @@ def _uncertainty(source, X_tr_s, y_tr, groups_train, is_clf, n_folds,
         return scores, None, f'no target: {type(exc).__name__}: {exc}'
 
 
+def drop_keep_mask(setting, scores):
+    """True for the molecules a `drop@setting` arm keeps. One rule, one place.
+
+    ⛔ THE ARM'S NAME IS A SHARE AND THE COUNT IT REMOVES IS NOT EXACTLY THAT
+    SHARE. Measured on flab_thermo_tresanco on 2026-09-21, 448 training
+    molecules, onehot at 5600 features, outlier_p10 at level 0.5, fold 0:
+
+      drop@0.05  removes 23 where 5 percent of 448 is 22.4, for four of the
+                 five uncertainty sources. `np.percentile` interpolates
+                 between the two order statistics that straddle the 95th
+                 percentile and `scores < cut` keeps only what is strictly
+                 below it, so a value sitting ON the interpolated cut is
+                 removed.
+      drop@0.1   removes 45 for activity_cliff_aware, gaussian_process,
+                 heteroscedastic_nn -- exactly the 45 the name promises -- and
+                 47 for ngboost, whose 448 molecules carry only 251 distinct
+                 spreads, so molecules TIED at the cut all go.
+
+    Two molecules of 448 changes no conclusion, which is why the rule is left
+    as it is rather than swapped for a rank cut: swapping it would move every
+    stored n23 number by a hair and settle nothing. What was missing was the
+    COUNT, so `run` now records how many molecules each drop arm actually
+    removed and how many of them were molecules whose label the injector moved.
+    """
+    cut = np.percentile(scores, 100.0 * (1.0 - float(setting)))
+    return np.asarray(scores) < cut
+
+
 def cleaned_training_set(shape, setting, X_tr_s, y_tr, scores, target,
                          method=None):
     """What one shape hands the downstream fit. None when it cannot be applied.
@@ -410,8 +452,7 @@ def cleaned_training_set(shape, setting, X_tr_s, y_tr, scores, target,
     if shape == 'none':
         return X_tr_s, y_tr
     if shape == 'drop':
-        cut = np.percentile(scores, 100.0 * (1.0 - float(setting)))
-        keep = scores < cut
+        keep = drop_keep_mask(setting, scores)
         if keep.sum() < 10:
             return None
         return X_tr_s[keep], y_tr[keep]
@@ -521,11 +562,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ⛔ A GROUPED CONDITION NEEDS SCAFFOLD GROUPS, AND AN ANTIBODY SET HAS NONE.
     #
-    # `grouped_wider` is the only entry in NOISE_KEYED_TO_STRUCTURE, so it is the
-    # one condition this file records as making its four feature-based sources
-    # defined. It gives a three-times wider error to whole scaffold families, and
-    # `kirby.noise_spec.make_noisy_labels_verbose` refuses to run it without one
-    # scaffold-group id per molecule built by `assign_noise_groups(smiles)`.
+    # The two entries of NOISE_KEYED_TO_STRUCTURE are the two conditions this
+    # file records as making its three feature-based sources defined.
+    # `grouped_wider` gives a three-times wider error to whole scaffold families
+    # and `grouped_shifted` gives whole scaffold families a common offset, and
+    # `kirby.noise_spec.make_noisy_labels_verbose` refuses to run either without
+    # one scaffold-group id per molecule built by `assign_noise_groups(smiles)`.
     # `noise_groups_for` returns None for any dataset that loads no SMILES -- an
     # antibody, nucleotide or expression set -- and says so in its own docstring:
     # the grouped conditions are dropped rather than run over invented groups.
@@ -619,8 +661,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'features and the condition in use picked its corrupted molecules '
             'at random, so there is nothing in the features to generalise from '
             'and a chance-level reading is the condition rather than the '
-            'method. Only grouped_wider keys the wider error to scaffold '
-            'families. NOISE_AUDIT_2026_09_10.md 6.7.'),
+            'method. The two grouped conditions are the ones that do not: '
+            'grouped_wider gives whole scaffold families the wider error and '
+            'grouped_shifted gives whole scaffold families a common offset. '
+            'True under grouped_shifted does NOT mean a detection number '
+            'exists: every training molecule moves under it, so there is no '
+            'corrupted subset to rank and the only reading is whether cleaning '
+            'wins folds. NOISE_AUDIT_2026_09_10.md 6.7.'),
         'scored_out_of_fold_note': (
             'True means the molecule was scored by a model fitted on the other '
             'inner folds, group-aware, so its own scaffold family did not set '
@@ -752,6 +799,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     detection_acc = {}
     est_seconds = {}
     target_src = {}
+    # How many molecules each drop arm REMOVED, and how many of them were
+    # molecules whose label the injector moved. Without this the arm is known
+    # only by its name: on 2026-09-21 `drop@0.1` with heteroscedastic_nn won
+    # every fold while removing 45 of the 448 training molecules, of which 5 of
+    # the 42 that moved -- removing 45 of 448 at random takes 4.2 of the 42 by
+    # arithmetic. The count is what said the winning arm was not removing the
+    # molecules whose labels moved, and it is cheaper than one fit.
+    removed_acc = {}
     t0 = time.time()
 
     for regime in regimes:
@@ -865,6 +920,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     'the shape could not be applied on this fold')
                                 continue
                             Xc, yc = got
+                            if shape == 'drop':
+                                rm = ~drop_keep_mask(setting, scores)
+                                (removed_acc
+                                 .setdefault(lvl_key, {})
+                                 .setdefault(space, {})
+                                 .setdefault(source, {})
+                                 .setdefault(arm, []).append({
+                                     'n_removed': int(rm.sum()),
+                                     'n_training': int(len(scores)),
+                                     'n_moved_among_the_removed': (
+                                         None if cmask is None else
+                                         int(np.sum(np.asarray(cmask, dtype=bool) & rm))),
+                                     'n_moved': (None if cmask is None
+                                                 else int(np.sum(cmask)))}))
                             for mname in downstream_models:
                                 s, err = _fit_score(
                                     model_factories[mname], Xc, yc, X_va_s,
@@ -886,6 +955,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for lvl, by_sp in detection_acc.items()})
     results['target_source_by_source'] = {k: sorted(v)
                                           for k, v in target_src.items()}
+    # Summed over the folds of one (level, space, source, arm), so every count
+    # below is molecules, not a share and not a per-fold average.
+    results['rows_removed_by_drop_arm'] = convert_numpy({
+        lvl: {sp: {src: {arm: {
+            'n_folds': len(rows),
+            'molecules_removed_summed_over_the_folds':
+                int(sum(r['n_removed'] for r in rows)),
+            'training_molecules_summed_over_the_folds':
+                int(sum(r['n_training'] for r in rows)),
+            'moved_molecules_removed_summed_over_the_folds':
+                (None if any(r['n_moved_among_the_removed'] is None for r in rows)
+                 else int(sum(r['n_moved_among_the_removed'] for r in rows))),
+            'moved_molecules_summed_over_the_folds':
+                (None if any(r['n_moved'] is None for r in rows)
+                 else int(sum(r['n_moved'] for r in rows))),
+        } for arm, rows in by_arm.items()}
+            for src, by_arm in by_src.items()}
+        for sp, by_src in by_sp.items()}
+        for lvl, by_sp in removed_acc.items()})
+    results['rows_removed_note'] = (
+        'One entry per drop arm. Every number is a count of molecules summed '
+        'over the outer folds of that level, so the share the arm removed is '
+        'molecules_removed divided by training_molecules. What the ranking did '
+        'is moved_molecules_removed against the count chance would take, which '
+        'is molecules_removed times moved_molecules divided by '
+        'training_molecules. An arm whose two are equal ranked no better than '
+        'removing that many molecules at random.')
     results['estimator_seconds_by_source'] = {
         k: {'mean': float(np.mean(v)), 'n_estimates': len(v),
             'total': float(np.sum(v))}

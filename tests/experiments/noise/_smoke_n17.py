@@ -205,7 +205,7 @@ def test_entity_construction():
 
 
 def test_arms():
-    print("\nthe five arms:")
+    print("\nthe arms:")
     rng = np.random.default_rng(0)
     n, d = 300, 6
     X = rng.normal(size=(n, d))
@@ -213,69 +213,141 @@ def test_arms():
     spread = rng.random(n)
     scores = rng.random(n)
     n_flag = 30
+    frac = n_flag / n
 
-    built = {a: n17.build_arm(a, X, y, scores, spread, n_flag,
-                              np.random.default_rng(1)) for a in n17.ARMS}
-    check('every arm built', all(v is not None for v in built.values()),
+    # oof_smooth fits a model on part of training and reads the result off the
+    # rest, and `oof_predict` REFUSES a None grouping rather than splitting at
+    # random (noisy_labels/core.py:123). The real run hands it the dataset's
+    # scaffold grouping at each entity's representative row; this stands in for
+    # it with 30 groups of 10.
+    g = np.repeat(np.arange(30), 10)
+
+    def _b(arm, sc=scores, sp=spread, nf=n_flag):
+        return n17.build_arm(arm, X, y, sc, sp, nf,
+                             np.random.default_rng(1), frac, groups_train=g)
+
+    built = {a: _b(a) for a in n17.ARMS}
+    # gp_smooth needs a Gaussian process and quantile_clip needs the
+    # quantile_forest package; both may refuse. Every other arm must build.
+    must = [a for a in n17.ARMS if a not in ('gp_smooth', 'quantile_clip')]
+    check('every arm but the two that may refuse built',
+          all(built[a] is not None for a in must),
           str({k: v is None for k, v in built.items()}))
 
-    removed = {a: built[a][2] for a in n17.ARMS}
-    relabelled = {a: built[a][3] for a in n17.ARMS}
+    removed = {a: built[a][3] for a in must}
+    relabelled = {a: built[a][4] for a in must}
     check('no_cleaning removes nothing and relabels nothing',
           removed['no_cleaning'] == 0 and relabelled['no_cleaning'] == 0)
     check('there are two floors, one per population',
           'floor_measured' in n17.ARMS and 'floor_any' in n17.ARMS,
           str(n17.ARMS))
-    check('repair removes nothing — it relabels',
-          removed['repair'] == 0 and relabelled['repair'] == n_flag,
-          f"removed {removed['repair']}, relabelled {relabelled['repair']}")
-    check('drop, ceiling and both floors remove the SAME count',
-          removed['drop'] == removed['ceiling'] == removed['floor_measured']
+    check('the corrections come from n07, not from this file',
+          n17.CORRECTIONS == ('remove', 'downweight', 'label_smooth',
+                              'knn_smooth', 'oof_smooth', 'gp_smooth',
+                              'quantile_clip'),
+          str(n17.CORRECTIONS))
+    check('remove is the only correction that trains on fewer entities',
+          n17.REMOVING_CORRECTIONS == ('remove',)
+          and removed['remove'] == n_flag
+          and all(removed[a] == 0 for a in n17.CORRECTIONS
+                  if a in removed and a != 'remove'),
+          str(removed))
+    check('knn_smooth removes nothing — it relabels',
+          removed['knn_smooth'] == 0 and relabelled['knn_smooth'] == n_flag,
+          f"removed {removed['knn_smooth']}, "
+          f"relabelled {relabelled['knn_smooth']}")
+    check('downweight moves no label and hands the fit a row weight',
+          relabelled['downweight'] == 0
+          and built['downweight'][2] is not None
+          and len(built['downweight'][2]) == n,
+          str(built['downweight'][2] is None))
+    check('the arms that remove take the SAME count',
+          removed['remove'] == removed['ceiling'] == removed['floor_measured']
           == removed['floor_any'] == n_flag
           and not any(relabelled[a] for a in
-                      ('drop', 'ceiling', 'floor_measured', 'floor_any')),
+                      ('remove', 'ceiling', 'floor_measured', 'floor_any')),
           str(removed))
-    check('repair keeps every row but changes some labels',
-          built['repair'][0].shape == X.shape
-          and not np.allclose(built['repair'][1], y))
-    check('repair changed exactly the flagged count',
-          int((~np.isclose(built['repair'][1], y)).sum()) <= n_flag,
-          f'{int((~np.isclose(built["repair"][1], y)).sum())} labels moved')
+    check('knn_smooth keeps every row but changes some labels',
+          built['knn_smooth'][0].shape == X.shape
+          and not np.allclose(built['knn_smooth'][1], y))
+    check('knn_smooth changed at most the flagged count',
+          int((~np.isclose(built['knn_smooth'][1], y)).sum()) <= n_flag,
+          f'{int((~np.isclose(built["knn_smooth"][1], y)).sum())} labels moved')
 
-    # The ceiling must remove the widest-spread entities and nothing else.
+    # The ceiling must remove the worst-ranked entities and nothing else.
     kept_ceiling = built['ceiling'][1]
     worst = np.argsort(-spread)[:n_flag]
-    check('ceiling removed the entities with the largest true spread',
+    check('ceiling removed the entities the ranking quantity ranks worst',
           len(kept_ceiling) == n - n_flag
-          and not np.any(np.isclose(y[worst][:, None], kept_ceiling[None, :]).all(0)))
+          and not np.any(np.isclose(y[worst][:, None],
+                                    kept_ceiling[None, :]).all(0)))
 
-    # An entity measured once has no spread; the ceiling must not prefer it.
+    # An entity the ranking quantity is undefined on must not be preferred.
     sp_nan = spread.copy()
     sp_nan[:50] = np.nan
-    _, y_c, n_rm, _ = n17.build_arm('ceiling', X, y, scores, sp_nan, n_flag,
-                                    np.random.default_rng(1))
-    check('ceiling still removes the full count when some spreads are unknown',
+    n_rm = _b('ceiling', sp=sp_nan)[3]
+    check('ceiling still removes the full count when some ranks are unknown',
           n_rm == n_flag, f'{n_rm} removed')
 
-    # The ceiling and its own floor must both be capped by how many entities have
-    # a spread at all. This is the defect found on 2026-09-16: the ceiling could
-    # only reach 12% of herg_ic50's molecules while the floor reached all of them.
-    sp_few = np.full(n, np.nan); sp_few[:20] = np.random.default_rng(2).random(20)
-    c = n17.build_arm('ceiling', X, y, scores, sp_few, n_flag, np.random.default_rng(1))
-    fm = n17.build_arm('floor_measured', X, y, scores, sp_few, n_flag,
-                       np.random.default_rng(1))
-    fa = n17.build_arm('floor_any', X, y, scores, sp_few, n_flag,
-                       np.random.default_rng(1))
-    check('ceiling and floor_measured are both capped at the entities with a spread',
-          c[2] == fm[2] == 20, f'ceiling {c[2]}, floor_measured {fm[2]}')
+    # The ceiling and its own floor must both be capped by how many entities the
+    # ranking quantity is defined on. This is the defect found on 2026-09-16: the
+    # ceiling could only reach 12% of herg_ic50's molecules while the floor
+    # reached all of them.
+    sp_few = np.full(n, np.nan)
+    sp_few[:20] = np.random.default_rng(2).random(20)
+    check('ceiling and floor_measured are both capped at the entities the '
+          'ranking quantity is defined on',
+          _b('ceiling', sp=sp_few)[3] == _b('floor_measured', sp=sp_few)[3] == 20,
+          f"ceiling {_b('ceiling', sp=sp_few)[3]}, "
+          f"floor_measured {_b('floor_measured', sp=sp_few)[3]}")
     check('floor_any is not capped — it draws from all of training',
-          fa[2] == n_flag, f'floor_any {fa[2]}')
+          _b('floor_any', sp=sp_few)[3] == n_flag,
+          f"floor_any {_b('floor_any', sp=sp_few)[3]}")
 
-    check('drop and repair return None when the detector failed',
-          n17.build_arm('drop', X, y, None, spread, n_flag,
-                        np.random.default_rng(1)) is None
-          and n17.build_arm('repair', X, y, None, spread, n_flag,
-                            np.random.default_rng(1)) is None)
+    check('every correction returns None when the detector failed',
+          all(_b(a, sc=None) is None for a in n17.CORRECTIONS))
+
+
+def test_spread_score():
+    """The two quantities the ceiling can rank on pick different entities.
+
+    An entity measured exactly twice trains on the mean of both measurements, so
+    under 'training_label_error' it has nothing wrong with its label and must
+    never be reachable. Under 'measurement_spread' it carries the full
+    disagreement of its two laboratories and is reachable.
+    """
+    print("\nwhat the ceiling ranks on:")
+    check('both settings are named', n17.SPREAD_SCORES ==
+          ('measurement_spread', 'training_label_error'),
+          str(n17.SPREAD_SCORES))
+
+    rng = np.random.default_rng(3)
+    # 40 entities measured twice, 40 measured three times.
+    labels, groups = [], []
+    for e in range(80):
+        k = 2 if e < 40 else 3
+        centre = float(rng.normal(0, 1))
+        width = 2.0 if e % 2 == 0 else 0.05
+        for _ in range(k):
+            labels.append(centre + float(rng.normal(0, width)))
+            groups.append(f'e{e}')
+    ent = n17.build_entities(np.array(labels), np.array(groups), seed=0)
+
+    two = ent['n_measurements'] == 2
+    err = np.abs(ent['train_label'] - ent['grade_label'])
+    check('an entity measured twice trains on the mean of both, so it has no '
+          'grading label and no training-label error',
+          np.all(np.isnan(ent['grade_label'][two]))
+          and np.all(np.isnan(err[two])),
+          f'{int(two.sum())} entities measured twice')
+    check('every one of those entities still has a measurement spread',
+          np.all(np.isfinite(ent['true_spread'][two])))
+    check('so the two rankings reach different populations: '
+          f"{int(np.isfinite(ent['true_spread']).sum())} entities by "
+          f"measurement spread, {int(np.isfinite(err).sum())} by training-label "
+          'error',
+          int(np.isfinite(ent['true_spread']).sum())
+          > int(np.isfinite(err).sum()))
 
 
 def test_refuses_without_replicates():
@@ -311,6 +383,7 @@ def _run_with_hybrid(data, name, captured_labels=None, **kw):
                               model, metric_fn, lower_is_better)
         n17.hybrid_for_fold = spy
     try:
+        kw.setdefault('arms', list(SMOKE_ARMS))
         return n17.run(data, {'n_splits': 4}, OUT, name, **kw)
     finally:
         n17.get_best_search_for_downstream = real_lookup
@@ -320,6 +393,29 @@ def _run_with_hybrid(data, name, captured_labels=None, **kw):
 def _ceiling_beyond_its_floor(result, space, model='rf'):
     return (result['summary']['per_space'][space]['per_model'][model]
             ['gain_over_its_own_floor']['ceiling'])
+
+
+# ⛔ WHICH ARMS THE END-TO-END RUNS, AND WHY IT IS NOT ALL ELEVEN.
+#
+# Every one of the seven corrections is built and checked in `test_arms` above,
+# on every branch, so what is left for an end-to-end to prove is the WIRING:
+# that an arm reaches the fit, reaches the summary, and is read against the
+# right control. One correction of each kind does that.
+#
+#   remove       takes molecules out of training
+#   downweight   hands the fit a row weight and moves no label
+#   knn_smooth   overwrites a flagged label with a neighbour target
+#   oof_smooth   moves every label toward a target it fits a model to produce
+#
+# WHAT IS LEFT OUT and what it would have cost. `label_smooth` is `knn_smooth`
+# with the same target reached in proportion to the suspicion score.
+# `gp_smooth` and `quantile_clip` are `oof_smooth`'s shape with a Gaussian
+# process and a quantile forest in place of the LightGBM, and each fits five of
+# them per fold per space: over 3 spaces, 3 folds and 2 draws that is 90 more
+# Gaussian processes and 90 more quantile forests, which turned this check from
+# a smoke into a run.
+SMOKE_ARMS = ['no_cleaning', 'remove', 'downweight', 'knn_smooth',
+              'oof_smooth', 'ceiling', 'floor_measured', 'floor_any']
 
 
 def test_end_to_end():
@@ -378,10 +474,15 @@ def test_end_to_end():
         g = row['gain_over_no_cleaning']
         check(f'{space}: no_cleaning scores zero gain against itself',
               abs(g['no_cleaning']) < 1e-12)
-        check(f'{space}: every pick carries what it gained beyond its own floor',
-              set(row['gain_over_its_own_floor']) == {'ceiling', 'drop', 'repair'},
+        # Only an arm that trains on fewer entities gets a removal floor. The
+        # six corrections that move a label or a row weight train on every
+        # entity and are read against no_cleaning alone.
+        check(f'{space}: the arms that remove entities carry what they gained '
+              'beyond their own floor, and only those',
+              set(row['gain_over_its_own_floor'])
+              == {'ceiling'} | set(n17.REMOVING_CORRECTIONS),
               str({k: round(v, 4) for k, v in row['gain_over_its_own_floor'].items()}))
-        for arm in n17.ARMS:
+        for arm in r['arms']:
             s = row['arm_scores'][arm]
             check(f'{space}: {arm} carries a spread over the draws',
                   np.isfinite(s['std_over_draws']) and s['n_draws_scored'] == 2,
@@ -399,10 +500,19 @@ def test_end_to_end():
     check('base:toy — the floor-to-ceiling span is positive',
           row['floor_to_ceiling_span'] > 0,
           f"{row['floor_to_ceiling_span']:+.4f}")
-    check('base:toy — drop and repair each have a position between floor and '
-          'ceiling',
-          all(k in row['removal_position'] for k in ('drop', 'repair')),
+    check('base:toy — the correction that removes entities has a position '
+          'between floor and ceiling',
+          all(k in row['removal_position'] for k in n17.REMOVING_CORRECTIONS),
           str({k: round(v, 3) for k, v in row['removal_position'].items()}))
+    # Every correction that keeps every entity must still carry a gain against
+    # no_cleaning, or it produced no number at all.
+    _kept = [a for a in r['arms']
+             if a in n17.CORRECTIONS and a not in n17.REMOVING_CORRECTIONS]
+    check('base:toy — every correction that keeps every entity carries a gain '
+          'against no_cleaning',
+          all(a in row['gain_over_no_cleaning'] for a in _kept),
+          str({a: round(row['gain_over_no_cleaning'].get(a, float('nan')), 4)
+               for a in _kept}))
 
     hrow = r['summary']['per_space']['hybrid']['per_model']['rf']
     check('hybrid — the ceiling beats no cleaning there too',
@@ -446,7 +556,7 @@ def test_runs_without_a_recipe():
     n17.get_best_search_for_downstream = no_recipe
     try:
         r = n17.run(data, {'n_splits': 3}, OUT, 'toy_no_recipe',
-                    models=['rf'], n_draws=2)
+                    models=['rf'], n_draws=2, arms=list(SMOKE_ARMS))
     finally:
         n17.get_best_search_for_downstream = real
 
@@ -466,7 +576,7 @@ def test_runs_without_a_recipe():
     finite, total = 0, 0
     for space in r['spaces_run']:
         row = r['summary']['per_space'][space]['per_model']['rf']
-        for arm in n17.ARMS:
+        for arm in r['arms']:
             total += 1
             if np.isfinite(row['arm_scores'][arm]['mean_over_draws']):
                 finite += 1
@@ -480,6 +590,7 @@ def test_runs_without_a_recipe():
 if __name__ == '__main__':
     test_entity_construction()
     test_arms()
+    test_spread_score()
     test_refuses_without_replicates()
     test_end_to_end()
     test_runs_without_a_recipe()

@@ -597,7 +597,8 @@ def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicio
 
 def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
                     model, metric_fn, lower_is_better,
-                    augmentations_train=None, augmentations_val=None):
+                    augmentations_train=None, augmentations_val=None,
+                    want_feature_info=False):
     """The hybrid feature matrices for one fold, or (None, None) if it could not build.
 
     Written for n19 on 2026-09-16 and moved here on 2026-09-17, when n17 and n18
@@ -631,6 +632,21 @@ def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
             already sliced to this fold's rows, or None. A recipe that names an
             augmentation strategy needs them or it rebuilds a narrower feature
             space than the one the search chose.
+        want_feature_info: return a third value, WHICH FEATURES the build
+            selected. `build_fold_hybrid` has always returned it third and
+            every caller here dropped it on the floor, so no experiment could
+            say which features a recipe chose -- only how wide it was. A
+            Blueprint does not carry them: it carries the representations, the
+            allocation method, the importance method, the budget and the
+            evaluator, and the features exist only once the hybrid is built.
+            The value is {rep_name: {'selected_indices': array of column ids
+            LOCAL to that representation's own matrix, 'importance_scores':
+            array, 'n_features': int}} plus an 'allocation' entry. Because the
+            indices are local (hybrid.py:2236), a feature's identity is the
+            PAIR (representation, index) -- two representations both selecting
+            their column 7 are two different features, not one.
+            False (the default) returns the two matrices alone, which is what
+            n17, n18, n19 and n20's own fold loop pass.
     """
     from experiments._shared import build_fold_hybrid
     from kirby.find_best_hybrid import _is_geometry_objective
@@ -647,7 +663,7 @@ def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
     objective = getattr(bp, 'objective', None)
     geometry = objective is not None and _is_geometry_objective(objective)
     try:
-        X_tr_h, X_va_h, _ = build_fold_hybrid(
+        X_tr_h, X_va_h, feat_info = build_fold_hybrid(
             tr, va, y_train, bp,
             augmentations_train=augmentations_train,
             augmentations_val=augmentations_val,
@@ -655,9 +671,13 @@ def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
             **({} if geometry else {'model': model, 'metric_fn': metric_fn,
                                     'lower_is_better': lower_is_better}),
         )
+        if want_feature_info:
+            return X_tr_h, X_va_h, feat_info
         return X_tr_h, X_va_h
     except Exception as exc:
         print(f"      hybrid build failed: {type(exc).__name__}: {exc}")
+        if want_feature_info:
+            return None, None, None
         return None, None
 
 

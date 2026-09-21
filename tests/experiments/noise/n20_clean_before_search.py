@@ -360,6 +360,181 @@ def _fingerprint(best):
     }
 
 
+def _stored_configurations(dataset_name, namespace, model, cache_dir):
+    """Every configuration this one search SCORED and stored, newest schema only.
+
+    Not the winner, and not `all_results`. `all_results` holds what this
+    invocation computed: a configuration whose score was already in the store
+    is read from there and never re-enters that list, which is why n20's
+    candidate count reads 1 on a search that compared more. The store is the
+    complete record.
+
+    Each n20 search writes to its own file, because find_best_hybrid appends
+    the cache namespace to the dataset name before building the path
+    (find_best_hybrid.py:8430). So `result_db/<dataset>__<namespace>.db` holds
+    this fold's one label column and nothing else.
+
+    One file can still hold more than one identity -- a different
+    representation pool or a different fold count is a different search under
+    the same namespace -- so the rows are grouped by identity and the largest
+    group is used. How many identities were found is returned, so a file
+    holding two does not read as a file holding one.
+
+    Returns (rows, note). `rows` is every stored row for the chosen identity
+    whose `model` column is this downstream model, each with its blueprint
+    unpickled and its `score_mean` and `budget` read. Empty with a note when
+    the file does not exist or cannot be opened.
+    """
+    import sqlite3
+    from kirby.result_cache import (ResultCache, IDENTITY_COLS, db_path_for,
+                                    StaleResultDB)
+    from kirby.find_best_hybrid import _sanitize_filename_part
+    ds = f'{dataset_name}__{_sanitize_filename_part(namespace)}'
+    path = db_path_for(ds, cache_dir=cache_dir)
+    if not path.exists():
+        return [], f'no store at {path.name}'
+    try:
+        conn = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+        cols = ', '.join(IDENTITY_COLS)
+        groups = conn.execute(
+            f'SELECT {cols}, COUNT(*) FROM results GROUP BY {cols}').fetchall()
+        conn.close()
+    except Exception as exc:
+        return [], f'{type(exc).__name__}: {exc}'
+    if not groups:
+        return [], 'store is empty'
+    groups.sort(key=lambda r: r[-1], reverse=True)
+    identity = dict(zip(IDENTITY_COLS, groups[0][:-1]))
+    try:
+        with ResultCache(ds, cache_dir=cache_dir) as rc:
+            rows = rc.fetch_rows(identity)
+    except StaleResultDB as exc:
+        return [], f'StaleResultDB: {exc}'
+    except Exception as exc:
+        return [], f'{type(exc).__name__}: {exc}'
+    rows = [r for r in rows
+            if str(r.get('model')) == str(model)
+            and r.get('score_mean') is not None
+            and r.get('blueprint') is not None]
+    note = (f'{len(rows)} stored configurations for this downstream model, '
+            f'over {len(groups)} search identities in the file')
+    return rows, note
+
+
+def _rank_stored(rows, lower_is_better, top_n):
+    """The best `top_n` stored configurations, in the dataset's own direction.
+
+    ⛔ DIRECTION. `score_mean` is a number IN the dataset's metric. flab is
+    spearman and higher wins; herg_ki and caco2 are rmse and lower wins.
+    Sorting the wrong way round would take the WORST configurations and call
+    them the top, and every feature count built on them would be inverted.
+    """
+    ordered = sorted(rows, key=lambda r: float(r['score_mean']),
+                     reverse=not lower_is_better)
+    return ordered[:int(top_n)]
+
+
+def _feature_frequency(top_rows, train_reps, val_reps, y_col, groups_train,
+                       model_factory, metric_fn, lower_is_better):
+    """How many of these hybrids selected each feature.
+
+    A feature is the PAIR (representation, column index inside that
+    representation), because `selected_indices` are LOCAL to each
+    representation's own matrix (hybrid.py:2236). saprot's column 7 and
+    onehot's column 7 are two features.
+
+    Returns (counts, n_built, widths). `counts` maps the pair to how many of
+    the hybrids that BUILT selected it. `n_built` is how many of the
+    configurations handed in produced a hybrid at all, which is the
+    denominator every frequency below is out of.
+    """
+    counts = {}
+    widths = {}
+    n_built = 0
+    for row in top_rows:
+        out = hybrid_for_fold(train_reps, val_reps, y_col, row['blueprint'],
+                              groups_train, model_factory(), metric_fn,
+                              lower_is_better, want_feature_info=True)
+        feat_info = out[2] if len(out) == 3 else None
+        if feat_info is None:
+            continue
+        n_built += 1
+        for rep_name, info in feat_info.items():
+            if rep_name == 'allocation' or not isinstance(info, dict):
+                continue
+            idxs = info.get('selected_indices')
+            if idxs is None:
+                continue
+            for i in np.asarray(idxs).ravel().tolist():
+                counts[(rep_name, int(i))] = counts.get((rep_name, int(i)), 0) + 1
+    for rep_name, mat in train_reps.items():
+        widths[rep_name] = int(np.asarray(mat).shape[1])
+    return counts, n_built, widths
+
+
+def _compare_feature_tables(counts_asis, n_asis, counts_cleaned, n_cleaned,
+                            widths, n_named=15):
+    """The two frequency tables read against each other.
+
+    Every count names what it counts. Nothing here is a bare number.
+    """
+    sel_a = set(counts_asis)
+    sel_c = set(counts_cleaned)
+    both = sel_a & sel_c
+    only_a = sel_a - sel_c
+    only_c = sel_c - sel_a
+    total_width = int(sum(widths.values()))
+
+    def _named(pair):
+        return {'representation': pair[0],
+                'index_within_that_representation': int(pair[1])}
+
+    moved = []
+    for pair in sel_a | sel_c:
+        a = counts_asis.get(pair, 0)
+        c = counts_cleaned.get(pair, 0)
+        moved.append((abs(a - c), pair, a, c))
+    moved.sort(key=lambda t: (-t[0], t[1][0], t[1][1]))
+
+    def _top_list(counts, n_built, k):
+        ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+        return [dict(_named(pair),
+                     n_top_hybrids_that_selected_it=int(c),
+                     n_top_hybrids_built=int(n_built))
+                for pair, c in ordered[:k]]
+
+    most_a = _top_list(counts_asis, n_asis, n_named)
+    most_c = _top_list(counts_cleaned, n_cleaned, n_named)
+    set_most_a = {(d['representation'], d['index_within_that_representation'])
+                  for d in most_a}
+    set_most_c = {(d['representation'], d['index_within_that_representation'])
+                  for d in most_c}
+
+    return {
+        'n_features_the_representations_hold_between_them': total_width,
+        'n_features_per_representation': dict(sorted(widths.items())),
+        'n_top_hybrids_built_searching_on_the_labels_as_they_are': int(n_asis),
+        'n_top_hybrids_built_searching_on_the_cleaned_labels': int(n_cleaned),
+        'n_features_selected_by_at_least_one_top_hybrid_asis': len(sel_a),
+        'n_features_selected_by_at_least_one_top_hybrid_cleaned': len(sel_c),
+        'n_features_both_searches_selected': len(both),
+        'n_features_only_the_search_on_the_labels_as_they_are_selected': len(only_a),
+        'n_features_only_the_search_on_the_cleaned_labels_selected': len(only_c),
+        'features_whose_selection_frequency_moved_most': [
+            dict(_named(pair),
+                 n_top_hybrids_that_selected_it_asis=int(a),
+                 n_top_hybrids_that_selected_it_cleaned=int(c),
+                 n_top_hybrids_built_asis=int(n_asis),
+                 n_top_hybrids_built_cleaned=int(n_cleaned))
+            for _, pair, a, c in moved[:n_named]],
+        'most_selected_searching_on_the_labels_as_they_are': most_a,
+        'most_selected_searching_on_the_cleaned_labels': most_c,
+        'n_of_the_most_selected_features_that_are_in_both_lists':
+            len(set_most_a & set_most_c),
+        'n_features_in_each_most_selected_list': n_named,
+    }
+
+
 def _stack(a, b):
     """One matrix per representation, this fold's training rows then its held-out ones."""
     return {k: np.vstack([np.asarray(a[k]), np.asarray(b[k])]) for k in a}
@@ -391,6 +566,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search_verbose = bool(kwargs.get('search_verbose', False))
     # What the candidates inside the cleaned search are SCORED on. See the
     # comment at the branch that uses it. 'asis' is what ran before 2026-09-20.
+    # HOW MANY of the stored configurations the per-feature table is built
+    # over, per search. 0 turns the whole per-feature measurement off, which is
+    # what every run before 2026-09-21 did. It is off by default because each
+    # configuration in the list has to be BUILT to find out which features it
+    # selected -- a Blueprint does not carry them -- and a build is a feature
+    # ranking plus an accept/reject pass per representation.
+    per_feature_top_n = int(kwargs.get('per_feature_top_n') or 0)
     search_scores_on = str(kwargs.get('search_scores_on', SEARCH_SCORES_ON))
     if search_scores_on not in ('asis', 'cleaned'):
         raise ValueError(
@@ -553,6 +735,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # recipes MUST match. That question is about `remove` and the smoothers,
     # and their recipes were computed and then thrown away.
     recipe_probe = {}
+    # THE PER-FEATURE VIEW. The recipe probe above answers "did the two
+    # searches pick different recipes". It cannot answer "did they pick
+    # different FEATURES", because two recipes that name the same
+    # representations, allocation method, importance method and budget still
+    # rank that representation's features against whatever label column they
+    # were handed. One row here is one FEATURE, a (representation, index inside
+    # that representation) pair, and the number is how many of the top stored
+    # configurations selected it.
+    per_feature = {}
     refuses_weight = set()
     t0 = time.time()
 
@@ -826,6 +1017,52 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 identity_probe[
                                     f'{regime}|{lvl_key}|{fold_key}'] = probe_row
 
+                        # ── WHICH FEATURES, not which recipe ──
+                        # Both searches' stored configurations are read from
+                        # their own files, ranked in the dataset's own metric
+                        # and own direction, and the best `per_feature_top_n`
+                        # of each are BUILT so the features they selected can
+                        # be counted. Under the identity control the two
+                        # tables must come out equal; that is the check that
+                        # the counting itself is not what moves.
+                        if per_feature_top_n and search_cleaned is not None:
+                            for mname in downstream_models:
+                                if mname not in model_factories:
+                                    continue
+                                rows_a, note_a = _stored_configurations(
+                                    dataset_name, ns, mname, cache_dir)
+                                rows_c, note_c = _stored_configurations(
+                                    dataset_name, ns_c, mname, cache_dir)
+                                top_a = _rank_stored(rows_a, lower_is_better,
+                                                     per_feature_top_n)
+                                top_c = _rank_stored(rows_c, lower_is_better,
+                                                     per_feature_top_n)
+                                cnt_a, built_a, widths = _feature_frequency(
+                                    top_a, train_reps, val_reps, y0, g_tr,
+                                    model_factories[mname], metric_fn,
+                                    lower_is_better)
+                                cnt_c, built_c, _w2 = _feature_frequency(
+                                    top_c, tr_for_search, val_reps, y_t, g_s,
+                                    model_factories[mname], metric_fn,
+                                    lower_is_better)
+                                cell = _compare_feature_tables(
+                                    cnt_a, built_a, cnt_c, built_c, widths)
+                                cell['n_configurations_the_store_held_asis'] = \
+                                    len(rows_a)
+                                cell['n_configurations_the_store_held_cleaned'] = \
+                                    len(rows_c)
+                                cell['store_note_asis'] = note_a
+                                cell['store_note_cleaned'] = note_c
+                                cell['budgets_among_the_top_asis'] = sorted(
+                                    {str(r.get('budget')) for r in top_a})
+                                cell['budgets_among_the_top_cleaned'] = sorted(
+                                    {str(r.get('budget')) for r in top_c})
+                                cell['is_the_identity_control'] = bool(
+                                    cleanup == IDENTITY_CONTROL)
+                                per_feature[
+                                    f'{regime}|{lvl_key}|{fold_key}|'
+                                    f'{cleanup}|{rate:g}/{mname}'] = cell
+
                         rate_cell = (cell.setdefault(cleanup, {})
                                          .setdefault(f'{rate:g}', {}))
 
@@ -930,6 +1167,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['detection'] = convert_numpy(
         {k: _mean_detection(v) for k, v in detection_acc.items()})
     results['models_refusing_sample_weight'] = sorted(refuses_weight)
+    results['per_feature_top_n'] = per_feature_top_n
+    if per_feature:
+        results['per_feature'] = convert_numpy({
+            'what_one_row_is': (
+                'One FEATURE, named as the representation it lives in and its '
+                'column index INSIDE that representation. The indices '
+                '`create_hybrid` returns are local to each representation '
+                '(hybrid.py:2236), so saprot column 7 and onehot column 7 are '
+                'two features, not one.'),
+            'what_the_frequency_counts': (
+                'How many of the top stored configurations, once built, '
+                'selected that feature. The denominator is '
+                'n_top_hybrids_built, which is how many of them produced a '
+                'hybrid at all, not how many were asked for.'),
+            'how_the_top_was_chosen': (
+                'Every configuration the search stored for this downstream '
+                'model, across every budget it scored, ranked by score_mean '
+                'in the dataset metric and its own direction '
+                f'(lower_is_better={lower_is_better}), best '
+                f'{per_feature_top_n} kept.'),
+            'per_cell': per_feature,
+        })
     if errors:
         results['_errors'] = errors
     results['summary'] = convert_numpy(
@@ -1215,6 +1474,52 @@ def _print_summary(results, metric_name):
             print(f"      representations the recipe used, one entry per cell: "
                   f"searching on the labels as they are {_rc(row['rep_count_asis'])}; "
                   f"searching on the cleaned labels {_rc(row['rep_count_cleaned'])}")
+
+    pf = results.get('per_feature') or {}
+    for key, c in (pf.get('per_cell') or {}).items():
+        print(f"\n  WHICH FEATURES, cell {key}")
+        print(f"    the representations hold "
+              f"{c['n_features_the_representations_hold_between_them']} "
+              f"features between them")
+        print(f"    configurations the store held, for this downstream model: "
+              f"{c['n_configurations_the_store_held_asis']} searching on the "
+              f"labels as they are, "
+              f"{c['n_configurations_the_store_held_cleaned']} searching on "
+              f"the cleaned labels")
+        print(f"    hybrids built out of those, one per configuration: "
+              f"{c['n_top_hybrids_built_searching_on_the_labels_as_they_are']} "
+              f"and "
+              f"{c['n_top_hybrids_built_searching_on_the_cleaned_labels']}; "
+              f"budgets among them "
+              f"{c['budgets_among_the_top_asis']} and "
+              f"{c['budgets_among_the_top_cleaned']}")
+        print(f"    features at least one of those hybrids selected: "
+              f"{c['n_features_selected_by_at_least_one_top_hybrid_asis']} "
+              f"searching on the labels as they are, "
+              f"{c['n_features_selected_by_at_least_one_top_hybrid_cleaned']} "
+              f"searching on the cleaned labels")
+        print(f"    of those, {c['n_features_both_searches_selected']} features "
+              f"were selected by both, "
+              f"{c['n_features_only_the_search_on_the_labels_as_they_are_selected']} "
+              f"only by the search on the labels as they are, and "
+              f"{c['n_features_only_the_search_on_the_cleaned_labels_selected']} "
+              f"only by the search on the cleaned labels")
+        print(f"    of the "
+              f"{c['n_features_in_each_most_selected_list']} most-selected "
+              f"features in each arm, "
+              f"{c['n_of_the_most_selected_features_that_are_in_both_lists']} "
+              f"are in both lists"
+              + ('   (identity control: both counts must match)'
+                 if c.get('is_the_identity_control') else ''))
+        for f in c['features_whose_selection_frequency_moved_most'][:5]:
+            print(f"      {f['representation']} column "
+                  f"{f['index_within_that_representation']}: selected by "
+                  f"{f['n_top_hybrids_that_selected_it_asis']} of "
+                  f"{f['n_top_hybrids_built_asis']} hybrids searching on the "
+                  f"labels as they are, "
+                  f"{f['n_top_hybrids_that_selected_it_cleaned']} of "
+                  f"{f['n_top_hybrids_built_cleaned']} searching on the "
+                  f"cleaned labels")
 
     idt = s['search_path_identity']
     print(f"\n  the two searches are one code path, checked on "

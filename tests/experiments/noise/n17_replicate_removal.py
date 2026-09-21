@@ -40,28 +40,36 @@ twice still train, at face value, and are never graded. That is deliberate --
 throwing them out would shrink the training set for a reason that has nothing to
 do with the question.
 
-THE FIVE WAYS OF CHOOSING WHAT TO TRAIN ON. All five are graded on exactly the
+THE WAYS OF CHOOSING WHAT TO TRAIN ON. All of them are graded on exactly the
 same validation entities, against exactly the same consensus labels. The only
-thing that differs is which training entities survive and with what label.
+thing that differs is which training entities survive, with what label, and at
+what row weight.
 
   no_cleaning  every training entity, untouched. The thing to beat.
-  drop         the entities a detector flags are removed.
-  repair       a flagged entity's label is replaced by its neighbours' mean.
-  ceiling      the entities whose TRUE repeat spread is worst are removed. It
-               uses the answer, so no detector can beat it. It says how much is
-               on the table before any detector is involved.
+  the seven    the corrections n07 measures, applied to the entities THIS
+  corrections  experiment's detector flags. `remove` takes them out of training;
+               `downweight` gives every entity a row weight; `label_smooth`,
+               `knn_smooth`, `oof_smooth` and `gp_smooth` move a label toward a
+               target; `quantile_clip` moves only the labels outside the range of
+               label values entities in their own forest leaves carry. They are
+               n07's, not this file's -- see CORRECTIONS.
+  ceiling      the entities the ranking quantity ranks worst are removed. It uses
+               the answer, so no detector can beat it. It says how much is on the
+               table before any detector is involved.
   floor        the same NUMBER of entities, chosen at random FROM THE SAME
                ENTITIES THE CEILING COULD HAVE PICKED. It says how much of any
                gain is just from training on fewer entities.
 
-Only an entity measured twice or more has a spread, so only those two can reach.
-Both draw from exactly that set, and the count is capped at its size. They drew
-from different sets until 2026-09-16 and the difference between them was partly
-that -- see `build_arm`.
+Which entities the ceiling can reach follows the quantity it ranks on, and its
+floor follows it -- see SPREAD_SCORE. The ceiling and its floor drew from
+different sets until 2026-09-16 and the difference between them was partly that.
 
-A removal result is `drop` or `repair` beating `no_cleaning`, reported against
-the distance between `floor` and `ceiling`. Beating `no_cleaning` while sitting
-at `floor` is not a removal result; it is a smaller training set.
+A cleaning result is a correction beating `no_cleaning`. `remove` is read on top
+of that against the distance between `floor` and `ceiling`, because it is the one
+correction that trains on fewer entities: beating `no_cleaning` while sitting at
+`floor_any` is not a removal result, it is a smaller training set. The other six
+train on every entity, so a removal floor is not their control and they are read
+against `no_cleaning` alone.
 
 WHERE EVERY ARM IS MEASURED. In every representation the run loaded, one at a
 time, and in a hybrid per family of stored search, each recipe coming from the
@@ -138,6 +146,9 @@ from experiments.noise._ground_truth_providers import build_replicate_groups
 # One per-fold hybrid build, shared with n18 and n19. It lived in n19 until
 # 2026-09-17.
 from experiments.noise.noise_helpers import hybrid_for_fold
+# The seven corrections, defined once for the whole suite. n17 held two of its
+# own inline until 2026-09-21; see CORRECTIONS.
+from experiments.noise.n07_remediation import cleaned_training_set
 from kirby.utils.noise_estimation import get_noise_estimator
 
 # Below this an entity cannot be graded: hold one measurement out of two and the
@@ -168,6 +179,33 @@ FLAG_FRACTION = 0.10
 DETECTOR = 'neighbor_residual'
 DETECTOR_K = 10
 
+# WHICH QUANTITY THE CEILING RANKS ENTITIES BY. Swept from the caller.
+#
+# 'measurement_spread' is what this file ranked on from the day it was written:
+# the standard deviation of ALL of an entity's repeat measurements, which is how
+# far the laboratories disagreed with each other.
+#
+# 'training_label_error' is how far THIS ENTITY'S TRAINING LABEL sits from the
+# mean of its other measurements, in the label's own units. That is the quantity
+# the arm is supposed to be an oracle for: an entity whose laboratories disagree
+# wildly, but whose randomly chosen training measurement happens to land on the
+# consensus, carries a correct training label and removing it removes a correct
+# label.
+#
+# The two differ most on the entities measured EXACTLY TWICE. Their training
+# label is the mean of both measurements -- `build_entities` holds nothing out
+# below MIN_MEASUREMENTS -- so under 'training_label_error' their label sits 0
+# from the mean of the rest and they can never be ranked. Under
+# 'measurement_spread' they carry the full disagreement of their two
+# laboratories and the ceiling takes them first.
+#
+# Which entities each one can reach is therefore different, and the floor it is
+# read against follows it: 'measurement_spread' reaches every entity measured
+# twice or more, 'training_label_error' reaches only the entities measured
+# MIN_MEASUREMENTS times or more.
+SPREAD_SCORE = 'measurement_spread'
+SPREAD_SCORES = ('measurement_spread', 'training_label_error')
+
 # TWO floors, because there are two things to control for and one floor cannot be
 # the control for both. Added 2026-09-16 after the first floor was fixed and the
 # fix removed a control instead of repairing one.
@@ -183,7 +221,46 @@ DETECTOR_K = 10
 # Comparing `drop` against `floor_measured` would compare a pick from everything
 # against a pick from a small, well-studied minority, and most of the difference
 # would be which minority.
-ARMS = ('no_cleaning', 'drop', 'repair', 'ceiling', 'floor_measured', 'floor_any')
+#
+# ⛔ THE CORRECTION AXIS IS n07's, NOT THIS FILE'S OWN. Changed 2026-09-21.
+#
+# Until today this file wrote its own two corrections inline: `drop` removed the
+# flagged entities and `repair` overwrote their labels with the mean of their ten
+# nearest neighbours. Removal is one correction of the seven the suite measures,
+# and n07 ranked it FOURTH of the seven at 50.0% of the clean-to-corrupted gap
+# recovered, behind quantile_clip at 72.2% and knn_smooth at 70.4%. So the one
+# experiment in the suite where the noise is nobody's choice was trying the
+# fourth-best correction and one other, and calling the answer negative.
+#
+# Every correction below is n07's `cleaned_training_set`, called with this
+# experiment's own detector scores and flag fraction. Nothing is reimplemented
+# here. The two names that left:
+#
+#   drop    -> `remove`.     n17 removed exactly n_flag entities by rank; n07
+#                            cuts at the (1 - flag_fraction) quantile of the
+#                            same scores, so with no tied score it removes the
+#                            same entities.
+#   repair  -> `knn_smooth`. n17 averaged the 10 nearest training entities; n07
+#                            averages 9, because it asks for min(10, n-1)
+#                            neighbours and then drops the entity itself.
+#
+# ⛔ WHICH CORRECTIONS REMOVE AN ENTITY AND WHICH DO NOT, because the summary
+# reads each one against a different control. `remove` is the only one that
+# trains on fewer entities. `downweight` gives every entity a row weight.
+# `label_smooth`, `knn_smooth`, `oof_smooth` and `gp_smooth` move a label toward
+# a target. `quantile_clip` moves only the labels that lie outside the range of
+# label values the entities in their own forest leaves carry. All six of those
+# train on every entity, so a floor that removes entities is not their control
+# and they are read against `no_cleaning` alone. Until today `repair` was read
+# against `floor_any`, which removes entities, although `repair` removes none.
+CORRECTIONS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
+               'oof_smooth', 'gp_smooth', 'quantile_clip')
+
+# The one correction that trains on fewer entities than `no_cleaning` does.
+REMOVING_CORRECTIONS = ('remove',)
+
+ARMS = (('no_cleaning',) + CORRECTIONS
+        + ('ceiling', 'floor_measured', 'floor_any'))
 
 # How many times the whole thing is repeated. WHICH measurement becomes the
 # training label is a random choice, so one run is one draw of it. Three, to
@@ -315,68 +392,82 @@ def detector_scores(X_train, y_train):
         return None
 
 
-def neighbour_means(X_train, y_train, k=DETECTOR_K):
-    """Each training entity's neighbours' mean label, for the repair arm."""
-    from sklearn.neighbors import NearestNeighbors
-    k_eff = int(min(k + 1, len(y_train)))
-    nn = NearestNeighbors(n_neighbors=k_eff).fit(X_train)
-    _, idx = nn.kneighbors(X_train)
-    return np.mean(y_train[idx[:, 1:]], axis=1)
+def build_arm(arm, X_train, y_train, scores, rank_quantity_train, n_flag, rng,
+              flag_fraction, groups_train=None):
+    """The training rows, labels and row weights one arm fits on.
 
+    Returns (X, y, sample_weight, n_removed, n_relabelled) or None when the arm
+    cannot be built.
 
-def build_arm(arm, X_train, y_train, scores, true_spread_train, n_flag, rng):
-    """The training rows and labels one arm fits on.
+    The two counts are separate because the arms do different things to reach the
+    same flagged entities. `remove`, `ceiling` and the two floors take entities
+    OUT of training. The other six corrections keep every entity and change its
+    label or its row weight. One field named "removed" covering both would say a
+    label-moving run trained on fewer entities than it did.
 
-    Returns (X, y, n_removed, n_relabelled) or None when the arm cannot be built.
-
-    The two counts are separate because the arms do two different things to reach
-    the same flagged entities. `drop`, `ceiling` and `floor` take entities OUT of
-    training. `repair` keeps every entity and CHANGES some labels. One field named
-    "removed" covering both would say a repair run trained on fewer entities than
-    it did.
+    `rank_quantity_train` is whatever SPREAD_SCORE names, per training entity,
+    NaN where this entity cannot be ranked by it. The ceiling ranks on it and
+    `floor_measured` draws at random from exactly the entities it is finite on.
     """
     n = len(y_train)
     if arm == 'no_cleaning':
-        return X_train, y_train, 0, 0
+        return X_train, y_train, None, 0, 0
 
-    if arm in ('drop', 'repair'):
+    if arm in CORRECTIONS:
         if scores is None:
             return None
-        flagged = np.zeros(n, dtype=bool)
-        flagged[np.argsort(-scores, kind='stable')[:n_flag]] = True
-        if arm == 'drop':
-            keep = ~flagged
-            if keep.sum() < 10:
-                return None
-            return X_train[keep], y_train[keep], int(flagged.sum()), 0
-        y_rep = y_train.copy()
-        y_rep[flagged] = neighbour_means(X_train, y_train)[flagged]
-        return X_train, y_rep, 0, int(flagged.sum())
+        # n07's own function, so the seven corrections are defined in one place
+        # and this file holds none of them. is_clf is False: n17 refuses a
+        # classification dataset before any fold starts, because a repeat
+        # measurement of a class label has no spread in the label's own units.
+        built = cleaned_training_set(
+            arm, X_train, y_train, scores, flag_fraction,
+            is_clf=False, groups=groups_train, strength=None, targets=None)
+        if built is None:
+            # gp_smooth refuses above GP_SMOOTH_MAX_ROWS training entities, and
+            # remove refuses when fewer than 10 would be left. Both say so.
+            return None
+        Xa = built['X']
+        ya = np.asarray(built['y'], dtype=np.float64)
+        keep = built['keep']
+        n_removed = int(n - len(ya)) if keep is not None else 0
+        if keep is not None and len(ya) < 10:
+            return None
+        # How many labels this correction actually moved, counted against the
+        # column it was given rather than assumed from the flag rate.
+        # `quantile_clip` leaves every label inside its own range untouched, and
+        # `downweight` and `remove` move none at all.
+        col = built.get('label_column')
+        n_relabelled = (int(np.count_nonzero(np.asarray(col, dtype=np.float64)
+                                             != y_train))
+                        if col is not None else 0)
+        return Xa, ya, built.get('sample_weight'), n_removed, n_relabelled
 
     # THE CEILING AND THE FLOOR DRAW FROM THE SAME ENTITIES. That is what makes
     # the floor a control for the ceiling rather than a different experiment.
     #
-    # An entity measured ONCE has no spread, so the ceiling can never rank it and
-    # can never remove it. Until 2026-09-16 the floor removed its entities from
-    # ALL of training while the ceiling could only reach the ones with a spread,
-    # so the two were removing from different populations and their difference
-    # was partly that. MEASURED on herg_ic50: only 1,218 of 9,802 molecules have
-    # a spread at all, so a ceiling asked for ten in every hundred of the whole
-    # training set was removing about 80 in every hundred of every molecule that
-    # had ever been measured twice. Those are not a random 80%: they average 2.88
-    # measurements against 1.23 over all molecules, and 29.7% of them are measured
-    # three or more times against 4.1% overall. So the ceiling was removing the
-    # well-studied molecules, and the floor was not.
+    # An entity the ranking quantity is not defined on can never be ranked and so
+    # can never be removed by the ceiling. Until 2026-09-16 the floor removed its
+    # entities from ALL of training while the ceiling could only reach the ones
+    # with a spread, so the two were removing from different populations and their
+    # difference was partly that. MEASURED on herg_ic50: only 1,218 of 9,802
+    # molecules have a spread at all, so a ceiling asked for ten in every hundred
+    # of the whole training set was removing about 80 in every hundred of every
+    # molecule that had ever been measured twice. Those are not a random 80%: they
+    # average 2.88 measurements against 1.23 over all molecules, and 29.7% of them
+    # are measured three or more times against 4.1% overall. So the ceiling was
+    # removing the well-studied molecules, and the floor was not.
     #
-    # Both now draw from the entities whose spread is defined, and the count is
-    # capped at how many of those there are.
+    # Both now draw from the entities the ranking quantity is finite on, and the
+    # count is capped at how many of those there are.
     if arm in ('ceiling', 'floor_measured'):
-        eligible = np.flatnonzero(np.isfinite(true_spread_train))
+        eligible = np.flatnonzero(np.isfinite(rank_quantity_train))
         if eligible.size == 0:
             return None
         take = int(min(n_flag, eligible.size))
         if arm == 'ceiling':
-            order = eligible[np.argsort(-true_spread_train[eligible], kind='stable')]
+            order = eligible[np.argsort(-rank_quantity_train[eligible],
+                                        kind='stable')]
             chosen = order[:take]
         else:
             chosen = rng.choice(eligible, size=take, replace=False)
@@ -384,14 +475,14 @@ def build_arm(arm, X_train, y_train, scores, true_spread_train, n_flag, rng):
         keep[chosen] = False
         if keep.sum() < 10:
             return None
-        return X_train[keep], y_train[keep], int(take), 0
+        return X_train[keep], y_train[keep], None, int(take), 0
 
     if arm == 'floor_any':
         keep = np.ones(n, dtype=bool)
         keep[rng.choice(n, size=int(min(n_flag, n)), replace=False)] = False
         if keep.sum() < 10:
             return None
-        return X_train[keep], y_train[keep], int((~keep).sum()), 0
+        return X_train[keep], y_train[keep], None, int((~keep).sum()), 0
 
     raise ValueError(f"unknown arm {arm!r}")
 
@@ -584,6 +675,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # nothing gets exactly what this file did before.
     flag_fraction = float(kwargs.get('flag_fraction', FLAG_FRACTION))
 
+    # WHICH ARMS RUN. Default: every one of them. A caller names fewer only
+    # when the ones it leaves out would produce a number that already exists at
+    # the identical configuration -- the six corrections never read the ranking
+    # quantity, so a run that changes only SPREAD_SCORE would refit them for
+    # nothing. `no_cleaning` is always kept, because every gain is read against
+    # it. The list that ran is written to 'arms', so no reader has to assume.
+    arms = tuple(kwargs.get('arms') or ARMS)
+    unknown = [a for a in arms if a not in ARMS]
+    if unknown:
+        raise ValueError(f"n17: unknown arm(s) {unknown}. Known: {list(ARMS)}.")
+    if 'no_cleaning' not in arms:
+        arms = ('no_cleaning',) + arms
+
+    # Which quantity the ceiling ranks entities by, and therefore which entities
+    # it and `floor_measured` can reach at all. See SPREAD_SCORE.
+    spread_score = str(kwargs.get('spread_score', SPREAD_SCORE))
+    if spread_score not in SPREAD_SCORES:
+        raise ValueError(
+            f"n17: spread_score={spread_score!r} is not one of "
+            f"{list(SPREAD_SCORES)}.")
+
     # EVERY representation the caller loaded, each its own space. Not
     # `sorted(reps)[0]`, which is what this read until 2026-09-17 -- that made
     # whichever representation sorted first the whole feature axis and said
@@ -607,18 +719,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'experiment measured every arm in sorted(reps)[0] alone and the '
             'result file did not say which representation that was.'),
         'models': downstream_models,
-        'arms': list(ARMS),
+        'arms': list(arms),
+        'arms_all': list(ARMS),
         'detector': DETECTOR,
         'detector_k': DETECTOR_K,
         'flag_fraction': flag_fraction,
         'flag_fraction_default': FLAG_FRACTION,
+        'corrections': list(CORRECTIONS),
+        'corrections_source': (
+            "experiments.noise.n07_remediation.cleaned_training_set, called "
+            "with this experiment's own detector scores and flag fraction. "
+            "Until 2026-09-21 this file held two corrections of its own "
+            "inline: 'drop', which is n07's 'remove', and 'repair', which is "
+            "n07's 'knn_smooth' over one more neighbour."),
+        'corrections_that_remove_entities': list(REMOVING_CORRECTIONS),
+        'spread_score': spread_score,
+        'spread_score_default': SPREAD_SCORE,
+        'spread_score_note': (
+            "What the ceiling ranks entities by. 'measurement_spread' is the "
+            "standard deviation of all of an entity's repeat measurements. "
+            "'training_label_error' is how far the one measurement that became "
+            "this entity's training label sits from the mean of its others, in "
+            "the label's own units; it is undefined for an entity measured "
+            "fewer than MIN_MEASUREMENTS times, whose training label is "
+            "already the mean of every measurement it has."),
         'min_measurements_to_grade': MIN_MEASUREMENTS,
         'n_draws': n_draws,
         'claim_scope': (
             'Training labels are ONE real measurement per entity; grading labels '
             'are the mean of that entity\'s OTHER measurements. No noise is '
-            'injected anywhere. A removal result is drop or repair beating '
-            'no_cleaning, read against the distance between floor and ceiling.'),
+            'injected anywhere. A cleaning result is a correction beating '
+            'no_cleaning. `remove` is read on top of that against the distance '
+            'between floor_any and ceiling, because it is the one correction '
+            'that trains on fewer entities.'),
         # Three facts a reader needs before reading any number below, each
         # stated rather than left to be inferred from the absence of a caveat.
         'recipe_saw_clean_labels': False,
@@ -808,7 +941,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         y_train_all = ent['train_label']
         y_grade_all = ent['grade_label']
         gradeable = ent['gradeable']
-        spread_all = ent['true_spread']
+
+        # What the ceiling ranks on, per entity, NaN where it cannot rank this
+        # entity at all. Under 'training_label_error' an entity measured fewer
+        # than MIN_MEASUREMENTS times trained on the mean of every measurement
+        # it has, so its training label sits 0 from the mean of the rest and
+        # there is nothing for the ceiling to find in it.
+        if spread_score == 'training_label_error':
+            rank_all = np.where(
+                gradeable,
+                np.abs(ent['train_label'] - ent['grade_label']),
+                np.nan)
+        else:
+            rank_all = ent['true_spread']
 
         # Fold geometry over ENTITIES. data['groups'] is per row, so it is read
         # at each entity's representative row.
@@ -817,10 +962,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       if row_groups is not None else None)
 
         # {space: {arm: {model: [fold scores]}}}
-        acc = {s: {a: {m: [] for m in downstream_models} for a in ARMS}
+        acc = {s: {a: {m: [] for m in downstream_models} for a in arms}
                for s in spaces}
-        removed = {s: {a: [] for a in ARMS} for s in spaces}
-        relabelled = {s: {a: [] for a in ARMS} for s in spaces}
+        removed = {s: {a: [] for a in arms} for s in spaces}
+        relabelled = {s: {a: [] for a in arms} for s in spaces}
+        # {space: {arm: [folds it refused to build on]}}. An arm that produced
+        # no number is not the same thing as an arm that produced a bad one, and
+        # gp_smooth refuses above GP_SMOOTH_MAX_ROWS training entities on every
+        # fold of this dataset.
+        refused = {s: {} for s in spaces}
         # {space: [fold numbers whose build failed]}. A list of folds until
         # 2026-09-19, when a second hybrid space arrived and the folds of the
         # two would otherwise have been added into one list.
@@ -853,7 +1003,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # measured twice or more, so a training fold holds about 1,611 of
             # them while a tenth of the fold is 2,122 -- the ceiling exhausts
             # the pool and the span came out +0.0000.
-            n_eligible.append(int(np.isfinite(spread_all[tr]).sum()))
+            n_eligible.append(int(np.isfinite(rank_all[tr]).sum()))
             n_flag_per_fold.append(int(n_flag))
 
             # ── The feature spaces for this fold ──
@@ -906,18 +1056,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # that is the whole reason a detector arm can move between them.
                 scores = detector_scores(X_tr, y_tr)
 
-                for arm in ARMS:
+                for arm in arms:
                     built = build_arm(arm, X_tr, y_tr, scores,
-                                      spread_all[tr], n_flag, rng)
+                                      rank_all[tr], n_flag, rng,
+                                      flag_fraction, groups_train=g_tr)
                     if built is None:
+                        refused[space].setdefault(arm, []).append(int(fold_i))
                         continue
-                    Xa, ya, n_rm, n_rl = built
+                    Xa, ya, sw, n_rm, n_rl = built
                     removed[space][arm].append(n_rm)
                     relabelled[space][arm].append(n_rl)
                     for mname in downstream_models:
                         try:
                             m = model_factories[mname]()
-                            m.fit(Xa, ya)
+                            # downweight is the one arm that hands the fit a row
+                            # weight. A model whose fit takes none is not asked
+                            # to take one; that arm is then recorded as refused
+                            # rather than fitted on flat weights, which would be
+                            # no_cleaning under another name.
+                            if sw is None:
+                                m.fit(Xa, ya)
+                            else:
+                                m.fit(Xa, ya, sample_weight=np.asarray(sw))
                             acc[space][arm][mname].append(
                                 float(metric_fn(y_va, m.predict(X_va))))
                         except Exception as exc:
@@ -947,7 +1107,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
         for space in spaces:
             per_arm = {}
-            for arm in ARMS:
+            for arm in arms:
                 per_arm[arm] = {
                     # Entities taken OUT of training, per fold. Always 0 for
                     # repair, which changes labels instead.
@@ -955,6 +1115,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Entities kept in training with a CHANGED label, per fold.
                     # Always 0 for every arm but repair.
                     'entities_relabelled_per_fold': relabelled[space][arm],
+                    'folds_the_arm_refused': refused[space].get(arm, []),
                     'per_model': {
                         m: {'mean': float(np.mean(v)) if v else float('nan'),
                             'fold_scores': [float(x) for x in v],
@@ -966,7 +1127,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    [{time.time() - t_draw:.0f}s]")
 
     results['summary'] = _summarise(results, downstream_models, spaces,
-                                    metric_name, lower_is_better)
+                                    metric_name, lower_is_better, arms)
     _print_summary(results['summary'], metric_name)
 
     # (results, output_dir, experiment_id, dataset) — the order every other
@@ -981,7 +1142,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return results
 
 
-def _summarise(results, models, spaces, metric_name, lower_is_better):
+def _summarise(results, models, spaces, metric_name, lower_is_better,
+               arms=ARMS):
     """One row per (space, model): each arm's score, and where the two detector
     arms sit.
 
@@ -1003,7 +1165,7 @@ def _summarise(results, models, spaces, metric_name, lower_is_better):
         per_model = {}
         for m in models:
             arm_means = {}
-            for arm in ARMS:
+            for arm in arms:
                 vals = []
                 for d in draws:
                     sp = d['per_space'].get(space)
@@ -1021,15 +1183,30 @@ def _summarise(results, models, spaces, metric_name, lower_is_better):
                     'per_draw': vals,
                     'n_draws_scored': len(vals),
                 }
-            base = arm_means['no_cleaning']['mean_over_draws']
-            ceil = arm_means['ceiling']['mean_over_draws']
+            _nan = {'mean_over_draws': float('nan')}
+
+            def _mean(a, _am=arm_means, _n=_nan):
+                return _am.get(a, _n)['mean_over_draws']
+
+            base = _mean('no_cleaning')
+            ceil = _mean('ceiling')
             # Each pick is read against the floor drawn from the same entities it
             # could have picked from. The ceiling reaches only the entities measured
             # twice or more; drop and repair reach all of training.
-            floor_for = {'ceiling': arm_means['floor_measured']['mean_over_draws'],
-                         'drop': arm_means['floor_any']['mean_over_draws'],
-                         'repair': arm_means['floor_any']['mean_over_draws']}
-            floor = floor_for['ceiling']
+            # ⛔ ONLY AN ARM THAT REMOVES ENTITIES GETS A REMOVAL FLOOR.
+            # `repair` was given `floor_any` until 2026-09-21 although it
+            # removed no entity at all, so it was read against a control that
+            # trains on fewer entities than it does. The six label-moving and
+            # row-weighting corrections train on every entity and are read
+            # against `no_cleaning` alone.
+            floor_for = {}
+            if 'ceiling' in arms and 'floor_measured' in arms:
+                floor_for['ceiling'] = _mean('floor_measured')
+            if 'floor_any' in arms:
+                for _c in REMOVING_CORRECTIONS:
+                    if _c in arms:
+                        floor_for[_c] = _mean('floor_any')
+            floor = floor_for.get('ceiling', float('nan'))
 
             def _gain(x, _base=base):
                 # Positive always means better, whichever way the metric runs.
@@ -1050,7 +1227,7 @@ def _summarise(results, models, spaces, metric_name, lower_is_better):
             row = {
                 'arm_scores': arm_means,
                 'gain_over_no_cleaning': {a: _gain(arm_means[a]['mean_over_draws'])
-                                          for a in ARMS},
+                                          for a in arms},
                 'floor_to_ceiling_span': float(span) if np.isfinite(span) else float('nan'),
                 'ceiling_beats_floor': span_is_real,
                 'ceiling_exhausted_the_pool': exhausted,
@@ -1072,13 +1249,15 @@ def _summarise(results, models, spaces, metric_name, lower_is_better):
             # the number that says the pick was better than luck, and it needs no
             # ceiling at all.
             row['gain_over_its_own_floor'] = {}
-            for arm in ('ceiling', 'drop', 'repair'):
-                g = _gain(arm_means[arm]['mean_over_draws'])
+            for arm in floor_for:
+                g = _gain(_mean(arm))
                 f = _gain(floor_for[arm])
                 row['gain_over_its_own_floor'][arm] = (
                     float(g - f) if np.isfinite(g) and np.isfinite(f) else float('nan'))
-            for arm in ('drop', 'repair'):
-                g = _gain(arm_means[arm]['mean_over_draws'])
+            for arm in REMOVING_CORRECTIONS:
+                if arm not in floor_for:
+                    continue
+                g = _gain(_mean(arm))
                 row.setdefault('removal_position', {})[arm] = (
                     float((g - _gain(floor_for[arm])) / span)
                     if span_is_real and np.isfinite(g) else float('nan'))
@@ -1093,7 +1272,7 @@ def _summarise(results, models, spaces, metric_name, lower_is_better):
     def _cross_for(hybrid_space):
         """One hybrid space against every base representation, per arm."""
         cross = {}
-        for arm in ('ceiling', 'drop', 'repair'):
+        for arm in ('ceiling',) + tuple(REMOVING_CORRECTIONS):
             per_model = {}
             for m in models:
                 h = out['per_space'][hybrid_space]['per_model'][m][
@@ -1151,13 +1330,13 @@ def _print_summary(summary, metric_name):
                 continue
             print(f"    {m}:")
             own = row['gain_over_its_own_floor']
-            print(f"      floor_any {g['floor_any']:+.4f}   "
-                  f"floor_measured {g['floor_measured']:+.4f}   "
-                  f"ceiling {g['ceiling']:+.4f}   "
+            _nan = float('nan')
+            print(f"      floor_any {g.get('floor_any', _nan):+.4f}   "
+                  f"floor_measured {g.get('floor_measured', _nan):+.4f}   "
+                  f"ceiling {g.get('ceiling', _nan):+.4f}   "
                   f"span {row['floor_to_ceiling_span']:+.4f}")
-            print(f"      beyond its own floor: "
-                  f"ceiling {own['ceiling']:+.4f}  drop {own['drop']:+.4f}  "
-                  f"repair {own['repair']:+.4f}")
+            print("      beyond its own floor: "
+                  + '  '.join(f"{k} {v:+.4f}" for k, v in own.items()))
             if row.get('ceiling_exhausted_the_pool'):
                 print("      the ceiling removed EVERY entity that has a "
                       "disagreement, and so did its floor —")
@@ -1168,11 +1347,27 @@ def _print_summary(summary, metric_name):
             elif not row['ceiling_beats_floor']:
                 print("      the ceiling did not beat the floor — nothing is on "
                       "the table here, so no position is reported")
-            for arm in ('drop', 'repair'):
-                p = pos.get(arm, float('nan'))
-                where = ('no distance to measure against' if not np.isfinite(p)
-                         else f'{p:.0%} of the way from floor to ceiling')
-                print(f"      {arm:8s} {g[arm]:+.4f}   {where}")
+            # Every correction, best first in the metric's own direction, so
+            # the line at the top is the one that did most to the held-out
+            # score. The share of the floor-to-ceiling distance is printed only
+            # for the correction that removes entities; it is not defined for a
+            # correction that removes none.
+            _ranked = sorted(
+                (a for a in CORRECTIONS if np.isfinite(g.get(a, float('nan')))),
+                key=lambda a: -g[a])
+            for arm in _ranked:
+                if arm in REMOVING_CORRECTIONS:
+                    p = pos.get(arm, float('nan'))
+                    where = ('no distance to measure against'
+                             if not np.isfinite(p)
+                             else f'{p:.0%} of the way from floor to ceiling')
+                else:
+                    where = 'trains on every molecule, read against no_cleaning'
+                print(f"      {arm:14s} {g[arm]:+.4f}   {where}")
+            _absent = [a for a in CORRECTIONS
+                       if not np.isfinite(g.get(a, float('nan')))]
+            if _absent:
+                print(f"      no number from: {', '.join(_absent)}")
     print("\n  A gain at the floor is a smaller training set, not a removal "
           "result.")
     if 'gain_by_space' in summary:
@@ -1188,13 +1383,17 @@ def main():
     parser.add_argument('--flag-fraction', type=float, default=FLAG_FRACTION,
                         help='Share of training entities every removing arm '
                              'takes out')
+    parser.add_argument('--spread-score', type=str, default=SPREAD_SCORE,
+                        choices=list(SPREAD_SCORES),
+                        help='What the ceiling ranks entities by')
     parser.add_argument('--base-reps', type=str, default=None,
                         help='Comma-separated representations to run as base '
                              'spaces. Default: every representation loaded')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)
-    kw = {'n_draws': args.n_draws, 'flag_fraction': args.flag_fraction}
+    kw = {'n_draws': args.n_draws, 'flag_fraction': args.flag_fraction,
+          'spread_score': args.spread_score}
     if args.base_reps:
         kw['base_reps'] = [x.strip() for x in args.base_reps.split(',')]
     run(data, config, args.output, args.dataset, **kw)
