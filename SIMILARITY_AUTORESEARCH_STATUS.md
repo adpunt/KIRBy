@@ -215,6 +215,49 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
+**s11 — the arms the hybrid beats were not using their surrogate.** Counted from
+the three budget-100 logs, picks made by dataset row order out of 300 (three
+seeds of 100 picks each):
+
+    arm                 caco2   herg_ki   adme_mdr1
+    random_50d            300       300         300
+    ecfp4_raw             100       295         300
+    pca_50d                58       224         298
+    best_single           100         0           0
+    tanimoto_ecfp4          0         0           0
+    hybrid_50d              0         0           0
+    hybrid_50d_refit       12         0           0
+
+The hybrid arm chose every one of its 900 picks with its surrogate. Three of the
+arms it is compared against chose most or all of theirs by row number. So the
+two sides of that comparison differ in two ways at once, not one: the features
+differ, and on one side the acquisition function is not being consulted.
+
+This bears hardest on the caco2 line above. `random_50d` made 300 of 300 picks
+in row order, so what beat the hybrid on caco2 is not random picking — it is the
+order the molecules sit in the file.
+
+**s11 — the length scale the RBF starts at decides whether the surrogate works.**
+Each arm standardises its features on the seed molecules before fitting, and
+`fit_gp` then starts the RBF length scale at 1.0 with scikit-learn's default
+bounds. The distance between two standardised caco2 molecules is 13.50 in maccs
+and 34.75 in ecfp4, so 1.0 sits far below anything the data has. Measured on 40
+caco2 seed molecules against a smooth function of their own features, starting
+instead at the median distance between two labelled molecules:
+
+    arm             start   fitted length scale   tied at the maximum   rank correlation
+    caco2 ecfp4     1.0                       1          200 of 200            +0.0819
+    caco2 ecfp4     median                 22.5            1 of 200            +0.5072
+    caco2 maccs     1.0                       1            1 of 200            +0.3999
+    caco2 maccs     median                27.43            1 of 200            +0.8125
+
+Tied at the maximum counts the molecules in the pool sharing the largest
+Expected Improvement; when all 200 tie, `np.argmax` returns the lowest row
+number and the pick is made by row order. `KIRBY_S11_LENGTHSCALE=median` is the
+lever and the default is unchanged. Unverified on the real permeability label
+and on the area under the best-found curve, which is what s11 reports — three
+runs at 100 picks are queued to settle it.
+
 **s12 — wins all three under the calibrated cliff rule.** Held-out delta:
 caco2 +0.0154, herg_ki +0.0107 (was -0.0024), adme_mdr1 +0.0416.
 
