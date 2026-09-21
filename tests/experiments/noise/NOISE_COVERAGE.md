@@ -19,7 +19,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n18 | cleaning the labels as they come, nothing injected | FAIL (_smoke_n18) | none | 5 (4 kept) |
 | n20 | cleaning before the recipe search rather than after | pass | 1 file(s), newest 2026-09-21 | 1 (1 kept) |
 | n21 | which distance the nearest neighbours are found in | pass | 4 file(s), newest 2026-09-20 | 4 (3 kept) |
-| n23 | cleaning from a model's own per-molecule uncertainty | FAIL (_smoke_n23) | none | 0 |
+| n23 | cleaning from a model's own per-molecule uncertainty | FAIL (_smoke_n23) | none | 3 (2 kept) |
 
 ## Investigations — these need to run and be believed
 
@@ -39,7 +39,7 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 - 18 experiments, 10 of them methods.
 - 0 have no smoke file at all.
 - 12 have never written a result file.
-- 4 of the 10 methods have had no optimisation loop.
+- 3 of the 10 methods have had no optimisation loop.
 
 ## The loops, newest first
 
@@ -49,6 +49,9 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n18 | 2026-09-21 | nothing in the file: the existing strength grid was read out per correction, to settle whether moving a label all the way beats moving it a quarter of the way | the uncleaned random forest, 0.4590 spearman | the strongest setting loses at every correction. label_smooth is best at alpha 0.25, 0.4492 spearman against 0.4185 at alpha 1.0. oof_smooth is best at alpha 0.5, 0.4651 against 0.4512 at alpha 1.0. gp_smooth is best at alpha 0.5, 0.4726 against 0.4705 at alpha 1.0. downweight is best at a 4-to-1 row weight ratio, 0.4823 against 0.4687 at 10-to-1 | yes |
 | n07 | 2026-09-21 | weighted the Gaussian process's kernel inputs by each feature's lightgbm gain, which is what cut a Gaussian process's error by 29 percent in n21 | the posterior mean gp_smooth aims every label at spans 1.6899 label units across the 448 molecules and rank-correlates with the labels it was fitted on at -0.0234 spearman | the same 1.6899 label units and the same -0.0234 spearman; the two posterior means differ by 0.00000000 label units, bit-identical | no |
 | n07 | 2026-09-21 | the gaussian process that gp_smooth corrects toward had its kernel inputs multiplied by feature importance, instead of left unweighted | share of the 0.2538 spearman clean-to-corrupted gap recovered, unweighted: 28.4% moving a label a quarter of the way, 47.5% all the way, 41.3% by rank, 31.1% replacing outright | identical to four decimal places at all four shapes: 28.4%, 47.5%, 41.3%, 31.1% | no |
+| n23 | 2026-09-21 | whether gaussian_process is counted as a source that predicts a molecule's noise from its features alone, which decides whether the result file marks it undefined under the default condition outlier_p10 | four of the five uncertainty sources marked undefined under outlier_p10, one of them scoring 0.3016 detection average precision against 0.0863 for a coin flip | three of the five marked undefined; the source moved out scores that same 0.3016 detection average precision against 0.0863 for a coin flip, the highest of the five measured | yes |
+| n23 | 2026-09-21 | the injected noise condition, from the default outlier_p10 to censoring, to give the feature-based sources a condition whose corrupted molecules are chosen by something the features encode | under outlier_p10 at level 0.5, with 29 of the 336 training molecules moved and a coin flip at 0.0863, detection average precision was 0.3016 for gaussian_process, 0.2664 for activity_cliff_aware and 0.0878 for heteroscedastic_nn | under censoring at level 0.25, with 79 and 86 of the 336 training molecules moved on the two folds and a coin flip at 0.2351 and 0.2560, detection average precision was 0.2663 and 0.2764 for gaussian_process, 0.1947 and 0.2776 for heteroscedastic_nn, and 0.1881 and 0.2340 for activity_cliff_aware | no |
+| n23 | 2026-09-21 | what n23 does when asked for a grouped condition on a dataset with no scaffold groups: it now stops before the first fold instead of injecting | every one of the outer folds raised inside the injector, each wrote one row into _errors, and the run finished and saved a result file carrying 0 held-out scores | the run stops with a message naming the 4 conditions in DETECTION_IS_DEFINED that need no scaffold groups, and writes no file | yes |
 | n21 | 2026-09-20 | the row weight ratio the repair applies, from 1.11-to-1 to 4-to-1 | a positive share of the clean-to-corrupted gap recovered in 3 of the 15 distances | a positive share recovered in 13 of the 15 distances | yes |
 | n21 | 2026-09-20 | the representation the plain distance is computed in, from the esm2_cdr fallback to saprot | best of the 15 distances, 0.2455 detection average precision | best of the 15 distances, 0.2266 detection average precision | no |
 | n21 | 2026-09-20 | the importance exponent matched to the distance metric rather than fixed at 0.5 | 0.2098 detection average precision, lightgbm_gain at exponent 0.5 under manhattan | 0.2388 detection average precision, lightgbm_gain at exponent 1.0 under manhattan | yes |
