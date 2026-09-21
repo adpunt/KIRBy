@@ -381,8 +381,8 @@ def detector_scores(X_train, y_train):
     """Per-entity suspicion score from the training features and labels only.
 
     It never sees `true_spread` and never sees `grade_label`. Returns None if the
-    detector raises, and the caller then drops the two detector arms for that fold
-    rather than scoring them against a silent fallback.
+    detector raises, and the caller then records every correction as refused for
+    that fold rather than scoring one against a silent fallback.
     """
     try:
         est = get_noise_estimator(DETECTOR, k=DETECTOR_K, metric=None)
