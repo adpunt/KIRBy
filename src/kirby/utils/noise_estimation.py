@@ -1601,9 +1601,63 @@ class NGBoostEstimator(NoiseEstimator):
         y_denoised = (1 - correction) * y + correction * mu
     
     Reference: Duan et al. 2020 "NGBoost: Natural Gradient Boosting"
+
+    ⛔ THE BOOSTING SCHEDULE IS 50 STAGES AT LEARNING RATE 0.1, NOT 500 AT 0.01,
+    AND THE PRODUCT IS THE SAME 5. Changed 2026-09-21 because at 500 stages this
+    estimator never returned a number to the experiment that asks for it. n23
+    abandoned it after 18 minutes on 2026-09-21 and it had no reading at all.
+
+    WHAT ONE STAGE COSTS, measured on this machine in CPU-seconds so a loaded
+    machine cannot move the reading, 168 training rows per inner fold:
+
+        1,280 features    0.24 CPU-seconds per stage
+        5,600 features    1.00 CPU-seconds per stage
+
+    n23 gives this estimator 2 inner folds, so at 500 stages one uncertainty
+    estimate costs 240 CPU-seconds at 1,280 features and 1,000 at 5,600.
+    `pick_noise_base_rep` returns `onehot` on an antibody set, which is 5,600
+    features wide, and n23's headline needs 6 of those estimates -- 3 outer
+    folds at each of 2 injected levels -- so the old schedule was 100
+    CPU-minutes of one source in a run whose other four sources together cost
+    under 10.
+
+    WHAT THE SHORTER SCHEDULE COSTS IN DETECTION, both schedules measured on the
+    same fold: flab_thermo_tresanco, 672 antibodies, 336 in fold 0's training
+    block, esm2_cdr at 1,280 features, outlier_p10 at level 0.5, draw 0, 2 inner
+    folds, 29 of the 336 training molecules moved so a coin flip scores 0.0863
+    average precision at ranking them:
+
+        500 stages at 0.01    0.1500 average precision   219.6 CPU-seconds
+         50 stages at 0.1     0.1313 average precision    21.9 CPU-seconds
+
+    So one tenth of the cost for 0.0187 average precision. Both readings sit
+    above the coin flip and both sit far below gaussian_process at 0.3016 and
+    activity_cliff_aware at 0.2664 on that same fold. ⛔ NEITHER IS EVIDENCE
+    ABOUT WHETHER NGBOOST CAN DETECT: `outlier_p10` picks the molecules it
+    corrupts at random with no reference to the features, and this estimator
+    predicts a molecule's spread FROM its features, so n23 marks it undefined
+    under that condition. What the pair settles is the cost of the schedule, not
+    the worth of the source.
+
+    ⛔ WHAT IT DEVIATES FROM, AND WHAT IT DID NOT MATCH BEFORE EITHER. The shared
+    parameter spec `qsar_qm_models/models/model_defaults.py` version 1.7.0
+    carries `n_estimators: 500` for ngboost together with
+    `early_stopping_rounds: 50` and `use_best_iteration: True` -- 500 is a CAP
+    the spec expects a validation curve to stop short of, and
+    `alternative_data_noise_robustness.EarlyStoppingNGBRegressor` is where that
+    curve is read. This estimator reads neither stopping key, so it fitted all
+    500 stages and predicted at all 500. Honouring the spec here would need a
+    validation split carved inside each inner fold, and carving one without
+    scaffold ids would put a molecule's own family on both sides of it, which is
+    the optimism the grouped inner split exists to rule out -- `fold_fn` is
+    handed no groups. Shortening the schedule is the change that needs nothing
+    added.
+
+    n11 and n13 also list 'ngboost' as an optional estimator and both get the
+    shorter schedule. Neither has a recorded ngboost reading to compare against.
     """
-    
-    def __init__(self, n_estimators: int = 500, learning_rate: float = 0.01,
+
+    def __init__(self, n_estimators: int = 50, learning_rate: float = 0.1,
                  minibatch_frac: float = 1.0, normalize: bool = False,
                  n_folds: int = 5, groups=None, random_state: int = 42):
         super().__init__(random_state)
