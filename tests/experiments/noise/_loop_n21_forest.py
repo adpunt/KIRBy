@@ -323,8 +323,13 @@ def main():
             'errors': errors,
             'seconds_total': time.time() - t_start,
         }
-        with open(out_path, 'w') as fh:
+        # Written to a temporary file and moved into place: this is called
+        # after every pass now, and a kill during the write would leave a
+        # truncated file, which is every finished pass gone.
+        tmp = f'{out_path}.writing'
+        with open(tmp, 'w') as fh:
             json.dump(result, fh, indent=2)
+        os.replace(tmp, out_path)
         return shipped_arm, ranked, comparisons
 
     for fold_i, (train_idx, _val_idx) in enumerate(splits):
