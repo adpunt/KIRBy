@@ -539,9 +539,16 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
                            f"hybrid matrix by the same scores"),
                 'importance_method': imp_method,
             }
-            conditions[f'{_space}_imp_own'] = conditions.get(
-                f'{_space}_imp_base',
-                _weight_features(X_hyb_std, imp_hybrid_via_blueprint))
+            # dict.get evaluates its default even when the key is there, so
+            # the weighting is looked up first and only built if condition 4
+            # was not added -- which happens when the base representation's
+            # own importance failed and condition 4 was skipped.
+            if f'{_space}_imp_base' in conditions:
+                conditions[f'{_space}_imp_own'] = conditions[
+                    f'{_space}_imp_base']
+            else:
+                conditions[f'{_space}_imp_own'] = _weight_features(
+                    X_hyb_std, imp_hybrid_via_blueprint)
             if _importance_is_all_zero(imp_hybrid_via_blueprint):
                 zero_importance[f'{_space}_imp_own'] = True
             continue

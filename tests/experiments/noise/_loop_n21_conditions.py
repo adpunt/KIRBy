@@ -293,9 +293,15 @@ def main():
         'done': done,
     }
 
-    for fold_i, (train_idx, val_idx) in enumerate(splits):
-        if all(f'{c}|f{fold_i}s{d}' in done
-               for c, _l in CONDITIONS for d in DRAWS):
+    # DRAW OUTSIDE FOLD, and the reason is readability under a kill. Ordered
+    # the other way, a run that is stopped part way has some folds at two draws
+    # and the rest at none, and no condition has a complete reading. This way
+    # the first draw finishes across every fold first, so the first complete
+    # three-fold reading of all three conditions arrives at a third of the
+    # cost, and the second draw deepens it.
+    for draw in DRAWS:
+      for fold_i, (train_idx, val_idx) in enumerate(splits):
+        if all(f'{c}|f{fold_i}s{draw}' in done for c, _l in CONDITIONS):
             continue
         X_raw = reps[base_rep][train_idx]
         X_std = StandardScaler().fit_transform(
@@ -308,7 +314,7 @@ def main():
                     if augmentations else None)
         g_train = groups[train_idx] if groups is not None else None
 
-        for draw in DRAWS:
+        if True:
             for condition, level in CONDITIONS:
                 pass_key = f'{condition}|f{fold_i}s{draw}'
                 if pass_key in done:
