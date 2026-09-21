@@ -115,6 +115,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import copy
 import time
 
 import numpy as np
@@ -122,7 +123,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
+from sklearn.gaussian_process.kernels import (
+    Kernel, Hyperparameter, RBF, WhiteKernel, ConstantKernel)
 from sklearn.svm import SVR
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -255,12 +257,59 @@ def _k_values():
     return [int(v) for v in raw.split(',') if v.strip()]
 
 
-def _qrasar_k():
+def _qrasar_ks():
     """How many nearest training rows the four q-RASAR features are built from.
 
-    Reads KIRBY_S10_QRASAR_K; unset gives 10, which is what this file had.
+    A list now, one arm each, where it was one number. Reads
+    KIRBY_S10_QRASAR_K as a comma-separated list; unset gives 5, 10 and 20.
+    The FIRST entry is the one the unsuffixed 'per_rep' and 'hybrid_by_budget'
+    blocks report, and 10 leads the default list because 10 is the single
+    number this file used before the sweep, so those two blocks hold what they
+    always held.
+
+    The four features are mean and standard deviation of the neighbours'
+    labels, the distance to the nearest of them and the mean distance to all of
+    them, so the count changes what all four measure. Sweeping it costs one
+    neighbour search and one forest fit per extra count per fold, and no extra
+    hybrid build: the feature matrix the neighbours are found in does not
+    depend on the count.
     """
-    return int(os.environ.get('KIRBY_S10_QRASAR_K', '10'))
+    raw = os.environ.get('KIRBY_S10_QRASAR_K', '').strip()
+    if not raw:
+        return [10, 5, 20]
+    return [int(v) for v in raw.split(',') if v.strip()]
+
+
+def _qrasar_block(base_scores, uw_scores, w_scores):
+    """One q-RASAR arm's three means and three differences.
+
+    base = the forest on the features alone, uw = the same forest with the
+    four neighbour features appended, w = the same four built in the
+    importance-weighted distance instead.
+    """
+    base_mean = float(np.nanmean(base_scores))
+    uw_mean = float(np.nanmean(uw_scores))
+    w_mean = float(np.nanmean(w_scores))
+    d_uw_p, n_uw_p = _paired_delta(uw_scores, base_scores)
+    d_w_p, n_w_p = _paired_delta(w_scores, base_scores)
+    d_wvu_p, n_wvu_p = _paired_delta(w_scores, uw_scores)
+    return {
+        'base_only': base_mean,
+        'base_plus_sim_unweighted': uw_mean,
+        'base_plus_sim_weighted': w_mean,
+        'delta_uw': uw_mean - base_mean,
+        'delta_w': w_mean - base_mean,
+        'delta_w_vs_uw': w_mean - uw_mean,
+        'delta_uw_paired': d_uw_p,
+        'delta_w_paired': d_w_p,
+        'delta_w_vs_uw_paired': d_wvu_p,
+        'n_paired_folds_uw': n_uw_p,
+        'n_paired_folds_w': n_w_p,
+        'n_paired_folds_w_vs_uw': n_wvu_p,
+        'base_only_folds': [float(s) for s in base_scores],
+        'base_plus_sim_unweighted_folds': [float(s) for s in uw_scores],
+        'base_plus_sim_weighted_folds': [float(s) for s in w_scores],
+    }
 
 
 def _paired_delta(treatment_scores, reference_scores):
@@ -317,6 +366,43 @@ def _drop_blueprint(obj):
     if isinstance(obj, list):
         return [_drop_blueprint(v) for v in obj]
     return obj
+
+
+def _per_rep_arms_to_score(reps, cache, results, task_name):
+    """Which representations this task still has to score in this hybrid space.
+
+    Every task's per-representation arms read `reps`, `fold_splits` and
+    `fold_importance` and never touch a recipe, so the second hybrid space
+    recomputed numbers identical to the first's. The Gaussian process is where
+    that cost: 7 representations x 5 folds x 2 arms, fitted twice for one set
+    of numbers.
+
+    `cache` carries the first space's block. What goes into this space's result
+    is a COPY of it, not the same object: _orient_deltas negates in place once
+    per task block, and one dict reached from two blocks would be negated twice
+    and put every rmse delta back the way it came.
+
+    Returns the representation names still to score — all of them the first
+    time, none of them afterwards.
+    """
+    if cache is not None and task_name in cache:
+        for key, value in cache[task_name].items():
+            results[key] = copy.deepcopy(value)
+        results['per_rep_reused_from_first_space'] = True
+        print(f"    per-representation arms: the {len(results['per_rep'])} "
+              f"scored in the first hybrid space are reused, because they do "
+              f"not read a recipe")
+        return []
+    results['per_rep_reused_from_first_space'] = False
+    return sorted(reps.keys())
+
+
+def _store_per_rep(results, cache, task_name, extra_keys=()):
+    """Keep this task's per-representation blocks for the next hybrid space."""
+    if cache is not None and task_name not in cache:
+        cache[task_name] = {
+            k: copy.deepcopy(results.get(k) or {})
+            for k in ('per_rep',) + tuple(extra_keys)}
 
 
 def _record_build_error(store, exc, **where):
@@ -463,7 +549,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                       metric_fn, metric_name, lower_is_better=False,
                       augmentations=None, task_type='regression',
                       fold_splits=None, fold_importance=None,
-                      hybrid_budgets=None):
+                      hybrid_budgets=None, per_rep_cache=None):
     """Weighted kNN: per-rep and hybrid, weighted vs unweighted.
 
     fold_splits: list of (train_idx, val_idx) tuples, shared across all tasks.
@@ -481,7 +567,8 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
     results = {'per_rep': {}, 'hybrid': {}}
 
     # Per-rep evaluation
-    for rep_name in sorted(reps.keys()):
+    for rep_name in _per_rep_arms_to_score(reps, per_rep_cache, results,
+                                           'weighted_knn'):
         X_rep = reps[rep_name]
         rep_results = {}
 
@@ -536,51 +623,75 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
               f"(delta={best['delta']:+.4f}, delta_paired={best['delta_paired']:+.4f} "
               f"over {best['n_paired_folds']} folds)")
 
+    _store_per_rep(results, per_rep_cache, 'weighted_knn')
+
     # Hybrid evaluation — one arm per swept number of features.
     if fold_blueprints:
         hybrid_build_errors = []
         budgets = list(hybrid_budgets or [None])
         results['hybrid_by_budget'] = {}
+        n_builds = 0
         for budget in budgets:
             bkey = _budget_key(budget)
-            by_k = {}
-            for k in k_values:
-                uw_scores, w_scores = [], []
+            uw_by_k = {k: [] for k in k_values}
+            w_by_k = {k: [] for k in k_values}
 
-                for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
-                    blueprint = fold_blueprints.get(fold_i)
-                    if blueprint is None:
-                        continue
-                    train_reps = {n: r[train_idx] for n, r in reps.items()}
-                    val_reps = {n: r[val_idx] for n, r in reps.items()}
-                    y_train, y_val = labels[train_idx], labels[val_idx]
-                    aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
-                    aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
+            # The fold is outside and the neighbour count inside, which is the
+            # other way round from how this read before. A recipe searched
+            # under a geometry objective fits no downstream model, so
+            # fold_hybrid_scoring_kwargs hands the build nothing that depends
+            # on the neighbour count and the three counts were building one
+            # feature matrix three times. A predictive recipe still builds once
+            # per neighbour count: the accept/reject test inside the build fits
+            # the kNN that consumes the allocation, and that kNN carries k.
+            for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
+                blueprint = fold_blueprints.get(fold_i)
+                if blueprint is None:
+                    continue
+                train_reps = {n: r[train_idx] for n, r in reps.items()}
+                val_reps = {n: r[val_idx] for n, r in reps.items()}
+                y_train, y_val = labels[train_idx], labels[val_idx]
+                aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+                aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
+                _KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
+                _build_reads_k = bool(fold_hybrid_scoring_kwargs(
+                    blueprint, model=_KNN(n_neighbors=1), metric_fn=metric_fn,
+                    lower_is_better=lower_is_better))
+                built = None
 
+                for k in k_values:
                     k_eff = min(k, len(y_train) - 1)
-                    _KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
-                    try:
-                        X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                            train_reps, val_reps, y_train, blueprint,
-                            augmentations_train=aug_tr, augmentations_val=aug_va,
-                            # The number of features this arm is built with,
-                            # one of the eight swept in run(). None leaves the
-                            # number this fold's own recipe was searched at.
-                            budget_override=budget,
-                            groups=(groups[train_idx] if groups is not None else None),
-                            # This arm's downstream estimator IS a kNN scored with
-                            # metric_fn — pass both so create_hybrid's internal
-                            # accept/reject test judges allocations by the model that
-                            # actually consumes them, instead of falling back to its
-                            # internal r2/accuracy proxy.
-                            **fold_hybrid_scoring_kwargs(
-                                blueprint, model=_KNN(n_neighbors=k_eff, weights=vote),
-                                metric_fn=metric_fn,
-                                lower_is_better=lower_is_better))
-                    except Exception as e:
-                        _record_build_error(hybrid_build_errors, e, k=k,
-                                            fold=fold_i, budget=budget)
-                        continue
+                    if built is None or _build_reads_k:
+                        try:
+                            built = build_fold_hybrid(
+                                train_reps, val_reps, y_train, blueprint,
+                                augmentations_train=aug_tr,
+                                augmentations_val=aug_va,
+                                # The number of features this arm is built
+                                # with, one of the nine swept in run(). None
+                                # leaves the number this fold's own recipe was
+                                # searched at.
+                                budget_override=budget,
+                                groups=(groups[train_idx]
+                                        if groups is not None else None),
+                                # This arm's downstream estimator IS a kNN
+                                # scored with metric_fn — pass both so
+                                # create_hybrid's internal accept/reject test
+                                # judges allocations by the model that actually
+                                # consumes them, instead of falling back to its
+                                # internal r2/accuracy proxy.
+                                **fold_hybrid_scoring_kwargs(
+                                    blueprint,
+                                    model=_KNN(n_neighbors=k_eff, weights=vote),
+                                    metric_fn=metric_fn,
+                                    lower_is_better=lower_is_better))
+                            n_builds += 1
+                        except Exception as e:
+                            _record_build_error(hybrid_build_errors, e, k=k,
+                                                fold=fold_i, budget=budget)
+                            built = None
+                            continue
+                    X_tr_h, X_va_h, feat_info = built
 
                     scaler = StandardScaler()
                     X_tr = scaler.fit_transform(X_tr_h)
@@ -590,7 +701,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                     KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
                     model = KNN(n_neighbors=k_eff, weights=vote)
                     model.fit(X_tr, y_train)
-                    uw_scores.append(metric_fn(y_val, model.predict(X_va)))
+                    uw_by_k[k].append(metric_fn(y_val, model.predict(X_va)))
 
                     # Weighted
                     try:
@@ -599,10 +710,17 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                             f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
                         model_w = KNN(n_neighbors=k_eff, weights=vote)
                         model_w.fit(X_tr * w, y_train)
-                        w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
+                        w_by_k[k].append(
+                            metric_fn(y_val, model_w.predict(X_va * w)))
                     except Exception:
-                        w_scores.append(float('nan'))
+                        w_by_k[k].append(float('nan'))
 
+                # Free this fold's feature matrices before the next one.
+                built = None
+
+            by_k = {}
+            for k in k_values:
+                uw_scores, w_scores = uw_by_k[k], w_by_k[k]
                 if uw_scores:
                     uw_mean = float(np.nanmean(uw_scores))
                     w_mean = float(np.nanmean(w_scores))
@@ -631,6 +749,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
         results['hybrid_build_errors'] = hybrid_build_errors
         results['n_hybrid_build_failures'] = len(hybrid_build_errors)
         results['hybrid_build_error_basis'] = _HYBRID_BUILD_ERROR_BASIS
+        results['n_hybrid_builds'] = n_builds
         if hybrid_build_errors:
             print(f"    hybrid build failed on {len(hybrid_build_errors)} of "
                   f"{len(budgets) * len(k_values) * len(fold_splits)} "
@@ -646,6 +765,98 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
 # =============================================================================
 
 _GP_LS_BOUNDS = (1e-5, 1e5)
+
+
+def _sqdist(X, Y):
+    """Squared euclidean distance between every row of X and every row of Y."""
+    d = (np.einsum('ij,ij->i', X, X)[:, None]
+         + np.einsum('ij,ij->i', Y, Y)[None, :] - 2.0 * (X @ Y.T))
+    np.maximum(d, 0, out=d)
+    return d
+
+
+class _CachedRBF(Kernel):
+    """The same RBF, over squared distances computed once instead of per step.
+
+    sklearn's RBF rebuilds every pairwise distance from all of the features at
+    each step of the marginal-likelihood optimiser. Only the length scale
+    changes between steps, so the distances do not: this computes them once per
+    training matrix and then evaluates exp(-d / 2 l^2) on them. Same kernel,
+    same gradient. On 2,048 features that is the difference between a step
+    costing 1,412 x 1,412 x 2,048 multiplications and one costing
+    1,412 x 1,412.
+
+    The cached entry holds the matrix it was computed from as well as the
+    distances, so the array cannot be freed and another array take its id.
+
+    _gp_kernel_equivalence() below fits both kernels on the same small matrix
+    and reports the largest difference in their held-out predictions; run()
+    stores that number in the result file. KIRBY_S10_GP_KERNEL=sklearn puts
+    sklearn's own RBF back.
+    """
+
+    def __init__(self, length_scale=1.0, length_scale_bounds=_GP_LS_BOUNDS):
+        self.length_scale = length_scale
+        self.length_scale_bounds = length_scale_bounds
+        self._cache = {}
+
+    @property
+    def hyperparameter_length_scale(self):
+        return Hyperparameter('length_scale', 'numeric',
+                              self.length_scale_bounds)
+
+    def _d2(self, X):
+        key = id(X)
+        hit = self._cache.get(key)
+        if hit is None or hit[0] is not X:
+            hit = (X, _sqdist(X, X))
+            self._cache[key] = hit
+        return hit[1]
+
+    def __call__(self, X, Y=None, eval_gradient=False):
+        ls = float(np.squeeze(self.length_scale))
+        d2 = self._d2(X) if Y is None else _sqdist(X, Y)
+        K = np.exp(-0.5 * d2 / (ls * ls))
+        if not eval_gradient:
+            return K
+        if Y is not None:
+            raise ValueError('gradient is only defined when Y is None')
+        return K, (K * (d2 / (ls * ls)))[:, :, np.newaxis]
+
+    def diag(self, X):
+        return np.ones(X.shape[0])
+
+    def is_stationary(self):
+        return True
+
+
+def _gp_kernel_in_use():
+    """'cached' (the default) or 'sklearn'. Reads KIRBY_S10_GP_KERNEL."""
+    return os.environ.get('KIRBY_S10_GP_KERNEL', 'cached').strip() or 'cached'
+
+
+def _gp_kernel_equivalence():
+    """Largest difference in prediction between the two kernels, 20 held-out rows.
+
+    Fits both on 60 rows of 8 gaussian features and predicts 20 more. A number
+    at the size of floating-point rounding is what says the cached kernel
+    changed nothing; anything larger means it did.
+    """
+    try:
+        r = np.random.default_rng(0)
+        X, y = r.normal(size=(60, 8)), r.normal(size=60)
+        X_test = r.normal(size=(20, 8))
+        preds = []
+        for K in (RBF(1.0), _CachedRBF(1.0)):
+            g = GaussianProcessRegressor(
+                kernel=ConstantKernel(1.0) * K + WhiteKernel(1e-3),
+                n_restarts_optimizer=0, alpha=1e-6, random_state=42)
+            g.fit(X, y)
+            preds.append(g.predict(X_test))
+        return float(np.abs(preds[0] - preds[1]).max())
+    except Exception as e:
+        return f'{type(e).__name__}: {e}'
+
 
 _GP_FIT_BASIS = (
     "standard_fits / weighted_fits = one entry per fold: the fitted RBF "
@@ -683,7 +894,7 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                      lower_is_better=False,
                      augmentations=None,
                      fold_splits=None, fold_importance=None,
-                     hybrid_budgets=None):
+                     hybrid_budgets=None, per_rep_cache=None):
     """GP with importance-weighted RBF kernel.
 
     lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
@@ -705,7 +916,10 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
     results = {'per_rep': {}, 'hybrid': {}}
 
     def _make_gp():
-        kernel = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(1e-3)
+        _rbf = (RBF(length_scale=1.0)
+                if _gp_kernel_in_use() == 'sklearn'
+                else _CachedRBF(length_scale=1.0))
+        kernel = ConstantKernel(1.0) * _rbf + WhiteKernel(1e-3)
         # n_restarts_optimizer counts EXTRA starts of the marginal-likelihood
         # optimiser, so 2 ran the whole Cholesky sequence three times per fit.
         # Both arms of this comparison got all three, so they cancel out of the
@@ -719,7 +933,8 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
         )
 
     # Per-rep evaluation
-    for rep_name in sorted(reps.keys()):
+    for rep_name in _per_rep_arms_to_score(reps, per_rep_cache, results,
+                                           'weighted_gp'):
         X_rep = reps[rep_name]
         std_scores, w_scores = [], []
         std_fits, w_fits = [], []
@@ -782,6 +997,8 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
         print(f"    {rep_name}: std={std_mean:.4f}, weighted={w_mean:.4f} "
               f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
               f"over {n_paired} folds)")
+
+    _store_per_rep(results, per_rep_cache, 'weighted_gp')
 
     # Hybrid evaluation — one arm per swept number of features.
     if fold_blueprints:
@@ -900,7 +1117,7 @@ def _run_weighted_svr(reps, labels, groups, config, fold_blueprints,
                       lower_is_better=False,
                       augmentations=None,
                       fold_splits=None, fold_importance=None,
-                      hybrid_budgets=None):
+                      hybrid_budgets=None, per_rep_cache=None):
     """SVR with importance-weighted RBF kernel.
 
     lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
@@ -925,7 +1142,8 @@ def _run_weighted_svr(reps, labels, groups, config, fold_blueprints,
         return SVR(kernel='rbf', C=1.0, gamma='scale')
 
     # Per-rep evaluation
-    for rep_name in sorted(reps.keys()):
+    for rep_name in _per_rep_arms_to_score(reps, per_rep_cache, results,
+                                           'weighted_svr'):
         X_rep = reps[rep_name]
         std_scores, w_scores = [], []
 
@@ -970,6 +1188,8 @@ def _run_weighted_svr(reps, labels, groups, config, fold_blueprints,
         print(f"    {rep_name}: std={std_mean:.4f}, weighted={w_mean:.4f} "
               f"(delta={w_mean - std_mean:+.4f}, delta_paired={paired:+.4f} "
               f"over {n_paired} folds)")
+
+    _store_per_rep(results, per_rep_cache, 'weighted_svr')
 
     # Hybrid evaluation — one arm per swept number of features.
     if fold_blueprints:
@@ -1074,7 +1294,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                 lower_is_better=False,
                 augmentations=None,
                 fold_splits=None, fold_importance=None,
-                hybrid_budgets=None):
+                hybrid_budgets=None, per_rep_cache=None):
     """q-RASAR-style similarity-augmented features.
 
     lower_is_better: direction of metric_fn, forwarded to build_fold_hybrid
@@ -1101,8 +1321,20 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
     """
     print("\n  --- Task 4: Similarity-Augmented Features (q-RASAR style) ---")
 
-    k_neighbors = _qrasar_k()
-    results = {'per_rep': {}, 'hybrid': {}}
+    k_list = _qrasar_ks()
+    # The count the unsuffixed blocks report. Every count is under
+    # 'per_rep_by_neighbours' and 'hybrid_by_budget_by_neighbours'.
+    k_neighbors = k_list[0]
+    results = {'per_rep': {}, 'hybrid': {},
+               'per_rep_by_neighbours': {}, 'qrasar_neighbour_counts': list(k_list),
+               'qrasar_neighbours_reported': k_neighbors,
+               'qrasar_neighbours_basis': (
+                   "One arm per neighbour count. 'per_rep' and "
+                   "'hybrid_by_budget' hold the count in "
+                   "'qrasar_neighbours_reported'; the same numbers and every "
+                   "other count are under 'per_rep_by_neighbours' and "
+                   "'hybrid_by_budget_by_neighbours', keyed by the count as a "
+                   "string.")}
 
     _rf_fac = get_model_factories(['rf'], task_type=task_type,
                                     n_samples=len(labels))['rf']
@@ -1110,9 +1342,12 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
         return _rf_fac()
 
     # Per-rep evaluation
-    for rep_name in sorted(reps.keys()):
+    for rep_name in _per_rep_arms_to_score(reps, per_rep_cache, results,
+                                           'qrasar'):
         X_rep = reps[rep_name]
-        base_scores, uw_sim_scores, w_sim_scores = [], [], []
+        base_scores = []
+        uw_by_k = {k: [] for k in k_list}
+        w_by_k = {k: [] for k in k_list}
 
         for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -1120,7 +1355,8 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
             X_tr = scaler.fit_transform(X_rep[train_idx])
             X_va = scaler.transform(X_rep[val_idx])
 
-            # Base features only
+            # Base features only. It reads no neighbour, so it is fitted once
+            # for every count.
             try:
                 rf = _make_rf()
                 rf.fit(X_tr, y_train)
@@ -1128,68 +1364,71 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
             except Exception:
                 base_scores.append(float('nan'))
 
-            # Base + unweighted sim descriptors
-            try:
-                sim_tr = _compute_sim_descriptors(X_tr, y_train, X_tr,
-                                                  k=k_neighbors, is_self=True)
-                sim_va = _compute_sim_descriptors(X_tr, y_train, X_va,
-                                                  k=k_neighbors, is_self=False)
-                X_tr_aug = np.hstack([X_tr, sim_tr])
-                X_va_aug = np.hstack([X_va, sim_va])
-                rf_aug = _make_rf()
-                rf_aug.fit(X_tr_aug, y_train)
-                uw_sim_scores.append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
-            except Exception:
-                uw_sim_scores.append(float('nan'))
-
-            # Base + importance-weighted sim descriptors
+            # The weighted feature matrix, built once per fold and reused by
+            # every neighbour count.
             try:
                 imp_arr = fold_importance.get(fold_i, {}).get(rep_name)
                 if imp_arr is None:
                     raise RuntimeError(f"missing precomputed importance for fold={fold_i} rep={rep_name}")
                 w = _importance_weights(imp_arr)
-                X_tr_w = X_tr * w
-                X_va_w = X_va * w
-                sim_tr_w = _compute_sim_descriptors(X_tr_w, y_train, X_tr_w,
-                                                    k=k_neighbors, is_self=True)
-                sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
-                                                    k=k_neighbors, is_self=False)
-                X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
-                X_va_aug_w = np.hstack([X_va_w, sim_va_w])
-                rf_aug_w = _make_rf()
-                rf_aug_w.fit(X_tr_aug_w, y_train)
-                w_sim_scores.append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                X_tr_w, X_va_w = X_tr * w, X_va * w
             except Exception:
-                w_sim_scores.append(float('nan'))
+                X_tr_w = X_va_w = None
 
-        base_mean = float(np.nanmean(base_scores))
-        uw_mean = float(np.nanmean(uw_sim_scores))
-        w_mean = float(np.nanmean(w_sim_scores))
-        d_uw_p, n_uw_p = _paired_delta(uw_sim_scores, base_scores)
-        d_w_p, n_w_p = _paired_delta(w_sim_scores, base_scores)
-        d_wvu_p, n_wvu_p = _paired_delta(w_sim_scores, uw_sim_scores)
-        results['per_rep'][rep_name] = {
-            'base_only': base_mean,
-            'base_plus_sim_unweighted': uw_mean,
-            'base_plus_sim_weighted': w_mean,
-            'delta_uw': uw_mean - base_mean,
-            'delta_w': w_mean - base_mean,
-            'delta_w_vs_uw': w_mean - uw_mean,
-            'delta_uw_paired': d_uw_p,
-            'delta_w_paired': d_w_p,
-            'delta_w_vs_uw_paired': d_wvu_p,
-            'n_paired_folds_uw': n_uw_p,
-            'n_paired_folds_w': n_w_p,
-            'n_paired_folds_w_vs_uw': n_wvu_p,
-            'base_only_folds': [float(s) for s in base_scores],
-            'base_plus_sim_unweighted_folds': [float(s) for s in uw_sim_scores],
-            'base_plus_sim_weighted_folds': [float(s) for s in w_sim_scores],
-        }
-        print(f"    {rep_name}: base={base_mean:.4f}, "
-              f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}, "
-              f"d_paired={d_uw_p:+.4f} over {n_uw_p} folds), "
-              f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f}, "
-              f"d_paired={d_w_p:+.4f} over {n_w_p} folds)")
+            for k_n in k_list:
+                # Base + unweighted sim descriptors
+                try:
+                    sim_tr = _compute_sim_descriptors(X_tr, y_train, X_tr,
+                                                      k=k_n, is_self=True)
+                    sim_va = _compute_sim_descriptors(X_tr, y_train, X_va,
+                                                      k=k_n, is_self=False)
+                    X_tr_aug = np.hstack([X_tr, sim_tr])
+                    X_va_aug = np.hstack([X_va, sim_va])
+                    rf_aug = _make_rf()
+                    rf_aug.fit(X_tr_aug, y_train)
+                    uw_by_k[k_n].append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
+                except Exception:
+                    uw_by_k[k_n].append(float('nan'))
+
+                # Base + importance-weighted sim descriptors
+                try:
+                    if X_tr_w is None:
+                        raise RuntimeError(
+                            f"no importance-weighted features for fold={fold_i} "
+                            f"rep={rep_name}")
+                    sim_tr_w = _compute_sim_descriptors(X_tr_w, y_train, X_tr_w,
+                                                        k=k_n, is_self=True)
+                    sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
+                                                        k=k_n, is_self=False)
+                    X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
+                    X_va_aug_w = np.hstack([X_va_w, sim_va_w])
+                    rf_aug_w = _make_rf()
+                    rf_aug_w.fit(X_tr_aug_w, y_train)
+                    w_by_k[k_n].append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                except Exception:
+                    w_by_k[k_n].append(float('nan'))
+
+        for k_n in k_list:
+            results['per_rep_by_neighbours'].setdefault(str(k_n), {})[rep_name] = \
+                _qrasar_block(base_scores, uw_by_k[k_n], w_by_k[k_n])
+        # A COPY, not the same dict: _orient_deltas negates in place and would
+        # otherwise reach these numbers twice.
+        _rep_block = copy.deepcopy(
+            results['per_rep_by_neighbours'][str(k_neighbors)][rep_name])
+        results['per_rep'][rep_name] = _rep_block
+        print(f"    {rep_name}: base={_rep_block['base_only']:.4f}, "
+              f"+sim_uw={_rep_block['base_plus_sim_unweighted']:.4f} "
+              f"(d={_rep_block['delta_uw']:+.4f}, "
+              f"d_paired={_rep_block['delta_uw_paired']:+.4f} over "
+              f"{_rep_block['n_paired_folds_uw']} folds), "
+              f"+sim_w={_rep_block['base_plus_sim_weighted']:.4f} "
+              f"(d={_rep_block['delta_w']:+.4f}, "
+              f"d_paired={_rep_block['delta_w_paired']:+.4f} over "
+              f"{_rep_block['n_paired_folds_w']} folds) "
+              f"at {k_neighbors} neighbours")
+
+    _store_per_rep(results, per_rep_cache, 'qrasar',
+                   extra_keys=('per_rep_by_neighbours',))
 
     # Hybrid evaluation — one arm per swept number of features.
     if fold_blueprints:
@@ -1197,9 +1436,12 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
         budgets = list(hybrid_budgets or [None])
         results['hybrid_by_budget'] = {}
 
+        results['hybrid_by_budget_by_neighbours'] = {}
         for budget in budgets:
             bkey = _budget_key(budget)
-            base_scores, uw_sim_scores, w_sim_scores = [], [], []
+            base_scores = []
+            uw_by_k = {k: [] for k in k_list}
+            w_by_k = {k: [] for k in k_list}
 
             for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
                 blueprint = fold_blueprints.get(fold_i)
@@ -1216,8 +1458,9 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                         train_reps, val_reps, y_train, blueprint,
                         augmentations_train=aug_tr, augmentations_val=aug_va,
                         # The number of features this arm is built with, one of
-                        # the eight swept in run(). None leaves the number this
-                        # fold's own recipe was searched at.
+                        # the nine swept in run(). None leaves the number this
+                        # fold's own recipe was searched at. The neighbour
+                        # count below does not reach the build.
                         budget_override=budget,
                         groups=(groups[train_idx] if groups is not None else None),
                         **fold_hybrid_scoring_kwargs(
@@ -1241,68 +1484,68 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                 except Exception:
                     base_scores.append(float('nan'))
 
-                # Unweighted sim descriptors
-                try:
-                    sim_tr = _compute_sim_descriptors(X_tr, y_train, X_tr,
-                                                      k=k_neighbors, is_self=True)
-                    sim_va = _compute_sim_descriptors(X_tr, y_train, X_va,
-                                                      k=k_neighbors, is_self=False)
-                    X_tr_aug = np.hstack([X_tr, sim_tr])
-                    X_va_aug = np.hstack([X_va, sim_va])
-                    rf_aug = _make_rf()
-                    rf_aug.fit(X_tr_aug, y_train)
-                    uw_sim_scores.append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
-                except Exception:
-                    uw_sim_scores.append(float('nan'))
-
-                # Weighted sim descriptors
+                # The importance-weighted hybrid matrix, built once per fold.
                 try:
                     w = _compute_importance_for_hybrid(feat_info)
                     assert w.shape[0] == X_tr.shape[1], (
                         f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
-                    X_tr_w = X_tr * w
-                    X_va_w = X_va * w
-                    sim_tr_w = _compute_sim_descriptors(X_tr_w, y_train, X_tr_w,
-                                                        k=k_neighbors, is_self=True)
-                    sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
-                                                        k=k_neighbors, is_self=False)
-                    X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
-                    X_va_aug_w = np.hstack([X_va_w, sim_va_w])
-                    rf_aug_w = _make_rf()
-                    rf_aug_w.fit(X_tr_aug_w, y_train)
-                    w_sim_scores.append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                    X_tr_w, X_va_w = X_tr * w, X_va * w
                 except Exception:
-                    w_sim_scores.append(float('nan'))
+                    X_tr_w = X_va_w = None
+
+                for k_n in k_list:
+                    # Unweighted sim descriptors
+                    try:
+                        sim_tr = _compute_sim_descriptors(X_tr, y_train, X_tr,
+                                                          k=k_n, is_self=True)
+                        sim_va = _compute_sim_descriptors(X_tr, y_train, X_va,
+                                                          k=k_n, is_self=False)
+                        X_tr_aug = np.hstack([X_tr, sim_tr])
+                        X_va_aug = np.hstack([X_va, sim_va])
+                        rf_aug = _make_rf()
+                        rf_aug.fit(X_tr_aug, y_train)
+                        uw_by_k[k_n].append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
+                    except Exception:
+                        uw_by_k[k_n].append(float('nan'))
+
+                    # Weighted sim descriptors
+                    try:
+                        if X_tr_w is None:
+                            raise RuntimeError(
+                                f"no importance-weighted hybrid features for "
+                                f"fold={fold_i} budget={bkey}")
+                        sim_tr_w = _compute_sim_descriptors(X_tr_w, y_train, X_tr_w,
+                                                            k=k_n, is_self=True)
+                        sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
+                                                            k=k_n, is_self=False)
+                        X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
+                        X_va_aug_w = np.hstack([X_va_w, sim_va_w])
+                        rf_aug_w = _make_rf()
+                        rf_aug_w.fit(X_tr_aug_w, y_train)
+                        w_by_k[k_n].append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                    except Exception:
+                        w_by_k[k_n].append(float('nan'))
 
             if base_scores:
-                base_mean = float(np.nanmean(base_scores))
-                uw_mean = float(np.nanmean(uw_sim_scores))
-                w_mean = float(np.nanmean(w_sim_scores))
-                d_uw_p, n_uw_p = _paired_delta(uw_sim_scores, base_scores)
-                d_w_p, n_w_p = _paired_delta(w_sim_scores, base_scores)
-                d_wvu_p, n_wvu_p = _paired_delta(w_sim_scores, uw_sim_scores)
-                results['hybrid_by_budget'][bkey] = {
-                    'base_only': base_mean,
-                    'base_plus_sim_unweighted': uw_mean,
-                    'base_plus_sim_weighted': w_mean,
-                    'delta_uw': uw_mean - base_mean,
-                    'delta_w': w_mean - base_mean,
-                    'delta_w_vs_uw': w_mean - uw_mean,
-                    'delta_uw_paired': d_uw_p,
-                    'delta_w_paired': d_w_p,
-                    'delta_w_vs_uw_paired': d_wvu_p,
-                    'n_paired_folds_uw': n_uw_p,
-                    'n_paired_folds_w': n_w_p,
-                    'n_paired_folds_w_vs_uw': n_wvu_p,
-                    'base_only_folds': [float(s) for s in base_scores],
-                    'base_plus_sim_unweighted_folds': [float(s) for s in uw_sim_scores],
-                    'base_plus_sim_weighted_folds': [float(s) for s in w_sim_scores],
-                }
-                print(f"    hybrid [{bkey} features]: base={base_mean:.4f}, "
-                      f"+sim_uw={uw_mean:.4f} (d={uw_mean - base_mean:+.4f}, "
-                      f"d_paired={d_uw_p:+.4f} over {n_uw_p} folds), "
-                      f"+sim_w={w_mean:.4f} (d={w_mean - base_mean:+.4f}, "
-                      f"d_paired={d_w_p:+.4f} over {n_w_p} folds)")
+                for k_n in k_list:
+                    results['hybrid_by_budget_by_neighbours'].setdefault(
+                        str(k_n), {})[bkey] = _qrasar_block(
+                            base_scores, uw_by_k[k_n], w_by_k[k_n])
+                # A COPY, so _orient_deltas does not reach one dict twice.
+                _blk = copy.deepcopy(
+                    results['hybrid_by_budget_by_neighbours'][
+                        str(k_neighbors)][bkey])
+                results['hybrid_by_budget'][bkey] = _blk
+                print(f"    hybrid [{bkey} features] at {k_neighbors} "
+                      f"neighbours: base={_blk['base_only']:.4f}, "
+                      f"+sim_uw={_blk['base_plus_sim_unweighted']:.4f} "
+                      f"(d={_blk['delta_uw']:+.4f}, "
+                      f"d_paired={_blk['delta_uw_paired']:+.4f} over "
+                      f"{_blk['n_paired_folds_uw']} folds), "
+                      f"+sim_w={_blk['base_plus_sim_weighted']:.4f} "
+                      f"(d={_blk['delta_w']:+.4f}, "
+                      f"d_paired={_blk['delta_w_paired']:+.4f} over "
+                      f"{_blk['n_paired_folds_w']} folds)")
 
         # 'hybrid' stays the arm built at each fold's own recipe width.
         results['hybrid'] = results['hybrid_by_budget'].get('recipe', {})
@@ -1720,6 +1963,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['by_hybrid_space'] = {}
     _primary_space = _SPACE_FOR_FAMILY['predictive']
 
+    # One block per task, filled by the first hybrid space and copied into
+    # every later one. The per-representation arms of all four tasks read no
+    # recipe, so the second space was fitting the same models again for the
+    # same numbers; the Gaussian process alone is 7 representations x 5 folds
+    # x 2 arms per space. The hybrid arms are what differ between spaces and
+    # they are not cached.
+    _per_rep_cache = {}
+
     for _space in _spaces_to_run:
         _fold_bps = fold_blueprints_by_space[_space]
         _space_out = {}
@@ -1732,7 +1983,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             metric_fn, metric_name, lower_is_better,
             augmentations=augmentations, task_type=task_type,
             fold_splits=fold_splits, fold_importance=fold_importance,
-            hybrid_budgets=sweep_budgets)
+            hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache)
         print(f"  [Task 1 elapsed: {time.time() - t0:.1f}s]")
 
         # Task 2: GP with importance-weighted RBF (regression only)
@@ -1748,7 +1999,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 lower_is_better=lower_is_better,
                 augmentations=augmentations,
                 fold_splits=fold_splits, fold_importance=fold_importance,
-                hybrid_budgets=sweep_budgets)
+                hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache)
             print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
 
         # Task 3: SVR with importance-weighted RBF (regression only)
@@ -1764,7 +2015,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 lower_is_better=lower_is_better,
                 augmentations=augmentations,
                 fold_splits=fold_splits, fold_importance=fold_importance,
-                hybrid_budgets=sweep_budgets)
+                hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache)
             print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
 
         # Task 4: q-RASAR similarity-augmented features
@@ -1775,7 +2026,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             lower_is_better=lower_is_better,
             augmentations=augmentations,
             fold_splits=fold_splits, fold_importance=fold_importance,
-            hybrid_budgets=sweep_budgets)
+            hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache)
         print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
 
         _space_out['built_under_objective'] = (
@@ -1982,8 +2233,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'weight_convention': _weight_convention(),
         'knn_vote': _knn_vote_weights(),
         'k_values': _k_values(),
-        'qrasar_k': _qrasar_k(),
+        'qrasar_neighbour_counts': _qrasar_ks(),
         'gp_restarts': int(os.environ.get('KIRBY_S10_GP_RESTARTS', '0')),
+        'gp_kernel': _gp_kernel_in_use(),
+        'gp_kernel_largest_prediction_difference': _gp_kernel_equivalence(),
         'basis': (
             'Every feature is z-scored, then multiplied by its importance '
             'raised to importance_exponent and rescaled by weight_convention. '
@@ -1991,7 +2244,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'its own scale; sum1 divides by the sum, which divides every '
             'distance by the number of features. knn_vote is sklearn\'s '
             "weights argument: uniform averages the k neighbours' labels, "
-            'distance averages them weighted by one over the distance.'),
+            'distance averages them weighted by one over the distance. '
+            'qrasar_neighbour_counts are the neighbour counts the four '
+            'q-RASAR features are built from, one arm each; the first is the '
+            "one that task's unsuffixed blocks report."),
     }
 
     # Summary
