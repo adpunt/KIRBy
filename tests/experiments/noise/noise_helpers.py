@@ -177,7 +177,13 @@ SINGLE_DATASET_EXPERIMENTS = [
 #
 # Kept as the name every reader knows, now a fallback for a caller that names
 # no task type.
-NOISY_SEARCH_LEVELS = (0.0, 0.15, 0.3, 0.5, 0.75, 1.0)
+# ⛔ A FALLBACK ONLY. The live path above reads dataset_policy.noise_levels, so
+# this fires only when the policy cannot answer. It is kept in step with
+# _DEFAULT_NOISE_LEVELS by hand, and the two disagreeing silently is the whole
+# hazard: a fallback that differs from the shared ladder would put n15's curve on
+# a different axis from every other experiment's while still looking right.
+# Corrected 2026-09-21 with the policy, from (0.0, 0.15, 0.3, 0.5, 0.75, 1.0).
+NOISY_SEARCH_LEVELS = (0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5)
 NOISY_SEARCH_SEED = 0  # kept for readers; the sweep uses NOISY_SEARCH_SEEDS below
 
 

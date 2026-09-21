@@ -405,9 +405,28 @@ _DEFAULT_NOISE_DOSE_UNITS = 'spread'
 
 _NOISE_LEVELS = {}
 
-# Fraction of the clean label SD. This is NOISE_DESIGN.md section 6.4's logD row,
-# adopted for every dataset.
-_DEFAULT_NOISE_LEVELS = (0.0, 0.15, 0.3, 0.5, 0.75, 1.0)
+# Fraction of that fold's clean training label spread. This is the shared ladder
+# from NOISE_DESIGN.md section 6.4, which every dataset in the sibling study runs.
+#
+# ⛔ CORRECTED 2026-09-21. It read (0.0, 0.15, 0.3, 0.5, 0.75, 1.0) and its comment
+# said it was "section 6.4's logD row". That section was replaced on 2026-08-27 by
+# one shared ladder for every dataset, and the per-dataset rows were left at the
+# bottom of it ONLY so the change would be visible. This had copied one of them.
+# Two differences followed: the second rung was 0.15 where the ladder says 0.2, and
+# the top rung 1.5 was missing entirely.
+#
+# 1.5 is the one that matters. The sibling study keeps it for a stated reason --
+# "1.5 is kept because it is the only level where the noise types separate at all".
+# This suite compares noise conditions and had dropped the level that makes that
+# comparison readable. 0.2 rather than 0.15 is the same range-finding run: below
+# 0.2 the models are indistinguishable from clean.
+#
+# The REPORTING level -- the one level a table quotes -- is 1.0, or 0.75 for a
+# dataset whose clean score is low enough that it has less to lose. n07 was
+# injecting at 0.5, half the reporting level, which is why its clean-to-corrupted
+# gap on flab_thermo_tresanco came out at 3% of the clean score and negative on
+# one run.
+_DEFAULT_NOISE_LEVELS = (0.0, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5)
 
 # Censoring is swept on its own axis -- the fraction of labels clipped -- because it has
 # no variance parameter and is not zero-mean. Same grid for every dataset. Set by the
