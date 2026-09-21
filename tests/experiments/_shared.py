@@ -1060,7 +1060,13 @@ def run_nested_cv(reps, labels, groups, config, *,
         dataset_name=dataset_name)
 
     if budgets is None:
-        budgets = FULL_BUDGETS
+        # config is what get_config built, and get_config is where the smoke
+        # shrink and the --budgets override both land. Falling straight through
+        # to FULL_BUDGETS meant a caller passing budgets=None got all 8 entries
+        # no matter what its config said: opig_scaffold_hybrid ran 2,400
+        # configurations locally on 2026-09-21 with the shrink switched on.
+        # On the server config['budgets'] IS FULL_BUDGETS, so nothing changes.
+        budgets = config.get('budgets') or FULL_BUDGETS
     if n_outer_folds is None:
         n_outer_folds = config.get('n_splits', 5)
 
@@ -1079,6 +1085,14 @@ def run_nested_cv(reps, labels, groups, config, *,
         kwargs['augmentation_strategy'] = augmentation_strategy
     if internal_evaluators is not None:
         kwargs['internal_evaluators'] = internal_evaluators
+    # Same story as budgets: get_config builds importance_methods and nothing
+    # forwarded it, so every nested run used the engine default -- which starts
+    # with deeplift, the recorded local segfault trigger, and includes treeshap,
+    # which failed on every fold here because transformers cannot import
+    # tensorflow in this environment. On the server config['importance_methods']
+    # IS the engine default, so nothing changes there.
+    if config.get('importance_methods'):
+        kwargs.setdefault('importance_methods', config['importance_methods'])
     if label_noise is not None:
         kwargs['label_noise'] = label_noise
     kwargs.update(search_kwargs)
