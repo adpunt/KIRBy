@@ -692,6 +692,46 @@ def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
         return None, None
 
 
+# ⛔ THE ORDER THE CONDITIONS RUN IN, AND IT IS NOT THE REGISTRY'S.
+#
+# A sweep of fourteen conditions is most of a day per dataset and the jobs
+# carrying it have a wall clock. Each condition is written as it finishes, so a
+# job that runs out of time keeps what it got -- which makes the ORDER decide
+# what you end up holding. In registry order the first five are gaussian and
+# the three student-t shapes and laplace: all zero-mean, all constant-width,
+# and the case the literature review says cleaning cannot help in. A job that
+# reached only those would have measured nothing that could have come out
+# differently.
+#
+# So the ones that can show a difference go first:
+#
+#   grouped_shifted   a constant offset per scaffold family. The one condition
+#                     here that is NOT zero-mean, and the review's "systematic
+#                     per-source bias" -- the case it says relabeling helps
+#                     most. Never run.
+#   outlier_only_p10  the widened tenth is the ONLY thing that moved, so
+#                     removing exactly those molecules can recover all of the
+#                     injected error.
+#   outlier_p10       the same p and lam with every other label ALSO moved, so
+#                     the same removal recovers half. The pair is the
+#                     comparison: it separates "the detector cannot find them"
+#                     from "finding them does not help".
+#   gaussian          the control. Zero-mean and constant-width, where the
+#                     review predicts no gain.
+#   student_t_nu3     the heaviest tail, where a robust loss should matter most.
+#   censoring         every label above a cut-point replaced by it. The only
+#                     condition whose corrupted molecules are chosen by the
+#                     label's own value.
+#
+# The rest follow in registry order. Nothing is cut -- this is an ORDER, not a
+# selection, and a job with time for all fourteen runs all fourteen.
+SWEEP_ORDER = ('grouped_shifted', 'outlier_only_p10', 'outlier_p10',
+               'gaussian', 'student_t_nu3', 'censoring',
+               'outlier_only_p05', 'outlier_p05', 'grouped_wider',
+               'laplace', 'outlier_only_p01', 'outlier_p01',
+               'student_t_nu5', 'student_t_nu10')
+
+
 def conditions_for_task(data, detection_is_the_headline=False):
     """Every condition this dataset can be given, for an experiment to sweep.
 
@@ -712,9 +752,11 @@ def conditions_for_task(data, detection_is_the_headline=False):
                                   CLASSIFICATION_STRATEGIES)
     if data.get('task_type') == 'classification':
         return list(CLASSIFICATION_STRATEGIES)
+    ordered = [c for c in SWEEP_ORDER if c in REGRESSION_STRATEGIES]
+    ordered += [c for c in REGRESSION_STRATEGIES if c not in ordered]
     if detection_is_the_headline:
-        return list(DETECTION_IS_DEFINED)
-    return list(REGRESSION_STRATEGIES)
+        return [c for c in ordered if c in DETECTION_IS_DEFINED]
+    return ordered
 
 
 def sweep_conditions(run_one, exp_id, data, config, output_dir,

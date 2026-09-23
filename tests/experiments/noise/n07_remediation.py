@@ -132,9 +132,11 @@ from experiments._shared import make_nearest_neighbors  # honours --distance-met
 from experiments.dataset_policy import (
     noise_dose_units, reference_noise_level,
 )
+from kirby.noise_spec import GROUPED_STRATEGIES
 from experiments.noise.noise_helpers import (inject_train_labels,
                                             noise_spec_for,
-                                            detection_scores)
+                                            detection_scores, sweep_conditions,
+    conditions_for_task)
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -184,13 +186,32 @@ CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
             # Added 2026-09-23 from the label-noise menu in the compass review.
             # Both keep every molecule, which is the family that review
             # recommends over deletion on small datasets.
-            'huber_weight', 'js_shrink', 'prox_smooth')
+            'huber_weight', 'js_shrink', 'prox_smooth',
+            # Added 2026-09-23. The only cleanup that reads no suspicion score
+            # and no label: the weight comes from how many times the molecule
+            # was measured. See SCORE_FREE_CLEANUPS below.
+            'invvar_weight')
 
-# The cleanups that read the detector's per-molecule suspicion score. Every one
-# but the quantile clip: the clip asks whether a label lies outside the range of
-# label values molecules like it carry, which is a question about the label and
-# the range, not about a suspicion score.
-SCORE_DRIVEN_CLEANUPS = tuple(c for c in CLEANUPS if c != 'quantile_clip')
+# The cleanups that read NO per-molecule suspicion score, so a caller may hand
+# them None where the detector would go.
+#
+#   quantile_clip  asks whether a label lies outside the range of label values
+#                  molecules like it carry, which is a question about the label
+#                  and the range.
+#   invvar_weight  asks how many times the molecule was measured, which is a
+#                  fact about the record and not about the label at all.
+#
+# ⛔ WRITTEN OUT RATHER THAN DERIVED. This was `tuple(c for c in CLEANUPS if c
+# != 'quantile_clip')`, so every name added to CLEANUPS became score-driven by
+# default. `invvar_weight` takes no score, and under that spelling n07 and n18
+# would have fitted a detector for it and `_evaluate_fold` would have dropped
+# the whole fold whenever the detector failed -- for a weight the detector
+# never touches.
+SCORE_FREE_CLEANUPS = ('quantile_clip', 'invvar_weight')
+
+# The cleanups that read the detector's per-molecule suspicion score.
+SCORE_DRIVEN_CLEANUPS = tuple(c for c in CLEANUPS
+                              if c not in SCORE_FREE_CLEANUPS)
 
 # Which cleanups read a target that `correction_targets` can hoist, and which
 # target each reads. ⛔ DECLARE A NEW CLEANUP HERE. Callers used to write this
@@ -202,6 +223,13 @@ SCORE_DRIVEN_CLEANUPS = tuple(c for c in CLEANUPS if c != 'quantile_clip')
 # none; the hoist exists because the target depends on the features, labels
 # and groups and on nothing else, so sweeping settings would otherwise refit
 # the same model for every one of them.
+#
+# ⛔ `invvar_weight` IS NOT HERE AND CANNOT BE. Every target below is built by
+# `correction_targets` from the features, the labels and the scaffold groups.
+# A measurement count is not in any of those three: it comes from the loader's
+# replicate grouping, which says which ROWS are the same molecule. So it
+# arrives as its own argument, `measurement_counts`, and
+# `measurement_counts_for_rows` below is where it is read off the data dict.
 CLEANUP_TARGETS = {
     'oof_smooth': 'oof',
     'gp_smooth': 'gp',
@@ -219,6 +247,13 @@ def targets_needed(cleanups):
 # pulls it back into a numeric range. None of the three is defined on a nominal
 # class label, so on a classification dataset they are not added to the
 # strategy list at all and the run records that rather than writing NaN rows.
+#
+# `invvar_weight` is NOT here, for the reason `huber_weight` is not: it sets a
+# row weight and never touches the label, and a row weight is defined whatever
+# the label is. Nothing about a measurement count needs the label to be a
+# number. It will still decline on most datasets, because the loader kept no
+# per-molecule measurement count for them -- that is a different refusal and it
+# says so in its own words.
 REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'quantile_clip',
                             # js_shrink blends a label toward a predicted
                             # NUMBER; there is no halfway point between two
@@ -268,8 +303,31 @@ GAP_MIN_FRAC = 0.02
 # condition -- a mistyped unit is a property of the record, not of the value.
 
 
-def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False):
-    """The Outlier condition at this dataset's WIDE-ERROR fraction.
+# The condition n07 injected for the life of the project, and the only one it
+# could. Kept as the default so a caller that names none behaves as before; the
+# sweep in run() below is what makes the others reachable.
+DEFAULT_CONDITION = 'outlier_p05'
+
+
+def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False,
+                condition=DEFAULT_CONDITION):
+    """One injected condition at this dataset's WIDE-ERROR fraction.
+
+    ⛔ `condition` ADDED 2026-09-23. This pinned 'outlier_p05' and nothing
+    could change it, so n07 -- the experiment that compares the cleaning
+    methods against each other -- ran ONE noise condition at ONE level for the
+    life of the project. Everything the suite knows about how the cleaning
+    methods behave under different noise had to come through here and could
+    not be asked.
+
+    `noise_fraction` OVERRIDES p, AND ONLY FOR THE OUTLIER FAMILY. p is the
+    share of training molecules given an error about three times as wide as
+    every other molecule's, and it is the knob n07's own design turns. The
+    other conditions have no p: gaussian and the heavy tails give every
+    molecule the same width, grouped_wider takes a group fraction, censoring
+    takes a clipped fraction. Forcing p onto them would either raise or be
+    silently ignored, so it is applied only where it means something and the
+    registry's own parameters stand everywhere else.
 
     `noise_fraction` is the share of training molecules that receive an error
     about three times the width every other molecule's receives -- Huber
@@ -291,9 +349,11 @@ def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False):
     if is_clf:
         return noise_spec_for(dataset_name, 'uniform', noise_fraction,
                               noise_seed=noise_seed, is_clf=True)
-    spec = noise_spec_for(dataset_name, 'outlier_p05', level,
+    spec = noise_spec_for(dataset_name, condition, level,
                           noise_seed=noise_seed)
-    return replace(spec, params=(('p', float(noise_fraction)),))
+    if str(condition).startswith('outlier') and noise_fraction is not None:
+        return replace(spec, params=(('p', float(noise_fraction)),))
+    return spec
 
 
 def _predict_for_metric(model, X, metric_name):
@@ -496,9 +556,64 @@ def correction_targets(X_tr_s, y_tr, groups=None, want=None):
     return out
 
 
+def measurement_counts_for_rows(data):
+    """How many times each row's molecule was measured, one entry per ROW.
+
+    WHERE THE COUNT COMES FROM, AND IT IS n19's PATH. n19 reaches a
+    per-molecule measurement count in two steps:
+    `_ground_truth_providers.build_replicate_groups(data)` reads the loader's
+    replicate grouping -- which rows are measurements of the same molecule --
+    and `n19_measurement_count.measurement_stats` counts the rows in each
+    group. Both are called here rather than counted a second way, so the suite
+    has one definition of a measurement count.
+
+    A loader hands that grouping back only when it kept one row per
+    MEASUREMENT. `tests/experiments/_shared.py` writes `replicate_groups` into
+    the data dict for exactly those datasets, and herg_ic50 is the only
+    molecular one today. Every other dataset averaged a molecule's repeats into
+    one number before an experiment saw it, so there is no count to read and
+    this returns None.
+
+    `measurement_stats` is per MOLECULE, in first-row order; this broadcasts it
+    back so every row of a molecule carries that molecule's count, because
+    `cleaned_training_set` is handed training ROWS.
+
+    ⛔ WHICH REGIME THE CALLER IS IN, because the two need different columns
+    and this one builds only the first.
+
+      ONE ROW PER MEASUREMENT, which is what `load_data` hands back for
+      herg_ic50: this column is right, and a molecule measured 4 times is 4
+      rows each carrying the count 4. Under `invvar_weight` that molecule then
+      pulls on the fit 16 times as hard as a molecule measured once, not 4
+      times, because the rows are counted as well as weighted. Whether that is
+      the intended weighting is a question for whoever runs it.
+
+      ONE ROW PER MOLECULE, which is what `n17_replicate_removal.build_entities`
+      produces and what n19 measures in: the label there is already the mean of
+      the molecule's measurements, so the count belongs in ENTITY order and
+      this column, which is in row order, is the wrong length. Read
+      `measurement_stats(...)['n_measurements']` directly for that.
+    """
+    # n19 imports n17, which imports this file, so both imports are local. A
+    # module-level one is a cycle.
+    from experiments.noise._ground_truth_providers import build_replicate_groups
+    from experiments.noise.n19_measurement_count import measurement_stats
+
+    rep_groups = build_replicate_groups(data)
+    if rep_groups is None:
+        return None
+    rep_groups = np.asarray(rep_groups)
+    stats = measurement_stats(np.asarray(data['labels'], dtype=np.float64),
+                              rep_groups)
+    count_by_group = {rep_groups[first]: int(k) for first, k
+                      in zip(stats['row_index'], stats['n_measurements'])}
+    return np.array([count_by_group[g] for g in rep_groups], dtype=np.float64)
+
+
 def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                          is_clf=False, groups=None, strength=None,
-                         targets=None):
+                         targets=None, measurement_counts=None,
+                         dataset_name=None):
     """What one of the cleanups hands the downstream fit, before any fit runs.
 
     Hoisted out of `_evaluate_fold` on 2026-09-17 so that `n20` can apply the
@@ -546,6 +661,16 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
     `sample_weight` reaches no feature selection at all: `sample_weight` appears
     zero times in src/kirby/hybrid.py and zero times in
     src/kirby/find_best_hybrid.py, checked 2026-09-17.
+
+    measurement_counts: how many times each TRAINING row's molecule was
+    measured, one entry per training row, or None. Only `invvar_weight` reads
+    it, and it declines when it is None. `measurement_counts_for_rows` above
+    builds the whole column from the data dict; a caller slices it to the
+    fold's training rows.
+
+    dataset_name: which dataset the cleanup was asked for. Used only in
+    `invvar_weight`'s decline line, so a reader of the log sees which dataset
+    had no measurement count rather than a bare refusal.
 
     groups: one scaffold-group label per training row, or None. Only the three
     cleanups added on 2026-09-17 read it, and all three read it for the same
@@ -598,6 +723,53 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
             w = np.minimum(1.0, c * s_scale / np.maximum(r, 1e-12))
         w = w / w.mean()          # mean-normalised, as weights_from_scores is
         return {'X': X_tr_s, 'y': y_tr, 'sample_weight': w,
+                'keep': None, 'label_column': None}
+
+    if strategy == 'invvar_weight':
+        # The inverse-variance weight, taken from the measurement count alone.
+        #
+        # A molecule whose label is the mean of k repeat measurements carries
+        # an error variance of that molecule's own measurement spread divided
+        # by k. So the precision of the label rises with k, and the weight that
+        # minimises the variance of the fit is proportional to k -- the weight
+        # meta-analysis has used since Hedges & Olkin 1985. Normalised to mean
+        # one, the same convention `huber_weight` above uses, so a weighted fit
+        # and an unweighted fit see the same total weight and the difference
+        # between them is the SHAPE of the weighting.
+        #
+        # HOW THIS DIFFERS FROM EVERY OTHER CLEANUP IN THE FILE: it reads no
+        # suspicion score and no label. The other nine ask a detector which
+        # labels look wrong. This one asks the record how many times somebody
+        # measured it, which is known before any model is fitted and cannot be
+        # wrong about a molecule the detector happens to misjudge.
+        #
+        # ⛔ DECLINING IS THE WHOLE POINT WHEN THERE IS NO COUNT. Falling back
+        # to a flat weight would produce an `invvar_weight` column that is
+        # bit-identical to the no-cleaning column, under a name that says a
+        # method ran.
+        if measurement_counts is None:
+            print(f"      invvar_weight: no per-molecule measurement count "
+                  f"exists for {dataset_name or 'this dataset'}, so there is "
+                  f"nothing to weight by; declining rather than returning a "
+                  f"flat weight, which would be the no-cleaning column under "
+                  f"another name.")
+            return None
+        k = np.asarray(measurement_counts, dtype=np.float64)
+        if len(k) != len(y_tr):
+            # A caller bug, not a fact about the dataset: the counts and the
+            # training rows index the same molecules, so a mismatch means every
+            # molecule after the first gap would carry another one's weight.
+            raise ValueError(
+                f"invvar_weight: {len(k)} measurement counts for "
+                f"{len(y_tr)} training molecules. They index the same "
+                f"molecules, so a mismatch misweights every one after the "
+                f"first gap.")
+        if not np.all(np.isfinite(k)) or np.any(k < 1):
+            raise ValueError(
+                f"invvar_weight: a measurement count must be a finite number "
+                f"of measurements, one or more. Got a range of {np.nanmin(k)} "
+                f"to {np.nanmax(k)}.")
+        return {'X': X_tr_s, 'y': y_tr, 'sample_weight': k / k.mean(),
                 'keep': None, 'label_column': None}
 
     if strategy == 'js_shrink':
@@ -1029,12 +1201,18 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                    noise_seed=42, precomputed_y_tr=None, noise_scores=None,
                    dataset_name=None, noise_level=0.5,
                    y_all=None, train_idx=None, train_groups=None,
-                   strength=None, targets=None):
+                   strength=None, targets=None, measurement_counts=None,
+                   condition=DEFAULT_CONDITION):
     """Evaluate a single remediation strategy on one fold.
 
     train_groups: one scaffold-group label per TRAINING row, forwarded to
     cleaned_training_set. Only the three cleanups added 2026-09-17 read it; see
     that function's docstring for why they need it.
+
+    measurement_counts: how many times each TRAINING row's molecule was
+    measured, forwarded the same way. Only `invvar_weight` reads it and it
+    declines without it, so a caller that leaves it None gets a refusal with
+    the dataset named rather than a silently flat weight.
 
     noise_seed: forwarded to the injector so the caller can average across
     multiple noise realizations. Default 42 preserves single-seed behavior.
@@ -1064,7 +1242,8 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                 "molecule's corruption does not depend on its fold. Pass "
                 "precomputed_y_tr instead if the caller already injected.")
         _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
-                            noise_seed=noise_seed, is_clf=is_clf)
+                            noise_seed=noise_seed, is_clf=is_clf,
+                            condition=condition)
         y_tr, _noise_mask, _ = inject_train_labels(
             y_all, _spec, train_idx=train_idx, is_clf=is_clf,
             dataset_name=dataset_name)
@@ -1123,7 +1302,9 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                                            noise_fraction, is_clf=is_clf,
                                            groups=train_groups,
                                            strength=strength,
-                                           targets=targets)
+                                           targets=targets,
+                                           measurement_counts=measurement_counts,
+                                           dataset_name=dataset_name)
             if cleaned is None:
                 # `remove` left under 10 training rows. Same fall-through as
                 # before: no score for this fold rather than a fit on nothing.
@@ -1162,7 +1343,27 @@ def _mean_detection(rows):
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """N07: Noise remediation strategies."""
+    """N07 across every injected condition this dataset can be given.
+
+    ⛔ WHY THIS EXISTS. n07 is the experiment that compares the cleaning
+    methods against each other, and until 2026-09-23 it injected ONE condition
+    -- outlier_p05, pinned in _noise_spec -- at ONE level. Everything this
+    suite knows about how the cleaning methods behave under different noise had
+    to come through here, and could not be asked.
+
+    Its headline is a downstream score, which is defined under every condition,
+    so it sweeps the whole list. The sweep, the per-condition checkpointing,
+    the resume and the stride slice are noise_helpers.sweep_conditions.
+    """
+    return sweep_conditions(
+        _run_one_condition, 'n07_remediation',
+        data, config, output_dir, dataset_name,
+        default_conditions=conditions_for_task(data), kwargs=kwargs,
+        groups_needed=GROUPED_STRATEGIES)
+
+
+def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
+    """N07: Noise remediation strategies, ONE condition."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N07: NOISE REMEDIATION STRATEGIES")
     print("=" * 70)
@@ -1194,6 +1395,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     budget = kwargs.get('budget', 100)
     noise_fraction = kwargs.get('noise_fraction', 0.1)
+    condition = kwargs.get('noise_condition') or DEFAULT_CONDITION
     # How much noise the corrupted rows receive. This experiment had no level axis
     # at all -- the magnitude was hardcoded at 0.3 of the label range -- so the
     # default is one unit of real error for this dataset: 0.54 log units on herg_ki
@@ -2015,7 +2217,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # all 6 noise-dependent strategies reuse them.
                 _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
                                     noise_seed=noise_seed,
-                                    is_clf=is_clf)
+                                    is_clf=is_clf, condition=condition)
                 y_tr_noisy, _cmask, _prov = inject_train_labels(
                     labels, _spec, train_idx=train_idx, is_clf=is_clf,
                     dataset_name=dataset_name)
@@ -2120,6 +2322,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             precomputed_y_tr=y_tr_noisy,
                             noise_scores=(_ns if needs_scores else None),
                             dataset_name=dataset_name, noise_level=noise_level,
+                            condition=condition,
                             train_groups=(groups[train_idx]
                                           if groups is not None else None))
                         if fold_score is not None:
@@ -2299,7 +2502,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 actual_seed = 42 + fold_i * 1000 + noise_seed
                 _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
                                     noise_seed=noise_seed,
-                                    is_clf=is_clf)
+                                    is_clf=is_clf, condition=condition)
                 y_tr_noisy, _, _prov = inject_train_labels(
                     labels, _spec, train_idx=train_idx, is_clf=is_clf,
                     dataset_name=dataset_name)
@@ -2319,6 +2522,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         precomputed_y_tr=y_tr_noisy,
                         noise_scores=(noise_scores_cache if needs_scores else None),
                         dataset_name=dataset_name, noise_level=noise_level,
+                        condition=condition,
                         train_groups=(groups[train_idx]
                                       if groups is not None else None))
                     if fold_score is not None:
@@ -2393,7 +2597,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     actual_seed = 42 + fold_i * 1000 + noise_seed
                     _spec = _noise_spec(dataset_name, noise_fraction,
                                         noise_level, noise_seed=noise_seed,
-                                        is_clf=is_clf)
+                                        is_clf=is_clf, condition=condition)
                     y_tr_noisy, _cm, _prov = inject_train_labels(
                         labels, _spec, train_idx=train_idx, is_clf=is_clf,
                         dataset_name=dataset_name)
@@ -2414,7 +2618,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             precomputed_y_tr=y_tr_noisy,
                             noise_scores=(ns_cache if needs else None),
                             dataset_name=dataset_name,
-                            noise_level=noise_level,
+                            noise_level=noise_level, condition=condition,
                             train_groups=g_tr)
                         if fs is not None:
                             acc[strategy].append(fs)

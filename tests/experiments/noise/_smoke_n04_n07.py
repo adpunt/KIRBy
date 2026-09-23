@@ -54,7 +54,11 @@ def check_n07(clf=False, subsample=200):
     """n07 recovery must be finite and sign-consistent with metric direction."""
     data, ds, config = _prep(clf, subsample)
     from experiments.noise import n07_remediation as n07
-    res = n07.run(data, config, OUT, ds)
+    # ONE condition. Since 2026-09-23 n07.run sweeps every condition, writes
+    # each to its own file and returns an INDEX of what it wrote, so the scores
+    # this check reads are no longer in its return value. The sweep itself is
+    # covered by _smoke_n23, which tests the shared helper all seven use.
+    res = n07._run_one_condition(data, config, OUT, ds)
     summ = res['summary']
     lower_is_better = res['lower_is_better']
     clean = summ['clean_score']
