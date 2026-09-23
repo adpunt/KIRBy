@@ -193,6 +193,13 @@ def smoke_n_folds(full_n: int) -> int:
     computed from two numbers, which is as much a reason to raise the cap as
     to lower it.
     """
+    # KIRBY_FED_FOLDS sets the fold count on its own, with every row present.
+    # Cutting folds and capping rows are different things: a 3-fold run on all
+    # 13,231 molecules is a coarser estimate of the same quantity, where a
+    # 200-row run is a different quantity. This switch only does the first.
+    raw = os.environ.get('KIRBY_FED_FOLDS', '').strip()
+    if raw:
+        return max(2, min(full_n, int(raw)))
     n = _row_cap()
     if n == 0:
         # Every row is present, so there is no reason to cut the folds.
@@ -474,6 +481,22 @@ def aggregate_seed_runs(run_dicts):
     return first  # non-numeric (strings, configs) — keep seed 0's value
 
 
+def _model_n_jobs():
+    """How many cores one forest may use.
+
+    sklearn defaults to one. The FLuID quality ensemble fits five folds per
+    silo on whole representations, so a fed02 fold spent hours in forests that
+    were each on a single core. A forest with a fixed random_state builds the
+    same trees whatever this is, so raising it changes the wall clock and
+    nothing else. KIRBY_LGBM_THREADS is the knob the repo already uses for
+    this; it defaults to 1 here so a SLURM job keeps the cores it was given.
+    """
+    try:
+        return int(os.environ.get('KIRBY_LGBM_THREADS', '1'))
+    except ValueError:
+        return 1
+
+
 def make_fed_classifier(algorithm, seed=0):
     """Return an UNFITTED classifier sourced DIRECTLY from Lhasa's
     FLuID.create_classifier (FLuID.py:85-107) — no re-declared hyperparameters,
@@ -488,6 +511,10 @@ def make_fed_classifier(algorithm, seed=0):
             "FLuID not importable — make_fed_classifier sources its models "
             "from FLuID.create_classifier.")
     clf = fluid.create_classifier(algorithm)
+    # FLuID's hyperparameters stay exactly as FLuID declared them. n_jobs is
+    # not one of them; it is how many cores the fit may use.
+    if hasattr(clf, 'n_jobs'):
+        clf.n_jobs = _model_n_jobs()
     try:
         clf.set_params(random_state=seed)
     except (ValueError, TypeError):
@@ -524,7 +551,8 @@ def make_fed_regressor(algorithm, seed=0):
     if algorithm == 'rf':
         from sklearn.ensemble import RandomForestRegressor
         return RandomForestRegressor(
-            n_estimators=150, max_depth=15, random_state=seed)
+            n_estimators=150, max_depth=15, random_state=seed,
+            n_jobs=_model_n_jobs())
     if algorithm == 'xgb':
         from xgboost import XGBRegressor
         return XGBRegressor(objective='reg:squarederror', random_state=seed)
