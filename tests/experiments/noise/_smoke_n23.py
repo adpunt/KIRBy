@@ -96,11 +96,19 @@ def no_recipe(*a, **k):
 
 
 def run_it(data, name, **kw):
-    """One tiny n23 run, in the base representation only."""
+    """One tiny n23 run, ONE condition, in the base representation only.
+
+    `_run_one_condition` and not `run`. Since 2026-09-23 `run` sweeps every
+    condition in SWEPT_CONDITIONS and writes each to its own file, returning an
+    INDEX of what it wrote -- so the scores these tests read are no longer in
+    its return value. They are about one condition's behaviour, so they call the
+    one-condition layer directly. The sweep, the checkpointing and the resume
+    are covered by test_the_sweep_checkpoints_and_resumes below.
+    """
     real = n23.get_best_search_for_downstream
     n23.get_best_search_for_downstream = no_recipe
     try:
-        return n23.run(
+        return n23._run_one_condition(
             data, {'n_splits': 3}, OUT, name,
             models=['rf'], base_rep='aaa',
             sources=kw.pop('sources', ['ngboost', 'activity_cliff_aware']),
@@ -291,12 +299,86 @@ def test_the_other_sources_run():
           all(s in secs for s in got))
 
 
+def test_the_sweep_checkpoints_and_resumes():
+    """The condition is an axis n23 sweeps, and a killed run keeps what it did.
+
+    THIS IS WHY THE DESIGN EXISTS. One condition measured between 1,991 and
+    7,095 seconds locally, so a sweep is a day's work and it WILL be interrupted
+    -- by a wall clock, by a kill, by a laptop closing. Writing once at the end
+    loses all of it. So each condition goes to its own file as it lands and a
+    condition already on disk is not run again. Nothing tested that until now.
+    """
+    import json
+    print("\nthe sweep, its checkpoints and its resume:")
+    data = make_data(n=120, seed=11)
+
+    # Two conditions, by stride, from a run that would otherwise do all eight.
+    real = n23.get_best_search_for_downstream
+    n23.get_best_search_for_downstream = no_recipe
+    try:
+        idx = n23.run(data, {'n_splits': 3}, OUT, 'toy_sweep',
+                      models=['rf'], base_rep='aaa',
+                      sources=['activity_cliff_aware'],
+                      drop_shares=[0.10], move_strengths=[0.5],
+                      estimator_folds=2, regimes=['injected'],
+                      levels=[0.5], draws=[0],
+                      # All three survive on a dataset with no SMILES. An
+                      # earlier version named grouped_wider here, which is
+                      # dropped for exactly that reason BEFORE the slice is
+                      # taken -- so the check was testing the drop and calling
+                      # it striding.
+                      noise_conditions=['outlier_p01', 'outlier_p05',
+                                        'outlier_only_p05'],
+                      sweep_slice='0/2')
+    finally:
+        n23.get_best_search_for_downstream = real
+
+    check('a stride slice takes every Nth condition, not the first N',
+          idx['swept_conditions'] == ['outlier_p01', 'outlier_only_p05'],
+          str(idx['swept_conditions']))
+    check('it ran them and said which',
+          idx['conditions_run_this_time'] == idx['swept_conditions'],
+          str(idx['conditions_run_this_time']))
+
+    # Each one is a file of its own, with scores in it.
+    for cond in idx['swept_conditions']:
+        path = idx['conditions_written'][cond]
+        body = json.load(open(path))
+        inner = body.get('results', body)
+        check(f'{cond} wrote its own file with its own condition on it',
+              inner.get('noise_condition') == cond, f"{cond} -> {inner.get('noise_condition')}")
+
+    # And the whole point: run it again, and it does no work.
+    real = n23.get_best_search_for_downstream
+    n23.get_best_search_for_downstream = no_recipe
+    try:
+        again = n23.run(data, {'n_splits': 3}, OUT, 'toy_sweep',
+                        models=['rf'], base_rep='aaa',
+                        sources=['activity_cliff_aware'],
+                        drop_shares=[0.10], move_strengths=[0.5],
+                        estimator_folds=2, regimes=['injected'],
+                        levels=[0.5], draws=[0],
+                        noise_conditions=['outlier_p01', 'outlier_p05',
+                                          'outlier_only_p05'],
+                        sweep_slice='0/2')
+    finally:
+        n23.get_best_search_for_downstream = real
+
+    check('a second run re-runs NOTHING, which is what resume means',
+          again['conditions_run_this_time'] == [],
+          str(again['conditions_run_this_time']))
+    check('and it still reports every condition as written',
+          sorted(again['conditions_written']) == sorted(idx['conditions_written']),
+          str(sorted(again['conditions_written'])))
+
+
 if __name__ == '__main__':
     res = test_detection_before_cleaning()
     test_zero_noise_control(res)
     test_both_shapes_score(res)
     test_counts_and_grading()
     test_the_other_sources_run()
+    test_the_sweep_checkpoints_and_resumes()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")

@@ -194,6 +194,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 
 import functools
 import time
+from pathlib import Path
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
@@ -301,6 +302,18 @@ NEIGHBOUR_K = 10
 # which is what makes detection_scores defined -- under gaussian, the student_t
 # settings, laplace and grouped_shifted every training molecule moves.
 DEFAULT_NOISE_CONDITION = 'outlier_p10'
+
+# EVERY CONDITION THIS FILE SWEEPS, and why it is this list and not all
+# fourteen. n23 grades a per-molecule uncertainty against the molecules whose
+# label actually moved, so it needs a condition where SOME moved and some did
+# not -- under a constant-width condition every training label moves, the
+# suspect set is every molecule, precision is 1.0 by construction and the
+# number says nothing. That is noise_helpers.DETECTION_IS_DEFINED, which is
+# also where the three outlier_only_* conditions were added on 2026-09-23.
+#
+# It is a LIST and the run loops it. Passing a single `noise_condition` still
+# works and becomes a one-element list.
+SWEPT_CONDITIONS = tuple(DETECTION_IS_DEFINED)
 NOISE_DRAWS = (0, 1, 2)
 REGIMES = ('injected', 'as_they_come')
 
@@ -507,7 +520,84 @@ def _levels_and_draws(dataset_name, condition, is_clf, levels=None, draws=None):
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """N23: cleaning by a model's own per-molecule uncertainty."""
+    """N23 across every injected condition, checkpointing each one as it lands.
+
+    THE CONDITION IS AN AXIS THIS FILE SWEEPS, not something a caller runs it
+    once per. `noise_conditions` is a list and defaults to every condition whose
+    corrupted molecules are a SUBSET -- the ones where detection and the oracle
+    are both defined. A single `noise_condition` still works and becomes a
+    one-element list, so every existing caller is unchanged.
+
+    WHY EACH CONDITION IS WRITTEN AS IT FINISHES. One condition on one dataset
+    measured between 1,991 and 7,095 seconds locally (3 folds, rf alone), so
+    fourteen of them is a day's work at best. Writing once at the end means a
+    job killed on its wall loses all of it. Each condition goes to its own file
+    the moment it is done -- save_experiment_results' `filename_suffix`, which
+    exists for exactly this -- and a condition whose file is already there is
+    skipped. A killed run loses the condition in flight and nothing else, and
+    the next start picks up from there.
+
+    `sweep_slice` is 'K/N' and takes every Nth condition, so N array tasks split
+    the sweep and each one is short enough to be scheduled. By STRIDE, not by
+    block: a part-finished array then covers a spread of conditions rather than
+    the first few. Same rule as the OPIG sweep.
+    """
+    from experiments._shared import save_experiment_results
+
+    conditions = kwargs.pop('noise_conditions', None)
+    if conditions is None:
+        one = kwargs.get('noise_condition')
+        conditions = [one] if one else list(SWEPT_CONDITIONS)
+    conditions = [str(c) for c in conditions]
+
+    # Conditions this dataset cannot carry are dropped with the reason, never
+    # attempted. One impossible condition must not end the other thirteen --
+    # which is what the raise this replaces used to do.
+    noise_groups, _, _ = noise_groups_for(data)
+    skipped = {}
+    if noise_groups is None:
+        for c in [c for c in conditions if c in GROUPED_STRATEGIES]:
+            skipped[c] = (f'{dataset_name} loads no SMILES, so there are no '
+                          f'scaffold groups to give a whole family a wider '
+                          f'error to. Every fold would raise inside the '
+                          f'injector and the file would carry no score.')
+        conditions = [c for c in conditions if c not in skipped]
+
+    slice_spec = kwargs.pop('sweep_slice', None)
+    if slice_spec:
+        k, n = (int(x) for x in str(slice_spec).split('/'))
+        if not (0 <= k < n):
+            raise ValueError(f'sweep_slice {slice_spec!r}: need 0 <= K < N')
+        conditions = conditions[k::n]
+
+    exp_id = 'n23_uncertainty_cleaning'
+    done, ran = {}, []
+    for cond in conditions:
+        dest = (Path(output_dir) / exp_id /
+                f'{dataset_name}__{cond}.json')
+        if dest.exists() and dest.stat().st_size > 0 and not kwargs.get('force_rerun'):
+            print(f"  {cond}: already on disk, skipping ({dest})")
+            done[cond] = str(dest)
+            continue
+        print(f"\n{'=' * 70}\nN23 CONDITION {cond}\n{'=' * 70}")
+        t0 = time.time()
+        res = _run_one_condition(data, config, output_dir, dataset_name,
+                                 noise_condition=cond, **kwargs)
+        save_experiment_results(res, output_dir, exp_id, dataset_name,
+                                filename_suffix=cond)
+        print(f"  {cond} done in {time.time() - t0:.0f}s -> {dest}")
+        done[cond] = str(dest)
+        ran.append(cond)
+
+    return {'swept_conditions': conditions,
+            'conditions_written': done,
+            'conditions_run_this_time': ran,
+            'conditions_skipped_and_why': skipped,
+            'sweep_slice': slice_spec}
+
+
+def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
+    """N23: cleaning by a model's own per-molecule uncertainty, ONE condition."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N23: CAN A PER-MOLECULE UNCERTAINTY CLEAN LABELS")
     print("=" * 70)
