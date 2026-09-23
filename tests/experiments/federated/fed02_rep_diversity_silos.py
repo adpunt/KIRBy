@@ -43,7 +43,7 @@ from experiments.federated.federated_helpers import (
     predict_fluid_similarity_ensemble_classification,
     predict_fluid_quality_ensemble_classification,
     fluid_within_kirby_across,
-    smoke_n_folds, smoke_search_kwargs,
+    smoke_n_folds, smoke_search_kwargs, federated_budgets,
     fit_fed_model,
     fed_to_kirby_model,
     make_fed_classifier,
@@ -68,7 +68,9 @@ SILO_REPS_FALLBACK = {
 }
 
 K_INTRA = 3   # sub-clusters per silo for Condition 6
-BUDGET = 100  # feature budget for KIRBy hybrid
+# Feature budgets the KIRBy arms sweep. KIRBY_FED_BUDGETS overrides it.
+BUDGETS = federated_budgets()
+HEADLINE_BUDGET = 100 if 100 in BUDGETS else BUDGETS[0]
 # Folds of the inner split C5's three representations are chosen on. Three, not
 # five: this runs inside every outer fold, so the cost is
 # 5 representations x INNER_RANK_FOLDS fits per outer fold.
@@ -300,6 +302,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # check themselves.
     fold_rank0_margin = []
     fold_rank0_runnerup = []
+    fold_budget_sweep = []  # {condition: {budget: metrics}} per fold
     fold_top_3_silos = []   # top-3 silo letters per fold
     fold_top_3_reps = []
     fold_n_train = []
@@ -501,162 +504,185 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"FAILED: {e}")
         fold_c3.append(c3)
 
-        # ── Phase 4: KIRBy hybrid (C4, C5) ───────────────────────────
-        print("\n--- Phase 4: KIRBy hybrid conditions ---")
+        # C4, C5 and C6 all pick BUDGET features and are measured against
+        # C2 and C3, which average five models over WHOLE representations
+        # of 2,048, 1,613 and 768 columns. Width was the obvious reason
+        # the selected arms lose and it had never been varied, so all
+        # three sweep it together — comparing them at different widths
+        # would mix the method with the size.
+        c4_by_budget, c5_by_budget, c6_by_budget = {}, {}, {}
+        for BUDGET in BUDGETS:
+            # ── Phase 4: KIRBy hybrid (C4, C5) ───────────────────────────
+            print("\n--- Phase 4: KIRBy hybrid conditions ---")
 
-        # Build silo-only rep dicts
-        kirby_train = {silo_reps[s]: train_reps[silo_reps[s]]
-                       for s in silo_letters}
-        kirby_test = {silo_reps[s]: test_reps[silo_reps[s]]
-                      for s in silo_letters}
+            # Build silo-only rep dicts
+            kirby_train = {silo_reps[s]: train_reps[silo_reps[s]]
+                           for s in silo_letters}
+            kirby_test = {silo_reps[s]: test_reps[silo_reps[s]]
+                          for s in silo_letters}
 
-        # Condition 4: KIRBy hybrid (all K reps)
-        print("  C4: KIRBy hybrid (all)...", end=' ')
-        try:
-            X_h_train, fi_c4 = create_hybrid(
-                kirby_train, y_train,
-                groups=(groups[train_idx] if groups is not None else None),
-                model=_match_model,  # P0/P1: enables 'match' → 'rf' resolution
-                metric_fn=metric_fn, lower_is_better=lower_is_better,
-                allocation_method=_alloc,
-                importance_method=_imp,
-                budget=BUDGET,
-                internal_evaluator=_int_eval,
-                augmentations=train_augs,
-                augmentation_strategy=aug_cond)
-            X_h_test = _append_test_augs(
-                apply_feature_selection(kirby_test, fi_c4), fi_c4)
-
-            mdl_c4 = fit_fed_model(fed_model, X_h_train, y_train, seed=fed_seed,
-                                   task_type=task_type)
-            y_pred_c4 = mdl_c4.predict(X_h_test)
-
-            if is_clf:
-                y_prob_c4 = mdl_c4.predict_proba(X_h_test)[:, 1] if hasattr(mdl_c4, 'predict_proba') else None
-                c4 = _compute_metrics(y_test, y_pred_c4, y_prob=y_prob_c4)
-                print(f"MCC={c4['mcc']:.4f}  ({X_h_train.shape[1]}D)")
-            else:
-                c4 = _compute_metrics(y_test, y_pred_c4)
-                print(f"RMSE={c4['rmse']:.4f}  ({X_h_train.shape[1]}D)")
-            c4['n_features'] = int(X_h_train.shape[1])
-            c4['allocation'] = convert_numpy(fi_c4.get('allocation', {}))
-        except Exception as e:
-            # Record traceback (not just str(e)) so a shape/import/NameError in
-            # the create_hybrid path surfaces during the expensive run instead
-            # of being reduced to a one-line message (FED-21).
-            c4 = {'error': str(e), 'traceback': traceback.format_exc()}
-            print(f"FAILED: {e}")
-            traceback.print_exc()
-        fold_c4.append(c4)
-
-        # Condition 5: KIRBy top-tier hybrid (top 3 reps by best silo metric)
-        print("  C5: KIRBy top-tier (3)...", end=' ')
-        try:
-            # The five silo representations were ranked INSIDE the training
-            # rows in Phase 1b, on an inner group-aware split. Take the three
-            # that won there. Ranking them by their score on this fold's test
-            # rows — which is what single_silo holds — picked C5's three
-            # representations with the answers in view, and C5 was then scored
-            # on those same rows.
-            if silo_ranked is None:
-                raise RuntimeError(
-                    "C5 needs the Phase 1b train-only ranking and it failed "
-                    "on this fold.")
-            top_3_silos = [s for s, _ in silo_ranked[:3]]
-            top_3_names = [silo_reps[s] for s in top_3_silos]
-
-            kirby_top3_train = {silo_reps[s]: train_reps[silo_reps[s]]
-                                for s in top_3_silos}
-            kirby_top3_test = {silo_reps[s]: test_reps[silo_reps[s]]
-                               for s in top_3_silos}
-
-            X_t3_train, fi_c5 = create_hybrid(
-                kirby_top3_train, y_train,
-                groups=(groups[train_idx] if groups is not None else None),
-                model=_match_model,  # P0/P1: 'match' → 'rf' resolution
-                metric_fn=metric_fn, lower_is_better=lower_is_better,
-                allocation_method=_alloc,
-                importance_method=_imp,
-                budget=BUDGET,
-                internal_evaluator=_int_eval,
-                augmentations=train_augs,
-                augmentation_strategy=aug_cond)
-            X_t3_test = _append_test_augs(
-                apply_feature_selection(kirby_top3_test, fi_c5), fi_c5)
-
-            mdl_c5 = fit_fed_model(fed_model, X_t3_train, y_train, seed=fed_seed,
-                                   task_type=task_type)
-            y_pred_c5 = mdl_c5.predict(X_t3_test)
-
-            if is_clf:
-                y_prob_c5 = mdl_c5.predict_proba(X_t3_test)[:, 1] if hasattr(mdl_c5, 'predict_proba') else None
-                c5 = _compute_metrics(y_test, y_pred_c5, y_prob=y_prob_c5)
-                print(f"MCC={c5['mcc']:.4f}  ({X_t3_train.shape[1]}D, "
-                      f"reps={top_3_names})")
-            else:
-                c5 = _compute_metrics(y_test, y_pred_c5)
-                print(f"RMSE={c5['rmse']:.4f}  ({X_t3_train.shape[1]}D, "
-                      f"reps={top_3_names})")
-            c5['n_features'] = int(X_t3_train.shape[1])
-            c5['top_3_silos'] = top_3_silos
-            c5['top_3_reps'] = top_3_names
-            # The train-only scores the three were chosen on, so the choice can
-            # be read back without re-running the fold.
-            c5['inner_rank_scores'] = convert_numpy(inner_scores)
-            c5['inner_rank_metric'] = 'mcc' if is_clf else 'rmse'
-            c5['inner_rank_folds'] = INNER_RANK_FOLDS
-            c5['allocation'] = convert_numpy(fi_c5.get('allocation', {}))
-            fold_top_3_silos.append(top_3_silos)
-            fold_top_3_reps.append(top_3_names)
-        except Exception as e:
-            c5 = {'error': str(e), 'traceback': traceback.format_exc()}
-            print(f"FAILED: {e}")
-            traceback.print_exc()
-            fold_top_3_silos.append(None)
-            fold_top_3_reps.append(None)
-        fold_c5.append(c5)
-
-        # ── Phase 5: FLuID→KIRBy pipeline (C6) ───────────────────────
-        print("\n--- Phase 5: FLuID-within-KIRBy-across pipeline (C6) ---")
-        print("  C6: FLuID→KIRBy...", end=' ')
-        try:
-            train_groups_c6 = (groups[train_idx]
-                               if groups is not None else None)
-            X_c6_train, X_c6_test, budgets_c6, scores_c6, meta_c6 = \
-                fluid_within_kirby_across(
-                    kirby_train, kirby_test, y_train,
-                    k_intra=K_INTRA,
-                    allocation_method=_alloc, importance_method=_imp,
+            # Condition 4: KIRBy hybrid (all K reps)
+            print("  C4: KIRBy hybrid (all)...", end=' ')
+            try:
+                X_h_train, fi_c4 = create_hybrid(
+                    kirby_train, y_train,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=_match_model,  # P0/P1: enables 'match' → 'rf' resolution
+                    metric_fn=metric_fn, lower_is_better=lower_is_better,
+                    allocation_method=_alloc,
+                    importance_method=_imp,
+                    budget=BUDGET,
                     internal_evaluator=_int_eval,
-                    downstream_model=fed_to_kirby_model(fed_model),  # 'match' resolution
-                    groups=train_groups_c6,
-                    seed=fed_seed,
-                    task_type=task_type,
-                    metric_fn=metric_fn, lower_is_better=lower_is_better)
+                    augmentations=train_augs,
+                    augmentation_strategy=aug_cond)
+                X_h_test = _append_test_augs(
+                    apply_feature_selection(kirby_test, fi_c4), fi_c4)
 
-            mdl_c6 = fit_fed_model(fed_model, X_c6_train, y_train, seed=fed_seed,
-                                   task_type=task_type)
-            y_pred_c6 = mdl_c6.predict(X_c6_test)
+                mdl_c4 = fit_fed_model(fed_model, X_h_train, y_train, seed=fed_seed,
+                                       task_type=task_type)
+                y_pred_c4 = mdl_c4.predict(X_h_test)
 
-            if is_clf:
-                y_prob_c6 = mdl_c6.predict_proba(X_c6_test)[:, 1] if hasattr(mdl_c6, 'predict_proba') else None
-                c6 = _compute_metrics(y_test, y_pred_c6, y_prob=y_prob_c6)
-                _c6_label = f"MCC={c6['mcc']:.4f}"
-            else:
-                c6 = _compute_metrics(y_test, y_pred_c6)
-                _c6_label = f"RMSE={c6['rmse']:.4f}"
-            c6['n_features'] = int(X_c6_train.shape[1])
-            c6['silo_budgets'] = convert_numpy(budgets_c6)
-            c6['silo_scores'] = convert_numpy(scores_c6)
-            c6['n_virtual_silos'] = len(meta_c6)
-            c6['virtual_silo_metadata'] = convert_numpy(meta_c6)
-            print(f"{_c6_label}  "
-                  f"({c6['n_features']}D, {c6['n_virtual_silos']} virtual silos)")
-        except Exception as e:
-            c6 = {'error': str(e), 'traceback': traceback.format_exc()}
-            print(f"FAILED: {e}")
-            traceback.print_exc()
-        fold_c6.append(c6)
+                if is_clf:
+                    y_prob_c4 = mdl_c4.predict_proba(X_h_test)[:, 1] if hasattr(mdl_c4, 'predict_proba') else None
+                    c4 = _compute_metrics(y_test, y_pred_c4, y_prob=y_prob_c4)
+                    print(f"MCC={c4['mcc']:.4f}  ({X_h_train.shape[1]}D)")
+                else:
+                    c4 = _compute_metrics(y_test, y_pred_c4)
+                    print(f"RMSE={c4['rmse']:.4f}  ({X_h_train.shape[1]}D)")
+                c4['n_features'] = int(X_h_train.shape[1])
+                c4['allocation'] = convert_numpy(fi_c4.get('allocation', {}))
+            except Exception as e:
+                # Record traceback (not just str(e)) so a shape/import/NameError in
+                # the create_hybrid path surfaces during the expensive run instead
+                # of being reduced to a one-line message (FED-21).
+                c4 = {'error': str(e), 'traceback': traceback.format_exc()}
+                print(f"FAILED: {e}")
+                traceback.print_exc()
+
+            # Condition 5: KIRBy top-tier hybrid (top 3 reps by best silo metric)
+            print("  C5: KIRBy top-tier (3)...", end=' ')
+            try:
+                # The five silo representations were ranked INSIDE the training
+                # rows in Phase 1b, on an inner group-aware split. Take the three
+                # that won there. Ranking them by their score on this fold's test
+                # rows — which is what single_silo holds — picked C5's three
+                # representations with the answers in view, and C5 was then scored
+                # on those same rows.
+                if silo_ranked is None:
+                    raise RuntimeError(
+                        "C5 needs the Phase 1b train-only ranking and it failed "
+                        "on this fold.")
+                top_3_silos = [s for s, _ in silo_ranked[:3]]
+                top_3_names = [silo_reps[s] for s in top_3_silos]
+
+                kirby_top3_train = {silo_reps[s]: train_reps[silo_reps[s]]
+                                    for s in top_3_silos}
+                kirby_top3_test = {silo_reps[s]: test_reps[silo_reps[s]]
+                                   for s in top_3_silos}
+
+                X_t3_train, fi_c5 = create_hybrid(
+                    kirby_top3_train, y_train,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=_match_model,  # P0/P1: 'match' → 'rf' resolution
+                    metric_fn=metric_fn, lower_is_better=lower_is_better,
+                    allocation_method=_alloc,
+                    importance_method=_imp,
+                    budget=BUDGET,
+                    internal_evaluator=_int_eval,
+                    augmentations=train_augs,
+                    augmentation_strategy=aug_cond)
+                X_t3_test = _append_test_augs(
+                    apply_feature_selection(kirby_top3_test, fi_c5), fi_c5)
+
+                mdl_c5 = fit_fed_model(fed_model, X_t3_train, y_train, seed=fed_seed,
+                                       task_type=task_type)
+                y_pred_c5 = mdl_c5.predict(X_t3_test)
+
+                if is_clf:
+                    y_prob_c5 = mdl_c5.predict_proba(X_t3_test)[:, 1] if hasattr(mdl_c5, 'predict_proba') else None
+                    c5 = _compute_metrics(y_test, y_pred_c5, y_prob=y_prob_c5)
+                    print(f"MCC={c5['mcc']:.4f}  ({X_t3_train.shape[1]}D, "
+                          f"reps={top_3_names})")
+                else:
+                    c5 = _compute_metrics(y_test, y_pred_c5)
+                    print(f"RMSE={c5['rmse']:.4f}  ({X_t3_train.shape[1]}D, "
+                          f"reps={top_3_names})")
+                c5['n_features'] = int(X_t3_train.shape[1])
+                c5['top_3_silos'] = top_3_silos
+                c5['top_3_reps'] = top_3_names
+                # The train-only scores the three were chosen on, so the choice can
+                # be read back without re-running the fold.
+                c5['inner_rank_scores'] = convert_numpy(inner_scores)
+                c5['inner_rank_metric'] = 'mcc' if is_clf else 'rmse'
+                c5['inner_rank_folds'] = INNER_RANK_FOLDS
+                c5['allocation'] = convert_numpy(fi_c5.get('allocation', {}))
+                if BUDGET == HEADLINE_BUDGET:
+                    fold_top_3_silos.append(top_3_silos)
+                    fold_top_3_reps.append(top_3_names)
+            except Exception as e:
+                c5 = {'error': str(e), 'traceback': traceback.format_exc()}
+                print(f"FAILED: {e}")
+                traceback.print_exc()
+                if BUDGET == HEADLINE_BUDGET:
+                    fold_top_3_silos.append(None)
+                    fold_top_3_reps.append(None)
+
+            # ── Phase 5: FLuID→KIRBy pipeline (C6) ───────────────────────
+            print("\n--- Phase 5: FLuID-within-KIRBy-across pipeline (C6) ---")
+            print("  C6: FLuID→KIRBy...", end=' ')
+            try:
+                train_groups_c6 = (groups[train_idx]
+                                   if groups is not None else None)
+                X_c6_train, X_c6_test, budgets_c6, scores_c6, meta_c6 = \
+                    fluid_within_kirby_across(
+                        kirby_train, kirby_test, y_train,
+                        k_intra=K_INTRA,
+                        allocation_method=_alloc, importance_method=_imp,
+                        internal_evaluator=_int_eval,
+                        downstream_model=fed_to_kirby_model(fed_model),  # 'match' resolution
+                        groups=train_groups_c6,
+                        seed=fed_seed,
+                        task_type=task_type,
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+
+                mdl_c6 = fit_fed_model(fed_model, X_c6_train, y_train, seed=fed_seed,
+                                       task_type=task_type)
+                y_pred_c6 = mdl_c6.predict(X_c6_test)
+
+                if is_clf:
+                    y_prob_c6 = mdl_c6.predict_proba(X_c6_test)[:, 1] if hasattr(mdl_c6, 'predict_proba') else None
+                    c6 = _compute_metrics(y_test, y_pred_c6, y_prob=y_prob_c6)
+                    _c6_label = f"MCC={c6['mcc']:.4f}"
+                else:
+                    c6 = _compute_metrics(y_test, y_pred_c6)
+                    _c6_label = f"RMSE={c6['rmse']:.4f}"
+                c6['n_features'] = int(X_c6_train.shape[1])
+                c6['silo_budgets'] = convert_numpy(budgets_c6)
+                c6['silo_scores'] = convert_numpy(scores_c6)
+                c6['n_virtual_silos'] = len(meta_c6)
+                c6['virtual_silo_metadata'] = convert_numpy(meta_c6)
+                print(f"{_c6_label}  "
+                      f"({c6['n_features']}D, {c6['n_virtual_silos']} virtual silos)")
+            except Exception as e:
+                c6 = {'error': str(e), 'traceback': traceback.format_exc()}
+                print(f"FAILED: {e}")
+                traceback.print_exc()
+            c4_by_budget[str(BUDGET)] = c4
+            c5_by_budget[str(BUDGET)] = c5
+            c6_by_budget[str(BUDGET)] = c6
+        # the width every summary row and cross-run comparison reads
+        c4 = c4_by_budget[str(HEADLINE_BUDGET)]
+        c5 = c5_by_budget[str(HEADLINE_BUDGET)]
+        c6 = c6_by_budget[str(HEADLINE_BUDGET)]
+        fold_c4.append(c4); fold_c5.append(c5); fold_c6.append(c6)
+        # NOT c4['by_budget'] = c4_by_budget: c4 is an entry in that dict, so
+        # the result would contain itself and json.dump would recurse for
+        # ever. The sweep is kept beside the conditions, not inside them.
+        fold_budget_sweep.append({
+            'c4_kirby_hybrid': c4_by_budget,
+            'c5_kirby_top_tier': c5_by_budget,
+            'c6_fluid_within_kirby_across': c6_by_budget,
+        })
 
     # ── Phase 6: Aggregate per-fold metrics → mean ± std ─────────────────
     print(f"\n{'=' * 70}\nAGGREGATING ACROSS {N_FOLDS} FOLDS\n{'=' * 70}")
@@ -795,7 +821,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_train_per_fold': fold_n_train,
             'n_test_per_fold': fold_n_test,
             'k_intra_c6': K_INTRA,
-            'budget': BUDGET,
+            # BUDGET is the loop variable now, so its value after the folds is
+            # whatever the sweep ended on. Report the list and the width every
+            # headline row is taken at.
+            'budgets_swept': BUDGETS,
+            'budget': HEADLINE_BUDGET,
             'best_silo_per_fold': fold_best_silo,
             'best_silo_train_picked_per_fold': fold_best_silo_train,
             'inner_rank_scores_per_fold': fold_inner_scores,
@@ -824,6 +854,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'c4_kirby_hybrid': convert_numpy(c4),
         'c5_kirby_top_tier': convert_numpy(c5),
         'c6_fluid_within_kirby_across': convert_numpy(c6),
+        # Every width, per fold, for the three arms that select features.
+        # The aggregated conditions above are the headline width only.
+        'budget_sweep_per_fold': convert_numpy(fold_budget_sweep),
         'privacy_notes': {
             'c1': 'each silo trains independently, no sharing',
             'c2': 'silos share predictions only',

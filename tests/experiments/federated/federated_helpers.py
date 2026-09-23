@@ -224,6 +224,26 @@ def smoke_search_kwargs(config=None):
     return out
 
 
+def federated_budgets(default=(50, 100, 250, 500, 1000)):
+    """The feature budgets an experiment sweeps.
+
+    Four of the five federated files pinned their budget to 100 and never
+    varied it, so every answer they gave was an answer about 100 features
+    rather than about the method. fed02's KIRBy arms pick 100 features and
+    are measured against models using whole representations of 2,048, 1,613
+    and 768 columns, which makes width the obvious explanation for a loss
+    nobody had tested.
+
+    KIRBY_FED_BUDGETS overrides the list, comma separated. A server run takes
+    the default and covers the range; a local debugging run sets it to one
+    width so it finishes.
+    """
+    raw = os.environ.get('KIRBY_FED_BUDGETS', '').strip()
+    if not raw:
+        return list(default)
+    return [int(x) for x in raw.split(',') if x.strip()]
+
+
 def smoke_k_silos(full_k: int) -> int:
     """How many silos/clusters a smoke run splits into, else full_k.
 

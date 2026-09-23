@@ -125,10 +125,13 @@ PART_B_BUDGET = 100
 # KIRBY_FED03_BUDGETS overrides it as a comma-separated list, for a local
 # debugging run that cannot afford five widths over 13,231 pooled molecules.
 def _fed03_budgets(default=(50, 100, 250, 500, 1000)):
+    # KIRBY_FED03_BUDGETS still works for fed03 alone; KIRBY_FED_BUDGETS is
+    # the suite-wide switch every federated file now reads.
     raw = os.environ.get('KIRBY_FED03_BUDGETS', '').strip()
-    if not raw:
-        return list(default)
-    return [int(x) for x in raw.split(',') if x.strip()]
+    if raw:
+        return [int(x) for x in raw.split(',') if x.strip()]
+    from experiments.federated.federated_helpers import federated_budgets
+    return federated_budgets(default)
 
 
 PART_A_BUDGETS = _fed03_budgets()
