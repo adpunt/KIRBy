@@ -107,6 +107,21 @@ FEDERATED_DATASETS="lhasa_herg caco2 logd"
 # shared_vectors_census names no dataset and activity_cliff_qsar reads
 # chembl_qsar, which builds its own representations, so neither waits for
 # anything.
+# ⛔ CUT 2026-09-23, both degenerate at the fold level, not underpowered searches.
+#
+# cdr_flexibility — 216 CDRH3 sequences, 41 of them rigid, and 11 IGHV families
+#   that collapse to 5 held-out groups once the seven families under 10
+#   antibodies are pooled. Matthews correlation is 0.0000 on 11 of the 25
+#   (representation, model) rows: those models call the majority class for every
+#   loop and only the ranking carries signal. No search size fixes 41 positives.
+#   submit_opig_experiments.sh had already dropped it on the same grounds.
+#
+# kingsmith — leave-one-component-out gives 4 held-out ligands and 3 held-out
+#   bases. Measured on the ligand axis: fold spreads of 8.1 to 15.9 RMSE in
+#   yield units against hybrid-minus-baseline deltas of 1.2 to 7.2. The delta is
+#   inside the spread on every model, and with 3 or 4 folds no grid makes it
+#   measurable. The additive axis has 23 components and would be readable; the
+#   file runs all four axes together, so it goes as a whole.
 OPIG_JOBS='
 humanness|64G|opig_humanness.py --datasets humanness_therapeutic PM|humanness_therapeutic
 trastuzumab|64G|opig_trastuzumab_enrichment.py PM|tz_her2_binary
@@ -114,9 +129,7 @@ ginkgo|128G|opig_ginkgo_developability.py PM|ginkgo_acsins ginkgo_colloidal gink
 graphinity|128G|opig_graphinity_ddg.py --max-foldx 5000 PM|ddg_combined
 qsar|64G|opig_activity_cliff_qsar.py PM|
 blueprint_transfer|64G|opig_blueprint_transfer.py --source logd --target herg_ki --mode full PM|logd herg_ki
-cdr_flexibility|64G|opig_cdr_flexibility.py PM|cdr_flexibility
 cgr_comparison|64G|opig_cgr_comparison.py PM|bh_doyle_plates buchwald_hartwig suzuki
-kingsmith|64G|opig_kingsmith_component_splits.py PM|bh_doyle_plates buchwald_hartwig
 shared_vectors_census|64G|opig_shared_vectors_census.py --check-freshness 200|
 shared_vectors_remedy|64G|opig_shared_vectors_remedy.py|herg_ki
 scaffold_hybrid|64G|opig_scaffold_hybrid.py|flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig

@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
 """
+⛔ CUT 2026-09-23 — TOO FEW HELD-OUT COMPONENTS TO MEASURE ANYTHING.
+Do not submit. Leave-one-component-out gives 4 held-out ligands and 3
+held-out bases. Measured on the ligand axis 2026-09-23: fold spreads of 8.1
+to 15.9 RMSE in yield units against hybrid-minus-baseline deltas of 1.2 to
+7.2 -- the delta sits inside the spread on every one of the 5 downstream
+models, and with 3 or 4 folds no grid size makes it readable. The additive
+axis has 23 components and would be measurable, but this file runs all four
+axes together, so it goes as a whole. Removed from submit_everything.sh.
+
 Component-Wise Extrapolation Splits for Buchwald-Hartwig (OPIG C6)
 
 Tests whether KIRBy hybrids improve generalization under increasingly strict

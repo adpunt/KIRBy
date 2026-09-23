@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 """
+⛔ CUT 2026-09-23 — DEGENERATE FOLDS, NOT AN UNDERPOWERED SEARCH.
+Do not submit. 216 CDRH3 sequences, 41 of them rigid, and 11 IGHV families
+that collapse to 5 held-out groups once the seven under 10 antibodies are
+pooled. Measured 2026-09-23: Matthews correlation is 0.0000 on 11 of the 25
+(representation, model) rows, so those models call the majority class for
+every loop and only the ranking carries signal. Best was ablang2/xgboost at
+ROC AUC 0.6987 against the paper GNN's 0.82. No search size fixes 41
+positives. Removed from submit_everything.sh; submit_opig_experiments.sh had
+already dropped it on the same grounds.
+
 CDR Flexibility Prediction Experiment (OPIG — Spoendlin et al. 2025)
 
 Replicates Spoendlin et al. 2025 "Predicting the conformational flexibility
