@@ -692,6 +692,182 @@ def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
         return None, None
 
 
+def group_models_by_recipe(recipe_by_model, models):
+    """Which downstream models can share one built feature matrix, and which cannot.
+
+    WHY IT EXISTS. The recipe is looked up per downstream model, so five models
+    means five builds per fold per space. Under a recipe from the similarity
+    family that is waste: no downstream model is fitted inside the build and the
+    model is not passed to it, so two models holding the SAME such recipe get
+    bit-identical matrices.
+
+    IT DOES NOT ASSUME THEY HOLD THE SAME ONE. get_best_search_for_downstream
+    skips a stored search the model is absent from and then takes
+    get_best_for_downstream for it (_shared.py:6133-6138), so two models can come
+    back with different similarity recipes. Recipes are compared, never assumed
+    equal, and _same_recipe returns True only on a plain True -- a comparison
+    that raises, or returns an array, counts as different. So the worst case is
+    one build per model, which is what the callers did before this existed.
+
+    Under a predictive recipe the model IS fitted inside the build, so those are
+    never grouped however equal the recipes look.
+
+    Args:
+        recipe_by_model: {model: recipe} -- a model absent from it, or mapped to
+            None, gets no build here rather than another model's.
+        models: the downstream models to consider, in the order to build them.
+
+    Returns:
+        [(recipe, [model, ...], shareable)]. `shareable` is True when the build
+        fits no downstream model, which is when the caller passes None in place
+        of a model instance and when the models in the list share the build.
+    """
+    groups = []
+    for name in models:
+        bp = (recipe_by_model or {}).get(name)
+        if bp is None:
+            continue
+        shareable = recipe_is_geometry(bp)
+        placed = False
+        if shareable:
+            for g in groups:
+                if not g[2]:
+                    continue
+                if g[0] is bp or _same_recipe(g[0], bp):
+                    g[1].append(name)
+                    placed = True
+                    break
+        if not placed:
+            groups.append((bp, [name], shareable))
+    return groups
+
+
+def recipe_is_geometry(bp):
+    """Whether this recipe chose its features by the geometry they define.
+
+    Under one of these no downstream model is fitted inside the build, so the
+    feature matrix it produces depends on the recipe alone -- which is what lets
+    two downstream models holding the same one share a single build. Anything
+    it cannot read off the blueprint is False, so an unreadable recipe is built
+    per model exactly as before.
+    """
+    try:
+        from kirby.find_best_hybrid import _is_geometry_objective
+    except ImportError:
+        return False
+    obj = getattr(bp, 'objective', None)
+    return obj is not None and bool(_is_geometry_objective(obj))
+
+
+def _same_recipe(a, b):
+    """Whether two stored recipes are the same recipe, conservatively.
+
+    Used to decide whether one built feature matrix can serve two downstream
+    models. Getting this WRONG in the permissive direction would hand a model
+    another model's features, which is the defect the per-model lookup exists
+    to remove -- so anything but a plain True means "treat them as different"
+    and build twice. Identity is checked by the caller before this is reached.
+
+    A blueprint's __eq__ may be identity-based, may be a numpy-style elementwise
+    comparison that has no truth value, or may raise. All three land on False.
+    """
+    if a is b:
+        return True
+    try:
+        eq = (a == b)
+    except Exception:
+        return False
+    return eq is True
+
+
+def pool_recipe_per_downstream_model(lookup, models):
+    """The stored search and its recipe for EACH downstream model, not for one.
+
+    WHY IT EXISTS. n17, n18 and n23 each fetched ONE recipe, asked for
+    downstream_models[0] -- 'rf' in every run this suite has made -- and then
+    scored every downstream model on the features that one recipe chose. A run
+    over the five models in _shared.DOWNSTREAM_MODELS -- rf, xgboost, svm, dnn,
+    lightgbm -- wrote five numbers measured in the random forest's feature
+    space, so a difference between two of them was a difference between two
+    estimators fitted on one estimator's features. Changed 2026-09-23 in the
+    three files at once.
+
+    Args:
+        lookup: the pool reader with everything but the model already bound,
+            called once per model as lookup(downstream_model=<name>). In the
+            three callers it is functools.partial over
+            _shared.get_best_search_for_downstream, so the representations, the
+            labels, the fold grouping, the dataset name and the pool subset are
+            fixed and the model is the only thing that moves.
+        models: the downstream model names, in the order the caller listed them.
+
+    WHAT HAPPENS TO A MODEL THE POOL HOLDS NO SEARCH FOR. Read out of
+    _shared.get_best_search_for_downstream in this session: it returns the pair
+    (None, None) -- after printing a line that starts '[pool] WARNING: no
+    usable hybrid for model=' -- when no member of the pool scored that model
+    at that budget, and it REFUSES the cross-model fallback that
+    get_best_for_downstream would otherwise take (the best configuration from
+    any model, carrying that other model's score). It RAISES instead when a
+    stored search cannot be opened at all (result_cache.StaleResultDB, which
+    _iter_pool_searches re-raises on purpose) or when the call is malformed.
+    Both land in the second return value here, saying which of the two
+    happened, and such a model gets no hybrid space from the caller: it is
+    never handed another model's recipe, which is the defect this function
+    exists to remove.
+
+    WHAT IT COSTS. One lookup per model where there was one lookup per run. The
+    searches are not re-run: the model asked for is in no cache key -- the
+    search pickle is named by dataset, tier and augmentation strategy
+    (find_best_hybrid._search_cache_path), get_precomputed_search passes no
+    `models` so the model list in the stored search's identity is the same in
+    every one of these calls, and the in-memory
+    data['precomputed_searches'] dict is keyed by augmentation condition alone
+    and is written back into by _iter_pool_searches -- so every call after the
+    first reads the same stored SearchResult and picks a different row out of
+    it with get_best_for_downstream. What the per-fold loop
+    pays is separate and belongs to the caller: one hybrid BUILD per (fold,
+    space, model) where there was one per (fold, space).
+
+    Returns:
+        (by_model, no_recipe).
+
+        by_model: {model: {'search': SearchResult or None, 'meta': the pool
+        metadata dict, 'blueprint': the recipe}} for every model the pool
+        answered for, in the order `models` names them.
+
+        no_recipe: {model: {'why': one sentence, 'lookup_error': 'Type:
+        message' or None}} for every model it did not.
+    """
+    by_model, no_recipe = {}, {}
+    for name in models:
+        try:
+            search, meta = lookup(downstream_model=name)
+        except Exception as exc:
+            err = f'{type(exc).__name__}: {exc}'
+            no_recipe[name] = {
+                'why': (f'the pool lookup for this model RAISED {err}, so the '
+                        f'pool was never read for it and this is not a '
+                        f'statement about what it holds'),
+                'lookup_error': err}
+            print(f"  hybrid recipe lookup failed for {name}: {err}")
+            continue
+        bp = ((meta or {}).get('best_config') or {}).get('blueprint')
+        if bp is None:
+            no_recipe[name] = {
+                'why': ('the precomputed pool holds no stored search that '
+                        'scored this downstream model at this budget, so no '
+                        'recipe was searched for it; it is NOT given another '
+                        "model's recipe"
+                        if not meta else
+                        'the pool returned a winner for this model but that '
+                        'configuration carried no recipe, so no feature space '
+                        'could be rebuilt from it'),
+                'lookup_error': None}
+            continue
+        by_model[name] = {'search': search, 'meta': meta, 'blueprint': bp}
+    return by_model, no_recipe
+
+
 def _import_experiment(exp_id: str):
     """Dynamically import a noise experiment module by ID (e.g. 'n01')."""
     module_map = {
@@ -818,6 +994,33 @@ def run_all(dataset_name: str, output_dir: str,
         }
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
+        if noise_condition:
+            # A condition names noise that only some experiments inject. The
+            # rest pin their own condition in the file and read no keyword, and
+            # the loop below RAISES on the first one rather than running
+            # gaussian under a filename that says otherwise. `c10` is first in
+            # the default list and is not one of the eight, so before this every
+            # job submitted with a condition and no explicit experiment list
+            # died on its first experiment having done nothing.
+            #
+            # Only the default list is narrowed. An explicit list that names an
+            # experiment which cannot honour the condition still raises: asking
+            # for n07 under grouped_shifted is a thing to be told about, not to
+            # have silently dropped.
+            _takes = HONOURS_NOISE_CONDITION | SWEEPS_ALL_CONDITIONS
+            _dropped = [e for e in experiments if e not in _takes]
+            experiments = [e for e in experiments if e in _takes]
+            print(f"  noise_condition={noise_condition!r}: running the "
+                  f"{len(experiments)} experiments that inject it "
+                  f"({', '.join(experiments)}).")
+            if _dropped:
+                print(f"  not run under this condition, they name their own: "
+                      f"{', '.join(_dropped)}")
+            if not experiments:
+                raise ValueError(
+                    f"noise_condition={noise_condition!r} was asked for and none "
+                    f"of the default experiments injects a condition. This is a "
+                    f"bug in HONOURS_NOISE_CONDITION or SINGLE_DATASET_EXPERIMENTS.")
 
     # Resolve rep list
     if rep_names is None:
