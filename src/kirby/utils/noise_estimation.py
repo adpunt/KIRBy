@@ -1677,7 +1677,29 @@ class NGBoostEstimator(NoiseEstimator):
                 Dist=Normal, n_estimators=self.n_estimators,
                 learning_rate=self.learning_rate, minibatch_frac=self.minibatch_frac,
                 random_state=self.random_state, verbose=False)
-            model.fit(X_tr, y_tr)
+            # ⛔ NGBoost DRAWS FROM NUMPY'S GLOBAL RNG, not from the
+            # random_state it is handed. Passing random_state alone does NOT
+            # make it reproducible. MEASURED 2026-09-23, three identical calls
+            # in one process on 160 molecules and 12 features: the per-molecule
+            # scores differed by up to 0.0126 on values around 0.05, about a
+            # quarter of the score. With the global seed pinned the three runs
+            # are bit-identical, max difference 0.0.
+            #
+            # Every ngboost score this suite recorded before this was
+            # reproducible only to that much. n08, n11 and n13 use it as an
+            # estimator, and _smoke_n23's zero-noise check flipped between
+            # passing and failing on identical code because of it.
+            #
+            # The state is saved and restored so this does not move any OTHER
+            # random draw in the process -- a global seed set and left would
+            # change the fold assignment or the noise draw of whatever runs
+            # next, which is a worse bug than the one being fixed.
+            _rng_state = np.random.get_state()
+            try:
+                np.random.seed(self.random_state)
+                model.fit(X_tr, y_tr)
+            finally:
+                np.random.set_state(_rng_state)
             dist = model.pred_dist(X_ev)
             return {'mu': dist.loc, 'sigma': dist.scale}
 

@@ -692,6 +692,103 @@ def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
         return None, None
 
 
+def sweep_conditions(run_one, exp_id, data, config, output_dir,
+                     dataset_name, default_conditions, kwargs,
+                     groups_needed=None):
+    """Run one experiment across several injected conditions, checkpointing each.
+
+    THE CONDITION IS AN AXIS AN EXPERIMENT SWEEPS, not something a caller runs
+    it once per. This is that sweep, in one place, because seven experiments
+    need it and three near-identical copies of a loop is how n17, n18 and n23
+    ended up each carrying the same per-model build defect.
+
+    WHY EACH CONDITION IS WRITTEN AS IT LANDS. One condition on one dataset
+    measured between 1,991 and 7,095 seconds locally at 3 folds on rf alone, so
+    a sweep is most of a day and it WILL be interrupted -- by a wall clock, by a
+    kill, by a laptop closing. Writing once at the end loses all of it. Each
+    condition goes to its own file through save_experiment_results'
+    `filename_suffix`, which exists for exactly this, and a condition whose file
+    is already there is skipped. An interrupted run loses the condition in
+    flight and nothing else.
+
+    Args:
+        run_one: the experiment's own single-condition entry point, called as
+            run_one(data, config, output_dir, dataset_name,
+                    noise_condition=<name>, **kwargs).
+        exp_id: the result directory name, e.g. 'n23_uncertainty_cleaning'.
+        default_conditions: what to sweep when the caller names none.
+        kwargs: the experiment's kwargs. `noise_conditions` (a list),
+            `noise_condition` (one name, becoming a one-element list),
+            `sweep_slice` ('K/N') and `force_rerun` are consumed here.
+        groups_needed: conditions that need scaffold groups. They are SKIPPED
+            with their reason when the dataset has none, never attempted: one
+            impossible condition must not end the other thirteen. The drop
+            happens BEFORE the slice so array tasks stay balanced.
+
+    Returns an index of what was written, not the scores -- those are in the
+    per-condition files.
+    """
+    from experiments._shared import save_experiment_results
+
+    conditions = kwargs.pop('noise_conditions', None)
+    if conditions is None:
+        one = kwargs.get('noise_condition')
+        conditions = [one] if one else list(default_conditions)
+    conditions = [str(c) for c in conditions]
+    kwargs.pop('noise_condition', None)
+
+    skipped = {}
+    if groups_needed:
+        # Imported here, not at module scope: dataset_policy imports from this
+        # module, so a top-level import would be circular.
+        from experiments.dataset_policy import noise_groups_for
+        noise_groups, _, _ = noise_groups_for(data)
+        if noise_groups is None:
+            for c in [c for c in conditions if c in groups_needed]:
+                skipped[c] = (
+                    f'{dataset_name} loads no SMILES, so there are no scaffold '
+                    f'groups for this condition to act on. Every fold would '
+                    f'raise inside the injector and the file would carry no '
+                    f'score.')
+            conditions = [c for c in conditions if c not in skipped]
+
+    slice_spec = kwargs.pop('sweep_slice', None)
+    if slice_spec:
+        k, n = (int(x) for x in str(slice_spec).split('/'))
+        if not (0 <= k < n):
+            raise ValueError(f'sweep_slice {slice_spec!r}: need 0 <= K < N')
+        # By STRIDE, not by block, so a part-finished array covers a spread of
+        # conditions rather than the first few. Same rule as the OPIG sweep.
+        conditions = conditions[k::n]
+
+    force = bool(kwargs.pop('force_rerun', False))
+    done, ran = {}, []
+    for cond in conditions:
+        dest = Path(output_dir) / exp_id / f'{dataset_name}__{cond}.json'
+        if dest.exists() and dest.stat().st_size > 0 and not force:
+            print(f"  {cond}: already on disk, skipping ({dest})")
+            done[cond] = str(dest)
+            continue
+        print(f"\n{'=' * 70}\n{exp_id.upper()} CONDITION {cond}\n{'=' * 70}")
+        t0 = time.time()
+        res = run_one(data, config, output_dir, dataset_name,
+                      noise_condition=cond, **kwargs)
+        save_experiment_results(res, output_dir, exp_id, dataset_name,
+                                filename_suffix=cond)
+        print(f"  {cond} done in {time.time() - t0:.0f}s -> {dest}")
+        done[cond] = str(dest)
+        ran.append(cond)
+
+    for cond, why in skipped.items():
+        print(f"  {cond}: not run -- {why}")
+
+    return {'swept_conditions': conditions,
+            'conditions_written': done,
+            'conditions_run_this_time': ran,
+            'conditions_skipped_and_why': skipped,
+            'sweep_slice': slice_spec}
+
+
 def group_models_by_recipe(recipe_by_model, models):
     """Which downstream models can share one built feature matrix, and which cannot.
 
