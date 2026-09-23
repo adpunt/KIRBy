@@ -1086,7 +1086,12 @@ def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
 # Similarity-specific extra params (layered on top of the DEFAULT_* config)
 SIMILARITY_EXTRA = {
     'weight_methods': ['lightgbm_gain'],
-    'k_values': [5, 10],
+    # s05's neighbour counts. This sits in the config every similarity run is
+    # built from, so it was always present and always won over
+    # KIRBY_S05_K_VALUES -- naming the env var changed nothing and said nothing.
+    # The env var now wins when it is set; unset still gives 5 and 10.
+    'k_values': ([int(v) for v in os.environ.get('KIRBY_S05_K_VALUES', '').split(',')
+                  if v.strip()] or [5, 10]),
     # How many molecule pairs every distance-activity Spearman is taken over,
     # in s01, s02 and s08. It was 5,000 because _pair_distances cost 4,096
     # distances for every pair it kept; it now costs one, so 5,000 was paying
@@ -1577,14 +1582,8 @@ def run_all(dataset_name: str, output_dir: str,
             from experiments._shared import FULL_BUDGETS
             kwargs['budgets'] = config.get('budgets', FULL_BUDGETS)
         if exp_id == 's05':
-            # Only pass k_values when the caller's config names them. s05
-            # resolves kwargs first and falls back to KIRBY_S05_K_VALUES, so
-            # passing the default here unconditionally made that env lever dead:
-            # a sweep asking for 5,7,10,15,25 silently ran at 5 and 10.
-            if 'k_values' in config:
-                kwargs['k_values'] = config['k_values']
-            elif not os.environ.get('KIRBY_S05_K_VALUES', '').strip():
-                kwargs['k_values'] = [5, 10]
+            # SIMILARITY_EXTRA resolves KIRBY_S05_K_VALUES, so this carries it.
+            kwargs['k_values'] = config.get('k_values', [5, 10])
             kwargs['conditions'] = config.get('knn_conditions')
         if exp_id == 's08':
             # s08 uses downstream_model='knn' (distance lineage), so budgets
