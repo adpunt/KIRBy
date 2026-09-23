@@ -98,6 +98,28 @@ def apply_distance_metric_arg(args):
 DATASETS = ['flab_expression_koenig', 'flab_binding_koenig',
             'flab_expression_adams', 'flab_binding_adams']
 SCAFFOLD_REPS = ('dphyschem', 'dphyschem_pos')
+# ⛔ BEFORE READING THE HYBRID DELTA AS A SCAFFOLD-DIFF RESULT, COUNT THE
+# FEATURES. The hybrid arm here wins on every downstream model, and it is easy
+# to report that as "the mutation-difference representations contribute
+# something the language models miss". Measured on flab_expression_koenig
+# 2026-09-21, 3 outer folds, budgets 100 and 500: 9 of the 15 winning recipes
+# selected ZERO scaffold features, random forest took none in any fold and
+# still beat prot_t5 by +0.0366 spearman, and the largest share anywhere was
+# 18 of 300. The recipes mix prot_t5, igt5, ablang2 and esm2 at roughly
+# 30/25/25/20 and give blosum and onehot near zero.
+#
+# So the delta this file prints is a HYBRID-vs-BEST-SINGLE result on this
+# dataset. It is not evidence about the scaffold-diff representations, which
+# lose standalone as well (dphyschem ranks 4th-6th of 5-8, dphyschem_pos last
+# wherever it scores).
+#
+# The count is already on disk: Blueprint.allocation_per_fold, one dict per
+# inner fold, keyed by representation name. summarise_one does not read it.
+#   bp = result['by_model'][model]['blueprints_per_fold'][outer_fold]
+#   sum(n for inner in bp['allocation_per_fold'].values()
+#         for r, n in inner.items() if r in SCAFFOLD_REPS)
+# EXPERIMENTS_FINALIZED records this question as dropped for want of the
+# number. The number exists; nothing reads it.
 TIER = 'scaffold_cmp'          # distinct cache identity; does not touch existing DBs
 
 
