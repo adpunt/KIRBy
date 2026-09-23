@@ -545,6 +545,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                          for b in budgets if b < full_dim_budget]
         best_simple_hybrid = _best_fn(hybrid_scores, key=lambda x: x[1] if not np.isnan(x[1]) else _sentinel) if hybrid_scores else (None, float('nan'))
 
+        # ⛔ SAY WHY IT IS None. hybrid_wins=None was the same value for a
+        # genuine tie and for a comparison that could not be made at all, which
+        # is the failure the note further down was written against, reached by
+        # a different route. The commonest route: _evaluate_cell SKIPS any cell
+        # whose budget is at or above the pool's total width -- a hybrid that
+        # wide is the concatenation of everything, and concat-all baselines are
+        # not allowed -- so when capped_full EQUALS the pool width the whole
+        # full-dimension column is nan and no family can be compared.
+        hybrid_wins_reason = None
         if not any(np.isnan(x) for x in [best_simple_hybrid[1], best_tuned_full[1]]):
             if lower_is_better:
                 hybrid_wins = best_simple_hybrid[1] < best_tuned_full[1]
@@ -552,8 +561,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 hybrid_wins = best_simple_hybrid[1] > best_tuned_full[1]
         else:
             hybrid_wins = None
+            if np.isnan(best_tuned_full[1]) and full_dim_budget >= total_dim:
+                hybrid_wins_reason = (
+                    f'no full-dimension cell: capped_full ({full_dim_budget}) '
+                    f'is at or above the pool width ({total_dim}), and cells '
+                    f'that wide are skipped because they are the '
+                    f'concatenation of every representation')
+            elif np.isnan(best_tuned_full[1]) and np.isnan(best_simple_hybrid[1]):
+                hybrid_wins_reason = 'neither arm produced a finite score'
+            elif np.isnan(best_tuned_full[1]):
+                hybrid_wins_reason = (
+                    'the full-dimension arm produced no finite score at '
+                    f'budget {full_dim_budget}')
+            else:
+                hybrid_wins_reason = (
+                    'the simple-hybrid arm produced no finite score at any '
+                    'budget below the full-dimension one')
 
         comparison = {
+            'hybrid_wins_reason': hybrid_wins_reason,
             'best_tuned_full_dim': {
                 'param_value': best_tuned_full[0],
                 'score': best_tuned_full[1],
@@ -688,8 +714,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # verdict and is kept unchanged beside it.
     reselection_result = {}
     try:
+        # ⛔ recipe_selection='whole_dataset'. Every candidate here rebuilds a
+        # recipe the pool search picked over EVERY row of the dataset --
+        # results['recipe_selected_on'] says exactly that, a few hundred lines
+        # up. fold_reselection's docstring says to pass 'whole_dataset' in that
+        # case, because the per-fold rebuild fixes the feature weights but not
+        # the choice of allocation method, budget, importance method or
+        # evaluator, so the delta is not fully held out. Left unset, the block
+        # was written with recipe_selection=None, which the same docstring
+        # defines as the OPPOSITE: that nothing on these rows chose the recipe.
         reselection_result = fold_reselection(reselection_candidates, reselected_baselines,
-                                       lower_is_better, metric_name=metric_name)
+                                       lower_is_better, metric_name=metric_name,
+                                       recipe_selection='whole_dataset')
     except Exception as e:
         print(f"  honest delta unavailable: {e}")
     results['fold_reselection_result'] = reselection_result

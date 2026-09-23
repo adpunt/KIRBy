@@ -398,9 +398,15 @@ def _run_information_retention(data, budgets, dataset_name=None,
         # No-search fallback: the engine's own current defaults. Was
         # 'greedy'/'treeshap'/'ridge' -- greedy is cut, and treeshap/ridge are
         # neither the engine default nor what the search would have picked.
+        # ⛔ internal_evaluator WAS 'lightgbm' HERE and the engine's has been
+        # 'rf' since 2026-09-16 (hybrid.py:34 records the change, hybrid.py:
+        # create_hybrid signature carries it). The comment claimed to track the
+        # engine and did not, so a budget with no pool blueprint was built
+        # under a different evaluator from one that had a blueprint naming
+        # 'rf' -- inside the same curve.
         alloc = bp.allocation_method if bp else 'performance_weighted'
         imp = bp.importance_method if bp else 'lightgbm_gain'
-        int_eval = bp.internal_evaluator if bp else 'lightgbm'
+        int_eval = bp.internal_evaluator if bp else 'rf'
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         # from_fallback says the recipe is the engine's default, not a recipe
         # any search picked. Without it a fallback budget reads like a searched
@@ -513,13 +519,42 @@ def _run_information_retention(data, budgets, dataset_name=None,
 
     # Find inflection: where MI(X,Y) gain drops below 10% of max gain
     if len(results['mi_xy']) >= 3:
-        mi_arr = np.array(results['mi_xy'])
+        mi_arr = np.array(results['mi_xy'], dtype=float)
         gains = np.diff(mi_arr)
-        max_gain = np.max(np.abs(gains)) if len(gains) > 0 else 0
+        # ⛔ TWO WAYS THIS USED TO GO WRONG.
+        #
+        # First, a nan anywhere in the curve made max_gain nan, `max_gain > 0`
+        # False, and NEITHER the inflection line nor the "no inflection" line
+        # printed -- a curve that could not be read looked like a curve nobody
+        # asked about. nanmax and an explicit count fix that.
+        #
+        # Second, the mask was `gains < 0.1 * max_gain` and argmax took the
+        # FIRST True. A negative gain -- the mutual-information estimate simply
+        # fell between two budgets, which it does, being an estimate -- is less
+        # than any positive threshold, so one noisy step at the small end fixed
+        # the inflection there whatever the rest of the curve did. A plateau by
+        # definition CONTINUES, so the first index is now the first one from
+        # which every later gain is also below the threshold.
+        n_nan = int(np.sum(~np.isfinite(gains)))
+        finite_gains = gains[np.isfinite(gains)]
+        max_gain = float(np.max(np.abs(finite_gains))) if len(finite_gains) else 0.0
+        if n_nan:
+            print(f"    {n_nan} of {len(gains)} budget steps have no finite "
+                  f"mutual-information gain; they cannot start or end a "
+                  f"plateau and are excluded.")
+            results['n_nonfinite_gains'] = n_nan
         if max_gain > 0:
-            plateau_mask = gains < 0.1 * max_gain
-            if np.any(plateau_mask):
-                inflection_idx = int(np.argmax(plateau_mask))
+            thresh = 0.1 * max_gain
+            plateau_mask = np.array(
+                [bool(np.isfinite(g) and g < thresh) for g in gains])
+            # Sustained: True from here to the end of the curve.
+            sustained = np.array(
+                [bool(plateau_mask[i:].all()) for i in range(len(plateau_mask))])
+            if np.any(sustained):
+                inflection_idx = int(np.argmax(sustained))
+                results['inflection_rule'] = (
+                    'first budget from which every later MI gain stays under '
+                    '10% of the largest absolute gain')
                 # gains[i] is the MI increase from budgets[i]→budgets[i+1].
                 # When plateau_mask[i] is first True the plateau STARTS at
                 # budgets[i] (the last productive budget) — that is the
@@ -527,7 +562,9 @@ def _run_information_retention(data, budgets, dataset_name=None,
                 results['inflection_budget'] = results['budgets'][inflection_idx]
                 print(f"    Inflection point: budget ~{results['inflection_budget']}")
             else:
-                print("    No inflection detected (MI still increasing)")
+                print("    No inflection detected: no budget from which the "
+                      "MI gain stays under 10% of the largest for the rest of "
+                      "the curve")
 
     return results
 
@@ -604,9 +641,15 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         # No-search fallback: the engine's own current defaults. Was
         # 'greedy'/'treeshap'/'ridge' -- greedy is cut, and treeshap/ridge are
         # neither the engine default nor what the search would have picked.
+        # ⛔ internal_evaluator WAS 'lightgbm' HERE and the engine's has been
+        # 'rf' since 2026-09-16 (hybrid.py:34 records the change, hybrid.py:
+        # create_hybrid signature carries it). The comment claimed to track the
+        # engine and did not, so a budget with no pool blueprint was built
+        # under a different evaluator from one that had a blueprint naming
+        # 'rf' -- inside the same curve.
         alloc = bp.allocation_method if bp else 'performance_weighted'
         imp = bp.importance_method if bp else 'lightgbm_gain'
-        int_eval = bp.internal_evaluator if bp else 'lightgbm'
+        int_eval = bp.internal_evaluator if bp else 'rf'
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         # Same marker as 9b: the recipe came from the engine's defaults, not a
         # search.
