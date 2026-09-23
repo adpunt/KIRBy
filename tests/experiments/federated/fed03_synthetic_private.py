@@ -113,6 +113,30 @@ REP_FAMILIES = {
 # with the size.
 PART_B_BUDGET = 100
 
+# Feature budgets both parts sweep.
+#
+# Until 2026-09-23 Part A's C4 and C6 passed no budget at all and took
+# create_hybrid's default of 100, so the result this experiment is best known
+# for — 0.5504 MCC against 0.4005 for the best single source — was measured at
+# one width and nobody knew whether it held at any other. Part B was pinned to
+# 100 the same way. A budget is a swept axis like any other and the server run
+# covers the range.
+#
+# KIRBY_FED03_BUDGETS overrides it as a comma-separated list, for a local
+# debugging run that cannot afford five widths over 13,231 pooled molecules.
+def _fed03_budgets(default=(50, 100, 250, 500, 1000)):
+    raw = os.environ.get('KIRBY_FED03_BUDGETS', '').strip()
+    if not raw:
+        return list(default)
+    return [int(x) for x in raw.split(',') if x.strip()]
+
+
+PART_A_BUDGETS = _fed03_budgets()
+PART_B_BUDGETS = _fed03_budgets()
+# The width every summary table and every cross-run comparison quotes. It has
+# to be in the sweep or the headline number has nothing behind it.
+HEADLINE_BUDGET = 100 if 100 in PART_A_BUDGETS else PART_A_BUDGETS[0]
+
 
 def assign_rep_families(available_reps):
     """Sort a dataset's own representations into the three families.
@@ -664,47 +688,57 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             train_reps = {r: arr[train_idx] for r, arr in combined_reps.items()}
             test_reps = {r: arr[test_idx] for r, arr in combined_reps.items()}
 
-            X_h_train, silo_budgets, silo_scores, silo_fis = \
-                federated_feature_selection(
-                    train_reps, y_train, train_silo_indices,
-                    K,
-                    allocation_method=_alloc, importance_method=_imp,
-                    internal_evaluator=_int_eval,
-                    downstream_model=fed_to_kirby_model(fed_model),
-                    # Each silo's 20% scoring slice is cut on these. Without
-                    # them federated_feature_selection refuses the slice and
-                    # every silo takes the flat score, so the budget comes out
-                    # equal across silos.
-                    groups=pooled_groups[train_idx],
-                    task_type='classification',
-                    metric_fn=metric_fn, lower_is_better=lower_is_better)
-
             from kirby.hybrid import apply_feature_selection
-            h_test_parts = []
-            for s in range(1, K + 1):
-                fi = silo_fis.get(s)
-                if fi is None:
-                    continue
-                try:
-                    h_test_parts.append(
-                        apply_feature_selection(test_reps, fi))
-                except Exception:
-                    continue
+            c4_by_budget = {}
+            for _budget in PART_A_BUDGETS:
+                X_h_train, silo_budgets, silo_scores, silo_fis = \
+                    federated_feature_selection(
+                        train_reps, y_train, train_silo_indices,
+                        K, budget=_budget,
+                        allocation_method=_alloc, importance_method=_imp,
+                        internal_evaluator=_int_eval,
+                        downstream_model=fed_to_kirby_model(fed_model),
+                        # Each silo's 20% scoring slice is cut on these.
+                        # Without them federated_feature_selection refuses the
+                        # slice and every silo takes the flat score, so the
+                        # budget comes out equal across silos.
+                        groups=pooled_groups[train_idx],
+                        task_type='classification',
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
 
-            if h_test_parts:
-                X_h_test = np.hstack(h_test_parts)
-                clf = fit_fed_classifier(
-                    fed_model, X_h_train, y_train, seed=fed_seed)
-                pred_cls = clf.predict(X_h_test)
-                pred_prob = clf.predict_proba(X_h_test)[:, 1]
-                c4 = compute_clf_metrics(y_test, pred_cls, pred_prob)
-            else:
-                c4 = {'error': 'no valid silo selections'}
-            c4['silo_budgets'] = convert_numpy(silo_budgets)
-            c4['silo_scores'] = convert_numpy(silo_scores)
-            results['c4_kirby_federated'] = convert_numpy(c4)
-            mcc_str = f"MCC={c4['mcc']:.3f}" if 'mcc' in c4 else 'N/A'
-            print(f"    {mcc_str}  budgets={silo_budgets}")
+                h_test_parts = []
+                for s in range(1, K + 1):
+                    fi = silo_fis.get(s)
+                    if fi is None:
+                        continue
+                    try:
+                        h_test_parts.append(
+                            apply_feature_selection(test_reps, fi))
+                    except Exception:
+                        continue
+
+                if h_test_parts:
+                    X_h_test = np.hstack(h_test_parts)
+                    clf = fit_fed_classifier(
+                        fed_model, X_h_train, y_train, seed=fed_seed)
+                    pred_cls = clf.predict(X_h_test)
+                    pred_prob = clf.predict_proba(X_h_test)[:, 1]
+                    c4 = compute_clf_metrics(y_test, pred_cls, pred_prob)
+                else:
+                    c4 = {'error': 'no valid silo selections'}
+                c4['budget_requested'] = int(_budget)
+                c4['n_features'] = (int(X_h_train.shape[1])
+                                    if h_test_parts else 0)
+                c4['silo_budgets'] = convert_numpy(silo_budgets)
+                c4['silo_scores'] = convert_numpy(silo_scores)
+                c4_by_budget[str(_budget)] = convert_numpy(c4)
+                mcc_str = f"MCC={c4['mcc']:.3f}" if 'mcc' in c4 else 'N/A'
+                print(f"    budget {_budget}: {mcc_str}  "
+                      f"{c4['n_features']} features  split={silo_budgets}")
+
+            results['c4_kirby_federated_by_budget'] = c4_by_budget
+            # The headline row every summary and cross-run comparison reads.
+            results['c4_kirby_federated'] = c4_by_budget[str(HEADLINE_BUDGET)]
         except Exception as e:
             # Surface the traceback (not just str(e)) so a shape/import/NameError
             # in the federated_feature_selection path is debuggable from the
@@ -753,24 +787,36 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             # from train_idx only, and test_idx was cut group-aware upstream.
             # What changes is WHICH features C6 admits, so a future run reports
             # different numbers. Fixed 2026-09-18.
-            X_h_c6, fi_c6 = create_hybrid(
-                train_single, y_train,
-                groups=pooled_groups[train_idx] if pooled_groups is not None else None,
-                allocation_method=_alloc,
-                importance_method=_imp,
-                internal_evaluator=_int_eval,
-                model=make_fed_classifier(fed_model, seed=fed_seed),
-                metric_fn=metric_fn, lower_is_better=lower_is_better,
-                augmentation_strategy='none')
-            X_h_c6_test = apply_feature_selection(test_single, fi_c6)
-            clf_c6 = fit_fed_classifier(
-                fed_model, X_h_c6, y_train, seed=fed_seed)
-            pred_c6 = clf_c6.predict(X_h_c6_test)
-            prob_c6 = clf_c6.predict_proba(X_h_c6_test)[:, 1]
-            c6 = compute_clf_metrics(y_test, pred_c6, prob_c6)
-            c6['rep_used'] = ecfp4_key
-            results['c6_kirby_single_rep'] = convert_numpy(c6)
-            print(f"    MCC={c6['mcc']:.3f}")
+            # C6 sweeps the SAME widths as C4. C4 minus C6 is what splitting
+            # the budget across three sources buys over spending it all on one
+            # representation, and that subtraction only means something if both
+            # sides are the same width.
+            c6_by_budget = {}
+            for _budget in PART_A_BUDGETS:
+                X_h_c6, fi_c6 = create_hybrid(
+                    train_single, y_train,
+                    groups=pooled_groups[train_idx] if pooled_groups is not None else None,
+                    allocation_method=_alloc,
+                    importance_method=_imp,
+                    budget=_budget,
+                    internal_evaluator=_int_eval,
+                    model=make_fed_classifier(fed_model, seed=fed_seed),
+                    metric_fn=metric_fn, lower_is_better=lower_is_better,
+                    augmentation_strategy='none')
+                X_h_c6_test = apply_feature_selection(test_single, fi_c6)
+                clf_c6 = fit_fed_classifier(
+                    fed_model, X_h_c6, y_train, seed=fed_seed)
+                pred_c6 = clf_c6.predict(X_h_c6_test)
+                prob_c6 = clf_c6.predict_proba(X_h_c6_test)[:, 1]
+                c6 = compute_clf_metrics(y_test, pred_c6, prob_c6)
+                c6['rep_used'] = ecfp4_key
+                c6['budget_requested'] = int(_budget)
+                c6['n_features'] = int(X_h_c6.shape[1])
+                c6_by_budget[str(_budget)] = convert_numpy(c6)
+                print(f"    budget {_budget}: MCC={c6['mcc']:.3f}  "
+                      f"{c6['n_features']} features")
+            results['c6_kirby_single_rep_by_budget'] = c6_by_budget
+            results['c6_kirby_single_rep'] = c6_by_budget[str(HEADLINE_BUDGET)]
         except Exception as e:
             results['c6_kirby_single_rep'] = {'error': str(e)}
             print(f"    FAILED: {e}")
@@ -1103,210 +1149,224 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
             'train_picked_inner_scores': _inner,
         })
 
-        # C2: KIRBy hybrid across all silo reps
-        print("  C2: KIRBy hybrid (all reps)...")
-        try:
-            all_silo_reps_tr = {}
-            all_silo_reps_te = {}
-            for sname in silo_names:
-                for r in silo_reps[sname]:
-                    all_silo_reps_tr[r] = train_reps[r]
-                    all_silo_reps_te[r] = test_reps[r]
-            train_augs_c2 = ({k: v[train_idx] for k, v in augs.items()}
-                             if augs else None)
-            test_augs_c2 = ({k: v[test_idx] for k, v in augs.items()}
-                            if augs else None)
+        # Part B sweeps the same widths Part A does. Both conditions run
+        # at every budget: C2 takes the whole budget in one selection over
+        # all three families, C3 splits it across them. Comparing them at
+        # one width only said nothing about whether either scales.
+        c2_by_budget, c3_by_budget = {}, {}
+        for _pb_budget in PART_B_BUDGETS:
+            # C2: KIRBy hybrid across all silo reps
+            print("  C2: KIRBy hybrid (all reps)...")
+            try:
+                all_silo_reps_tr = {}
+                all_silo_reps_te = {}
+                for sname in silo_names:
+                    for r in silo_reps[sname]:
+                        all_silo_reps_tr[r] = train_reps[r]
+                        all_silo_reps_te[r] = test_reps[r]
+                train_augs_c2 = ({k: v[train_idx] for k, v in augs.items()}
+                                 if augs else None)
+                test_augs_c2 = ({k: v[test_idx] for k, v in augs.items()}
+                                if augs else None)
 
-            _c2_model = (
-                make_fed_classifier(fed_model, seed=fed_seed) if is_clf
-                else make_fed_regressor(fed_model, seed=fed_seed))
-            X_h_tr, fi = create_hybrid(
-                all_silo_reps_tr, y_train,
-                # Without groups the internal evaluation splits at random, so
-                # a scaffold can sit on both sides of it
-                # (feedback_no_random_splits.md). C1's own fits are
-                # scaffold-grouped; this was not.
-                groups=(groups[train_idx] if groups is not None else None),
-                allocation_method=_alloc,
-                importance_method=_imp,
-                internal_evaluator=_int_eval,
-                budget=PART_B_BUDGET,
-                model=_c2_model,
-                metric_fn=metric_fn_b, lower_is_better=lower_is_better_b,
-                augmentations=train_augs_c2,
-                augmentation_strategy=aug_cond)
-            X_h_te = apply_feature_selection(all_silo_reps_te, fi)
-            _aug_info = (fi.get('augmentation_info')
-                         if isinstance(fi, dict) else None)
-            if _aug_info and test_augs_c2:
-                _X_te_aug = apply_augmentation_selection(
-                    test_augs_c2, _aug_info)
-                if _X_te_aug is not None:
-                    X_h_te = np.hstack([X_h_te, _X_te_aug])
+                _c2_model = (
+                    make_fed_classifier(fed_model, seed=fed_seed) if is_clf
+                    else make_fed_regressor(fed_model, seed=fed_seed))
+                X_h_tr, fi = create_hybrid(
+                    all_silo_reps_tr, y_train,
+                    # Without groups the internal evaluation splits at random, so
+                    # a scaffold can sit on both sides of it
+                    # (feedback_no_random_splits.md). C1's own fits are
+                    # scaffold-grouped; this was not.
+                    groups=(groups[train_idx] if groups is not None else None),
+                    allocation_method=_alloc,
+                    importance_method=_imp,
+                    internal_evaluator=_int_eval,
+                    budget=_pb_budget,
+                    model=_c2_model,
+                    metric_fn=metric_fn_b, lower_is_better=lower_is_better_b,
+                    augmentations=train_augs_c2,
+                    augmentation_strategy=aug_cond)
+                X_h_te = apply_feature_selection(all_silo_reps_te, fi)
+                _aug_info = (fi.get('augmentation_info')
+                             if isinstance(fi, dict) else None)
+                if _aug_info and test_augs_c2:
+                    _X_te_aug = apply_augmentation_selection(
+                        test_augs_c2, _aug_info)
+                    if _X_te_aug is not None:
+                        X_h_te = np.hstack([X_h_te, _X_te_aug])
 
-            model = fit_fed_model(
-                fed_model, X_h_tr, y_train, seed=fed_seed,
-                task_type=('classification' if is_clf else 'regression'))
-            y_pred = model.predict(X_h_te)
-            if is_clf:
-                c2 = metrics_fn(y_test, y_pred,
-                                model.predict_proba(X_h_te)[:, 1])
-            else:
-                c2 = metrics_fn(y_test, y_pred)
-            c2['allocation'] = convert_numpy(fi.get('allocation', {}))
-            c2['n_features'] = int(X_h_tr.shape[1])
-            results['c2_kirby_hybrid'] = convert_numpy(c2)
-            primary = c2.get('mcc', c2.get('rmse'))
-            print(f"    {primary:.4f}  ({c2['n_features']}D)")
-        except Exception as e:
-            results['c2_kirby_hybrid'] = {
-                'error': str(e), 'traceback': traceback.format_exc()}
-            print(f"    FAILED: {e}")
-            traceback.print_exc()
-
-        # C3: Federated feature selection (privacy-preserving)
-        print("  C3: Federated FS (per-silo importance)...")
-        try:
-            from kirby.hybrid import create_hybrid as _ch
-            from sklearn.model_selection import (
-                GroupShuffleSplit as _GSS, ShuffleSplit as _SS)
-            from experiments._shared import get_model_factories
-
-            silo_task_type = 'classification' if is_clf else 'regression'
-            train_groups = groups[train_idx] if groups is not None else None
-
-            # Resolve 'match' → concrete evaluator ('rf' default) BEFORE the
-            # create_hybrid call. Without this, _int_eval='match' + no model=
-            # arg makes create_hybrid silently fall back to 'ridge'
-            # (hybrid.py:3354-3355), which is forbidden (feedback_no_ridge.md).
-            _resolved_eval = _resolve_match(_int_eval, 'rf')
-            _silo_model_c3 = (
-                make_fed_classifier(fed_model, seed=fed_seed) if is_clf
-                else make_fed_regressor(fed_model, seed=fed_seed))
-
-            # Each family selects its features and is scored, in that order,
-            # on two disjoint parts of the training rows. It used to select
-            # from every training row and then score on a split of those same
-            # rows, so every feature had been chosen with the scoring rows'
-            # labels in view and the score was not a held-out score.
-            #
-            # Budget: PART_B_BUDGET split across the families, so C3's total
-            # matches C2's. Each family used to take the full default of 100
-            # on its own, which made C3 a wider feature set than C2 and the
-            # comparison a comparison of two sizes.
-            silo_fis = {}
-            silo_scores = {}
-            _n_fam = max(1, len(silo_names))
-            _per_family_budget = max(5, PART_B_BUDGET // _n_fam)
-            for i, sname in enumerate(silo_names, 1):
-                rep_list = silo_reps[sname]
-                silo_rep_tr = {r: train_reps[r] for r in rep_list}
-                try:
-                    if (train_groups is not None
-                            and len(np.unique(train_groups)) >= 2):
-                        splitter = _GSS(
-                            n_splits=1, test_size=0.2,
-                            random_state=42 + i + fold_idx)
-                        tr, va = next(splitter.split(
-                            np.zeros((len(y_train), 1)), y_train,
-                            groups=train_groups))
-                    else:
-                        splitter = _SS(
-                            n_splits=1, test_size=0.2,
-                            random_state=42 + i + fold_idx)
-                        tr, va = next(splitter.split(
-                            np.zeros((len(y_train), 1))))
-
-                    # Probe: select on the training part only, score on the
-                    # part that selection never saw.
-                    _, fi_probe = _ch(
-                        {r: arr[tr] for r, arr in silo_rep_tr.items()},
-                        y_train[tr],
-                        groups=(train_groups[tr]
-                                if train_groups is not None else None),
-                        allocation_method=_alloc,
-                        importance_method=_imp,
-                        internal_evaluator=_resolved_eval,
-                        budget=min(_per_family_budget, len(tr)),
-                        model=_silo_model_c3)
-                    X_probe_tr = apply_feature_selection(
-                        {r: arr[tr] for r, arr in silo_rep_tr.items()},
-                        fi_probe)
-                    X_probe_va = apply_feature_selection(
-                        {r: arr[va] for r, arr in silo_rep_tr.items()},
-                        fi_probe)
-                    eval_factory = get_model_factories(
-                        [_resolved_eval], task_type=silo_task_type,
-                        n_samples=len(tr)).get(_resolved_eval)
-                    if eval_factory is None or X_probe_tr.shape[1] == 0:
-                        silo_scores[i] = 0.0
-                    else:
-                        evaluator = eval_factory()
-                        evaluator.fit(X_probe_tr, y_train[tr])
-                        silo_scores[i] = max(0.0, float(
-                            evaluator.score(X_probe_va, y_train[va])))
-
-                    # The selection that is actually used: every training row,
-                    # at this family's share of the budget.
-                    _, fi_s = _ch(
-                        silo_rep_tr, y_train,
-                        groups=train_groups,
-                        allocation_method=_alloc,
-                        importance_method=_imp,
-                        internal_evaluator=_resolved_eval,
-                        budget=_per_family_budget,
-                        model=_silo_model_c3)
-                    silo_fis[i] = fi_s
-                except Exception:
-                    silo_fis[i] = None
-                    silo_scores[i] = 0.0
-
-            h_parts_tr = []
-            h_parts_te = []
-            for i, sname in enumerate(silo_names, 1):
-                fi = silo_fis.get(i)
-                if fi is None:
-                    continue
-                rep_list = silo_reps[sname]
-                silo_rep_tr = {r: train_reps[r] for r in rep_list}
-                silo_rep_te = {r: test_reps[r] for r in rep_list}
-                try:
-                    h_parts_tr.append(
-                        apply_feature_selection(silo_rep_tr, fi))
-                    h_parts_te.append(
-                        apply_feature_selection(silo_rep_te, fi))
-                except Exception:
-                    continue
-
-            if h_parts_tr:
-                X_fed_tr = np.hstack(h_parts_tr)
-                X_fed_te = np.hstack(h_parts_te)
                 model = fit_fed_model(
-                    fed_model, X_fed_tr, y_train, seed=fed_seed,
-                    task_type=silo_task_type)
-                y_pred = model.predict(X_fed_te)
+                    fed_model, X_h_tr, y_train, seed=fed_seed,
+                    task_type=('classification' if is_clf else 'regression'))
+                y_pred = model.predict(X_h_te)
                 if is_clf:
-                    c3 = metrics_fn(
-                        y_test, y_pred,
-                        model.predict_proba(X_fed_te)[:, 1])
+                    c2 = metrics_fn(y_test, y_pred,
+                                    model.predict_proba(X_h_te)[:, 1])
                 else:
-                    c3 = metrics_fn(y_test, y_pred)
-                c3['n_features'] = int(X_fed_tr.shape[1])
-            else:
-                c3 = {'error': 'no valid silo selections'}
-            c3['silo_scores'] = convert_numpy(silo_scores)
-            c3['budget_total'] = PART_B_BUDGET
-            c3['budget_per_family'] = _per_family_budget
-            results['c3_federated_fs'] = convert_numpy(c3)
-            primary = c3.get('mcc', c3.get('rmse', float('nan')))
-            # The width is printed beside the score so C2 and C3 can be seen
-            # to be the same size, which is what makes them comparable.
-            print(f"    {primary:.4f}  ({c3.get('n_features', 0)}D)")
-        except Exception as e:
-            results['c3_federated_fs'] = {
-                'error': str(e), 'traceback': traceback.format_exc()}
-            print(f"    FAILED: {e}")
-            traceback.print_exc()
+                    c2 = metrics_fn(y_test, y_pred)
+                c2['allocation'] = convert_numpy(fi.get('allocation', {}))
+                c2['n_features'] = int(X_h_tr.shape[1])
+                results['c2_kirby_hybrid'] = convert_numpy(c2)
+                primary = c2.get('mcc', c2.get('rmse'))
+                print(f"    {primary:.4f}  ({c2['n_features']}D)")
+            except Exception as e:
+                results['c2_kirby_hybrid'] = {
+                    'error': str(e), 'traceback': traceback.format_exc()}
+                print(f"    FAILED: {e}")
+                traceback.print_exc()
+
+            # C3: Federated feature selection (privacy-preserving)
+            print("  C3: Federated FS (per-silo importance)...")
+            try:
+                from kirby.hybrid import create_hybrid as _ch
+                from sklearn.model_selection import (
+                    GroupShuffleSplit as _GSS, ShuffleSplit as _SS)
+                from experiments._shared import get_model_factories
+
+                silo_task_type = 'classification' if is_clf else 'regression'
+                train_groups = groups[train_idx] if groups is not None else None
+
+                # Resolve 'match' → concrete evaluator ('rf' default) BEFORE the
+                # create_hybrid call. Without this, _int_eval='match' + no model=
+                # arg makes create_hybrid silently fall back to 'ridge'
+                # (hybrid.py:3354-3355), which is forbidden (feedback_no_ridge.md).
+                _resolved_eval = _resolve_match(_int_eval, 'rf')
+                _silo_model_c3 = (
+                    make_fed_classifier(fed_model, seed=fed_seed) if is_clf
+                    else make_fed_regressor(fed_model, seed=fed_seed))
+
+                # Each family selects its features and is scored, in that order,
+                # on two disjoint parts of the training rows. It used to select
+                # from every training row and then score on a split of those same
+                # rows, so every feature had been chosen with the scoring rows'
+                # labels in view and the score was not a held-out score.
+                #
+                # Budget: PART_B_BUDGET split across the families, so C3's total
+                # matches C2's. Each family used to take the full default of 100
+                # on its own, which made C3 a wider feature set than C2 and the
+                # comparison a comparison of two sizes.
+                silo_fis = {}
+                silo_scores = {}
+                _n_fam = max(1, len(silo_names))
+                _per_family_budget = max(5, PART_B_BUDGET // _n_fam)
+                for i, sname in enumerate(silo_names, 1):
+                    rep_list = silo_reps[sname]
+                    silo_rep_tr = {r: train_reps[r] for r in rep_list}
+                    try:
+                        if (train_groups is not None
+                                and len(np.unique(train_groups)) >= 2):
+                            splitter = _GSS(
+                                n_splits=1, test_size=0.2,
+                                random_state=42 + i + fold_idx)
+                            tr, va = next(splitter.split(
+                                np.zeros((len(y_train), 1)), y_train,
+                                groups=train_groups))
+                        else:
+                            splitter = _SS(
+                                n_splits=1, test_size=0.2,
+                                random_state=42 + i + fold_idx)
+                            tr, va = next(splitter.split(
+                                np.zeros((len(y_train), 1))))
+
+                        # Probe: select on the training part only, score on the
+                        # part that selection never saw.
+                        _, fi_probe = _ch(
+                            {r: arr[tr] for r, arr in silo_rep_tr.items()},
+                            y_train[tr],
+                            groups=(train_groups[tr]
+                                    if train_groups is not None else None),
+                            allocation_method=_alloc,
+                            importance_method=_imp,
+                            internal_evaluator=_resolved_eval,
+                            budget=min(_per_family_budget, len(tr)),
+                            model=_silo_model_c3)
+                        X_probe_tr = apply_feature_selection(
+                            {r: arr[tr] for r, arr in silo_rep_tr.items()},
+                            fi_probe)
+                        X_probe_va = apply_feature_selection(
+                            {r: arr[va] for r, arr in silo_rep_tr.items()},
+                            fi_probe)
+                        eval_factory = get_model_factories(
+                            [_resolved_eval], task_type=silo_task_type,
+                            n_samples=len(tr)).get(_resolved_eval)
+                        if eval_factory is None or X_probe_tr.shape[1] == 0:
+                            silo_scores[i] = 0.0
+                        else:
+                            evaluator = eval_factory()
+                            evaluator.fit(X_probe_tr, y_train[tr])
+                            silo_scores[i] = max(0.0, float(
+                                evaluator.score(X_probe_va, y_train[va])))
+
+                        # The selection that is actually used: every training row,
+                        # at this family's share of the budget.
+                        _, fi_s = _ch(
+                            silo_rep_tr, y_train,
+                            groups=train_groups,
+                            allocation_method=_alloc,
+                            importance_method=_imp,
+                            internal_evaluator=_resolved_eval,
+                            budget=_per_family_budget,
+                            model=_silo_model_c3)
+                        silo_fis[i] = fi_s
+                    except Exception:
+                        silo_fis[i] = None
+                        silo_scores[i] = 0.0
+
+                h_parts_tr = []
+                h_parts_te = []
+                for i, sname in enumerate(silo_names, 1):
+                    fi = silo_fis.get(i)
+                    if fi is None:
+                        continue
+                    rep_list = silo_reps[sname]
+                    silo_rep_tr = {r: train_reps[r] for r in rep_list}
+                    silo_rep_te = {r: test_reps[r] for r in rep_list}
+                    try:
+                        h_parts_tr.append(
+                            apply_feature_selection(silo_rep_tr, fi))
+                        h_parts_te.append(
+                            apply_feature_selection(silo_rep_te, fi))
+                    except Exception:
+                        continue
+
+                if h_parts_tr:
+                    X_fed_tr = np.hstack(h_parts_tr)
+                    X_fed_te = np.hstack(h_parts_te)
+                    model = fit_fed_model(
+                        fed_model, X_fed_tr, y_train, seed=fed_seed,
+                        task_type=silo_task_type)
+                    y_pred = model.predict(X_fed_te)
+                    if is_clf:
+                        c3 = metrics_fn(
+                            y_test, y_pred,
+                            model.predict_proba(X_fed_te)[:, 1])
+                    else:
+                        c3 = metrics_fn(y_test, y_pred)
+                    c3['n_features'] = int(X_fed_tr.shape[1])
+                else:
+                    c3 = {'error': 'no valid silo selections'}
+                c3['silo_scores'] = convert_numpy(silo_scores)
+                c3['budget_total'] = PART_B_BUDGET
+                c3['budget_per_family'] = _per_family_budget
+                results['c3_federated_fs'] = convert_numpy(c3)
+                primary = c3.get('mcc', c3.get('rmse', float('nan')))
+                # The width is printed beside the score so C2 and C3 can be seen
+                # to be the same size, which is what makes them comparable.
+                print(f"    {primary:.4f}  ({c3.get('n_features', 0)}D)")
+            except Exception as e:
+                results['c3_federated_fs'] = {
+                    'error': str(e), 'traceback': traceback.format_exc()}
+                print(f"    FAILED: {e}")
+                traceback.print_exc()
+            c2_by_budget[str(_pb_budget)] = results.get('c2_kirby_hybrid')
+            c3_by_budget[str(_pb_budget)] = results.get('c3_federated_fs')
+        results['c2_kirby_hybrid_by_budget'] = c2_by_budget
+        results['c3_federated_fs_by_budget'] = c3_by_budget
+        # headline rows the summary table reads
+        _hb = str(HEADLINE_BUDGET if HEADLINE_BUDGET in PART_B_BUDGETS                  else PART_B_BUDGETS[0])
+        results['c2_kirby_hybrid'] = c2_by_budget[_hb]
+        results['c3_federated_fs'] = c3_by_budget[_hb]
 
         per_fold_results.append(results)
 
