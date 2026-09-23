@@ -54,7 +54,7 @@ from experiments.federated.federated_helpers import (
     compute_reg_metrics, compute_clf_metrics, inject_noise_per_silo,
     federated_feature_selection, importance_profile_transfer,
     extract_importance_profile, compare_importance_profiles,
-    cluster_antibody_silos,
+    cluster_antibody_silos, federated_budgets,
     predict_fluid_quality_ensemble_regression,
     _resolve_match,
     fit_fed_classifier, fit_fed_regressor, fit_fed_model, fed_to_kirby_model,
@@ -382,6 +382,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Phase 3: C2 — Cross-silo importance transfer ─────────────────────
     print("\n--- Phase 3: C2 — Cross-silo importance transfer ---")
     transfer_results = {}
+    # The transfer was measured at 100 features and nowhere else, so a
+    # negative result could not be told apart from a result about 100.
+    # KIRBY_FED_BUDGETS narrows this for a local run.
+    TRANSFER_BUDGETS = federated_budgets()
+    HEADLINE_BUDGET = (100 if 100 in TRANSFER_BUDGETS
+                       else TRANSFER_BUDGETS[0])
+    print(f"  budgets swept: {TRANSFER_BUDGETS}, "
+          f"headline {HEADLINE_BUDGET} features")
 
     for source_name in silo_names:
         source_fi = silo_fis.get(source_name)
@@ -390,57 +398,58 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for target_name in silo_names:
             if source_name == target_name:
                 continue
-            key = f"{source_name}→{target_name}"
-            print(f"  {key}...", end=' ')
-            try:
-                target_sd = silo_data[target_name]
-                target_reps = {r: target_sd['reps'][r]
-                               for r in shared_reps if r in target_sd['reps']}
-                if len(target_reps) < 2:
-                    target_reps = target_sd['reps']
+            for transfer_budget in TRANSFER_BUDGETS:
+                key = f"{source_name}→{target_name}@b{transfer_budget}"
+                print(f"  {key}...", end=' ')
+                try:
+                    target_sd = silo_data[target_name]
+                    target_reps = {r: target_sd['reps'][r]
+                                   for r in shared_reps if r in target_sd['reps']}
+                    if len(target_reps) < 2:
+                        target_reps = target_sd['reps']
 
-                tr, te = silo_splits[target_name]
-                rep_tr = {r: arr[tr] for r, arr in target_reps.items()}
-                rep_te = {r: arr[te] for r, arr in target_reps.items()}
-                y_tr = target_sd['labels'][tr]
-                y_te = target_sd['labels'][te]
+                    tr, te = silo_splits[target_name]
+                    rep_tr = {r: arr[tr] for r, arr in target_reps.items()}
+                    rep_te = {r: arr[te] for r, arr in target_reps.items()}
+                    y_tr = target_sd['labels'][tr]
+                    y_te = target_sd['labels'][te]
 
-                X_target, transferred_fi, stats = importance_profile_transfer(
-                    source_fi, rep_tr, y_tr, budget=100)
+                    X_target, transferred_fi, stats = importance_profile_transfer(
+                        source_fi, rep_tr, y_tr, budget=transfer_budget)
 
-                if X_target is None:
-                    transfer_results[key] = {'error': 'no features transferred'}
-                    print("no features")
-                    continue
+                    if X_target is None:
+                        transfer_results[key] = {'error': 'no features transferred'}
+                        print("no features")
+                        continue
 
-                X_te = apply_feature_selection(rep_te, transferred_fi)
-                if target_sd.get('task_type') == 'classification':
-                    mdl = fit_fed_classifier(
-                        fed_model, X_target, y_tr, seed=fed_seed)
-                    y_pred = mdl.predict(X_te)
-                    y_prob = (mdl.predict_proba(X_te)
-                              if hasattr(mdl, 'predict_proba') else None)
-                    metrics = compute_clf_metrics(y_te, y_pred, y_prob)
-                else:
-                    mdl = fit_fed_regressor(
-                        fed_model, X_target, y_tr, seed=fed_seed)
-                    y_pred = mdl.predict(X_te)
-                    metrics = compute_reg_metrics(y_te, y_pred)
-                metrics['transfer_stats'] = stats
+                    X_te = apply_feature_selection(rep_te, transferred_fi)
+                    if target_sd.get('task_type') == 'classification':
+                        mdl = fit_fed_classifier(
+                            fed_model, X_target, y_tr, seed=fed_seed)
+                        y_pred = mdl.predict(X_te)
+                        y_prob = (mdl.predict_proba(X_te)
+                                  if hasattr(mdl, 'predict_proba') else None)
+                        metrics = compute_clf_metrics(y_te, y_pred, y_prob)
+                    else:
+                        mdl = fit_fed_regressor(
+                            fed_model, X_target, y_tr, seed=fed_seed)
+                        y_pred = mdl.predict(X_te)
+                        metrics = compute_reg_metrics(y_te, y_pred)
+                    metrics['transfer_stats'] = stats
 
-                ind_rmse = independent.get(target_name, {}).get('rmse', float('nan'))
-                if not np.isnan(ind_rmse):
-                    metrics['rmse_improvement'] = float(ind_rmse - metrics['rmse'])
+                    ind_rmse = independent.get(target_name, {}).get('rmse', float('nan'))
+                    if not np.isnan(ind_rmse):
+                        metrics['rmse_improvement'] = float(ind_rmse - metrics['rmse'])
 
-                transfer_results[key] = metrics
-                if 'rmse' in metrics:
-                    print(f"RMSE={metrics['rmse']:.4f}  "
-                          f"(vs ind {ind_rmse:.4f})")
-                else:
-                    print(f"MCC={metrics.get('mcc', float('nan')):.4f}")
-            except Exception as e:
-                transfer_results[key] = {'error': str(e)}
-                print(f"FAILED: {e}")
+                    transfer_results[key] = metrics
+                    if 'rmse' in metrics:
+                        print(f"RMSE={metrics['rmse']:.4f}  "
+                              f"(vs ind {ind_rmse:.4f})")
+                    else:
+                        print(f"MCC={metrics.get('mcc', float('nan')):.4f}")
+                except Exception as e:
+                    transfer_results[key] = {'error': str(e)}
+                    print(f"FAILED: {e}")
 
     results['c2_importance_transfer'] = convert_numpy(transfer_results)
 
@@ -975,7 +984,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ind_rmse = ind.get('rmse', float('nan'))
         best_tr = float('nan')
         for k, v in transfer_results.items():
-            if k.endswith(f'→{sname}') and 'rmse' in v:
+            if k.endswith(f'→{sname}@b{HEADLINE_BUDGET}') and 'rmse' in v:
                 if np.isnan(best_tr) or v['rmse'] < best_tr:
                     best_tr = v['rmse']
         print(f"  {sname:<12} {ind_rmse:>10.4f} {best_tr:>10.4f}")
