@@ -136,6 +136,37 @@ Queued 2026-09-23 as a result:
   kNN task chose. Three runs. A full 8-cell grid at 6 hours a run is roughly
   two days of this laptop and belongs on the cluster.
 
+## Where this stands, 2026-09-24 01:30
+
+Audited from result files, not from the rows below. Four experiments the table
+called optimised were not:
+
+    s04   ran on 4 representations, not 7; one cliff setting, not a sweep
+    s05   one point per dataset; KIRBY_S05_K_VALUES was dead
+    s10   scored at exponent 0.5 and uniform voting, which its own kNN task
+          measured as losing
+    s12   ran on 4 representations, not 7
+
+Only **s06** survives the audit: four levers, 2,628 cells, all three datasets.
+
+Three defects found and fixed tonight, each of which had been silently spoiling
+results rather than failing loudly:
+
+- **s11 never finished** because `hybrid_bnn` refits a PyTorch network once per
+  BO iteration and torch opens a full-core thread pool per fit. Nine attempts
+  over two days, killed by the kernel, empty logs every time.
+  `KIRBY_TORCH_THREADS` caps it; both `hybrid_bnn` and `hybrid_gauche_gp`
+  completed for the first time in this campaign.
+- **s11 lost every kill** because nothing was written until the last condition.
+  Each condition now checkpoints through a temporary file and a rename.
+- **`KIRBY_S05_K_VALUES` was dead.** `SIMILARITY_EXTRA` carries
+  `'k_values': [5, 10]` into every similarity run's config, so the env var was
+  always overridden. A sweep naming five neighbour counts ran at two and said
+  nothing.
+
+65 jobs are queued, roughly 24 hours of wall clock at four at a time, ordered so
+the s05 grid and the s04/s12 re-runs land first and s10's 5-to-8-hour cells last.
+
 ## s01–s13
 
 | exp | kind | smoke tested / debugged | methods to optimise | optimisation done |
