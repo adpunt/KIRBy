@@ -51,6 +51,31 @@ on all three. s10's kNN task found distance-weighted voting lowered held-out
 error in 20 of 21 representation-dataset pairs; this says that gain does not
 survive into the hybrid-minus-reference difference, because it lifts both arms.
 
+## s04 and s12 were run on four representations; everything else used seven
+
+Counted from `input_fingerprint.reps` in every stored result file, 2026-09-24:
+
+    experiment                    caco2  herg_ki  adme_mdr1
+    s01 s02 s05 s06 s13             7       7         7
+    s04 s12                         4       4         4
+
+The four are `atom_pair`, `ecfp4`, `maccs`, `pdv`. Absent: **avalon**,
+**ecfp4_count**, **top_torsion**. Nothing in either file restricts the pool —
+the runs were launched with a four-representation pool. s02 ran on 2026-09-18
+with seven; s04 and s12 ran on 2026-09-20 with four.
+
+Why it matters rather than being bookkeeping: both files pick a best single
+representation as the comparator the hybrid is measured against, from whatever
+pool they were given. s06's sweep, on the full seven, found
+`ecfp4_count_weighted` the single best arm on caco2 at +0.2162 and
+`avalon_weighted` second at +0.1954 — both absent from s04 and s12. So their
+comparator was chosen from a pool missing three representations that win
+elsewhere, and the hybrid's margin over it cannot be read as a margin over the
+best available single representation.
+
+Six re-runs on the seven-representation pool are queued, writing to
+`/Volumes/seagate/kirby_s04s12_pool7`. Nothing already stored is overwritten.
+
 ## A lever can be present, documented and dead
 
 `KIRBY_S05_K_VALUES` did nothing. s05 resolves `kwargs.get('k_values', <env
@@ -118,14 +143,14 @@ Queued 2026-09-23 as a result:
 | s01 | investigation | yes, 3/3 datasets | no — it is the comparator s02 is measured against | n/a |
 | s02 | method | yes, 3/3 | yes | **yes** — 20 cells per dataset, all three complete |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
-| s04 | method | yes, 3/3 twice | yes | **yes** — four levers, 48 settings |
+| s04 | method | yes, 3/3 twice | yes | **re-opened 2026-09-24** — ran on 4 representations, not 7; re-runs queued |
 | s05 | method | yes, 3/3 | yes | **yes, 2026-09-23** — tuned run finished on all three |
 | s06 | method | yes, 3/3 twice | yes | **yes** — four levers, 2,628 cells per dataset, all three complete |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
 | s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **yes** — kNN, GP and q-RASAR all scored; the GP's length-scale start is an arm |
 | s11 | method | yes, 3/3 at two budgets | yes | **BLOCKED** — cannot finish locally. 9 attempts, each killed at 2–5 h, no checkpoint so every kill loses the run |
-| s12 | method | yes, 3/3 twice | yes | **yes** |
+| s12 | method | yes, 3/3 twice | yes | **re-opened 2026-09-24** — ran on 4 representations, not 7; re-runs queued |
 | s13 | method | yes, 3/3 | yes | **retrieval yes; clustering CANNOT BE** — its statistic moves 6-34x the delta on a reseed |
 
 ## minkowski p=0.5 is queued, not cut
