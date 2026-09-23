@@ -28,12 +28,12 @@ Two categories, and they need different work:
 | s02 | method | yes, 3/3 | yes | **yes** — 20 cells per dataset, all three complete |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
 | s04 | method | yes, 3/3 twice | yes | **yes** — four levers, 48 settings |
-| s05 | method | yes, 3/3 | yes | **partial** — knobs added, re-run still in flight (2026-09-21) |
+| s05 | method | yes, 3/3 | yes | **yes, 2026-09-23** — tuned run finished on all three |
 | s06 | method | yes, 3/3 twice | yes | **yes** — four levers, 2,628 cells per dataset, all three complete |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
-| s10 | method | **partial** — has never completed a full run | yes | **partial** |
-| s11 | method | yes, 3/3 at two budgets | yes | **re-opened 2026-09-21** — three of the arms it is measured against picked by row number; runs queued |
+| s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **yes** — kNN, GP and q-RASAR all scored; the GP's length-scale start is an arm |
+| s11 | method | yes, 3/3 at two budgets | yes | **BLOCKED** — cannot finish locally. 9 attempts, each killed at 2–5 h, no checkpoint so every kill loses the run |
 | s12 | method | yes, 3/3 twice | yes | **yes** |
 | s13 | method | yes, 3/3 | yes | **retrieval yes; clustering CANNOT BE** — its statistic moves 6-34x the delta on a reseed |
 
