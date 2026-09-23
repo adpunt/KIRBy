@@ -3750,13 +3750,51 @@ def _deeplift_column_scores(X_scaled, target, is_classification,
     return np.nan_to_num(_acc / max(1, _n), nan=0.0)
 
 
+def _max_abs_corr_to_base(col, X_base):
+    """Largest absolute Pearson correlation between one candidate and any base column.
+
+    Used by the admission gate to spot a candidate the base representation
+    already carries. A near-copy of a base feature has the SAME correlation with
+    the base model's residual that the base feature itself has, so
+    residual_correlation ranks it highly and nothing in the rule asks whether
+    the base already holds it.
+    """
+    c = np.asarray(col, dtype=float)
+    cs = c.std()
+    if not np.isfinite(cs) or cs == 0:
+        return 0.0
+    B = np.asarray(X_base, dtype=float)
+    bs = B.std(axis=0)
+    live = np.flatnonzero(np.isfinite(bs) & (bs > 0))
+    if live.size == 0:
+        return 0.0
+    cc = (c - c.mean()) / cs
+    Bc = (B[:, live] - B[:, live].mean(axis=0)) / bs[live]
+    r = np.abs(Bc.T @ cc) / len(cc)
+    r = r[np.isfinite(r)]
+    return float(r.max()) if r.size else 0.0
+
+
+def _sentinel_columns(col, n, rng):
+    """n permutations of one candidate: what a column of its own kind scores by chance.
+
+    Admission is otherwise by rank alone -- the ladder takes the top 5, 10, 20 or
+    40 and no candidate is ever compared with chance. On 537 training rows the
+    largest of 48 pure-noise correlations reached 0.1328, above the real donor
+    pool's own median of 0.0464, which is how a block of Gaussian noise gets in.
+    """
+    c = np.asarray(col, dtype=float)
+    return np.column_stack([rng.permutation(c) for _ in range(int(n))])
+
+
 def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
                                 y_train, X_base_train, model,
                                 candidate_ranking='residual_correlation',
                                 is_classification=False,
                                 max_candidates=200,
                                 per_source_budget=None,
-                                groups_train=None):
+                                groups_train=None,
+                                admission_gate=None):
     """Pool all augmentation features, rank them, return ranked arrays + provenance.
 
     Parameters
@@ -3924,7 +3962,73 @@ def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
             f"Unknown candidate_ranking: {candidate_ranking}. "
             f"Valid: {', '.join(CANDIDATE_RANKINGS)}.")
 
+    # ── ADMISSION GATE ────────────────────────────────────────────────────
+    # Opt-in, default off. With admission_gate None this block does nothing and
+    # the ranking below is what it always was.
+    #
+    # It exists because c21 plants two donors a working rule must take NOTHING
+    # from, and the rule took plenty. Totals over five folds, random forest,
+    # condition B: flab_thermo_tresanco 4 pure-noise columns and 61 near-copies
+    # of the base representation admitted, herg_ki 9 and 14.
+    #
+    # Two separate failures, no fix in common:
+    #   max_base_correlation  a near-copy has the same correlation with the base
+    #       model's residual that the base feature itself has, so
+    #       residual_correlation ranks it highly and nothing asks whether the
+    #       base already carries it. Every one of the 64 planted near-copies
+    #       reached at least 0.9981 absolute correlation with some base feature;
+    #       the highest any real donor feature reached was 0.9832. 0.95 is
+    #       measured, not chosen.
+    #   sentinels_per_column  admission is otherwise by rank alone, and no
+    #       candidate is compared with what a column of its own kind scores by
+    #       chance. Each candidate is scored against n permutations of itself
+    #       and must beat all of them.
+    _gate = admission_gate or {}
+    if _gate:
+        _keep = np.ones(len(scores), dtype=bool)
+        _max_corr = _gate.get('max_base_correlation')
+        _n_sent = int(_gate.get('sentinels_per_column', 0) or 0)
+        _dropped_copy = _dropped_chance = 0
+        if _max_corr is not None and X_base_train is not None:
+            for j in range(X_pool_tr.shape[1]):
+                if _max_abs_corr_to_base(X_pool_tr[:, j], X_base_train) >= _max_corr:
+                    _keep[j] = False
+                    _dropped_copy += 1
+        # The sentinel test needs the same quantity the real score was built
+        # from. Only 'residual_correlation' exposes one that is cheap to
+        # recompute per permutation; under any other ranking the test is skipped
+        # and said so, rather than silently comparing two different things.
+        if _n_sent > 0 and candidate_ranking == 'residual_correlation':
+            _rng = np.random.RandomState(42)
+            _res = np.asarray(residuals, dtype=float)
+            _rs = _res.std()
+            if np.isfinite(_rs) and _rs > 0:
+                _rz = (_res - _res.mean()) / _rs
+                for j in np.flatnonzero(_keep):
+                    _sent = _sentinel_columns(X_pool_tr[:, j], _n_sent, _rng)
+                    _ss = _sent.std(axis=0)
+                    _live = np.flatnonzero(np.isfinite(_ss) & (_ss > 0))
+                    if _live.size == 0:
+                        continue
+                    _sz = (_sent[:, _live] - _sent[:, _live].mean(axis=0)) / _ss[_live]
+                    _null = np.abs(_sz.T @ _rz) / len(_rz)
+                    if scores[j] <= np.nanmax(_null):
+                        _keep[j] = False
+                        _dropped_chance += 1
+        elif _n_sent > 0:
+            warn_once(
+                f"admission gate: the permutation test is defined only for "
+                f"candidate_ranking='residual_correlation'; under "
+                f"{candidate_ranking!r} only the near-copy check ran.")
+        warn_once(
+            f"augmentation admission gate: of {len(scores)} pooled candidate "
+            f"features, {_dropped_copy} were dropped as near-copies of a base "
+            f"feature and {_dropped_chance} as no better than a permutation of "
+            f"themselves; {int(_keep.sum())} remain.")
+        scores = np.where(_keep, scores, -np.inf)
+
     order = np.argsort(scores)[::-1][:max_candidates]
+    order = [i for i in order if np.isfinite(scores[i])]
     ranked_tr = X_pool_tr[:, order]
     ranked_vl = X_pool_vl[:, order]
     ranked_prov = [prov[i] for i in order]
@@ -3951,7 +4055,7 @@ def augment_capped(
     groups_val=None,
     groups_train=None,
     precomputed_ranking=None,
-):
+    admission_gate=None):
     """Capped augmentation: extras must DISPLACE base features to earn a slot.
 
     The finished feature count never exceeds ``total_budget``. Candidates are
@@ -4065,12 +4169,19 @@ def augment_capped(
     if precomputed_ranking is not None:
         ranked_tr, ranked_vl, prov = precomputed_ranking
     else:
+        if admission_gate and precomputed_ranking is not None:
+            raise ValueError(
+                "precomputed_ranking and admission_gate were both given. The "
+                "gate decides which candidates are admissible, so a ranking "
+                "computed before it was applied would already have dropped or "
+                "kept the wrong ones. Pass one or the other.")
         ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
             augmentations_train, augmentations_val,
             y_train, X_base_train, model,
             candidate_ranking, is_clf_task, max_candidates,
             per_source_budget=per_source_budget,
             groups_train=groups_train,
+            admission_gate=admission_gate,
         )
     if ranked_tr is None or n_base == 0:
         return empty
@@ -4280,7 +4391,7 @@ def augment_uncapped(
     groups_val=None,
     groups_train=None,
     precomputed_ranking=None,
-):
+    admission_gate=None):
     """Uncapped augmentation: keep a validated BLOCK of extra features, or none.
 
     Candidates are ranked once (by out-of-fold residual complementarity by
@@ -4357,6 +4468,12 @@ def augment_uncapped(
     if precomputed_ranking is not None:
         ranked_tr, ranked_vl, prov = precomputed_ranking
     else:
+        if admission_gate and precomputed_ranking is not None:
+            raise ValueError(
+                "precomputed_ranking and admission_gate were both given. The "
+                "gate decides which candidates are admissible, so a ranking "
+                "computed before it was applied would already have dropped or "
+                "kept the wrong ones. Pass one or the other.")
         ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
             augmentations_train, augmentations_val,
             y_train, X_base_train, model,
@@ -4366,6 +4483,7 @@ def augment_uncapped(
             candidate_ranking, is_clf_task, max_candidates,
             per_source_budget=per_source_budget,
             groups_train=groups_train,
+            admission_gate=admission_gate,
         )
 
     if ranked_tr is None:
@@ -5688,6 +5806,11 @@ def create_hybrid(base_reps, labels,
     # compute_feature_importance() further down, so they must not survive past
     # here — and the uncapped branch is not always reached.
     _aug_max_candidates = kwargs.pop('aug_max_candidates', 50)
+    # Opt-in admission gate for augmentation candidates, default off.
+    # {'max_base_correlation': 0.95, 'sentinels_per_column': 20} is the
+    # setting measured against c21's planted decoys. None leaves the
+    # ranking bit-identical to what it was.
+    _aug_admission_gate = kwargs.pop('augmentation_admission_gate', None)
     _aug_per_source_budget = kwargs.pop('aug_per_source_budget', None)
     # How much better than "keep no extras" a block of extras must score
     # before it is accepted. 0.0 reproduces the behaviour before 2026-08-26:
@@ -6381,6 +6504,7 @@ def create_hybrid(base_reps, labels,
                 fraction=_aug_fraction,
                 objective=objective, is_clf=is_clf, groups_val=groups_val,
                 groups_train=groups_train_internal,
+                admission_gate=_aug_admission_gate,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
@@ -6431,6 +6555,7 @@ def create_hybrid(base_reps, labels,
                 fraction=_aug_fraction,
                 objective=objective, is_clf=is_clf, groups_val=groups_val,
                 groups_train=groups_train_internal,
+                admission_gate=_aug_admission_gate,
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
