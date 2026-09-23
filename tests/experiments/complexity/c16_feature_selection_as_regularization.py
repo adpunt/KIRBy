@@ -279,6 +279,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # below reads them.
     _family_to_canonical = {'Ridge': 'ridge', 'LogReg': 'ridge',
                             'RF': 'rf', 'SVM': 'svm'}
+
+    # The model list c16 names into the search cache key. RIDGE_MODELS is
+    # DOWNSTREAM_MODELS + ridge, and on the cluster DOWNSTREAM_MODELS already
+    # holds svm, so this line is a NO-OP there. Locally KIRBY_LOCAL_MODELS
+    # rebinds DOWNSTREAM_MODELS to rf and lightgbm, which took svm out of the
+    # list while `_family_to_canonical` still asks the pool for 'svm' for the
+    # SVM family -- so every budget of that family came back
+    # "no usable hybrid for model=svm" and the family was written with
+    # hybrid_wins=None, which reads like a family that was measured and tied.
+    # The owner's 2026-09-12 decision says c16 asks the pool for 'svm' for SVR;
+    # this makes the named list carry what that decision asks for.
+    C16_MODELS = sorted(set(RIDGE_MODELS) | set(_family_to_canonical.values()))
     # c16 evaluates on a fixed blueprint pulled via aug-aware pool helper;
     # 'uncapped' when augs present, 'none' otherwise.
     _c16_strategy = 'uncapped' if augmentations else 'none'
@@ -349,7 +361,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     data=data,
                     # Names 'ridge' into the search cache key. Required on the
                     # read side or the key misses the --with-ridge file.
-                    models=RIDGE_MODELS,
+                    models=C16_MODELS,
                 )
             except Exception as e:
                 # Was one try/except around the whole budget loop, so a single
@@ -441,7 +453,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # that had to be named to get 'ridge' scored at all.
         'recipe_downstream_model': {fam: _family_to_canonical.get(fam)
                                     for fam in families},
-        'recipe_model_list': list(RIDGE_MODELS),
+        'recipe_model_list': list(C16_MODELS),
         'budgets_without_recipe': {fam: [b for b in budgets
                                          if b not in blueprints[fam]]
                                    for fam in families},
