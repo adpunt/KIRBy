@@ -101,6 +101,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     # Match the actual augmentation presence (collision-safe default).
     optimal_aug_strategy = 'uncapped' if augs else 'none'
     optimal_desc = 'RF at budget=100 (default)'
+    # Defined here, not inside the else-branch: the fallback report below runs
+    # on both paths.
+    pool_lookup_errors = {}
+    recipe_source = None
 
     if exp2_results and exp2_results.get('best_by_model'):
         # Use best config from Exp 2
@@ -116,6 +120,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         optimal_desc = (f"{best_model} at budget={optimal_budget} "
                         f"[{optimal_imp}/{optimal_alloc}] (from Exp 2)")
         print(f"  Using Exp 2 optimal: {optimal_desc}")
+        recipe_source = 'c02'
     else:
         # Pool helper picks the best (tier, aug_condition) cache file per
         # downstream model. We try across all common models and pick the
@@ -136,9 +141,19 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                         task_type=data['task_type'],
                         data=data,
                     )
-                except Exception:
+                except Exception as _e:
+                    # ⛔ RECORD IT. Every one of the candidate models can throw
+                    # here; with all of them gone `best` stays None and the
+                    # whole experiment silently runs RandomForest at budget
+                    # 100, performance_weighted, treeshap -- a default nobody
+                    # chose -- while the results carry no sign that a discovery
+                    # was ever attempted. The `except` further down only
+                    # catches a throw OUTSIDE this loop, so nothing printed.
+                    # c09 does the same lookup and records from_fallback.
+                    pool_lookup_errors[candidate_model] = f'{type(_e).__name__}: {_e}'
                     continue
                 if not m:
+                    pool_lookup_errors[candidate_model] = 'no search metadata returned'
                     continue
                 bc = m['best_config']
                 score = bc.get('score_mean')
@@ -184,6 +199,14 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         except Exception as e:
             print(f"  pool helper failed ({e}), using RF/budget=100 default")
 
+    used_pool_fallback = optimal_model_factory is None
+    if not used_pool_fallback and recipe_source is None:
+        recipe_source = 'pool helper'
+    if used_pool_fallback:
+        recipe_source = 'hardcoded default (no recipe found)'
+        print(f"  NO POOL RECIPE FOUND for any candidate model. Falling back "
+              f"to RandomForest at budget 100. Why each candidate was "
+              f"unusable: {pool_lookup_errors or 'no candidates tried'}")
     if optimal_model_factory is None:
         if is_classification:
             optimal_model_factory = lambda: RandomForestClassifier(
@@ -213,8 +236,17 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     f'Same model at full dim={total_dim} (too many features)'),
         # The mismatch under test is the MODEL at full width, not the
         # allocation. Was 'greedy', which is cut and costs 20-100x for nothing.
-        'mismatched': (mismatched_factory, total_dim, 'performance_weighted',
-                       'treeshap', mismatched_desc),
+        # ⛔ AND IT WAS STILL NOT THE MODEL ALONE. This line hardcoded
+        # 'performance_weighted' and 'treeshap' while 'overfit' beside it --
+        # the condition it is read against, same budget, same width -- uses the
+        # DISCOVERED allocation and importance methods. The search picks the
+        # allocation from five and the importance method from three, so the two
+        # conditions commonly differed in the model, the allocation method and
+        # the importance method together, and the comment above said the
+        # opposite. Both now take the discovered values, so 'overfit' and
+        # 'mismatched' differ in the model and nothing else.
+        'mismatched': (mismatched_factory, total_dim, optimal_alloc,
+                       optimal_imp, mismatched_desc),
     }
 
     # Condition-distinctness diagnostic. The calibration comparison is only
@@ -227,6 +259,13 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     _cond_budgets = {'optimal': optimal_budget, 'underfit': underfit_budget,
                      'overfit': total_dim}
     results = {
+        # Where the 'optimal' recipe came from, and why any candidate model
+        # could not supply one. Without these, a run that found no recipe at
+        # all and silently used RandomForest at budget 100 is indistinguishable
+        # in the saved file from one that discovered a recipe.
+        'recipe_source': recipe_source,
+        'pool_lookup_errors': pool_lookup_errors,
+        'used_hardcoded_fallback': bool(used_pool_fallback),
         'conditions': {},
         'task_type': task_type,
         'total_dim': total_dim,
