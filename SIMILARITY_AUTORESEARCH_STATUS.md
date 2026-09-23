@@ -471,6 +471,46 @@ reports is unmeasured. The recorded s10 GP null — weighting worse by +0.0111 a
 +0.0188 pKi — is on herg_ki pdv, the representation that escapes; the wide ones
 may have been comparing two constant predictors.
 
+**s10 GP — the full run, and which arm actually collapses. Measured 2026-09-23.**
+The first complete s10 run scored both length-scale starts as arms on all three
+datasets. `_gp_fit_report` records the spread of each fold's predictions, so a
+constant predictor is visible rather than inferred. A spread below 1e-6 across a
+fold's held-out molecules is a GP returning one number for every molecule.
+
+Constant predictors occur on adme_mdr1 only, and the two arms collapse on
+different representations:
+
+    adme_mdr1, smallest prediction spread over 5 folds
+    representation     start 1.0     start median
+    atom_pair          1.11e-149            0.489
+    avalon             4.93e-161            0.501
+    ecfp4_count         1.64e-83            0.506
+    pdv                    0.514         1.88e-37   <- 4 of 5 folds at a bound
+    maccs                  0.443            0.443
+    ecfp4                0.00892            0.471
+    top_torsion          0.00896            0.454
+
+So neither start is clean. The shipped start of 1.0 turns three of the seven
+representations into constant predictors; the median start rescues those three
+and breaks `pdv` instead, at four of its five folds finishing on a bound.
+
+herg_ki and caco2 have no constant predictor under either start; every
+prediction spread there is between 0.04 and 0.74. One fold of `maccs` finishes
+at a bound under the median start on both.
+
+The rmse this produces, lower better: on adme_mdr1 the three collapsed
+representations all report 0.7939 under start 1.0 and 0.4853 to 0.5059 under
+median; `pdv` reports 0.4601 under 1.0 and 0.7939 under median. 0.7939 is what a
+constant predictor scores on this dataset, which is why it appears on both
+sides.
+
+⛔ `lengthscale_reported` is `ls_starts[0]`, which is `fixed`. The unsuffixed
+blocks in every s10 result file therefore carry the start that collapses three
+adme_mdr1 representations. Both arms are stored under
+`per_rep_by_lengthscale`, so nothing is lost, but the headline numbers are the
+collapsed ones. Which arm should be the headline is the owner's call and has not
+been changed.
+
 **s10 q-RASAR — a null.** The four neighbour features carry real signal alone
 (pdv's four reach 0.6730 pKi against 0.9160 for a mean predictor) and add
 nothing to a forest that already has the features.
