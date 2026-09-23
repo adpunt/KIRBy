@@ -136,6 +136,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Per-fold hybrid construction + model evaluation ──
     fold_results = []
     all_shap_values = []
+    shap_failures = []
     all_feature_infos = []
     # Per-fold representation shares, and per-fold budget splits, so the
     # movement between folds is on the record instead of being averaged away.
@@ -201,8 +202,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # SHAP on the best model for this fold
         shap_info = None
+        _lifted = {}
         try:
             import shap
+            # ⛔ LIFT transformers OUT OF sys.modules FOR THE SHAP CALL.
+            #
+            # caco2's shap_share_by_rep came back EMPTY on all five folds while
+            # flab_thermo_tresanco and herg_ki filled it, and it is not a caco2
+            # defect. caco2's pool holds molformer, grover and smited, whose
+            # builders import transformers, so sys.modules['transformers'] is a
+            # lazy module by the time this loop runs. shap's safe_isinstance
+            # SKIPS a class whose module is absent from sys.modules but calls
+            # getattr(module, class_name) when it is present, and shap asks for
+            # transformers.TFPreTrainedModel. The lazy module answers that by
+            # importing transformers.modeling_tf_utils, which imports
+            # TensorFlow, which dies here: this machine's protobuf has dropped
+            # FieldDescriptor.is_repeated and the installed TensorFlow still
+            # calls it. `import tensorflow` alone raises the same error in a
+            # bare process, so TensorFlow is unusable here whatever shap does.
+            #
+            # Removing the entries makes safe_isinstance take its skip path.
+            # They go back in the finally below, so nothing downstream sees a
+            # different sys.modules.
+            _lifted = {k: v for k, v in list(sys.modules.items())
+                       if k == 'transformers' or k.startswith('transformers.')}
+            for k in _lifted:
+                del sys.modules[k]
             # Use the same fitted instance the score was selected from
             # (re-training a fresh factory would discard the scored model and
             # introduce stochastic drift between scored model and explanation).
@@ -245,7 +270,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     {k: int(v) for k, v in
                      (feature_info.get('allocation') or {}).items()})
         except Exception as e:
+            # Recorded, not just printed: an empty shap_share_by_rep used to be
+            # indistinguishable from a run where SHAP was never asked for.
+            shap_failures.append(f'fold {fold_idx}: {type(e).__name__}: {e}')
             print(f"    Fold {fold_idx}: SHAP failed — {e}")
+        finally:
+            sys.modules.update(_lifted)
 
         fold_results.append({
             'fold_idx': fold_idx,
@@ -410,6 +440,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # this one for "which representation carries the weight" — it does not
         # let a fold with a larger total SHAP outvote the others.
         'shap_share_by_rep': shap_share_by_rep,
+        # How many folds SHAP actually scored. An empty shap_share_by_rep used
+        # to be indistinguishable from a run where SHAP was never asked for; on
+        # caco2 it was empty on all five folds because shap's safe_isinstance
+        # reached into a lazily-imported transformers and pulled in TensorFlow.
+        'shap_folds_scored': len(all_shap_values),
+        'shap_folds_requested': n_folds,
+        'shap_failures': shap_failures,
         'shap_by_rep_folds': shap_by_rep_folds,
         'shap_by_rep_basis': 'per fold, then averaged',
         # The budget split per fold. When these differ, no feature position is
