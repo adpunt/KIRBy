@@ -472,5 +472,15 @@ if __name__ == '__main__':
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset, budget=args.budget)
+    # ⛔ STAMP THE METRIC c04 ACTUALLY USES. Every number in this file is an
+    # R-squared (or an MAE), whatever the dataset is reported in: c04 never
+    # calls get_domain_metric. Left unset, save_experiment_results fills
+    # metric_name and lower_is_better from the dataset registry, so a herg_ki
+    # or caco2 file carried `metric_name: rmse, lower_is_better: true` at the
+    # top level above a body in which every stored quantity is an R-squared
+    # where higher is better. Anything aggregating these files read the
+    # direction backwards.
     save_experiment_results(results, args.output, 'c04_importance_as_metric',
-                            args.dataset)
+                            args.dataset,
+                            metric_name='r2',
+                            lower_is_better=False)

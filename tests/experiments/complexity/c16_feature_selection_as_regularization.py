@@ -523,7 +523,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sensitivity[budget] = float(np.std(vals)) if len(vals) >= 2 else float('nan')
 
         # --- Analysis 2: Best-tuned-full-dim vs simple-hybrid ---
-        full_dim_budget = max(budgets)
+        # ⛔ capped_full, NOT max(budgets). The comment below used to assert
+        # the two were equal. They are not: capped_full is
+        # min(total_dim, 2 * n_samples, 2048) while pool_budgets keeps every
+        # FULL_BUDGETS value <= total_dim, so on a wide pool with few molecules
+        # the list still holds 2000 while capped_full is far smaller. On
+        # flab_thermo_tresanco -- 672 molecules, 16,736 pool features --
+        # capped_full is 1,344 and max(budgets) is 2,000. So the "full-dim
+        # baseline" ran at an interior budget, and the four per-family fast
+        # searches built for capped_full were never the column it read.
+        full_dim_budget = capped_full
         full_vals = [(pval, heatmap[full_dim_budget].get(str(pval), {}).get('val', float('nan')))
                      for _, pval, _ in variants]
         _sentinel = -1e10 if not lower_is_better else 1e10
@@ -548,13 +557,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'best_tuned_full_dim': {
                 'param_value': best_tuned_full[0],
                 'score': best_tuned_full[1],
-                # OTHER-27: this baseline is evaluated at full_dim_budget =
-                # max(budgets) = capped_full = min(total_dim, 2n, 2048), which
-                # is NOT necessarily the true full dimensionality. Record the
-                # actual budget + a flag so the "full_dim" label can't be
-                # misread when total_dim > the cap.
+                # This baseline is evaluated at capped_full =
+                # min(total_dim, 2n, 2048), which is NOT necessarily the true
+                # full dimensionality. Record the actual budget and a flag so
+                # the "full_dim" label cannot be misread when total_dim is
+                # larger than the cap. max_budget_in_grid is recorded too,
+                # because the two used to be confused for each other.
                 'budget': int(full_dim_budget),
                 'is_capped': bool(full_dim_budget < total_dim),
+                'max_budget_in_grid': int(max(budgets)),
+                'capped_by': ('total_dim' if capped_full == total_dim
+                              else '2*n_samples' if capped_full == 2 * n_samples
+                              else '2048 hard cap'),
             },
             'simple_hybrid': {
                 'budget': best_simple_hybrid[0],

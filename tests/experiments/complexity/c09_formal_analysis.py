@@ -701,8 +701,20 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
     results = {'models': {}}
 
     # If Exp 6 results are available, extract train-val gaps from there
+    # ⛔ THIS BRANCH HAS NEVER KEPT A SINGLE CELL. It requires 'train_r2' on
+    # each heatmap cell; c06 writes val_r2, val_std, n_features, importance,
+    # allocation, evaluator, evaluator_label, fold_scores, n_folds_scored and
+    # n_folds_asked, and NOTHING ELSE -- `grep -c train_r2` over c06 returns 0,
+    # and c06's own docstring says train scores are not collected there. So
+    # results['models'] stayed empty and the expensive from-scratch path below
+    # ran every time, after this printed that it was using c06's data. That
+    # path is 5 models x 8 budgets x 5 folds = 200 create_hybrid calls, the
+    # bulk of c09.
+    #
+    # Left as a branch rather than deleted: if c06 ever records a training
+    # score this becomes live again. But it now says what it found.
     if exp6_results and 'families' in exp6_results:
-        print("    Using Exp 6 data for bias-variance analysis")
+        print("    Exp 6 results found — checking for a training score")
         for fam_name, fam_data in exp6_results['families'].items():
             fam_bv = {}
             for var_name, budget_data in fam_data.get('heatmap', {}).items():
@@ -722,6 +734,14 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                         }
             if fam_bv:
                 results['models'][fam_name] = fam_bv
+        if not results['models']:
+            print("    Exp 6 has no 'train_r2' on any heatmap cell, so it "
+                  "cannot supply a train-validation gap. Falling through to "
+                  "the from-scratch path below. THIS IS THE NORMAL CASE: c06 "
+                  "does not record training scores.")
+            results['exp6_unusable_reason'] = (
+                "c06 heatmap cells carry no 'train_r2'; c06 does not record "
+                "training scores")
         if results['models']:
             results['recipe_selected_on'] = 'c06 per-variant search'
             results['val_score_is_held_out'] = True
