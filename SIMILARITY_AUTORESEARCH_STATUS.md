@@ -624,11 +624,19 @@ mean at 0, so a fit that finishes at the bottom of the length-scale bounds
 predicts 0 for every held-out molecule. s11 passes `normalize_y=True` at three
 places, so the identical collapse there predicts the training mean instead.
 
-Measured and recorded at s10_importance_downstream.py:1042 against
-`/Volumes/seagate/kirby_simrun_logs/gp_arms.log`: on herg_ki that difference is
-an rmse of about 5.6 under s10's convention against about 0.92 under s11's, for
-the same failure. It is why herg_ki `atom_pair` reads 5.7443 in the s10 run
-above — that is a GP predicting zero, not a GP fitting badly.
+Confirmed from the labels themselves, 2026-09-23, reading
+`kirby_simrun_cache/chembl_herg_ki.csv` directly. herg_ki pKi over 1,415
+molecules has mean +5.7057 and spread 0.9143, so:
+
+    what a collapsed GP predicts     rmse in pKi
+    zero, under s10's normalize_y=False   5.7785
+    the training mean, under s11's True   0.9143
+
+s10's `atom_pair` under the shipped start reads **5.7443**, which sits on the
+predicting-zero value and nowhere near the mean-predictor one. So that arm is a
+GP returning zero for every molecule, not a GP fitting badly. The same failure
+under s11's convention would have read about 0.91 and looked like a mediocre
+model.
 
 Consequence: a collapsed arm's score is not comparable between s10 and s11, and
 within s10 it is not on the same scale as a working arm. `at_bound` and
