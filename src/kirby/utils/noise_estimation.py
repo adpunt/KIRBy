@@ -2067,3 +2067,74 @@ def weights_from_scores(noise_scores: np.ndarray,
         raise ValueError(f"Unknown weighting method: {method}")
     
     return weights / weights.mean()
+
+
+# ---------------------------------------------------------------------------
+# Forest proximity: a similarity the forest itself defines
+# ---------------------------------------------------------------------------
+#
+# MOVED HERE FROM n21 on 2026-09-23, unchanged. It lived in one experiment and
+# nothing else could reach it, which is why the proximity had never been used
+# as a SMOOTHING kernel even though n21 had been measuring it as a distance for
+# days. Two molecules are close when the trees keep putting them in the same
+# leaf, so the similarity is importance- and interaction-aware without anyone
+# choosing a feature weighting -- which is exactly what a label-smoothing
+# neighbour list wants.
+#
+# The settings below are n21's, with its measured reasons kept:
+#   FOREST_TREES             100
+#   FOREST_MIN_SAMPLES_LEAF  5, not sklearn's 1: a fully grown forest
+#                            isolates every molecule in its own leaf and the
+#                            proximity then reports bootstrap exclusion rather
+#                            than similarity.
+#   FOREST_SEED              42
+FOREST_TREES = 100
+FOREST_MIN_SAMPLES_LEAF = 5
+FOREST_SEED = 42
+_PROXIMITY_CHUNK = 125
+
+
+def forest_leaf_ids(X_train, y_train, is_clf, n_trees=FOREST_TREES,
+                    min_samples_leaf=FOREST_MIN_SAMPLES_LEAF,
+                    seed=FOREST_SEED):
+    """One leaf id per tree per training molecule.
+
+    `rf.apply(X)` is the call. It appears nowhere in src/kirby/utils/, so this
+    is the first time a forest proximity is computed in this repository.
+
+    The forest sees the fold's training molecules and their corrupted labels,
+    and nothing else. Fitting it on the clean labels would hand the distance the
+    answer the experiment is asking it to find.
+    """
+    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+    cls = RandomForestClassifier if is_clf else RandomForestRegressor
+    # 2026-09-20: was n_jobs=-1 while every other estimator in the run honours
+    # the single-thread policy (KIRBY_RF_JOBS, KIRBY_LGBM_THREADS,
+    # OMP_NUM_THREADS). Same shape as the defect commit 9cb3f43 fixed.
+    rf = cls(n_estimators=int(n_trees), min_samples_leaf=int(min_samples_leaf),
+             random_state=int(seed),
+             n_jobs=int(os.environ.get('KIRBY_RF_JOBS', '1') or 1))
+    rf.fit(np.asarray(X_train, dtype=np.float64), y_train)
+    return np.asarray(rf.apply(X_train), dtype=np.int32)
+
+
+def forest_proximity_distance(leaf_ids, chunk=_PROXIMITY_CHUNK):
+    """One minus the share of trees in which two molecules land in one leaf.
+
+    `leaf_ids` is one row per molecule, one column per tree. The proximity of
+    two molecules is the number of columns where their ids match, divided by the
+    number of trees. The distance is one minus that, so it runs from 0 for two
+    molecules that are always together to 1 for two that never are.
+
+    Returned as a square matrix, molecules by molecules, because a proximity is
+    a pairwise quantity and there is no feature space it comes from.
+    """
+    leaves = np.asarray(leaf_ids)
+    n, n_trees = leaves.shape
+    D = np.empty((n, n), dtype=np.float32)
+    step = max(1, int(chunk))
+    for start in range(0, n, step):
+        stop = min(n, start + step)
+        same = (leaves[start:stop, None, :] == leaves[None, :, :])
+        D[start:stop] = 1.0 - (same.sum(axis=2) / float(n_trees))
+    return D

@@ -184,7 +184,7 @@ CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
             # Added 2026-09-23 from the label-noise menu in the compass review.
             # Both keep every molecule, which is the family that review
             # recommends over deletion on small datasets.
-            'huber_weight', 'js_shrink')
+            'huber_weight', 'js_shrink', 'prox_smooth')
 
 # The cleanups that read the detector's per-molecule suspicion score. Every one
 # but the quantile clip: the clip asks whether a label lies outside the range of
@@ -216,6 +216,13 @@ REPAIR_OOF_SPLITS = 5
 # molecules is a different quantity and a cleanup silently aiming somewhere
 # else is worse than one that says it did not run.
 GP_SMOOTH_MAX_ROWS = 1000
+
+# `prox_smooth` builds a molecules-by-molecules proximity, so its memory is
+# quadratic where every other cleanup's is linear. At 2000 molecules that is
+# 16 MB; at 10,000 it would be 400 MB. Refused above this rather than
+# subsampled, because a proximity over a subsample is a different quantity
+# from one over the fold -- the same argument GP_SMOOTH_MAX_ROWS carries.
+PROX_SMOOTH_MAX_ROWS = 2000
 
 # The smallest clean-to-noisy gap a recovery PERCENTAGE may divide by, as a
 # fraction of the clean score's own magnitude. Same rule and same number as
@@ -649,6 +656,57 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
             nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
             y_corrected = y_tr.copy()
             y_corrected[flagged] = nbr_means[flagged]
+        return {'X': X_tr_s, 'y': y_corrected, 'sample_weight': None,
+                'keep': None, 'label_column': y_corrected}
+
+    if strategy == 'prox_smooth':
+        # knn_smooth's correction, with the neighbours taken from the FOREST'S
+        # OWN notion of similarity instead of Euclidean distance in the feature
+        # space. Two molecules are close when the trees keep putting them in
+        # the same leaf, so the similarity is importance- and
+        # interaction-aware without anyone choosing a feature weighting.
+        #
+        # WHY THIS IS NOT knn_smooth WITH A DIFFERENT ARGUMENT. Euclidean
+        # distance over a wide representation treats every feature alike, and
+        # the noise suite has measured what that costs: n12 found 97 percent of
+        # every distance being computed over columns of exact zeros, and its
+        # top-50 cut of a representation beat the full width in 10 of 12 rows.
+        # A proximity never has that problem, because a feature the trees never
+        # split on cannot move two molecules apart.
+        #
+        # ⛔ COST. The forest is fitted on the fold's training molecules and the
+        # proximity is a square matrix, so this is O(n^2) in memory where
+        # knn_smooth is not. On the 448-molecule folds in this suite that is
+        # about 0.8 MB; on a 10,000-molecule training block it would be 400 MB
+        # and this cleanup should be refused rather than run.
+        n_tr = len(y_tr)
+        if n_tr > PROX_SMOOTH_MAX_ROWS:
+            print(f"      prox_smooth: {n_tr} training molecules is over "
+                  f"PROX_SMOOTH_MAX_ROWS={PROX_SMOOTH_MAX_ROWS}; the proximity "
+                  f"is a square matrix and would need "
+                  f"{n_tr * n_tr * 4 / 1e6:.0f} MB. Refused rather than "
+                  f"subsampled -- a proximity over a subsample is a different "
+                  f"quantity from one over the fold.")
+            return None
+        from kirby.utils.noise_estimation import (forest_leaf_ids,
+                                                  forest_proximity_distance)
+        threshold = np.percentile(noise_scores, flag_percentile)
+        flagged = noise_scores >= threshold
+        # The forest sees the training labels AS THEY ARE, corrupted and all.
+        # Fitting it on anything cleaner would hand the neighbour list the
+        # answer the experiment is asking it to find.
+        leaves = forest_leaf_ids(X_tr_s, y_tr, is_clf)
+        D = forest_proximity_distance(leaves)
+        np.fill_diagonal(D, np.inf)          # never its own neighbour
+        k = min(10, n_tr - 1)
+        nbr_idx = np.argsort(D, axis=1)[:, :k]
+        y_corrected = np.asarray(y_tr).copy()
+        if is_clf:
+            from scipy.stats import mode as scipy_mode
+            nbr_vals = scipy_mode(np.asarray(y_tr)[nbr_idx], axis=1).mode.ravel()
+        else:
+            nbr_vals = np.mean(np.asarray(y_tr)[nbr_idx], axis=1)
+        y_corrected[flagged] = nbr_vals[flagged]
         return {'X': X_tr_s, 'y': y_corrected, 'sample_weight': None,
                 'keep': None, 'label_column': y_corrected}
 
