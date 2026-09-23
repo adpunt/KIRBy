@@ -395,8 +395,115 @@ def freshness_check(data, rep_names, n_rows=200, tol=1e-4):
 
 # ===== ONE DATASET ========================================================
 
+def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True):
+    """How many molecules the TOP HYBRIDS give one identical row.
+
+    Same question the per-representation table answers, asked of a hybrid. A
+    hybrid picks features out of the representations in its pool, so it can only
+    tell two molecules apart when at least one representation in that pool
+    already does -- the all-representations-concatenated line is the floor it
+    cannot beat. What is worth knowing is how close a 100 or 500 feature
+    selection gets to that floor while dropping most of the features.
+
+    Where the recipes come from: the search the precompute already stored for
+    this dataset. Nothing is searched here. The precompute saves the recipe --
+    which representations, how many features from each, how to rank them -- and
+    not the feature list, because a per-fold experiment has to rank on its own
+    training rows and a whole-dataset list would have seen the held-out ones.
+    So the recipe is applied here, over every molecule, which costs one
+    importance ranking per representation and no search.
+
+    Returns [] when no search is stored, rather than building one.
+    """
+    out = []
+    try:
+        from experiments._shared import get_best_search_for_downstream, top_hybrids
+        from kirby.hybrid import create_hybrid
+    except Exception as exc:
+        if verbose:
+            print(f'  hybrid rows skipped: {type(exc).__name__}: {exc}', flush=True)
+        return out
+
+    # Refuse to search. If the precompute has not run for this dataset there is
+    # nothing to read and the row is simply absent.
+    _prev = os.environ.get('KIRBY_NO_COLD_SEARCH')
+    os.environ['KIRBY_NO_COLD_SEARCH'] = '1'
+    try:
+        try:
+            search, _meta = get_best_search_for_downstream(
+                reps, labels, groups, downstream_model='rf', budget=None,
+                dataset_name=dataset_name, task_type=None)
+        except Exception as exc:
+            if verbose:
+                print(f'  no stored search for {dataset_name} '
+                      f'({type(exc).__name__}) -- no hybrid rows', flush=True)
+            return out
+        if search is None:
+            if verbose:
+                print(f'  no stored search for {dataset_name} -- no hybrid rows',
+                      flush=True)
+            return out
+
+        from kirby.find_best_hybrid import DOWNSTREAM_MODELS as _DM
+    except Exception:
+        return out
+    finally:
+        if _prev is None:
+            os.environ.pop('KIRBY_NO_COLD_SEARCH', None)
+        else:
+            os.environ['KIRBY_NO_COLD_SEARCH'] = _prev
+
+    n = int(np.asarray(labels).size)
+    for model_name in _DM:
+        try:
+            picked = top_hybrids(search, model_name, n_per_model,
+                                 require_full=False,
+                                 context=f'census/{dataset_name}/{model_name}')
+        except Exception:
+            continue
+        for rank, entry in enumerate(picked.get('selected') or [], start=1):
+            bp = entry.get('blueprint')
+            if bp is None:
+                continue
+            try:
+                X, _info = create_hybrid(
+                    reps, np.asarray(labels),
+                    allocation_method=bp.allocation_method,
+                    budget=bp.budget,
+                    importance_method=bp.importance_method,
+                    internal_evaluator=bp.internal_evaluator,
+                    groups=groups,
+                )
+            except Exception as exc:
+                if verbose:
+                    print(f'  hybrid {model_name} rank {rank}: could not build '
+                          f'({type(exc).__name__}: {exc})', flush=True)
+                continue
+            inv, sizes = row_partition(np.asarray(X, dtype=np.float64))
+            tied = int((sizes > 1).sum())
+            out.append({
+                'dataset': dataset_name,
+                'representation': f'hybrid[{model_name}#{rank}]',
+                'is_hybrid': True,
+                'downstream_model': model_name,
+                'rank_within_model': rank,
+                'budget': bp.budget,
+                'allocation_method': bp.allocation_method,
+                'importance_method': bp.importance_method,
+                'n_features': int(np.asarray(X).shape[1]),
+                'n_molecules': n,
+                'n_representation_merged': tied,
+                'percent_merged': round(100.0 * tied / n, 4) if n else None,
+            })
+            if verbose:
+                print(f'    hybrid[{model_name}#{rank}] '
+                      f'{np.asarray(X).shape[1]:>5}f  {tied:>5} of {n} '
+                      f'share a row ({100.0*tied/max(n,1):5.2f}%)', flush=True)
+    return out
+
+
 def census_one(dataset_name, rep_names, build_missing=False, verbose=True,
-               check_freshness=0):
+               check_freshness=0, with_hybrids=0):
     """Every count for one dataset. Returns (rows, pairwise, pool_row, meta)."""
     from experiments._shared import load_data, _resolve_dataset_metric
 
@@ -504,6 +611,19 @@ def census_one(dataset_name, rep_names, build_missing=False, verbose=True,
                 print(f'     {r}: {v.get("rows_that_differ")} of '
                       f'{v.get("rows_checked")} sampled rows differ, largest '
                       f'difference {v.get("largest_difference")}', flush=True)
+    # The hybrid rows, from the recipes the precompute already stored. Appended
+    # to the same list the per-representation rows are in, so every table that
+    # sorts `rows` picks them up and a hybrid sits beside the representations it
+    # was built from. Absent when no search is stored for this dataset.
+    if with_hybrids:
+        try:
+            rows.extend(hybrid_rows(dataset_name, reps, labels,
+                                    data.get('groups'), n_per_model=with_hybrids,
+                                    verbose=verbose))
+        except Exception as exc:
+            if verbose:
+                print(f'  hybrid rows failed: {type(exc).__name__}: {exc}',
+                      flush=True)
     return rows, pairwise, pool_row, meta
 
 
@@ -644,6 +764,13 @@ def main():
                          'builder and report every representation whose cached '
                          'matrix no longer matches. Only the builders that run '
                          'on a laptop are checked. Default off.')
+    ap.add_argument('--with-hybrids', type=int, default=0, nargs='?',
+                    const=2, dest='with_hybrids',
+                    help='also count ties for the top N hybrids per '
+                         'downstream model, read from the search the '
+                         'precompute stored (default 2 when the flag is '
+                         'given bare, 0 = off). Applies each stored '
+                         'recipe over every molecule; it never searches.')
     ap.add_argument('--output-dir', default=DEFAULT_OUTPUT)
     ap = add_distance_metric_arg(ap)
     args = ap.parse_args()
@@ -661,7 +788,8 @@ def main():
         try:
             rows, pairs, pool_row, meta = census_one(
                 ds, names, build_missing=args.build_missing,
-                check_freshness=args.check_freshness)
+                check_freshness=args.check_freshness,
+                with_hybrids=args.with_hybrids)
         except Exception as exc:                      # one dataset must not stop the rest
             print(f'  FAILED: {type(exc).__name__}: {exc}', flush=True)
             all_meta.append({'dataset': ds, 'error': f'{type(exc).__name__}: {exc}'})
