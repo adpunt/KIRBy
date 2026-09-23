@@ -785,6 +785,29 @@ Each sat under a number that had been reported as a result.
 
 ---
 
+## s06's comparator is ranked 8th, 10th and 13th by what s06 measures
+
+`comparator_rep` is the representation a kNN predicts the LABEL best from, by
+RMSE. What s06 reports is the Spearman correlation between a held-out molecule's
+distance to its neighbours and a model's absolute residual — a different
+quantity. Read from the three stored files, 2026-09-24, ranking all seven
+representations and their weighted twins by the quantity s06 reports:
+
+    caco2       pdv            +0.1447   rank 13 of 14    best is ecfp4_count_weighted +0.2162
+    herg_ki     atom_pair      +0.2173   rank  8 of 14    best is pdv_weighted         +0.2951
+    adme_mdr1   pdv            +0.2044   rank 10 of 14    best is atom_pair_weighted   +0.3494
+
+Every representation is scored either way, so no stored number depends on this;
+14 single-representation arms sit in each file. What the rule decides is which
+arm the printed headline and the conformal `hybrid_genuinely_tighter` flag
+compare the hybrid against — and on all three datasets that is an arm in the
+bottom half of the ranking s06 itself produces.
+
+The weighted twin is top on all three. Recommendation: rank the comparator by
+the correlation s06 reports, which also makes both sides of the comparison
+importance-weighted rather than one of each. Not changed — it is the owner's
+call and it moves which arm the headline names on all three datasets.
+
 ## Open decisions for the owner
 
 1. **Cliff share.** `CLIFF_TARGET_PCT = 15.0`. It is the smallest share where
