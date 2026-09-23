@@ -278,7 +278,35 @@ def weight_features(X_standardized, importance, exponent):
     if not np.isfinite(total) or total <= 0:
         return X_standardized
     w = w * (len(w) / total)
-    return X_standardized * w
+    Xw = X_standardized * w
+
+    # DROP THE FEATURES THE SCORER GAVE NOTHING, exactly as n12 does since
+    # commit ca249de. At any exponent above zero a feature with no importance
+    # gets weight zero, so its column is zero in every row -- on
+    # flab_thermo_tresanco lightgbm_gain scored 181 of onehot's 5600 features
+    # above zero, leaving 5419 columns of zeros carrying nothing through every
+    # neighbour search.
+    #
+    # This is EXACT, not an approximation, for every metric
+    # kirby.similarity.distance_config sweeps: manhattan, euclidean and
+    # minkowski sum a per-feature term that is zero when both values are zero,
+    # and cosine's dot product and both norms gain zero from such a feature.
+    # No metric in that list centres per molecule, which is the one thing that
+    # would make a zero column change an answer.
+    #
+    # ⛔ WHY n21 HAS TO FOLLOW n12 HERE. This function exists to reproduce
+    # n12's space at exponent 0.5 so `_smoke_n21` can assert the two build the
+    # same matrix. When n12 started dropping and n21 did not, that assertion
+    # failed on the two cases where it matters -- some features at zero, and a
+    # negative importance clamped to zero. They are one space again.
+    #
+    # ⛔ At exponent 0.0, numpy gives 0 ** 0 == 1, so nothing is dropped and
+    # the space is the unweighted control. That still holds.
+    live = w > 0
+    n_live = int(live.sum())
+    if 0 < n_live < len(w):
+        return Xw[:, live]
+    return Xw
 
 
 # forest_leaf_ids and forest_proximity_distance MOVED to
