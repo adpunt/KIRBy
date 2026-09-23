@@ -471,7 +471,25 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     _dropped = []
     for candidate_model in _candidates:
         try:
-            _extra = {'condition_suffix': condition_suffix} if condition_suffix else {}
+            # ⛔ cache_namespace, NOT condition_suffix alone. condition_suffix
+            # names the search PICKLE and nothing else: it appears nowhere in
+            # result_cache.py, and the per-configuration store's primary key is
+            # IDENTITY_COLS + CONFIG_COLS, whose rep_pool entry is built from
+            # representation NAMES AND FEATURE COUNTS ONLY (_rep_pool_key).
+            # Representation CONTENT is deliberately excluded, because neural
+            # embeddings are not bit-reproducible.
+            #
+            # The random-Gaussian control replaces one representation with noise
+            # of the SAME NAME and the SAME WIDTH. So its identity was byte-for-
+            # byte the real arm's, the DB file was result_db/<dataset>.db for
+            # both, and every configuration the control asked for was already
+            # stored by the real arm that ran moments earlier. No model was ever
+            # fitted on the noise. D minus D_random came out exactly 0.0 and
+            # every subject was reported as "apparent gain is selection noise".
+            # cache_namespace is the one knob that changes the DB FILE.
+            _extra = ({'condition_suffix': condition_suffix,
+                       'cache_namespace': condition_suffix}
+                      if condition_suffix else {})
             # ⛔ speed='fast' SINCE 2026-09-18, OWNER'S DECISION.
             #
             # Every search c13 runs is built live. Each condition carries a
@@ -1085,9 +1103,12 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             # of identical width earns exactly that inflation and nothing else,
             # so the null minus the without-side measures the bias and the
             # representation's own contribution is the with-side minus the null.
-            # The distinct condition_suffix gives it its own cache file
-            # (find_best_hybrid keys on dataset_name + condition_suffix), so it
-            # is computed live on the random content and never collides.
+            # ⛔ THIS COMMENT USED TO SAY THE SUFFIX GAVE THIS ITS OWN CACHE
+            # FILE. It did not. find_best_hybrid keys the result DB on
+            # dataset_name + cache_namespace, and condition_suffix is not in
+            # the key at all -- so this control read the real representation's
+            # stored rows and fitted nothing. Fixed 2026-09-23 by passing
+            # cache_namespace as well; see the note at the _extra dict.
             null_reps = {**without_reps, rep_name: X_null}
             print(f"\n  Condition {dr_key}: those {len(without_reps)} plus a "
                   f"random-Gaussian matrix, {X_new.shape[1]} features, the same "
