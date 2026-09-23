@@ -177,10 +177,19 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
     (see the fold_reselection block built in run()). Empty list when no fold ran.
     """
     sample_X = next(iter(reps.values()))
-    val_scores = []
-    train_scores = []
+    # ⛔ POSITIONALLY CORRECT, NOT COMPACTED. The per-fold list this returns is
+    # read back by fold_reselection -> _hr_lofo_score, which treats
+    # fold_scores[k] as FOLD k (_shared.py:1596). Appending only the folds that
+    # survived meant a cell that lost fold 2 returned three numbers, and one
+    # candidate's fold 2 was then compared against another candidate's fold 3 --
+    # the leave-one-fold-out delta built from mismatched folds. A slot is now
+    # written for every fold and a failed one holds None, which _hr_is_bad
+    # already treats as bad (_shared.py:1515).
+    val_by_fold = [None] * int(n_folds)
+    train_by_fold = [None] * int(n_folds)
 
-    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+    for _fold_i, (train_idx, val_idx) in enumerate(
+            cv_split(groups, n_folds, sample_X, labels, mode=mode)):
         train_reps = {k: v[train_idx] for k, v in reps.items()}
         val_reps = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -214,13 +223,18 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
 
         model = model_factory()
         model.fit(X_tr_s, y_train)
-        val_scores.append(_score_prediction(model, X_va_s, y_val, metric_fn, task_type))
-        train_scores.append(_score_prediction(model, X_tr_s, y_train, metric_fn, task_type))
+        if _fold_i < len(val_by_fold):
+            val_by_fold[_fold_i] = _score_prediction(
+                model, X_va_s, y_val, metric_fn, task_type)
+            train_by_fold[_fold_i] = _score_prediction(
+                model, X_tr_s, y_train, metric_fn, task_type)
 
+    val_scores = [v for v in val_by_fold if v is not None]
+    train_scores = [v for v in train_by_fold if v is not None]
     if not val_scores:
-        return float('nan'), float('nan'), []
+        return float('nan'), float('nan'), [None] * int(n_folds)
     return (float(np.mean(val_scores)), float(np.mean(train_scores)),
-            [float(s) for s in val_scores])
+            [None if v is None else float(v) for v in val_by_fold])
 
 
 # =========================================================================
