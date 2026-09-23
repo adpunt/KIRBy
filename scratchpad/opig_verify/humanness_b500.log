@@ -1,0 +1,128 @@
+======================================================================
+HUMANNESS CLASSIFICATION EXPERIMENT (OPIG B3)
+  Paper: Prihoda et al. 2022, mAbs 14(1):2020203 (BioPhi)
+  Datasets: ['humanness_therapeutic']
+  Reps: ['aac', 'blosum', 'onehot', 'antiberty_cdr']
+  Models: ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+  Folds: 5
+======================================================================
+
+============================================================
+Dataset: humanness_therapeutic
+============================================================
+  Humanness (therapeutic, BioPhi IMGT): 564 samples, 198 human, 366 non-human
+    identity grouping: 461 groups over 564 antibodies (homology clusters, largest=13, 404/461 singletons)
+  564 samples, 198 human (35.1%), 366 non-human (64.9%)
+    identity grouping: 461 groups over 564 antibodies (homology clusters, largest=13, 404/461 singletons)
+  aac: 40D (cached) [humanness_therapeutic]
+  blosum: 5600D (cached) [humanness_therapeutic]
+  onehot: 5600D (cached) [humanness_therapeutic]
+  antiberty_cdr: 512D (cached) [humanness_therapeutic]
+  [humanness_therapeutic] pruning_mode=default_pruning (no per-model overrides)
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 2}). The hybrid is 98 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 20 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 20}). The hybrid is 180 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 13 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 13}). The hybrid is 187 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 15 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 15}). The hybrid is 485 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 47 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 47}). The hybrid is 453 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 12 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 12}). The hybrid is 488 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 22 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 20, 'onehot': 2}). The hybrid is 478 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 15 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 15}). The hybrid is 485 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 12 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 12}). The hybrid is 488 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 22 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 20, 'onehot': 2}). The hybrid is 478 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 12 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 12}). The hybrid is 488 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 22 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 20, 'onehot': 2}). The hybrid is 478 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 20 hit / 0 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Top-3 base reps (by RF): antiberty_cdr=0.9631, blosum=0.9404, onehot=0.9331
+
+  Evaluating 4 reps × 5 models × 5-fold CV...
+    aac                       rf        acc=0.7842  auroc=0.8306  (4.4s)
+    aac                       xgboost   acc=0.7610  auroc=0.8012  (3.3s)
+    aac                       svm       acc=0.7968  auroc=0.8489  (4.9s)
+    aac                       dnn       acc=0.7745  auroc=0.8173  (14.3s)
+    aac                       lightgbm  acc=0.7636  auroc=0.8031  (4.2s)
+    antiberty_cdr             rf        acc=0.9161  auroc=0.9631  (17.6s)
+    antiberty_cdr             xgboost   acc=0.9049  auroc=0.9654  (37.8s)
+    antiberty_cdr             svm       acc=0.9211  auroc=0.9704  (7.6s)
+    antiberty_cdr             dnn       acc=0.9203  auroc=0.9665  (15.8s)
+    antiberty_cdr             lightgbm  acc=0.9074  auroc=0.9712  (117.4s)
+    blosum                    rf        acc=0.8915  auroc=0.9361  (20.7s)
+    blosum                    xgboost   acc=0.8626  auroc=0.9252  (94.5s)
+    blosum                    svm       acc=0.8181  auroc=0.8883  (197.2s)
+    blosum                    dnn       acc=0.8010  auroc=0.8595  (116.4s)
+    blosum                    lightgbm  acc=0.8757  auroc=0.9260  (120.5s)
+    onehot                    rf        acc=0.8628  auroc=0.9233  (20.5s)
+    onehot                    xgboost   acc=0.8631  auroc=0.9153  (77.8s)
+    onehot                    svm       acc=0.8426  auroc=0.9175  (181.1s)
+    onehot                    dnn       acc=0.8476  auroc=0.8953  (123.6s)
+    onehot                    lightgbm  acc=0.8568  auroc=0.9052  (12.3s)
+
+==========================================================================================
+HUMANNESS EXPERIMENT RESULTS: humanness_therapeutic
+  564 samples (198 human, 366 non-human)
+==========================================================================================
+
+  Rep                       Model           Acc      AUROC        F1w     BalAcc
+  ------------------------- -------- ---------- ---------- ---------- ----------
+  Hu-mAb (Marks)            paper        0.9330     0.9770          —          —
+  OASis relaxed             paper        0.9440     0.9720          —          —
+  Germline content          paper        0.9280     0.9680          —          —
+  IgReconstruct             paper        0.9260     0.9670          —          —
+  MG Score                  paper        0.9180     0.9590          —          —
+  AbLSTM                    paper        0.8780     0.9370          —          —
+  T20                       paper        0.8390     0.8960          —          —
+  Z-score                   paper        0.7650     0.8370          —          —
+  . . .                    
+  antiberty_cdr             lightgbm     0.9074     0.9712     0.9062     0.8905
+  antiberty_cdr             svm          0.9211     0.9704     0.9209     0.9135
+  antiberty_cdr             dnn          0.9203     0.9665     0.9195     0.9059
+  antiberty_cdr             xgboost      0.9049     0.9654     0.9041     0.8877
+  antiberty_cdr             rf           0.9161     0.9631     0.9146     0.8947
+  blosum                    rf           0.8915     0.9361     0.8898     0.8701
+  blosum                    lightgbm     0.8757     0.9260     0.8740     0.8547
+  blosum                    xgboost      0.8626     0.9252     0.8608     0.8383
+  onehot                    rf           0.8628     0.9233     0.8606     0.8354
+  onehot                    svm          0.8426     0.9175     0.8396     0.8104
+  onehot                    xgboost      0.8631     0.9153     0.8627     0.8479
+  onehot                    lightgbm     0.8568     0.9052     0.8547     0.8315
+  onehot                    dnn          0.8476     0.8953     0.8464     0.8236
+  blosum                    svm          0.8181     0.8883     0.8136     0.7788
+  blosum                    dnn          0.8010     0.8595     0.8014     0.7855
+  aac                       svm          0.7968     0.8489     0.7926     0.7588
+  aac                       rf           0.7842     0.8306     0.7732     0.7269
+  aac                       dnn          0.7745     0.8173     0.7741     0.7484
+  aac                       lightgbm     0.7636     0.8031     0.7577     0.7213
+  aac                       xgboost      0.7610     0.8012     0.7550     0.7170
+
+  Summary:
+    Best individual rep: antiberty_cdr (lightgbm) = 0.9712
+    vs Hu-mAb (Marks): -0.0058
+    vs OASis relaxed: -0.0008
+    vs Germline content: +0.0032
+    vs IgReconstruct: +0.0042
+    vs MG Score: +0.0122
+    vs AbLSTM: +0.0342
+    vs T20: +0.0752
+    vs Z-score: +0.1342
+
+  Honest per-model comparison (leave-one-fold-out, held-out selection; primary metric = auc):
+    Delta = delta_mean_of_folds, the mean over folds of (hybrid AUROC - best-single AUROC) on that held-out fold. Folds = how many folds both arms scored.
+    Model          Hybrid   BestSingle      Delta  Folds
+    ---------- ---------- ------------ ---------- ------
+    dnn            0.9752       0.9675    +0.0077      4
+    lightgbm       0.9675       0.9732    -0.0057      4
+    rf             0.9672       0.9632    +0.0040      4
+    svm            0.9700       0.9724    -0.0024      4
+    xgboost        0.9643       0.9664    -0.0020      4
+
+Results saved: /Users/apunt/repos/KIRBy/scratchpad/opig_verify/humanness_b500.json
+
+  !! warnings raised more than 3 times (printed once each here):
+        295x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'aac': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        145x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         40x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         30x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'aac': #, 'onehot': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+EXIT=0

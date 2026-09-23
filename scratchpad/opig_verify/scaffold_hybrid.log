@@ -1,0 +1,803 @@
+
+=== flab_expression_koenig | base pool = 6 reps + 2 scaffold (0s) ===
+  FLAb flab_expression_koenig: 4275 samples, paired, property=Expression (enrichment ratio)
+  Fitness range: [0.0009766, 3.178], mean=1.005, std=0.5711
+  Wildtype heavy: EVQLVESGGGLVQPGGSLRLSCAASGFTIS...
+  4275/4275 samples have mutations, avg 1.0 mutations/sample
+    ablang2: cached (480D)
+    esm2: cached (2560D)
+    prot_t5: cached (2048D)
+    igt5: cached (1024D)
+    blosum: cached (5600D)
+    onehot: cached (5600D)
+  flab_expression_koenig: 4275 antibodies, 5 groups, 6 reps (ablang2=480, esm2=2560, prot_t5=2048, igt5=1024, blosum=5600, onehot=5600)
+  reps built (8): scaffold present = ['dphyschem', 'dphyschem_pos']
+
+============================================================
+Nested CV outer fold 1/3 (train=3401, test=874)
+============================================================
+  No augmentations supplied — normalizing augmentation_strategy='uncapped' -> 'none' for cache key.
+Models: ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+Representations: ['ablang2', 'esm2', 'prot_t5', 'igt5', 'blosum', 'onehot', 'dphyschem', 'dphyschem_pos'] (dims: [480, 2560, 2048, 1024, 5600, 5600, 5, 1140])
+
+Evaluating full-dimension baselines [spearman, BIGGER IS BETTER]...
+  ablang2 (dim=480): rf=0.606, xgboost=0.591, lightgbm=0.626, svm=0.638, dnn=0.630
+  esm2 (dim=2560): rf=0.524, xgboost=0.488, lightgbm=0.547, svm=0.602, dnn=0.555
+  prot_t5 (dim=2048): rf=0.662, xgboost=0.635, lightgbm=0.659, svm=0.691, dnn=0.654
+  igt5 (dim=1024): rf=0.626, xgboost=0.579, lightgbm=0.625, svm=0.649, dnn=0.619
+  blosum: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  blosum (dim=5600): rf=nan, xgboost=nan, lightgbm=nan, svm=0.074, dnn=0.071
+  onehot: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  onehot (dim=5600): rf=nan, xgboost=nan, lightgbm=nan, svm=0.066, dnn=-0.052
+  dphyschem (dim=5): rf=0.487, xgboost=0.485, lightgbm=0.486, svm=0.366, dnn=0.396
+  dphyschem_pos (dim=1140): rf=nan, xgboost=nan, lightgbm=nan, svm=0.173, dnn=-0.016
+
+Searching 200 unique configurations...
+  Pre-computing importance: 1 methods × 4 folds × 8 reps...
+  Importance pre-computed in 10.0s (4/4 successful, 4 read from disk)
+  Allocation scores pre-computed in 9.7s (1 evaluators × 10 metrics, 4 read from disk, evaluators: ['rf'])
+
+  Evaluating 200 configs (all 5 folds)...
+  [1/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6965+/-0.016, dim=100
+  [2/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6958+/-0.026, dim=100
+  [3/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7029+/-0.025, dim=100
+  [4/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7043+/-0.029, dim=100
+  [5/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6912+/-0.013, dim=500
+  [6/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7000+/-0.023, dim=500
+  [7/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7060+/-0.019, dim=500
+  [8/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7034+/-0.021, dim=500
+  [9/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6529+/-0.025, dim=100
+  [10/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6651+/-0.031, dim=100
+  [11/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6603+/-0.037, dim=100
+  [12/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6781+/-0.024, dim=100
+  [13/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6874+/-0.019, dim=500
+  [14/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6703+/-0.022, dim=500
+  [15/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6845+/-0.035, dim=500
+  [16/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6737+/-0.014, dim=500
+  [17/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6811+/-0.018, dim=100
+  [18/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6960+/-0.018, dim=100
+  [19/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6946+/-0.022, dim=100
+  [20/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6991+/-0.019, dim=100
+  [21/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7089+/-0.020, dim=500
+  [22/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7111+/-0.012, dim=500
+  [23/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7088+/-0.010, dim=500
+  [24/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7050+/-0.014, dim=500
+  [25/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6971+/-0.020, dim=100
+  [26/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7075+/-0.029, dim=100
+  [27/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7102+/-0.028, dim=100
+  [28/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7140+/-0.029, dim=100
+  [29/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7325+/-0.022, dim=500
+  [30/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7339+/-0.025, dim=500
+  [31/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7356+/-0.022, dim=500
+  [32/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7341+/-0.024, dim=500
+  [33/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6631+/-0.032, dim=100
+  [34/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6663+/-0.033, dim=100
+  [35/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6728+/-0.041, dim=100
+  [36/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6890+/-0.028, dim=100
+  [37/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7123+/-0.026, dim=500
+  [38/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7024+/-0.021, dim=500
+  [39/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7088+/-0.022, dim=500
+  [40/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7100+/-0.026, dim=500
+  [41/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6953+/-0.017, dim=100
+  [42/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6953+/-0.027, dim=100
+  [43/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.7078+/-0.025, dim=100
+  [44/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.7063+/-0.021, dim=100
+  [45/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6951+/-0.010, dim=500
+  [46/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.7000+/-0.020, dim=500
+  [47/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.7050+/-0.021, dim=500
+  [48/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.7027+/-0.020, dim=500
+  [49/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6425+/-0.035, dim=100
+  [50/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6544+/-0.024, dim=100
+  [51/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6708+/-0.033, dim=100
+  [52/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6631+/-0.028, dim=100
+  [53/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6767+/-0.028, dim=500
+  [54/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6583+/-0.030, dim=500
+  [55/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6699+/-0.017, dim=500
+  [56/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6724+/-0.017, dim=500
+  [57/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6813+/-0.018, dim=100
+  [58/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6812+/-0.024, dim=100
+  [59/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7037+/-0.028, dim=100
+  [60/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7015+/-0.019, dim=100
+  [61/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7080+/-0.019, dim=500
+  [62/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7050+/-0.015, dim=500
+  [63/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7106+/-0.018, dim=500
+  [64/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7132+/-0.017, dim=500
+  [65/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6972+/-0.020, dim=100
+  [66/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7036+/-0.032, dim=100
+  [67/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7159+/-0.027, dim=100
+  [68/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7134+/-0.028, dim=100
+  [69/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7328+/-0.021, dim=500
+  [70/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7336+/-0.025, dim=500
+  [71/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7363+/-0.024, dim=500
+  [72/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7385+/-0.022, dim=500
+  [73/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6585+/-0.038, dim=100
+  [74/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6739+/-0.032, dim=100
+  [75/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6708+/-0.041, dim=100
+  [76/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6855+/-0.027, dim=100
+  [77/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7067+/-0.031, dim=500
+  [78/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7110+/-0.020, dim=500
+  [79/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7129+/-0.023, dim=500
+  [80/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7131+/-0.026, dim=500
+  [81/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6901+/-0.019, dim=100
+  [82/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6978+/-0.022, dim=100
+  [83/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7021+/-0.026, dim=100
+  [84/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6985+/-0.022, dim=100
+  [85/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6932+/-0.012, dim=500
+  [86/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6910+/-0.025, dim=500
+  [87/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6996+/-0.023, dim=500
+  [88/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7003+/-0.024, dim=500
+  [89/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6555+/-0.018, dim=100
+  [90/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6687+/-0.018, dim=100
+  [91/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6709+/-0.035, dim=100
+  [92/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6594+/-0.039, dim=100
+  [93/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6839+/-0.030, dim=500
+  [94/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6890+/-0.025, dim=500
+  [95/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6655+/-0.024, dim=500
+  [96/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6709+/-0.026, dim=500
+  [97/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6796+/-0.019, dim=100
+  [98/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6913+/-0.019, dim=100
+  [99/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6980+/-0.024, dim=100
+  [100/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6988+/-0.022, dim=100
+  [101/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7122+/-0.019, dim=500
+  [102/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7127+/-0.016, dim=500
+  [103/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7113+/-0.016, dim=500
+  [104/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7100+/-0.012, dim=500
+  [105/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6974+/-0.021, dim=100
+  [106/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7071+/-0.028, dim=100
+  [107/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7071+/-0.030, dim=100
+  [108/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7108+/-0.030, dim=100
+  [109/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7333+/-0.022, dim=500
+  [110/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7342+/-0.025, dim=500
+  [111/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7347+/-0.024, dim=500
+  [112/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7345+/-0.023, dim=500
+  [113/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6664+/-0.034, dim=100
+  [114/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6737+/-0.023, dim=100
+  [115/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6746+/-0.044, dim=100
+  [116/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6775+/-0.031, dim=100
+  [117/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7161+/-0.026, dim=500
+  [118/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7126+/-0.022, dim=500
+  [119/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7147+/-0.029, dim=500
+  [120/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7146+/-0.022, dim=500
+  [121/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6979+/-0.017, dim=100
+  [122/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6990+/-0.018, dim=100
+  [123/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7035+/-0.024, dim=100
+  [124/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7032+/-0.021, dim=100
+  [125/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6953+/-0.011, dim=500
+  [126/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7016+/-0.016, dim=500
+  [127/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7048+/-0.026, dim=500
+  [128/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7061+/-0.021, dim=500
+  [129/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6459+/-0.028, dim=100
+  [130/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6664+/-0.015, dim=100
+  [131/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6582+/-0.034, dim=100
+  [132/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6671+/-0.026, dim=100
+  [133/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6660+/-0.024, dim=500
+  [134/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6673+/-0.021, dim=500
+  [135/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6834+/-0.038, dim=500
+  [136/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6736+/-0.034, dim=500
+  [137/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6841+/-0.022, dim=100
+  [138/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6892+/-0.016, dim=100
+  [139/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6967+/-0.025, dim=100
+  [140/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7011+/-0.025, dim=100
+  [141/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7135+/-0.023, dim=500
+  [142/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7104+/-0.011, dim=500
+  [143/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7098+/-0.020, dim=500
+  [144/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7099+/-0.016, dim=500
+  [145/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7012+/-0.015, dim=100
+  [146/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7040+/-0.021, dim=100
+  [147/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7156+/-0.021, dim=100
+  [148/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7100+/-0.028, dim=100
+  [149/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7294+/-0.022, dim=500
+  [150/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7342+/-0.027, dim=500
+  [151/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7378+/-0.024, dim=500
+  [152/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7387+/-0.023, dim=500
+  [153/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6652+/-0.037, dim=100
+  [154/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6759+/-0.020, dim=100
+  [155/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6776+/-0.036, dim=100
+  [156/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6673+/-0.033, dim=100
+  [157/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7036+/-0.023, dim=500
+  [158/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7138+/-0.020, dim=500
+  [159/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7138+/-0.026, dim=500
+  [160/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7127+/-0.026, dim=500
+  [161/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7010+/-0.015, dim=100
+  [162/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7000+/-0.026, dim=100
+  [163/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7009+/-0.030, dim=100
+  [164/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7039+/-0.018, dim=100
+  [165/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7007+/-0.010, dim=492
+  [166/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6920+/-0.023, dim=500
+  [167/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7037+/-0.027, dim=500
+  [168/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7059+/-0.023, dim=500
+  [169/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6707+/-0.028, dim=100
+  [170/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6647+/-0.030, dim=100
+  [171/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6658+/-0.028, dim=100
+  [172/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6661+/-0.023, dim=100
+  [173/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6770+/-0.013, dim=492
+  [174/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6828+/-0.023, dim=500
+  [175/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6646+/-0.011, dim=500
+  [176/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6812+/-0.026, dim=500
+  [177/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6929+/-0.022, dim=100
+  [178/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6913+/-0.020, dim=100
+  [179/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6932+/-0.021, dim=100
+  [180/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7018+/-0.019, dim=100
+  [181/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7082+/-0.021, dim=492
+  [182/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7103+/-0.018, dim=500
+  [183/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7179+/-0.025, dim=500
+  [184/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7070+/-0.013, dim=500
+  [185/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7099+/-0.021, dim=100
+  [186/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7113+/-0.025, dim=100
+  [187/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7193+/-0.025, dim=100
+  [188/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7058+/-0.025, dim=100
+  [189/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7285+/-0.014, dim=492
+  [190/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7307+/-0.021, dim=500
+  [191/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7401+/-0.021, dim=500
+  [192/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7297+/-0.022, dim=500
+  [193/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6651+/-0.038, dim=100
+  [194/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6748+/-0.031, dim=100
+  [195/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6801+/-0.035, dim=100
+  [196/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6573+/-0.035, dim=100
+  [197/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7012+/-0.025, dim=492
+  [198/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7113+/-0.003, dim=500
+  [199/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7224+/-0.020, dim=500
+  [200/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7155+/-0.028, dim=500
+  Feature selection dedup: 35 fold evaluations skipped (765 unique selections cached)
+
+Best features per model x budget (spearman):
+  model         b=100    b=500  
+  ------------------------------
+  dnn           0.6890  0.7224
+  lightgbm      0.7037  0.7179
+  rf            0.7078  0.7061
+  svm           0.7193  0.7401
+  xgboost       0.6781  0.6890
+  budget split [dnn, wglobal_power2, budget 500]: 500 features across 4 of 5 representations; the largest share is 162 (32%). igt5=162, prot_t5=152, ablang2=109, esm2=77
+  budget split [lightgbm, wglobal_power2, budget 500]: 500 features across 4 of 5 representations; the largest share is 162 (32%). igt5=162, prot_t5=152, ablang2=109, esm2=77
+  budget split [rf, power_2, budget 100]: 100 features across 4 of 5 representations; the largest share is 30 (30%). ablang2=30, prot_t5=28, igt5=25, esm2=17
+  budget split [svm, wglobal_power2, budget 500]: 500 features across 4 of 5 representations; the largest share is 162 (32%). igt5=162, prot_t5=152, ablang2=109, esm2=77
+  budget split [xgboost, softmax_T1, budget 500]: 500 features across 3 of 3 representations; the largest share is 170 (34%). ablang2=170, prot_t5=168, igt5=162
+[cache] cache stats — baseline: 40 hit / 0 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+
+============================================================
+Nested CV outer fold 2/3 (train=2565, test=1710)
+============================================================
+  No augmentations supplied — normalizing augmentation_strategy='uncapped' -> 'none' for cache key.
+Models: ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+Representations: ['ablang2', 'esm2', 'prot_t5', 'igt5', 'blosum', 'onehot', 'dphyschem', 'dphyschem_pos'] (dims: [480, 2560, 2048, 1024, 5600, 5600, 5, 1140])
+
+Evaluating full-dimension baselines [spearman, BIGGER IS BETTER]...
+  ablang2 (dim=480): rf=0.579, xgboost=0.535, lightgbm=0.574, svm=0.615, dnn=0.553
+  esm2 (dim=2560): rf=0.477, xgboost=0.457, lightgbm=0.514, svm=0.557, dnn=0.505
+  prot_t5 (dim=2048): rf=0.632, xgboost=0.600, lightgbm=0.620, svm=0.663, dnn=0.627
+  igt5 (dim=1024): rf=0.610, xgboost=0.562, lightgbm=0.617, svm=0.616, dnn=0.558
+  blosum: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  blosum (dim=5600): rf=nan, xgboost=nan, lightgbm=nan, svm=0.077, dnn=0.039
+  onehot: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  onehot (dim=5600): rf=nan, xgboost=nan, lightgbm=nan, svm=0.068, dnn=0.009
+  dphyschem (dim=5): rf=0.455, xgboost=0.456, lightgbm=0.456, svm=0.314, dnn=0.217
+  dphyschem_pos (dim=1140): rf=nan, xgboost=nan, lightgbm=nan, svm=0.156, dnn=0.005
+
+Searching 200 unique configurations...
+  Pre-computing importance: 1 methods × 3 folds × 8 reps...
+  Importance pre-computed in 106.1s (3/3 successful, 0 read from disk)
+  Allocation scores pre-computed in 783.0s (1 evaluators × 10 metrics, 0 read from disk, evaluators: ['rf'])
+
+  Evaluating 200 configs (all 5 folds)...
+  [1/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6471+/-0.011, dim=100
+  [2/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6931+/-0.016, dim=100
+  [3/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6797+/-0.022, dim=100
+  [4/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6869+/-0.021, dim=100
+  [5/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6536+/-0.010, dim=500
+  [6/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6809+/-0.025, dim=500
+  [7/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6808+/-0.020, dim=500
+  [8/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6885+/-0.023, dim=500
+  [9/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6047+/-0.003, dim=100
+  [10/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6319+/-0.014, dim=100
+  [11/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6289+/-0.007, dim=100
+  [12/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6507+/-0.011, dim=100
+  [13/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6046+/-0.032, dim=500
+  [14/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6453+/-0.014, dim=500
+  [15/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6423+/-0.022, dim=500
+  [16/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6520+/-0.027, dim=500
+  [17/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6340+/-0.008, dim=100
+  [18/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6760+/-0.014, dim=100
+  [19/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6675+/-0.009, dim=100
+  [20/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6782+/-0.009, dim=100
+  [21/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6420+/-0.009, dim=500
+  [22/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6814+/-0.017, dim=500
+  [23/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6848+/-0.017, dim=500
+  [24/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6774+/-0.016, dim=500
+  [25/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6586+/-0.016, dim=100
+  [26/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6910+/-0.009, dim=100
+  [27/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6918+/-0.020, dim=100
+  [28/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6962+/-0.018, dim=100
+  [29/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6762+/-0.027, dim=500
+  [30/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6886+/-0.010, dim=500
+  [31/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6903+/-0.014, dim=500
+  [32/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6890+/-0.019, dim=500
+  [33/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6030+/-0.036, dim=100
+  [34/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6316+/-0.031, dim=100
+  [35/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6261+/-0.046, dim=100
+  [36/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6327+/-0.045, dim=100
+  [37/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6389+/-0.018, dim=500
+  [38/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6570+/-0.031, dim=500
+  [39/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6689+/-0.039, dim=500
+  [40/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6591+/-0.024, dim=500
+  [41/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6478+/-0.006, dim=100
+  [42/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6854+/-0.026, dim=100
+  [43/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6817+/-0.019, dim=100
+  [44/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6787+/-0.021, dim=100
+  [45/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6559+/-0.009, dim=500
+  [46/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6787+/-0.022, dim=500
+  [47/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6813+/-0.016, dim=500
+  [48/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6848+/-0.022, dim=500
+  [49/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6184+/-0.011, dim=100
+  [50/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6637+/-0.014, dim=100
+  [51/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6436+/-0.026, dim=100
+  [52/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6612+/-0.019, dim=100
+  [53/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6251+/-0.006, dim=500
+  [54/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6562+/-0.014, dim=500
+  [55/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6563+/-0.026, dim=500
+  [56/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6288+/-0.023, dim=500
+  [57/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6328+/-0.012, dim=100
+  [58/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6863+/-0.011, dim=100
+  [59/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6746+/-0.017, dim=100
+  [60/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6854+/-0.012, dim=100
+  [61/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6402+/-0.013, dim=500
+  [62/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6819+/-0.019, dim=500
+  [63/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6784+/-0.019, dim=500
+  [64/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6764+/-0.015, dim=500
+  [65/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6576+/-0.016, dim=100
+  [66/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6909+/-0.009, dim=100
+  [67/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6907+/-0.020, dim=100
+  [68/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6979+/-0.018, dim=100
+  [69/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6766+/-0.026, dim=500
+  [70/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6881+/-0.010, dim=500
+  [71/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6893+/-0.018, dim=500
+  [72/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6882+/-0.017, dim=500
+  [73/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.5987+/-0.033, dim=100
+  [74/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6338+/-0.047, dim=100
+  [75/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6311+/-0.045, dim=100
+  [76/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6348+/-0.044, dim=100
+  [77/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.6244+/-0.020, dim=500
+  [78/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.6515+/-0.025, dim=500
+  [79/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.6535+/-0.031, dim=500
+  [80/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.6590+/-0.021, dim=500
+  [81/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6471+/-0.011, dim=100
+  [82/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6920+/-0.015, dim=100
+  [83/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6849+/-0.020, dim=100
+  [84/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6893+/-0.020, dim=100
+  [85/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6509+/-0.007, dim=500
+  [86/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6866+/-0.020, dim=500
+  [87/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6863+/-0.014, dim=500
+  [88/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6843+/-0.023, dim=500
+  [89/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6047+/-0.003, dim=100
+  [90/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6385+/-0.018, dim=100
+  [91/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6495+/-0.016, dim=100
+  [92/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6552+/-0.004, dim=100
+  [93/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6308+/-0.014, dim=500
+  [94/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6331+/-0.009, dim=500
+  [95/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6461+/-0.034, dim=500
+  [96/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6503+/-0.010, dim=500
+  [97/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6340+/-0.008, dim=100
+  [98/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6746+/-0.012, dim=100
+  [99/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6703+/-0.010, dim=100
+  [100/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6725+/-0.011, dim=100
+  [101/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6461+/-0.010, dim=500
+  [102/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6838+/-0.024, dim=500
+  [103/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6728+/-0.014, dim=500
+  [104/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6912+/-0.014, dim=500
+  [105/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6586+/-0.016, dim=100
+  [106/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6913+/-0.009, dim=100
+  [107/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6947+/-0.018, dim=100
+  [108/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6940+/-0.018, dim=100
+  [109/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6764+/-0.027, dim=500
+  [110/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6885+/-0.011, dim=500
+  [111/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6913+/-0.015, dim=500
+  [112/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6909+/-0.021, dim=500
+  [113/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6030+/-0.036, dim=100
+  [114/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6269+/-0.028, dim=100
+  [115/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6301+/-0.038, dim=100
+  [116/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6382+/-0.043, dim=100
+  [117/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6350+/-0.011, dim=500
+  [118/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6727+/-0.036, dim=500
+  [119/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6612+/-0.029, dim=500
+  [120/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6617+/-0.029, dim=500
+  [121/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6452+/-0.010, dim=100
+  [122/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6883+/-0.013, dim=100
+  [123/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6871+/-0.020, dim=100
+  [124/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6913+/-0.019, dim=100
+  !! the budget is a MAXIMUM and it was not filled: 4 feature slots went unused because no feature left in those representations scored above zero importance ({'ablang2': 4}). The hybrid is 496 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [125/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6586+/-0.007, dim=498
+  [126/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6869+/-0.020, dim=500
+  [127/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6838+/-0.023, dim=500
+  [128/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6835+/-0.018, dim=500
+  [129/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6147+/-0.012, dim=100
+  [130/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6620+/-0.015, dim=100
+  [131/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6581+/-0.008, dim=100
+  [132/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6554+/-0.009, dim=100
+  !! the budget is a MAXIMUM and it was not filled: 4 feature slots went unused because no feature left in those representations scored above zero importance ({'ablang2': 4}). The hybrid is 496 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [133/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6278+/-0.014, dim=498
+  [134/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6338+/-0.029, dim=500
+  [135/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6452+/-0.016, dim=500
+  [136/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6562+/-0.005, dim=500
+  [137/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6317+/-0.015, dim=100
+  [138/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6766+/-0.009, dim=100
+  [139/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6764+/-0.010, dim=100
+  [140/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6777+/-0.014, dim=100
+  !! the budget is a MAXIMUM and it was not filled: 4 feature slots went unused because no feature left in those representations scored above zero importance ({'ablang2': 4}). The hybrid is 496 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [141/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6609+/-0.019, dim=498
+  [142/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6893+/-0.016, dim=500
+  [143/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6766+/-0.024, dim=500
+  [144/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6743+/-0.020, dim=500
+  [145/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6595+/-0.013, dim=100
+  [146/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6918+/-0.015, dim=100
+  [147/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6911+/-0.026, dim=100
+  [148/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7005+/-0.018, dim=100
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [149/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6758+/-0.023, dim=498
+  [150/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6896+/-0.010, dim=500
+  [151/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6940+/-0.015, dim=500
+  [152/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6934+/-0.016, dim=500
+  [153/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.5880+/-0.035, dim=100
+  [154/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6334+/-0.050, dim=100
+  [155/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6251+/-0.040, dim=100
+  [156/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6322+/-0.041, dim=100
+  [157/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6431+/-0.021, dim=498
+  [158/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6492+/-0.028, dim=500
+  [159/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6680+/-0.023, dim=500
+  [160/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6695+/-0.029, dim=500
+  [161/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6621+/-0.005, dim=100
+  [162/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6890+/-0.021, dim=100
+  [163/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6839+/-0.027, dim=100
+  [164/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6869+/-0.018, dim=100
+  [165/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6633+/-0.004, dim=434
+  [166/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6837+/-0.014, dim=446
+  [167/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6817+/-0.019, dim=451
+  [168/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6902+/-0.020, dim=436
+  [169/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6158+/-0.024, dim=100
+  [170/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6526+/-0.031, dim=100
+  [171/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6527+/-0.043, dim=100
+  [172/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6371+/-0.017, dim=100
+  [173/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6217+/-0.006, dim=434
+  [174/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6332+/-0.011, dim=446
+  [175/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6407+/-0.026, dim=451
+  [176/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6508+/-0.018, dim=436
+  [177/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6492+/-0.008, dim=100
+  [178/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6764+/-0.016, dim=100
+  [179/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6751+/-0.017, dim=100
+  [180/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6688+/-0.016, dim=100
+  [181/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6518+/-0.008, dim=434
+  [182/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6814+/-0.011, dim=446
+  [183/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6879+/-0.021, dim=451
+  [184/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6839+/-0.006, dim=436
+  [185/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6603+/-0.021, dim=100
+  [186/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6749+/-0.003, dim=100
+  [187/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6706+/-0.022, dim=100
+  [188/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6786+/-0.017, dim=100
+  [189/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6898+/-0.018, dim=434
+  [190/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6819+/-0.016, dim=446
+  [191/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6901+/-0.013, dim=451
+  [192/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7008+/-0.006, dim=436
+  [193/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6027+/-0.009, dim=100
+  [194/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6460+/-0.021, dim=100
+  [195/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6340+/-0.026, dim=100
+  [196/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6215+/-0.052, dim=100
+  [197/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6421+/-0.025, dim=434
+  [198/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6641+/-0.025, dim=446
+  [199/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6508+/-0.012, dim=451
+  [200/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6749+/-0.021, dim=436
+  Feature selection dedup: 35 fold evaluations skipped (565 unique selections cached)
+
+Best features per model x budget (spearman):
+  model         b=100    b=500  
+  ------------------------------
+  dnn           0.6460  0.6749
+  lightgbm      0.6863  0.6912
+  rf            0.6931  0.6902
+  svm           0.7005  0.7008
+  xgboost       0.6637  0.6563
+  budget split [dnn, wglobal_power2, budget 500]: 442 features across 5 of 8 representations; the largest share is 174 (39%). igt5=174, prot_t5=114, ablang2=77, esm2=75 ...
+  budget split [lightgbm, softmax_T1, budget 500]: 500 features across 8 of 8 representations; the largest share is 120 (24%). prot_t5=120, igt5=119, ablang2=114, esm2=106 ...
+  budget split [rf, performance_weighted, budget 100]: 100 features across 3 of 3 representations; the largest share is 35 (35%). prot_t5=35, igt5=34, ablang2=31
+  budget split [svm, wglobal_power2, budget 500]: 442 features across 5 of 8 representations; the largest share is 174 (39%). igt5=174, prot_t5=114, ablang2=77, esm2=75 ...
+  budget split [xgboost, power_2, budget 100]: 100 features across 3 of 3 representations; the largest share is 36 (36%). prot_t5=36, igt5=35, ablang2=29
+[cache] cache stats — baseline: 40 hit / 40 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+
+============================================================
+Nested CV outer fold 3/3 (train=2584, test=1691)
+============================================================
+  No augmentations supplied — normalizing augmentation_strategy='uncapped' -> 'none' for cache key.
+Models: ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+Representations: ['ablang2', 'esm2', 'prot_t5', 'igt5', 'blosum', 'onehot', 'dphyschem', 'dphyschem_pos'] (dims: [480, 2560, 2048, 1024, 5600, 5600, 5, 1140])
+
+Evaluating full-dimension baselines [spearman, BIGGER IS BETTER]...
+  ablang2 (dim=480): rf=0.609, xgboost=0.585, lightgbm=0.625, svm=0.662, dnn=0.636
+  esm2 (dim=2560): rf=0.509, xgboost=0.439, lightgbm=0.531, svm=0.613, dnn=0.530
+  prot_t5 (dim=2048): rf=0.688, xgboost=0.652, lightgbm=0.686, svm=0.704, dnn=0.676
+  igt5 (dim=1024): rf=0.599, xgboost=0.570, lightgbm=0.616, svm=0.625, dnn=0.631
+  blosum: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  blosum (dim=5600): rf=nan, xgboost=nan, lightgbm=nan, svm=0.093, dnn=0.068
+  onehot: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  onehot (dim=5600): rf=nan, xgboost=nan, lightgbm=nan, svm=0.089, dnn=-0.010
+  dphyschem (dim=5): rf=0.475, xgboost=0.474, lightgbm=0.477, svm=0.372, dnn=0.373
+  dphyschem_pos (dim=1140): rf=nan, xgboost=nan, lightgbm=nan, svm=0.153, dnn=-0.048
+
+Searching 200 unique configurations...
+  Pre-computing importance: 1 methods × 3 folds × 8 reps...
+  Importance pre-computed in 85.8s (3/3 successful, 0 read from disk)
+  Allocation scores pre-computed in 558.9s (1 evaluators × 10 metrics, 0 read from disk, evaluators: ['rf'])
+
+  Evaluating 200 configs (all 5 folds)...
+  [1/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6712+/-0.047, dim=100
+  [2/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6757+/-0.023, dim=100
+  [3/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6912+/-0.019, dim=100
+  [4/200] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6863+/-0.024, dim=100
+  [5/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6937+/-0.034, dim=500
+  [6/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6678+/-0.024, dim=500
+  [7/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6808+/-0.039, dim=500
+  [8/200] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6763+/-0.022, dim=500
+  [9/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6352+/-0.041, dim=100
+  [10/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6225+/-0.033, dim=100
+  [11/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6495+/-0.008, dim=100
+  [12/200] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6425+/-0.010, dim=100
+  [13/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6435+/-0.040, dim=500
+  [14/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6485+/-0.012, dim=500
+  [15/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6510+/-0.024, dim=500
+  [16/200] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6275+/-0.019, dim=500
+  [17/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6694+/-0.033, dim=100
+  [18/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6865+/-0.020, dim=100
+  [19/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6697+/-0.017, dim=100
+  [20/200] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6653+/-0.015, dim=100
+  [21/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6739+/-0.039, dim=500
+  [22/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6733+/-0.029, dim=500
+  [23/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6949+/-0.015, dim=500
+  [24/200] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6949+/-0.020, dim=500
+  [25/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6812+/-0.022, dim=100
+  [26/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7108+/-0.021, dim=100
+  [27/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7035+/-0.027, dim=100
+  [28/200] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6931+/-0.034, dim=100
+  [29/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7148+/-0.034, dim=500
+  [30/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7181+/-0.020, dim=500
+  [31/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7282+/-0.012, dim=500
+  [32/200] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7265+/-0.010, dim=500
+  [33/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6606+/-0.032, dim=100
+  [34/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6929+/-0.013, dim=100
+  [35/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6932+/-0.014, dim=100
+  [36/200] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6859+/-0.019, dim=100
+  [37/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6743+/-0.013, dim=500
+  [38/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.6868+/-0.007, dim=500
+  [39/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7089+/-0.006, dim=500
+  [40/200] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7103+/-0.005, dim=500
+  [41/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6681+/-0.039, dim=100
+  [42/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6781+/-0.021, dim=100
+  [43/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6788+/-0.017, dim=100
+  [44/200] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.6933+/-0.020, dim=100
+  [45/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6805+/-0.047, dim=500
+  [46/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6758+/-0.032, dim=500
+  [47/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6767+/-0.027, dim=500
+  [48/200] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.6772+/-0.024, dim=500
+  [49/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6390+/-0.030, dim=100
+  [50/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6590+/-0.009, dim=100
+  [51/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6546+/-0.015, dim=100
+  [52/200] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.6328+/-0.013, dim=100
+  [53/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6336+/-0.030, dim=500
+  [54/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6446+/-0.018, dim=500
+  [55/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6532+/-0.019, dim=500
+  [56/200] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.6607+/-0.032, dim=500
+  [57/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6558+/-0.032, dim=100
+  [58/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6754+/-0.020, dim=100
+  [59/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6738+/-0.006, dim=100
+  [60/200] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6797+/-0.021, dim=100
+  [61/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6667+/-0.037, dim=500
+  [62/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6786+/-0.022, dim=500
+  [63/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6944+/-0.016, dim=500
+  [64/200] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.6967+/-0.014, dim=500
+  [65/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.6797+/-0.030, dim=100
+  [66/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7157+/-0.021, dim=100
+  [67/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7101+/-0.018, dim=100
+  [68/200] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7040+/-0.031, dim=100
+  [69/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7141+/-0.033, dim=500
+  [70/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7217+/-0.019, dim=500
+  [71/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7234+/-0.013, dim=500
+  [72/200] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7221+/-0.013, dim=500
+  [73/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6748+/-0.033, dim=100
+  [74/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6890+/-0.013, dim=100
+  [75/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6881+/-0.019, dim=100
+  [76/200] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6842+/-0.022, dim=100
+  [77/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.6711+/-0.015, dim=500
+  [78/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.6845+/-0.005, dim=500
+  [79/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7147+/-0.007, dim=500
+  [80/200] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7148+/-0.014, dim=500
+  [81/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6750+/-0.042, dim=100
+  [82/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6734+/-0.020, dim=100
+  [83/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6857+/-0.023, dim=100
+  [84/200] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6873+/-0.025, dim=100
+  [85/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6891+/-0.040, dim=500
+  [86/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6759+/-0.028, dim=500
+  [87/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6816+/-0.031, dim=500
+  [88/200] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6776+/-0.033, dim=500
+  [89/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6208+/-0.044, dim=100
+  [90/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6442+/-0.025, dim=100
+  [91/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6367+/-0.014, dim=100
+  [92/200] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6315+/-0.043, dim=100
+  [93/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6324+/-0.034, dim=500
+  [94/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6454+/-0.033, dim=500
+  [95/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6371+/-0.018, dim=500
+  [96/200] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6521+/-0.016, dim=500
+  [97/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6662+/-0.036, dim=100
+  [98/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6861+/-0.010, dim=100
+  [99/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6723+/-0.016, dim=100
+  [100/200] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6802+/-0.009, dim=100
+  [101/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6704+/-0.029, dim=500
+  [102/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6839+/-0.033, dim=500
+  [103/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6862+/-0.014, dim=500
+  [104/200] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6866+/-0.020, dim=500
+  [105/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6842+/-0.023, dim=100
+  [106/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7092+/-0.018, dim=100
+  [107/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6993+/-0.028, dim=100
+  [108/200] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6876+/-0.033, dim=100
+  [109/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7140+/-0.034, dim=500
+  [110/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7171+/-0.020, dim=500
+  [111/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7291+/-0.010, dim=500
+  [112/200] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7231+/-0.012, dim=500
+  [113/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6730+/-0.023, dim=100
+  [114/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6902+/-0.020, dim=100
+  [115/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6933+/-0.012, dim=100
+  [116/200] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6782+/-0.026, dim=100
+  [117/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6757+/-0.011, dim=500
+  [118/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6835+/-0.006, dim=500
+  [119/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.6994+/-0.011, dim=500
+  [120/200] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7053+/-0.016, dim=500
+  [121/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6764+/-0.046, dim=100
+  [122/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6795+/-0.025, dim=100
+  [123/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6865+/-0.026, dim=100
+  [124/200] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6848+/-0.023, dim=100
+  [125/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6824+/-0.040, dim=500
+  [126/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6732+/-0.036, dim=500
+  [127/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6780+/-0.027, dim=500
+  [128/200] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6808+/-0.031, dim=500
+  [129/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6157+/-0.054, dim=100
+  [130/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6278+/-0.031, dim=100
+  [131/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6500+/-0.009, dim=100
+  [132/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6636+/-0.014, dim=100
+  [133/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6363+/-0.039, dim=500
+  [134/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6234+/-0.008, dim=500
+  [135/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6413+/-0.013, dim=500
+  [136/200] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6338+/-0.010, dim=500
+  [137/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6655+/-0.041, dim=100
+  [138/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6733+/-0.015, dim=100
+  [139/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6759+/-0.022, dim=100
+  [140/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6751+/-0.014, dim=100
+  [141/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6737+/-0.036, dim=500
+  [142/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6782+/-0.031, dim=500
+  [143/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6912+/-0.012, dim=500
+  [144/200] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6972+/-0.015, dim=500
+  [145/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6783+/-0.037, dim=100
+  [146/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7082+/-0.025, dim=100
+  [147/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7089+/-0.020, dim=100
+  [148/200] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7069+/-0.024, dim=100
+  [149/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7111+/-0.033, dim=500
+  [150/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7218+/-0.023, dim=500
+  [151/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7277+/-0.016, dim=500
+  [152/200] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7220+/-0.015, dim=500
+  [153/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6477+/-0.055, dim=100
+  [154/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6800+/-0.005, dim=100
+  [155/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6870+/-0.003, dim=100
+  [156/200] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6989+/-0.006, dim=100
+  [157/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6711+/-0.015, dim=500
+  [158/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6979+/-0.004, dim=500
+  [159/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7003+/-0.007, dim=500
+  [160/200] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.6961+/-0.012, dim=500
+  [161/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6658+/-0.047, dim=100
+  [162/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6754+/-0.029, dim=100
+  [163/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6842+/-0.046, dim=100
+  [164/200] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6809+/-0.025, dim=100
+  [165/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6836+/-0.042, dim=423
+  [166/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6648+/-0.039, dim=456
+  [167/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6699+/-0.033, dim=458
+  [168/200] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6806+/-0.035, dim=437
+  [169/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6183+/-0.035, dim=100
+  [170/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6479+/-0.036, dim=100
+  [171/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6239+/-0.040, dim=100
+  [172/200] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6521+/-0.015, dim=100
+  [173/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6271+/-0.043, dim=423
+  [174/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6066+/-0.043, dim=456
+  [175/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6459+/-0.029, dim=458
+  [176/200] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6531+/-0.015, dim=437
+  [177/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6464+/-0.039, dim=100
+  [178/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6621+/-0.013, dim=100
+  [179/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6671+/-0.030, dim=100
+  [180/200] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6676+/-0.016, dim=100
+  [181/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6670+/-0.052, dim=423
+  [182/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6671+/-0.046, dim=456
+  [183/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6814+/-0.031, dim=458
+  [184/200] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6776+/-0.035, dim=437
+  [185/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6671+/-0.030, dim=100
+  [186/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6903+/-0.030, dim=100
+  [187/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6878+/-0.034, dim=100
+  [188/200] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6929+/-0.027, dim=100
+  [189/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7066+/-0.041, dim=423
+  [190/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6938+/-0.037, dim=456
+  [191/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7099+/-0.022, dim=458
+  [192/200] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7138+/-0.027, dim=437
+  [193/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6357+/-0.040, dim=100
+  [194/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6812+/-0.014, dim=100
+  [195/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6772+/-0.025, dim=100
+  [196/200] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6775+/-0.027, dim=100
+  [197/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6829+/-0.018, dim=423
+  [198/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6707+/-0.013, dim=456
+  [199/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6871+/-0.007, dim=458
+  [200/200] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7100+/-0.012, dim=437
+  Feature selection dedup: 5 fold evaluations skipped (595 unique selections cached)
+
+Best features per model x budget (spearman):
+  model         b=100    b=500  
+  ------------------------------
+  dnn           0.6989  0.7148
+  lightgbm      0.6865  0.6972
+  rf            0.6933  0.6937
+  svm           0.7157  0.7291
+  xgboost       0.6636  0.6607
+  budget split [dnn, power_2, budget 500]: 500 features across 8 of 8 representations; the largest share is 161 (32%). prot_t5=161, ablang2=127, igt5=91, esm2=86 ...
+  budget split [lightgbm, rank_exp_d0.3, budget 500]: 500 features across 8 of 8 representations; the largest share is 173 (35%). prot_t5=173, ablang2=130, igt5=98, esm2=74 ...
+  budget split [rf, performance_weighted, budget 500]: 500 features across 2 of 2 representations; the largest share is 266 (53%). prot_t5=266, ablang2=234
+  budget split [svm, softmax_T1, budget 500]: 500 features across 4 of 5 representations; the largest share is 138 (28%). prot_t5=138, ablang2=129, igt5=117, esm2=116
+  budget split [xgboost, rank_exp_d0.3, budget 100]: 100 features across 8 of 8 representations; the largest share is 34 (34%). prot_t5=34, ablang2=25, igt5=19, esm2=14 ...
+[cache] cache stats — baseline: 40 hit / 80 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+
+============================================================
+NESTED CV SUMMARY (3 outer folds) — metric=spearman
+============================================================
+
+  dnn:
+    hybrid (honest):      0.7208 +/-0.019
+    best single (honest): 0.6922 +/-0.015  reps=['prot_t5', 'prot_t5', 'prot_t5']
+    paired delta:         +0.0286 (+ = hybrid better, over 3 folds)
+    selection bias:       -0.0168 (inner search said 0.7040)
+
+  lightgbm:
+    hybrid (honest):      0.7184 +/-0.005
+    best single (honest): 0.6754 +/-0.007  reps=['prot_t5', 'prot_t5', 'prot_t5']
+    paired delta:         +0.0431 (+ = hybrid better, over 3 folds)
+    selection bias:       -0.0164 (inner search said 0.7021)
+
+  rf:
+    hybrid (honest):      0.7136 +/-0.002
+    best single (honest): 0.6770 +/-0.013  reps=['prot_t5', 'prot_t5', 'prot_t5']
+    paired delta:         +0.0366 (+ = hybrid better, over 3 folds)
+    selection bias:       -0.0154 (inner search said 0.6982)
+
+  svm:
+    hybrid (honest):      0.7441 +/-0.022
+    best single (honest): 0.7154 +/-0.016  reps=['prot_t5', 'prot_t5', 'prot_t5']
+    paired delta:         +0.0287 (+ = hybrid better, over 3 folds)
+    selection bias:       -0.0208 (inner search said 0.7233)
+
+  xgboost:
+    hybrid (honest):      0.6768 +/-0.021
+    best single (honest): 0.6511 +/-0.021  reps=['prot_t5', 'prot_t5', 'prot_t5']
+    paired delta:         +0.0257 (+ = hybrid better, over 3 folds)
+    selection bias:       -0.0047 (inner search said 0.6721)
+  wrote /Users/apunt/repos/KIRBy/scratchpad/opig_verify/scaffold_hybrid/opig_scaffold_hybrid_flab_expression_koenig.json (61224s)
+
+====================================================================================
+SCAFFOLD-DIFF REPS IN THE REAL PIPELINE POOL — honest nested-CV comparison
+Dataset-native metric; direction per dataset.
+====================================================================================
+
+### flab_expression_koenig   (metric: spearman, higher better)
+  dnn        best_base=prot_t5=0.692  |  dphyschem=0.422(rank 5/8), dphyschem_pos=-0.027(rank 8/8)
+  lightgbm   best_base=prot_t5=0.675  |  dphyschem=0.517(rank 5/5), dphyschem_pos=n/a
+  rf         best_base=prot_t5=0.677  |  dphyschem=0.516(rank 5/5), dphyschem_pos=n/a
+  svm        best_base=prot_t5=0.715  |  dphyschem=0.369(rank 6/7), dphyschem_pos=0.157(rank 7/7)
+  xgboost    best_base=prot_t5=0.651  |  dphyschem=0.517(rank 4/5), dphyschem_pos=n/a
+  hybrid minus best single representation, per model — mean, outer folds that scored both arms, then those folds:
+    dnn          +0.0286  3 paired outer folds  |  per fold: +0.026, +0.058, +0.002
+    lightgbm     +0.0431  3 paired outer folds  |  per fold: +0.039, +0.043, +0.047
+    rf           +0.0366  3 paired outer folds  |  per fold: +0.016, +0.046, +0.048
+    svm          +0.0287  3 paired outer folds  |  per fold: +0.012, +0.059, +0.016
+    xgboost      +0.0257  3 paired outer folds  |  per fold: -0.030, +0.049, +0.058
+
+wrote /Users/apunt/repos/KIRBy/scratchpad/opig_verify/scaffold_hybrid/opig_scaffold_hybrid_summary.json
+
+  !! warnings raised more than 3 times (printed once each here):
+          5x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'ablang#': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+EXIT=0

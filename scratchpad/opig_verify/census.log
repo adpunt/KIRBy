@@ -1,0 +1,169 @@
+
+=== caco2 (0s) ===
+  Loaded 2158 molecules from OpenADMET-Caco2_Efflux
+    graph_kernel: cached (317D)
+    mhg_gnn: cached (1024D)
+    ecfp4: cached (2048D)
+    pdv: cached (200D)
+    grover: cached (4800D)
+    avalon: cached (2048D)
+    top_torsion: cached (2048D)
+    smited: cached (768D)
+    atom_pair: cached (2048D)
+    molformer: cached (768D)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    usrcat: cached (60D)
+    coulomb_matrix: cached (50D)
+    usr: cached (12D)
+  caco2: 2158 samples, 1086 scaffolds, 15 reps (graph_kernel=317, mhg_gnn=1024, ecfp4=2048, pdv=200, grover=4800, avalon=2048, top_torsion=2048, smited=768, atom_pair=2048, molformer=768, maccs=167, pharmacophore3d=49, usrcat=60, coulomb_matrix=50, usr=12)
+    atom_pair                 177 of   2158 share a row (  8.20%)  [repeated input 0, zero rows 0, representation 177, of those stereo-only 177]
+    avalon                    181 of   2158 share a row (  8.39%)  [repeated input 0, zero rows 0, representation 181, of those stereo-only 177]
+    coulomb_matrix              0 of   2158 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    ecfp4                     179 of   2158 share a row (  8.29%)  [repeated input 0, zero rows 0, representation 179, of those stereo-only 177]
+    graph_kernel              203 of   2158 share a row (  9.41%)  [repeated input 0, zero rows 0, representation 203, of those stereo-only 177]
+    grover                      0 of   2158 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    maccs                     804 of   2158 share a row ( 37.26%)  [repeated input 0, zero rows 0, representation 804, of those stereo-only 139]
+    mhg_gnn                     0 of   2158 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    molformer                   0 of   2158 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    pdv                       177 of   2158 share a row (  8.20%)  [repeated input 0, zero rows 0, representation 177, of those stereo-only 177]
+    pharmacophore3d             0 of   2158 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    smited                    177 of   2158 share a row (  8.20%)  [repeated input 0, zero rows 0, representation 177, of those stereo-only 177]
+    top_torsion               186 of   2158 share a row (  8.62%)  [repeated input 0, zero rows 0, representation 186, of those stereo-only 177]
+    usr                         0 of   2158 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    usrcat                      0 of   2158 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+
+=== herg_ki (194s) ===
+  Loading cached ChEMBL hERG Ki from /Users/apunt/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    ecfp4: cached (2048D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+    maccs: cached (167D)
+    pharmacophore3d: cached (49D)
+    coulomb_matrix: cached (50D)
+    usr: cached (12D)
+    usrcat: cached (60D)
+  herg_ki: 1412 samples, 769 scaffolds, 15 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, ecfp4=2048, atom_pair=2048, chembert=256, smited=768, maccs=167, pharmacophore3d=49, coulomb_matrix=50, usr=12, usrcat=60)
+    atom_pair                  56 of   1412 share a row (  3.97%)  [repeated input 0, zero rows 0, representation 56, of those stereo-only 56]
+    avalon                     66 of   1412 share a row (  4.67%)  [repeated input 0, zero rows 0, representation 66, of those stereo-only 56]
+    chembert                    0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    coulomb_matrix              0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    ecfp4                      56 of   1412 share a row (  3.97%)  [repeated input 0, zero rows 0, representation 56, of those stereo-only 56]
+    graph_kernel              105 of   1412 share a row (  7.44%)  [repeated input 0, zero rows 0, representation 105, of those stereo-only 56]
+    grover                      0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    maccs                     377 of   1412 share a row ( 26.70%)  [repeated input 0, zero rows 0, representation 377, of those stereo-only 30]
+    mhg_gnn                     0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    mordred                    56 of   1412 share a row (  3.97%)  [repeated input 0, zero rows 0, representation 56, of those stereo-only 56]
+    pdv                        56 of   1412 share a row (  3.97%)  [repeated input 0, zero rows 0, representation 56, of those stereo-only 56]
+    pharmacophore3d             0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    smited                     52 of   1412 share a row (  3.68%)  [repeated input 0, zero rows 0, representation 52, of those stereo-only 52]
+    usr                         0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+    usrcat                      0 of   1412 share a row (  0.00%)  [repeated input 0, zero rows 0, representation 0, of those stereo-only 0]
+
+================================================================================================
+WORST: different molecules the representation itself merges
+One row is one (dataset, representation). The count excludes inputs the dataset holds
+twice and rows the featuriser left at zero.
+================================================================================================
+dataset                  representation         merged       of       %  stereo-only
+caco2                    maccs                     804     2158  37.26%          139
+herg_ki                  maccs                     377     1412  26.70%           30
+caco2                    graph_kernel              203     2158   9.41%          177
+caco2                    top_torsion               186     2158   8.62%          177
+caco2                    avalon                    181     2158   8.39%          177
+caco2                    ecfp4                     179     2158   8.29%          177
+caco2                    atom_pair                 177     2158   8.20%          177
+caco2                    pdv                       177     2158   8.20%          177
+caco2                    smited                    177     2158   8.20%          177
+herg_ki                  graph_kernel              105     1412   7.44%           56
+herg_ki                  avalon                     66     1412   4.67%           56
+herg_ki                  atom_pair                  56     1412   3.97%           56
+herg_ki                  ecfp4                      56     1412   3.97%           56
+herg_ki                  mordred                    56     1412   3.97%           56
+herg_ki                  pdv                        56     1412   3.97%           56
+herg_ki                  smited                     52     1412   3.68%           52
+caco2                    coulomb_matrix              0     2158   0.00%            0
+caco2                    grover                      0     2158   0.00%            0
+caco2                    mhg_gnn                     0     2158   0.00%            0
+caco2                    molformer                   0     2158   0.00%            0
+caco2                    pharmacophore3d             0     2158   0.00%            0
+caco2                    usr                         0     2158   0.00%            0
+caco2                    usrcat                      0     2158   0.00%            0
+herg_ki                  chembert                    0     1412   0.00%            0
+herg_ki                  coulomb_matrix              0     1412   0.00%            0
+
+================================================================================================
+BEST SCORE ANY MODEL COULD REACH — regression datasets
+rmse_floor is in the dataset's own label units and is the error left when every
+tied group is predicted at its own mean. label_std is that dataset's label spread.
+================================================================================================
+dataset                  representation        rmse floor   label std  r2 ceiling
+herg_ki                  maccs                     0.1343      0.9151      0.9784
+caco2                    maccs                     0.1114      0.4378      0.9352
+herg_ki                  graph_kernel              0.0710      0.9151      0.9940
+herg_ki                  avalon                    0.0491      0.9151      0.9971
+herg_ki                  atom_pair                 0.0406      0.9151      0.9980
+herg_ki                  ecfp4                     0.0406      0.9151      0.9980
+herg_ki                  mordred                   0.0406      0.9151      0.9980
+herg_ki                  pdv                       0.0406      0.9151      0.9980
+herg_ki                  smited                    0.0401      0.9151      0.9981
+caco2                    top_torsion               0.0287      0.4378      0.9957
+caco2                    graph_kernel              0.0278      0.4378      0.9960
+caco2                    ecfp4                     0.0274      0.4378      0.9961
+caco2                    avalon                    0.0267      0.4378      0.9963
+caco2                    atom_pair                 0.0267      0.4378      0.9963
+caco2                    pdv                       0.0267      0.4378      0.9963
+caco2                    smited                    0.0267      0.4378      0.9963
+
+================================================================================================
+PAIRS WHERE THE BETTER OF THE TWO GAINS NOTHING
+Concatenating these two leaves as many molecules tied as the better of the two had on its own. Whatever the second one adds, it does not separate the tied molecules of the first.
+================================================================================================
+dataset                rep a              rep b                   a      b  together
+caco2                  avalon             maccs                 181    804       181
+caco2                  ecfp4              top_torsion           179    186       179
+caco2                  atom_pair          avalon                177    181       177
+caco2                  atom_pair          ecfp4                 177    179       177
+caco2                  atom_pair          graph_kernel          177    203       177
+caco2                  atom_pair          maccs                 177    804       177
+caco2                  atom_pair          pdv                   177    177       177
+caco2                  atom_pair          smited                177    177       177
+caco2                  atom_pair          top_torsion           177    186       177
+caco2                  avalon             pdv                   181    177       177
+caco2                  avalon             smited                181    177       177
+caco2                  ecfp4              pdv                   179    177       177
+caco2                  ecfp4              smited                179    177       177
+caco2                  graph_kernel       pdv                   203    177       177
+caco2                  graph_kernel       smited                203    177       177
+caco2                  maccs              pdv                   804    177       177
+caco2                  maccs              smited                804    177       177
+caco2                  pdv                smited                177    177       177
+caco2                  pdv                top_torsion           177    186       177
+caco2                  smited             top_torsion           177    186       177
+herg_ki                atom_pair          avalon                 56     66        56
+herg_ki                atom_pair          ecfp4                  56     56        56
+herg_ki                atom_pair          graph_kernel           56    105        56
+herg_ki                atom_pair          maccs                  56    377        56
+herg_ki                atom_pair          mordred                56     56        56
+
+================================================================================================
+THE WHOLE POOL SIDE BY SIDE
+Molecules still sharing a row when every representation in the pool is concatenated.
+This is the floor a hybrid cannot go below, because a hybrid selects from these features.
+================================================================================================
+dataset                   reps  molecules  still tied       %
+caco2                       15       2158           0   0.00%
+herg_ki                     15       1412           0   0.00%
+
+wrote /Users/apunt/repos/KIRBy/scratchpad/opig_verify/census/opig_shared_vectors_census.json
+wrote /Users/apunt/repos/KIRBy/scratchpad/opig_verify/census/opig_shared_vectors_census.csv
+EXIT=0

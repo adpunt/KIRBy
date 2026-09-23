@@ -1,0 +1,29 @@
+  [auto] herg_ki: filtering to 10 general reps from DATASET_REPS
+  Loading cached ChEMBL hERG Ki from /Users/apunt/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    mhg_gnn: cached (1024D)
+    mordred: cached (1613D)
+    graph_kernel: cached (276D)
+    avalon: cached (2048D)
+    grover: cached (4800D)
+    pdv: cached (200D)
+    ecfp4: cached (2048D)
+    atom_pair: cached (2048D)
+    chembert: cached (256D)
+    smited: cached (768D)
+  herg_ki: 1412 samples, 769 scaffolds, 10 reps (mhg_gnn=1024, mordred=1613, graph_kernel=276, avalon=2048, grover=4800, pdv=200, ecfp4=2048, atom_pair=2048, chembert=256, smited=768)
+herg_ki 1412 molecules, metric rmse in pKi units, lower is better
+  atom_pair       2048f  rmse=0.6129 sd=0.0230  (18s)
+  avalon          2048f  rmse=0.6203 sd=0.0321  (19s)
+  chembert         256f  rmse=0.6623 sd=0.0229  (36s)
+  ecfp4           2048f  rmse=0.5994 sd=0.0326  (18s)
+  graph_kernel     276f  rmse=0.6094 sd=0.0397  (5s)
+  grover          4800f  rmse=0.6524 sd=0.0210  (133s)
+  mhg_gnn         1024f  rmse=0.6018 sd=0.0267  (31s)
+  mordred         1613f  rmse=0.6286 sd=0.0368  (55s)
+  pdv              200f  rmse=0.6116 sd=0.0340  (13s)
+  smited           768f  rmse=0.6664 sd=0.0196  (52s)
+
+TOP 5 by rmse: ecfp4,mhg_gnn,graph_kernel,pdv,atom_pair
+EXIT=0

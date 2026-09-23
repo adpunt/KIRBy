@@ -1,0 +1,53 @@
+======================================================================
+GRAPHINITY DDG EXPERIMENT (OPIG B2)
+  Paper: Hummer et al. 2025, Nature Computational Science
+  Conditions: ['experimental']
+  Reps: ['mutation_features', 'onehot', 'blosum', 'aac', 'antiberty_cdr']
+  Models: ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+  Folds: 5
+  Max samples (FoldX): 5000
+======================================================================
+
+============================================================
+Condition: experimental (dataset: ddg_combined)
+============================================================
+  Loading combined ΔΔG dataset (SKEMPI 2.0 Ab-Ag + AB-Bind)...
+  SKEMPI: 1231/7085 entries are Ab-Ag
+  SKEMPI: 267 valid Ab-Ag entries, 964 skipped
+  AB-Bind: 230 valid entries, 524 skipped
+  Deduplication: 35 overlapping entries (AB-Bind preferred)
+  Combined: 454 unique entries (267 SKEMPI + 230 AB-Bind - 35 overlap)
+  Outlier filter: removed 25 entries (|ddG|>8 or >3σ from mean)
+  Final: 429 entries
+  ΔΔG range: [-4.061, 6.000] kcal/mol, mean=0.472
+  429 samples, DDG range [-4.06, 6.00]
+  30 groups (PDB complexes)
+  mutation_features: 48D (computed + cached) [ddg_combined_429]
+  onehot: 5600D (computed + cached) [ddg_combined_429]
+  blosum: 5600D (computed + cached) [ddg_combined_429]
+  aac: 40D (computed + cached) [ddg_combined_429]
+  [dedup] embed_antiberty_cdr: 429 -> 388 unique pairs (1x)
+  antiberty_cdr: 1024D (computed + cached) [ddg_combined_429]
+  [ddg_combined/n429] pruning_mode=default_pruning (no per-model overrides)
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 2}). The hybrid is 23 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 2}). The hybrid is 23 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 2}). The hybrid is 23 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 0 hit / 12 miss / 8 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+[cache] cache stats — baseline: 20 hit / 12 miss / 8 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+[cache] cache stats — baseline: 40 hit / 12 miss / 8 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Top-3 base reps (by RF): onehot=0.3199, blosum=0.1706, mutation_features=0.1372
+  deltas x dnn       hybrid=0.2141  minus the mean of the 4 representations that fed it: +0.1486  minus the best representation (mutation_features): +0.0416
+  deltas x lightgbm  hybrid=0.1666  minus the mean of the 4 representations that fed it: +0.0070  minus the best representation (onehot): -0.0506
+  deltas x rf        hybrid=0.2429  minus the mean of the 4 representations that fed it: +0.0837  minus the best representation (onehot): -0.0770
+  deltas x svm       hybrid=0.2205  minus the mean of the 4 representations that fed it: +0.0895  minus the best representation (mutation_features): -0.0072
+  deltas x xgboost   hybrid=0.1800  minus the mean of the 4 representations that fed it: +0.0617  minus the best representation (onehot): -0.0128
+
+  Evaluating 5 reps × 5 models × 5-fold CV...
+    aac                       rf        r=0.1629  r_g=-0.1668  rho=0.0645  (5.4s)
+    aac                       xgboost   r=0.2045  r_g=-0.1124  rho=0.1517  (4.9s)
+    aac                       svm       r=-0.0355  r_g=-0.3826  rho=-0.0034  (2.0s)
+    aac                       dnn       r=-0.1216  r_g=-0.4096  rho=-0.0603  (18.3s)
+    aac                       lightgbm  r=0.2839  r_g=-0.0291  rho=0.1909  (3.2s)
+sh: line 1:  5819 Segmentation fault: 11  python tests/experiments/opig_graphinity_ddg.py --conditions experimental --reps mutation_features,onehot,blosum,aac,antiberty_cdr --output /Users/apunt/repos/KIRBy/scratchpad/opig_verify/graphinity.json
+EXIT=139

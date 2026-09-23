@@ -1,0 +1,106 @@
+======================================================================
+HUMANNESS CLASSIFICATION EXPERIMENT (OPIG B3)
+  Paper: Prihoda et al. 2022, mAbs 14(1):2020203 (BioPhi)
+  Datasets: ['humanness_therapeutic']
+  Reps: ['aac', 'blosum', 'onehot', 'antiberty_cdr']
+  Models: ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+  Folds: 5
+======================================================================
+
+============================================================
+Dataset: humanness_therapeutic
+============================================================
+  Humanness (therapeutic, BioPhi IMGT): 564 samples, 198 human, 366 non-human
+    identity grouping: 461 groups over 564 antibodies (homology clusters, largest=13, 404/461 singletons)
+  564 samples, 198 human (35.1%), 366 non-human (64.9%)
+    identity grouping: 461 groups over 564 antibodies (homology clusters, largest=13, 404/461 singletons)
+  aac: 40D (cached) [humanness_therapeutic]
+  blosum: 5600D (cached) [humanness_therapeutic]
+  onehot: 5600D (cached) [humanness_therapeutic]
+  antiberty_cdr: 512D (cached) [humanness_therapeutic]
+  [humanness_therapeutic] pruning_mode=default_pruning (no per-model overrides)
+[cache] cache stats — baseline: 19 hit / 1 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Top-3 base reps (by RF): antiberty_cdr=0.9631, blosum=0.9404, onehot=0.9331
+
+  Evaluating 4 reps × 5 models × 5-fold CV...
+    aac                       rf        acc=0.7842  auroc=0.8306  (5.5s)
+    aac                       xgboost   acc=0.7610  auroc=0.8012  (4.7s)
+    aac                       svm       acc=0.7968  auroc=0.8489  (6.4s)
+    aac                       dnn       acc=0.7745  auroc=0.8173  (14.6s)
+    aac                       lightgbm  acc=0.7636  auroc=0.8031  (3.9s)
+    antiberty_cdr             rf        acc=0.9161  auroc=0.9631  (7.1s)
+    antiberty_cdr             xgboost   acc=0.9049  auroc=0.9654  (40.4s)
+    antiberty_cdr             svm       acc=0.9211  auroc=0.9704  (9.0s)
+    antiberty_cdr             dnn       acc=0.9203  auroc=0.9665  (14.6s)
+    antiberty_cdr             lightgbm  acc=0.9074  auroc=0.9712  (79.5s)
+    blosum                    rf        acc=0.8915  auroc=0.9361  (10.0s)
+    blosum                    xgboost   acc=0.8626  auroc=0.9252  (58.9s)
+    blosum                    svm       acc=0.8181  auroc=0.8883  (104.2s)
+    blosum                    dnn       acc=0.8010  auroc=0.8595  (59.7s)
+    blosum                    lightgbm  acc=0.8757  auroc=0.9260  (67.0s)
+    onehot                    rf        acc=0.8628  auroc=0.9233  (7.5s)
+    onehot                    xgboost   acc=0.8631  auroc=0.9153  (33.0s)
+    onehot                    svm       acc=0.8426  auroc=0.9175  (94.5s)
+    onehot                    dnn       acc=0.8476  auroc=0.8953  (74.3s)
+    onehot                    lightgbm  acc=0.8568  auroc=0.9052  (12.2s)
+
+==========================================================================================
+HUMANNESS EXPERIMENT RESULTS: humanness_therapeutic
+  564 samples (198 human, 366 non-human)
+==========================================================================================
+
+  Rep                       Model           Acc      AUROC        F1w     BalAcc
+  ------------------------- -------- ---------- ---------- ---------- ----------
+  Hu-mAb (Marks)            paper        0.9330     0.9770          —          —
+  OASis relaxed             paper        0.9440     0.9720          —          —
+  Germline content          paper        0.9280     0.9680          —          —
+  IgReconstruct             paper        0.9260     0.9670          —          —
+  MG Score                  paper        0.9180     0.9590          —          —
+  AbLSTM                    paper        0.8780     0.9370          —          —
+  T20                       paper        0.8390     0.8960          —          —
+  Z-score                   paper        0.7650     0.8370          —          —
+  . . .                    
+  antiberty_cdr             lightgbm     0.9074     0.9712     0.9062     0.8905
+  antiberty_cdr             svm          0.9211     0.9704     0.9209     0.9135
+  antiberty_cdr             dnn          0.9203     0.9665     0.9195     0.9059
+  antiberty_cdr             xgboost      0.9049     0.9654     0.9041     0.8877
+  antiberty_cdr             rf           0.9161     0.9631     0.9146     0.8947
+  blosum                    rf           0.8915     0.9361     0.8898     0.8701
+  blosum                    lightgbm     0.8757     0.9260     0.8740     0.8547
+  blosum                    xgboost      0.8626     0.9252     0.8608     0.8383
+  onehot                    rf           0.8628     0.9233     0.8606     0.8354
+  onehot                    svm          0.8426     0.9175     0.8396     0.8104
+  onehot                    xgboost      0.8631     0.9153     0.8627     0.8479
+  onehot                    lightgbm     0.8568     0.9052     0.8547     0.8315
+  onehot                    dnn          0.8476     0.8953     0.8464     0.8236
+  blosum                    svm          0.8181     0.8883     0.8136     0.7788
+  blosum                    dnn          0.8010     0.8595     0.8014     0.7855
+  aac                       svm          0.7968     0.8489     0.7926     0.7588
+  aac                       rf           0.7842     0.8306     0.7732     0.7269
+  aac                       dnn          0.7745     0.8173     0.7741     0.7484
+  aac                       lightgbm     0.7636     0.8031     0.7577     0.7213
+  aac                       xgboost      0.7610     0.8012     0.7550     0.7170
+
+  Summary:
+    Best individual rep: antiberty_cdr (lightgbm) = 0.9712
+    vs Hu-mAb (Marks): -0.0058
+    vs OASis relaxed: -0.0008
+    vs Germline content: +0.0032
+    vs IgReconstruct: +0.0042
+    vs MG Score: +0.0122
+    vs AbLSTM: +0.0342
+    vs T20: +0.0752
+    vs Z-score: +0.1342
+
+  Honest per-model comparison (leave-one-fold-out, held-out selection; primary metric = auc):
+    Delta = delta_mean_of_folds, the mean over folds of (hybrid AUROC - best-single AUROC) on that held-out fold. Folds = how many folds both arms scored.
+    Model          Hybrid   BestSingle      Delta  Folds
+    ---------- ---------- ------------ ---------- ------
+    dnn            0.9583       0.9675    -0.0092      4
+    lightgbm       0.9625       0.9732    -0.0107      4
+    rf             0.9728       0.9632    +0.0096      4
+    svm            0.9612       0.9724    -0.0113      4
+    xgboost        0.9603       0.9664    -0.0061      4
+
+Results saved: /Users/apunt/repos/KIRBy/scratchpad/opig_verify/humanness.json
+EXIT=0

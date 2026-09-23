@@ -1,0 +1,1140 @@
+======================================================================
+TRASTUZUMAB BINDER ENRICHMENT EXPERIMENT (OPIG B1)
+  Paper: Chinery et al. 2024
+  Reps: ['blosum', 'onehot', 'aac', 'mutation_features']
+  Models: ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+  Folds: 5
+  Enrichment fractions: [0.01, 0.05, 0.1]
+======================================================================
+
+============================================================
+Dataset: tz_her2_binary (Trastuzumab-HER2 binding)
+============================================================
+  Trastuzumab (binary): 524346 total samples
+    Class 0: 352197 (67.2%)
+    Class 1: 172149 (32.8%)
+  Subsampling 524346 -> 5000...
+  After subsampling: 5000 samples
+    Class 0: 3361 (67.2%)
+    Class 1: 1639 (32.8%)
+  5000/5000 samples have mutations, avg 7.3 mutations/sample
+  Edit distance range: [1, 10]
+  5000 samples, 1639 binders (32.8%), 3361 non-binders (67.2%)
+  blosum: 5600D (computed + cached) [tz_her2_binary]
+  onehot: 5600D (computed + cached) [tz_her2_binary]
+  aac: 40D (computed + cached) [tz_her2_binary]
+  mutation_features: 48D (computed + cached) [tz_her2_binary]
+  [tz_her2_binary] pruning_mode=default_pruning (no per-model overrides)
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 2}). The hybrid is 98 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 1 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 1}). The hybrid is 99 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 198 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 136, 'blosum': 46, 'mutation_features': 16}). The hybrid is 302 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 198 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 132, 'blosum': 50, 'mutation_features': 16}). The hybrid is 302 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 178 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 116, 'blosum': 26, 'aac': 20, 'mutation_features': 16}). The hybrid is 322 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 178 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 113, 'blosum': 29, 'aac': 20, 'mutation_features': 16}). The hybrid is 322 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 2}). The hybrid is 98 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 198 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 136, 'blosum': 46, 'mutation_features': 16}). The hybrid is 302 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 178 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 116, 'blosum': 26, 'aac': 20, 'mutation_features': 16}). The hybrid is 322 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 200 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 139, 'blosum': 41, 'aac': 20}). The hybrid is 300 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 167 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 115, 'aac': 20, 'blosum': 17, 'mutation_features': 15}). The hybrid is 333 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 200 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 139, 'blosum': 41, 'aac': 20}). The hybrid is 300 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 167 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 115, 'aac': 20, 'blosum': 17, 'mutation_features': 15}). The hybrid is 333 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 200 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 139, 'blosum': 41, 'aac': 20}). The hybrid is 300 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 167 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 115, 'aac': 20, 'blosum': 17, 'mutation_features': 15}). The hybrid is 333 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 200 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 167, 'aac': 20, 'blosum': 13}). The hybrid is 300 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 174 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 139, 'aac': 20, 'mutation_features': 15}). The hybrid is 326 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 200 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 167, 'aac': 20, 'blosum': 13}). The hybrid is 300 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 174 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 139, 'aac': 20, 'mutation_features': 15}). The hybrid is 326 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 200 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 167, 'aac': 20, 'blosum': 13}). The hybrid is 300 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 174 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 139, 'aac': 20, 'mutation_features': 15}). The hybrid is 326 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 0 hit / 8 miss / 12 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Top-3 base reps (by RF): onehot=0.8639, blosum=0.8300, mutation_features=0.7301
+  per-fold reselection drops fold(s) [0] from both arms (the search filtered its recipe list on them)
+  honest × dnn       hybrid=0.7930  best_single=0.7706  delta_mean_of_folds=+0.0224 over 4 paired folds
+  honest × lightgbm  hybrid=0.8141  best_single=0.8601  delta_mean_of_folds=-0.0460 over 4 paired folds
+  honest × rf        hybrid=0.8151  best_single=0.8677  delta_mean_of_folds=-0.0526 over 4 paired folds
+  honest × svm       hybrid=0.7854  best_single=0.7655  delta_mean_of_folds=+0.0199 over 4 paired folds
+  honest × xgboost   hybrid=0.7924  best_single=0.8787  delta_mean_of_folds=-0.0863 over 4 paired folds
+  top-2 grid: 20 of 20 rows (5 downstream models × (2 base representations + 2 hybrid configurations)), 8 distinct things to build
+  deltas × dnn      hybrid=0.8150 auc  vs mean of the 4 representations that fed it (0.7782 auc): +0.0369  vs best single representation mutation_features (0.8064 auc): +0.0086
+  deltas × lightgbm hybrid=0.8340 auc  vs mean of the 4 representations that fed it (0.7914 auc): +0.0426  vs best single representation blosum (0.8562 auc): -0.0222
+  deltas × rf       hybrid=0.8485 auc  vs mean of the 4 representations that fed it (0.7789 auc): +0.0697  vs best single representation onehot (0.8639 auc): -0.0154
+  deltas × svm      hybrid=0.8278 auc  vs mean of the 4 representations that fed it (0.7440 auc): +0.0838  vs best single representation onehot (0.8033 auc): +0.0245
+  deltas × xgboost  hybrid=0.8370 auc  vs mean of the 4 representations that fed it (0.7821 auc): +0.0549  vs best single representation onehot (0.8676 auc): -0.0306
+
+  Zero-shot ranking (paper's protocol)...
+
+  Supervised evaluation (4 reps × 5 models × 5-fold CV)...
+    aac                       rf        E@1%=0.9590  AUROC=0.6914  (3.0s)
+    aac                       xgboost   E@1%=0.9524  AUROC=0.7113  (0.8s)
+    aac                       svm       E@1%=0.8657  AUROC=0.6913  (42.6s)
+    aac                       dnn       E@1%=0.9790  AUROC=0.7087  (11.9s)
+    aac                       lightgbm  E@1%=0.9800  AUROC=0.7484  (0.8s)
+    blosum                    rf        E@1%=1.0000  AUROC=0.8156  (19.0s)
+    blosum                    xgboost   E@1%=1.0000  AUROC=0.8318  (54.0s)
+    blosum                    svm       E@1%=0.8000  AUROC=0.7794  (5162.4s)
+    blosum                    dnn       E@1%=0.9000  AUROC=0.7874  (245.8s)
+    blosum                    lightgbm  E@1%=1.0000  AUROC=0.8616  (32.0s)
+    mutation_features         rf        E@1%=0.9933  AUROC=0.7301  (7.7s)
+    mutation_features         xgboost   E@1%=0.9800  AUROC=0.7035  (3.5s)
+    mutation_features         svm       E@1%=0.9933  AUROC=0.6970  (161.3s)
+    mutation_features         dnn       E@1%=1.0000  AUROC=0.7073  (41.4s)
+    mutation_features         lightgbm  E@1%=1.0000  AUROC=0.7255  (4.5s)
+    onehot                    rf        E@1%=1.0000  AUROC=0.8473  (79.7s)
+    onehot                    xgboost   E@1%=1.0000  AUROC=0.7982  (144.4s)
+    onehot                    svm       E@1%=1.0000  AUROC=0.7687  (4272.0s)
+    onehot                    dnn       E@1%=1.0000  AUROC=0.8047  (431.5s)
+    onehot                    lightgbm  E@1%=1.0000  AUROC=0.8334  (13.4s)
+
+  Per-fold hybrid enrichment (5 folds, train-only search)...
+  [tz_her2_binary/fold0] pruning_mode=default_pruning (no per-model overrides)
+Models: ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+Representations: ['blosum', 'onehot', 'aac', 'mutation_features'] (dims: [5600, 5600, 40, 48])
+
+Evaluating full-dimension baselines [auc, BIGGER IS BETTER]...
+  blosum: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__blosum__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  blosum (dim=5600): rf=0.863, xgboost=0.852, lightgbm=0.858, svm=0.805, dnn=0.813
+  onehot: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__onehot__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 5600), expected=(4729, 5600)) — will recompute.
+  onehot (dim=5600): rf=0.861, xgboost=0.868, lightgbm=0.855, svm=0.848, dnn=0.906
+  Cache tz_her2_binary__aac__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 40), expected=(4729, 40)) — will recompute.
+  Cache tz_her2_binary__aac__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 40), expected=(4729, 40)) — will recompute.
+  Cache tz_her2_binary__aac__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 40), expected=(4729, 40)) — will recompute.
+  Cache tz_her2_binary__aac__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 40), expected=(4729, 40)) — will recompute.
+  Cache tz_her2_binary__aac__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 40), expected=(4729, 40)) — will recompute.
+  aac (dim=40): rf=0.735, xgboost=0.765, lightgbm=0.602, svm=0.750, dnn=0.787
+  Cache tz_her2_binary__mutation_features__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 48), expected=(4729, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 48), expected=(4729, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 48), expected=(4729, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 48), expected=(4729, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(5000, 48), expected=(4729, 48)) — will recompute.
+  mutation_features (dim=48): rf=0.731, xgboost=0.713, lightgbm=0.712, svm=0.525, dnn=0.743
+
+Searching 150 unique configurations...
+  Pre-computing importance: 1 methods × 5 folds × 4 reps...
+  Importance pre-computed in 37.5s (5/5 successful, 0 read from disk)
+  Allocation scores pre-computed in 143.4s (1 evaluators × 10 metrics, 0 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 150 configs...
+  !! the budget is a MAXIMUM and it was not filled: 240 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 156, 'blosum': 84}). The hybrid is 260 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 230 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 156, 'blosum': 74}). The hybrid is 270 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 240 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 156, 'blosum': 84}). The hybrid is 260 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+    stored fold 0 for 30 pruned recipes, so the next run reads the vote instead of re-fitting it
+  Pruned 1/5 strategies (top-2 in <15% of groups): ['softmax_T1']
+  Remaining: 120 configs
+
+  Evaluating 120 configs (all 5 folds)...
+  !! the budget is a MAXIMUM and it was not filled: 58 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 35, 'aac': 23}). The hybrid is 42 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [1/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8564+/-0.103, dim=88
+  !! the budget is a MAXIMUM and it was not filled: 40 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 23, 'mutation_features': 10, 'onehot': 7}). The hybrid is 60 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [2/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8141+/-0.149, dim=92
+  !! the budget is a MAXIMUM and it was not filled: 19 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 14, 'mutation_features': 5}). The hybrid is 81 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [3/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8424+/-0.118, dim=94
+  !! the budget is a MAXIMUM and it was not filled: 458 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 435, 'aac': 23}). The hybrid is 42 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [4/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8325+/-0.134, dim=218
+  !! the budget is a MAXIMUM and it was not filled: 440 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 387, 'mutation_features': 30, 'aac': 23}). The hybrid is 60 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [5/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8197+/-0.149, dim=248
+  !! the budget is a MAXIMUM and it was not filled: 324 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 191, 'blosum': 80, 'mutation_features': 30, 'aac': 23}). The hybrid is 176 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [6/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8528+/-0.115, dim=287
+  !! the budget is a MAXIMUM and it was not filled: 58 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 35, 'aac': 23}). The hybrid is 42 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [7/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8524+/-0.104, dim=88
+  !! the budget is a MAXIMUM and it was not filled: 40 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 23, 'mutation_features': 10, 'onehot': 7}). The hybrid is 60 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [8/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7495+/-0.267, dim=92
+  !! the budget is a MAXIMUM and it was not filled: 19 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 14, 'mutation_features': 5}). The hybrid is 81 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [9/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7891+/-0.206, dim=94
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [10/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8627+/-0.098, dim=218
+  !! the budget is a MAXIMUM and it was not filled: 440 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 387, 'mutation_features': 30, 'aac': 23}). The hybrid is 60 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [11/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7848+/-0.205, dim=248
+  !! the budget is a MAXIMUM and it was not filled: 324 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 191, 'blosum': 80, 'mutation_features': 30, 'aac': 23}). The hybrid is 176 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [12/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7723+/-0.270, dim=287
+  [13/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8431+/-0.119, dim=88
+  !! the budget is a MAXIMUM and it was not filled: 40 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 23, 'mutation_features': 10, 'onehot': 7}). The hybrid is 60 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [14/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8213+/-0.145, dim=92
+  !! the budget is a MAXIMUM and it was not filled: 19 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 14, 'mutation_features': 5}). The hybrid is 81 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [15/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7290+/-0.332, dim=94
+  [16/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8468+/-0.119, dim=218
+  !! the budget is a MAXIMUM and it was not filled: 440 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 387, 'mutation_features': 30, 'aac': 23}). The hybrid is 60 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [17/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8133+/-0.173, dim=248
+  !! the budget is a MAXIMUM and it was not filled: 324 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 191, 'blosum': 80, 'mutation_features': 30, 'aac': 23}). The hybrid is 176 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [18/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8567+/-0.117, dim=287
+  [19/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8257+/-0.145, dim=88
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [20/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7212+/-0.330, dim=92
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [21/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7601+/-0.267, dim=94
+  [22/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8370+/-0.126, dim=218
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [23/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8390+/-0.124, dim=248
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [24/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8508+/-0.123, dim=287
+  [25/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8491+/-0.093, dim=88
+  [26/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7800+/-0.154, dim=92
+  [27/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7862+/-0.143, dim=94
+  [28/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8445+/-0.100, dim=218
+  [29/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7814+/-0.154, dim=248
+  [30/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8218+/-0.146, dim=287
+  [31/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8394+/-0.118, dim=88
+  [32/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8080+/-0.162, dim=92
+  [33/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8165+/-0.152, dim=95
+  [34/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8325+/-0.134, dim=218
+  [35/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8197+/-0.149, dim=248
+  [36/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8528+/-0.115, dim=287
+  [37/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.8603+/-0.097, dim=88
+  [38/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.7235+/-0.298, dim=92
+  [39/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.7542+/-0.268, dim=95
+  [40/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8627+/-0.098, dim=218
+  [41/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.7848+/-0.205, dim=248
+  [42/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.7723+/-0.270, dim=287
+  [43/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8452+/-0.119, dim=88
+  [44/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7564+/-0.266, dim=92
+  [45/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8430+/-0.120, dim=95
+  [46/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8468+/-0.119, dim=218
+  [47/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8133+/-0.173, dim=248
+  [48/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8567+/-0.117, dim=287
+  [49/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8214+/-0.146, dim=88
+  [50/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7432+/-0.299, dim=92
+  [51/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8119+/-0.173, dim=95
+  [52/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8370+/-0.126, dim=218
+  [53/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8390+/-0.124, dim=248
+  [54/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8508+/-0.123, dim=287
+  [55/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8479+/-0.096, dim=88
+  [56/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.7753+/-0.154, dim=92
+  [57/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8151+/-0.123, dim=95
+  [58/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8445+/-0.100, dim=218
+  [59/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7814+/-0.154, dim=248
+  [60/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8218+/-0.146, dim=287
+  [61/120] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8673+/-0.095, dim=88
+  !! the budget is a MAXIMUM and it was not filled: 40 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 23, 'onehot': 9, 'mutation_features': 8}). The hybrid is 60 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [62/120] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8448+/-0.110, dim=92
+  !! the budget is a MAXIMUM and it was not filled: 25 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 20, 'onehot': 3, 'mutation_features': 2}). The hybrid is 75 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [63/120] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7996+/-0.178, dim=95
+  [64/120] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8325+/-0.134, dim=218
+  [65/120] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8197+/-0.149, dim=248
+  [66/120] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8528+/-0.115, dim=287
+  [67/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8639+/-0.095, dim=88
+  !! the budget is a MAXIMUM and it was not filled: 40 feature slots went unused because no feature left in those representations scored above zero importance ({'aac': 23, 'onehot': 9, 'mutation_features': 8}). The hybrid is 60 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [68/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7213+/-0.298, dim=92
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [69/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8113+/-0.175, dim=95
+  [70/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8627+/-0.098, dim=218
+  [71/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7848+/-0.205, dim=248
+  [72/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7723+/-0.270, dim=287
+  [73/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8623+/-0.097, dim=88
+  [74/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8237+/-0.144, dim=92
+  [75/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7634+/-0.268, dim=95
+  [76/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8468+/-0.119, dim=218
+  [77/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8133+/-0.173, dim=248
+  [78/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8567+/-0.117, dim=287
+  [79/120] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8049+/-0.174, dim=88
+  [80/120] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7561+/-0.266, dim=92
+  [81/120] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7990+/-0.204, dim=95
+  [82/120] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8370+/-0.126, dim=218
+  [83/120] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8390+/-0.124, dim=248
+  [84/120] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8508+/-0.123, dim=287
+  [85/120] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8236+/-0.120, dim=88
+  [86/120] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7591+/-0.178, dim=92
+  [87/120] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7588+/-0.177, dim=95
+  [88/120] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8445+/-0.100, dim=218
+  [89/120] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.7814+/-0.154, dim=248
+  [90/120] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8218+/-0.146, dim=287
+  [91/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8510+/-0.105, dim=87
+  [92/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8207+/-0.147, dim=88
+  [93/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7963+/-0.193, dim=91
+  [94/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8555+/-0.100, dim=145
+  [95/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8539+/-0.102, dim=161
+  [96/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8029+/-0.193, dim=184
+  [97/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8713+/-0.090, dim=87
+  [98/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7974+/-0.174, dim=88
+  [99/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8074+/-0.177, dim=91
+  [100/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8181+/-0.150, dim=145
+  [101/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7148+/-0.330, dim=161
+  [102/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7991+/-0.208, dim=184
+  [103/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8419+/-0.121, dim=87
+  [104/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8428+/-0.117, dim=88
+  [105/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8369+/-0.143, dim=91
+  [106/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8681+/-0.094, dim=145
+  [107/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8660+/-0.093, dim=161
+  [108/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8305+/-0.175, dim=184
+  [109/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8108+/-0.154, dim=87
+  [110/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7463+/-0.267, dim=88
+  [111/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8096+/-0.175, dim=91
+  [112/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8101+/-0.155, dim=145
+  [113/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8170+/-0.151, dim=161
+  [114/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8469+/-0.124, dim=184
+  [115/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8133+/-0.125, dim=87
+  [116/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7188+/-0.212, dim=88
+  [117/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8117+/-0.128, dim=91
+  [118/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8212+/-0.121, dim=145
+  [119/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7907+/-0.152, dim=161
+  [120/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8225+/-0.144, dim=184
+  Feature selection dedup: 475 fold evaluations skipped (425 unique selections cached)
+
+Fitting best configs on full data (5 models)...
+
+Best features per model x budget (auc):
+  model         b=100    b=500  
+  ------------------------------
+  dnn           0.8491  0.8445
+  lightgbm      0.8623  0.8681
+  rf            0.8673  0.8555
+  svm           0.8257  0.8508
+  xgboost       0.8713  0.8627
+  budget split [dnn, performance_weighted, budget 100]: 100 features across 2 of 2 representations; the largest share is 51 (51%). blosum=51, onehot=49
+  budget split [lightgbm, wglobal_power2, budget 500]: 170 features across 2 of 2 representations; the largest share is 169 (99%). blosum=169, onehot=1
+  budget split [rf, rank_exp_d0.3, budget 100]: 100 features across 2 of 2 representations; the largest share is 57 (57%). blosum=57, onehot=43
+  budget split [svm, performance_weighted, budget 500]: 500 features across 4 of 4 representations; the largest share is 210 (42%). blosum=210, onehot=202, mutation_features=48, aac=40
+  budget split [xgboost, wglobal_power2, budget 100]: 100 features across 2 of 2 representations; the largest share is 98 (98%). blosum=98, onehot=2
+[cache] cache stats — baseline: 0 hit / 8 miss / 32 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [tz_her2_binary/fold1] pruning_mode=default_pruning (no per-model overrides)
+Models: ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+Representations: ['blosum', 'onehot', 'aac', 'mutation_features'] (dims: [5600, 5600, 40, 48])
+
+Evaluating full-dimension baselines [auc, BIGGER IS BETTER]...
+  blosum: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__blosum__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  blosum (dim=5600): rf=0.914, xgboost=0.913, lightgbm=0.931, svm=0.860, dnn=0.862
+  onehot: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__onehot__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 5600), expected=(4813, 5600)) — will recompute.
+  onehot (dim=5600): rf=0.898, xgboost=0.891, lightgbm=0.892, svm=0.879, dnn=0.902
+  Cache tz_her2_binary__aac__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 40), expected=(4813, 40)) — will recompute.
+  Cache tz_her2_binary__aac__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 40), expected=(4813, 40)) — will recompute.
+  Cache tz_her2_binary__aac__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 40), expected=(4813, 40)) — will recompute.
+  Cache tz_her2_binary__aac__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 40), expected=(4813, 40)) — will recompute.
+  Cache tz_her2_binary__aac__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 40), expected=(4813, 40)) — will recompute.
+  aac (dim=40): rf=0.769, xgboost=0.806, lightgbm=0.810, svm=0.743, dnn=0.789
+  Cache tz_her2_binary__mutation_features__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 48), expected=(4813, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 48), expected=(4813, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 48), expected=(4813, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 48), expected=(4813, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4729, 48), expected=(4813, 48)) — will recompute.
+  mutation_features (dim=48): rf=0.801, xgboost=0.681, lightgbm=0.768, svm=0.567, dnn=0.641
+
+Searching 150 unique configurations...
+  Pre-computing importance: 1 methods × 5 folds × 4 reps...
+  Importance pre-computed in 48.3s (5/5 successful, 0 read from disk)
+  Allocation scores pre-computed in 148.4s (1 evaluators × 10 metrics, 0 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 150 configs...
+    stored fold 0 for 30 pruned recipes, so the next run reads the vote instead of re-fitting it
+  Pruned 1/5 strategies (top-2 in <15% of groups): ['softmax_T1']
+  Remaining: 120 configs
+
+  Evaluating 120 configs (all 5 folds)...
+  [1/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.9114+/-0.055, dim=100
+  [2/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8517+/-0.142, dim=98
+  [3/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8785+/-0.096, dim=98
+  [4/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8951+/-0.083, dim=257
+  [5/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8952+/-0.084, dim=287
+  [6/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8962+/-0.084, dim=309
+  [7/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8961+/-0.083, dim=100
+  [8/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8034+/-0.240, dim=98
+  [9/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8721+/-0.112, dim=98
+  [10/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8982+/-0.083, dim=257
+  [11/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8572+/-0.144, dim=287
+  [12/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8420+/-0.176, dim=309
+  [13/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.9141+/-0.055, dim=100
+  [14/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8908+/-0.082, dim=98
+  [15/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7889+/-0.273, dim=98
+  [16/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8984+/-0.083, dim=257
+  [17/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.9093+/-0.056, dim=287
+  [18/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8764+/-0.112, dim=309
+  [19/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8918+/-0.081, dim=100
+  [20/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8418+/-0.176, dim=98
+  [21/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8541+/-0.142, dim=98
+  [22/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8652+/-0.145, dim=257
+  [23/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8667+/-0.146, dim=287
+  [24/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8664+/-0.146, dim=309
+  [25/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8852+/-0.059, dim=100
+  [26/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8954+/-0.057, dim=98
+  [27/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8928+/-0.057, dim=98
+  [28/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8989+/-0.055, dim=257
+  [29/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8672+/-0.109, dim=287
+  [30/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8867+/-0.080, dim=309
+  [31/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.9135+/-0.055, dim=100
+  [32/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.9062+/-0.056, dim=99
+  [33/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8707+/-0.112, dim=100
+  [34/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8951+/-0.083, dim=257
+  [35/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8952+/-0.084, dim=287
+  [36/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8962+/-0.084, dim=309
+  [37/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.8802+/-0.114, dim=100
+  [38/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.7860+/-0.273, dim=99
+  [39/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.8380+/-0.175, dim=100
+  [40/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8982+/-0.083, dim=257
+  [41/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8572+/-0.144, dim=287
+  [42/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8420+/-0.176, dim=309
+  [43/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.9150+/-0.055, dim=100
+  [44/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8250+/-0.208, dim=99
+  [45/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8225+/-0.208, dim=100
+  [46/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8984+/-0.083, dim=257
+  [47/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.9093+/-0.056, dim=287
+  [48/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8764+/-0.112, dim=309
+  [49/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8924+/-0.081, dim=100
+  [50/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8268+/-0.209, dim=99
+  [51/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8381+/-0.175, dim=100
+  [52/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8652+/-0.145, dim=257
+  [53/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8667+/-0.146, dim=287
+  [54/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8664+/-0.146, dim=309
+  [55/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8868+/-0.059, dim=100
+  [56/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.9141+/-0.047, dim=99
+  [57/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8742+/-0.080, dim=100
+  [58/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8989+/-0.055, dim=257
+  [59/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8672+/-0.109, dim=287
+  [60/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8867+/-0.080, dim=309
+  [61/120] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.9124+/-0.055, dim=100
+  [62/120] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8733+/-0.112, dim=99
+  [63/120] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8895+/-0.082, dim=100
+  [64/120] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8951+/-0.083, dim=257
+  [65/120] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8952+/-0.084, dim=287
+  [66/120] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8962+/-0.084, dim=309
+  [67/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8780+/-0.114, dim=100
+  [68/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.6192+/-0.361, dim=99
+  [69/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.7863+/-0.272, dim=100
+  [70/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8982+/-0.083, dim=257
+  [71/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8572+/-0.144, dim=287
+  [72/120] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8420+/-0.176, dim=309
+  [73/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.9295+/-0.040, dim=100
+  [74/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8074+/-0.241, dim=99
+  [75/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8223+/-0.207, dim=100
+  [76/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8984+/-0.083, dim=257
+  [77/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.9093+/-0.056, dim=287
+  [78/120] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8764+/-0.112, dim=309
+  [79/120] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8930+/-0.082, dim=100
+  [80/120] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8600+/-0.144, dim=99
+  [81/120] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8382+/-0.175, dim=100
+  [82/120] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8652+/-0.145, dim=257
+  [83/120] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8667+/-0.146, dim=287
+  [84/120] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8664+/-0.146, dim=309
+  [85/120] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8893+/-0.057, dim=100
+  [86/120] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8767+/-0.080, dim=99
+  [87/120] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8553+/-0.107, dim=100
+  [88/120] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8989+/-0.055, dim=257
+  [89/120] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8672+/-0.109, dim=287
+  [90/120] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8867+/-0.080, dim=309
+  [91/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8959+/-0.082, dim=100
+  [92/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8745+/-0.112, dim=100
+  [93/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8744+/-0.112, dim=100
+  [94/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.9144+/-0.056, dim=167
+  [95/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8782+/-0.113, dim=185
+  [96/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8618+/-0.145, dim=201
+  [97/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8810+/-0.114, dim=100
+  [98/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8357+/-0.174, dim=100
+  [99/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8729+/-0.111, dim=100
+  [100/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8972+/-0.083, dim=167
+  [101/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8718+/-0.113, dim=185
+  [102/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8723+/-0.113, dim=201
+  [103/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8813+/-0.114, dim=100
+  [104/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8427+/-0.176, dim=100
+  [105/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8264+/-0.209, dim=100
+  [106/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8804+/-0.114, dim=167
+  [107/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.9111+/-0.056, dim=185
+  [108/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8583+/-0.144, dim=201
+  [109/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8938+/-0.082, dim=100
+  [110/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8411+/-0.175, dim=100
+  [111/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8744+/-0.112, dim=100
+  [112/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8620+/-0.144, dim=167
+  [113/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8975+/-0.082, dim=185
+  [114/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8970+/-0.082, dim=201
+  [115/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8789+/-0.080, dim=100
+  [116/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8820+/-0.083, dim=100
+  [117/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.9075+/-0.056, dim=100
+  [118/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8433+/-0.139, dim=167
+  [119/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8974+/-0.055, dim=185
+  [120/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8868+/-0.082, dim=201
+  Feature selection dedup: 435 fold evaluations skipped (465 unique selections cached)
+
+Fitting best configs on full data (5 models)...
+
+Best features per model x budget (auc):
+  model         b=100    b=500  
+  ------------------------------
+  dnn           0.9141  0.8989
+  lightgbm      0.9295  0.9111
+  rf            0.9135  0.9144
+  svm           0.8938  0.8975
+  xgboost       0.8961  0.8982
+  budget split [dnn, power_2, budget 100]: 100 features across 3 of 3 representations; the largest share is 40 (40%). blosum=40, onehot=36, aac=24
+  budget split [lightgbm, rank_exp_d0.3, budget 100]: 100 features across 2 of 2 representations; the largest share is 57 (57%). blosum=57, onehot=43
+  budget split [rf, wglobal_power2, budget 500]: 170 features across 2 of 2 representations; the largest share is 168 (99%). blosum=168, onehot=2
+  budget split [svm, wglobal_power2, budget 500]: 187 features across 3 of 3 representations; the largest share is 166 (89%). blosum=166, aac=20, onehot=1
+  budget split [xgboost, performance_weighted, budget 500]: 500 features across 2 of 2 representations; the largest share is 255 (51%). blosum=255, onehot=245
+[cache] cache stats — baseline: 0 hit / 8 miss / 52 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [tz_her2_binary/fold2] pruning_mode=default_pruning (no per-model overrides)
+Models: ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+Representations: ['blosum', 'onehot', 'aac', 'mutation_features'] (dims: [5600, 5600, 40, 48])
+
+Evaluating full-dimension baselines [auc, BIGGER IS BETTER]...
+  blosum: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__blosum__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  blosum (dim=5600): rf=0.834, xgboost=0.852, lightgbm=0.866, svm=0.828, dnn=0.799
+  onehot: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__onehot__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 5600), expected=(3506, 5600)) — will recompute.
+  onehot (dim=5600): rf=0.854, xgboost=0.836, lightgbm=0.838, svm=0.808, dnn=0.836
+  Cache tz_her2_binary__aac__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 40), expected=(3506, 40)) — will recompute.
+  Cache tz_her2_binary__aac__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 40), expected=(3506, 40)) — will recompute.
+  Cache tz_her2_binary__aac__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 40), expected=(3506, 40)) — will recompute.
+  Cache tz_her2_binary__aac__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 40), expected=(3506, 40)) — will recompute.
+  Cache tz_her2_binary__aac__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 40), expected=(3506, 40)) — will recompute.
+  aac (dim=40): rf=0.749, xgboost=0.768, lightgbm=0.751, svm=0.745, dnn=0.759
+  Cache tz_her2_binary__mutation_features__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 48), expected=(3506, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 48), expected=(3506, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 48), expected=(3506, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 48), expected=(3506, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(4813, 48), expected=(3506, 48)) — will recompute.
+  mutation_features (dim=48): rf=0.753, xgboost=0.725, lightgbm=0.743, svm=0.785, dnn=0.777
+
+Searching 150 unique configurations...
+  Pre-computing importance: 1 methods × 5 folds × 4 reps...
+  Importance pre-computed in 23.9s (5/5 successful, 0 read from disk)
+  Allocation scores pre-computed in 146.2s (1 evaluators × 10 metrics, 0 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 150 configs...
+  Pruned 1/3 on the rep_count axis (top-1 in <10% of 50 groups, folds [0, 1]): [3]
+    stored fold 0 for 60 pruned recipes, so the next run reads the vote instead of re-fitting it
+  Pruned 2/5 strategies (top-2 in <15% of groups): ['rank_exp_d0.3', 'softmax_T1']
+  Remaining: 60 configs
+
+  Evaluating 60 configs (all 5 folds)...
+  !! the budget is a MAXIMUM and it was not filled: 15 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 15}). The hybrid is 85 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 15 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 15}). The hybrid is 85 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [1/60] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8242+/-0.072, dim=94
+  [2/60] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8194+/-0.070, dim=97
+  !! the budget is a MAXIMUM and it was not filled: 333 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 315, 'mutation_features': 18}). The hybrid is 167 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 333 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 315, 'mutation_features': 18}). The hybrid is 167 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [3/60] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8399+/-0.062, dim=216
+  [4/60] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8351+/-0.065, dim=277
+  !! the budget is a MAXIMUM and it was not filled: 15 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 15}). The hybrid is 85 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [5/60] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8399+/-0.061, dim=94
+  [6/60] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8114+/-0.071, dim=97
+  !! the budget is a MAXIMUM and it was not filled: 333 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 315, 'mutation_features': 18}). The hybrid is 167 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [7/60] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8529+/-0.056, dim=216
+  [8/60] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8491+/-0.057, dim=277
+  [9/60] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8414+/-0.061, dim=94
+  [10/60] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8373+/-0.060, dim=97
+  [11/60] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8512+/-0.057, dim=216
+  [12/60] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8536+/-0.052, dim=277
+  [13/60] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8432+/-0.058, dim=94
+  [14/60] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8157+/-0.072, dim=97
+  [15/60] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8474+/-0.056, dim=216
+  [16/60] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8534+/-0.056, dim=277
+  [17/60] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8442+/-0.048, dim=94
+  [18/60] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8241+/-0.070, dim=97
+  [19/60] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8375+/-0.061, dim=216
+  [20/60] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8371+/-0.059, dim=277
+  [21/60] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8371+/-0.065, dim=96
+  [22/60] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8089+/-0.080, dim=99
+  [23/60] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8399+/-0.062, dim=216
+  !! the budget is a MAXIMUM and it was not filled: 260 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 133, 'onehot': 89, 'aac': 20, 'mutation_features': 18}). The hybrid is 240 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 260 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 123, 'onehot': 99, 'aac': 20, 'mutation_features': 18}). The hybrid is 240 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [24/60] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8351+/-0.065, dim=277
+  [25/60] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.8426+/-0.054, dim=96
+  [26/60] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.8244+/-0.069, dim=99
+  [27/60] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8529+/-0.056, dim=216
+  !! the budget is a MAXIMUM and it was not filled: 260 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 133, 'onehot': 89, 'aac': 20, 'mutation_features': 18}). The hybrid is 240 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [28/60] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8491+/-0.057, dim=277
+  [29/60] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8489+/-0.059, dim=96
+  [30/60] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8295+/-0.066, dim=99
+  [31/60] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8512+/-0.057, dim=216
+  [32/60] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8536+/-0.052, dim=277
+  [33/60] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8449+/-0.056, dim=96
+  [34/60] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8177+/-0.076, dim=99
+  [35/60] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8474+/-0.056, dim=216
+  [36/60] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8534+/-0.056, dim=277
+  [37/60] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8458+/-0.056, dim=96
+  [38/60] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8297+/-0.059, dim=99
+  [39/60] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8375+/-0.061, dim=216
+  [40/60] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8371+/-0.059, dim=277
+  [41/60] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8288+/-0.066, dim=100
+  [42/60] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8374+/-0.061, dim=100
+  [43/60] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8271+/-0.072, dim=155
+  [44/60] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8316+/-0.064, dim=180
+  [45/60] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8590+/-0.050, dim=100
+  [46/60] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8404+/-0.065, dim=100
+  [47/60] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8556+/-0.049, dim=155
+  [48/60] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8544+/-0.055, dim=180
+  [49/60] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8485+/-0.051, dim=100
+  [50/60] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8433+/-0.064, dim=100
+  [51/60] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8479+/-0.058, dim=155
+  [52/60] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8362+/-0.076, dim=180
+  [53/60] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8345+/-0.059, dim=100
+  [54/60] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8426+/-0.055, dim=100
+  [55/60] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8307+/-0.070, dim=155
+  [56/60] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8443+/-0.059, dim=180
+  [57/60] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8186+/-0.060, dim=100
+  [58/60] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8069+/-0.069, dim=100
+  [59/60] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8258+/-0.065, dim=155
+  [60/60] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8449+/-0.053, dim=180
+  Feature selection dedup: 250 fold evaluations skipped (350 unique selections cached)
+
+Fitting best configs on full data (5 models)...
+
+Best features per model x budget (auc):
+  model         b=100    b=500  
+  ------------------------------
+  dnn           0.8458  0.8449
+  lightgbm      0.8489  0.8536
+  rf            0.8374  0.8399
+  svm           0.8449  0.8534
+  xgboost       0.8590  0.8556
+  budget split [dnn, power_2, budget 100]: 100 features across 2 of 2 representations; the largest share is 52 (52%). blosum=52, onehot=48
+  budget split [lightgbm, performance_weighted, budget 500]: 500 features across 4 of 4 representations; the largest share is 208 (42%). blosum=208, onehot=204, mutation_features=48, aac=40
+  budget split [rf, performance_weighted, budget 500]: 500 features across 2 of 2 representations; the largest share is 254 (51%). blosum=254, onehot=246
+  budget split [svm, performance_weighted, budget 500]: 500 features across 4 of 4 representations; the largest share is 208 (42%). blosum=208, onehot=204, mutation_features=48, aac=40
+  budget split [xgboost, wglobal_power2, budget 100]: 100 features across 2 of 2 representations; the largest share is 99 (99%). blosum=99, onehot=1
+[cache] cache stats — baseline: 0 hit / 8 miss / 72 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [tz_her2_binary/fold3] pruning_mode=default_pruning (no per-model overrides)
+Models: ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+Representations: ['blosum', 'onehot', 'aac', 'mutation_features'] (dims: [5600, 5600, 40, 48])
+
+Evaluating full-dimension baselines [auc, BIGGER IS BETTER]...
+  blosum: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__blosum__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  blosum (dim=5600): rf=0.761, xgboost=0.773, lightgbm=0.780, svm=0.752, dnn=0.687
+  onehot: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__onehot__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 5600), expected=(1965, 5600)) — will recompute.
+  onehot (dim=5600): rf=0.787, xgboost=0.754, lightgbm=0.774, svm=0.738, dnn=0.749
+  Cache tz_her2_binary__aac__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 40), expected=(1965, 40)) — will recompute.
+  Cache tz_her2_binary__aac__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 40), expected=(1965, 40)) — will recompute.
+  Cache tz_her2_binary__aac__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 40), expected=(1965, 40)) — will recompute.
+  Cache tz_her2_binary__aac__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 40), expected=(1965, 40)) — will recompute.
+  Cache tz_her2_binary__aac__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 40), expected=(1965, 40)) — will recompute.
+  aac (dim=40): rf=0.645, xgboost=0.658, lightgbm=0.646, svm=0.695, dnn=0.656
+  Cache tz_her2_binary__mutation_features__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 48), expected=(1965, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 48), expected=(1965, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 48), expected=(1965, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 48), expected=(1965, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(3506, 48), expected=(1965, 48)) — will recompute.
+  mutation_features (dim=48): rf=0.676, xgboost=0.659, lightgbm=0.680, svm=0.719, dnn=0.757
+
+Searching 150 unique configurations...
+  Pre-computing importance: 1 methods × 5 folds × 4 reps...
+  Importance pre-computed in 13.5s (5/5 successful, 0 read from disk)
+  Allocation scores pre-computed in 47.7s (1 evaluators × 10 metrics, 0 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 150 configs...
+  !! the budget is a MAXIMUM and it was not filled: 254 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 157, 'onehot': 97}). The hybrid is 246 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 234 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 121, 'onehot': 93, 'aac': 20}). The hybrid is 266 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 254 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 157, 'onehot': 97}). The hybrid is 246 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 234 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 121, 'onehot': 93, 'aac': 20}). The hybrid is 266 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 254 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 157, 'onehot': 97}). The hybrid is 246 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 234 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 121, 'onehot': 93, 'aac': 20}). The hybrid is 266 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 273 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 129, 'onehot': 127, 'mutation_features': 17}). The hybrid is 227 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 273 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 129, 'onehot': 127, 'mutation_features': 17}). The hybrid is 227 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 273 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 129, 'onehot': 127, 'mutation_features': 17}). The hybrid is 227 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+    stored fold 0 for 30 pruned recipes, so the next run reads the vote instead of re-fitting it
+  Pruned 1/5 strategies (top-2 in <15% of groups): ['rank_exp_d0.3']
+  Remaining: 120 configs
+
+  Evaluating 120 configs (all 5 folds)...
+  [1/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7658+/-0.061, dim=90
+  [2/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7379+/-0.085, dim=95
+  [3/120] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7108+/-0.126, dim=99
+  [4/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7774+/-0.058, dim=210
+  !! the budget is a MAXIMUM and it was not filled: 303 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 266, 'aac': 20, 'mutation_features': 17}). The hybrid is 197 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [5/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7594+/-0.081, dim=248
+  [6/120] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7527+/-0.071, dim=277
+  [7/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7334+/-0.095, dim=90
+  [8/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7781+/-0.066, dim=95
+  [9/120] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7224+/-0.089, dim=99
+  [10/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7557+/-0.067, dim=210
+  !! the budget is a MAXIMUM and it was not filled: 303 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 266, 'aac': 20, 'mutation_features': 17}). The hybrid is 197 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [11/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7518+/-0.073, dim=248
+  [12/120] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7550+/-0.072, dim=277
+  [13/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7640+/-0.066, dim=90
+  [14/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7732+/-0.048, dim=95
+  [15/120] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7532+/-0.055, dim=99
+  [16/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7641+/-0.063, dim=210
+  !! the budget is a MAXIMUM and it was not filled: 303 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 266, 'aac': 20, 'mutation_features': 17}). The hybrid is 197 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [17/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7465+/-0.079, dim=248
+  [18/120] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7762+/-0.041, dim=277
+  [19/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7438+/-0.076, dim=90
+  [20/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7694+/-0.036, dim=95
+  [21/120] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7684+/-0.040, dim=99
+  [22/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7607+/-0.075, dim=210
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [23/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7862+/-0.057, dim=248
+  [24/120] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7893+/-0.058, dim=277
+  [25/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6823+/-0.118, dim=90
+  [26/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.7025+/-0.106, dim=95
+  [27/120] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.6969+/-0.103, dim=99
+  [28/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7300+/-0.103, dim=210
+  [29/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7951+/-0.047, dim=248
+  [30/120] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.7736+/-0.042, dim=277
+  [31/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.7752+/-0.058, dim=91
+  !! the budget is a MAXIMUM and it was not filled: 11 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 9, 'aac': 2}). The hybrid is 89 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [32/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.7334+/-0.092, dim=97
+  [33/120] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.7173+/-0.113, dim=99
+  [34/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.7774+/-0.058, dim=210
+  [35/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.7594+/-0.081, dim=248
+  [36/120] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.7527+/-0.071, dim=277
+  [37/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.7535+/-0.083, dim=91
+  !! the budget is a MAXIMUM and it was not filled: 11 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 9, 'aac': 2}). The hybrid is 89 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [38/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.7515+/-0.070, dim=97
+  [39/120] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.7502+/-0.066, dim=99
+  [40/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.7557+/-0.067, dim=210
+  [41/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.7518+/-0.073, dim=248
+  [42/120] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.7550+/-0.072, dim=277
+  [43/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7695+/-0.051, dim=91
+  !! the budget is a MAXIMUM and it was not filled: 11 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 9, 'aac': 2}). The hybrid is 89 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  [44/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7680+/-0.061, dim=97
+  [45/120] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7578+/-0.057, dim=99
+  [46/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7641+/-0.063, dim=210
+  [47/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7465+/-0.079, dim=248
+  [48/120] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7762+/-0.041, dim=277
+  [49/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7530+/-0.068, dim=91
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  [50/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7713+/-0.038, dim=97
+  [51/120] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.7672+/-0.039, dim=99
+  [52/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7607+/-0.075, dim=210
+  [53/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7862+/-0.057, dim=248
+  [54/120] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.7893+/-0.058, dim=277
+  [55/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6467+/-0.180, dim=91
+  [56/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6625+/-0.087, dim=97
+  [57/120] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.6682+/-0.108, dim=99
+  [58/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7300+/-0.103, dim=210
+  [59/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7951+/-0.047, dim=248
+  [60/120] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.7736+/-0.042, dim=277
+  [61/120] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7955+/-0.036, dim=90
+  [62/120] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7555+/-0.050, dim=94
+  [63/120] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7062+/-0.120, dim=97
+  [64/120] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7774+/-0.058, dim=210
+  [65/120] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7594+/-0.081, dim=248
+  [66/120] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7527+/-0.071, dim=277
+  [67/120] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7588+/-0.073, dim=90
+  [68/120] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7405+/-0.073, dim=94
+  [69/120] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7298+/-0.074, dim=97
+  [70/120] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7557+/-0.067, dim=210
+  [71/120] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7518+/-0.073, dim=248
+  [72/120] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7550+/-0.072, dim=277
+  [73/120] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7658+/-0.055, dim=90
+  [74/120] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7487+/-0.064, dim=94
+  [75/120] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6961+/-0.135, dim=97
+  [76/120] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7641+/-0.063, dim=210
+  [77/120] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7465+/-0.079, dim=248
+  [78/120] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7762+/-0.041, dim=277
+  [79/120] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7503+/-0.068, dim=90
+  [80/120] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7762+/-0.036, dim=94
+  [81/120] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7706+/-0.049, dim=97
+  [82/120] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7607+/-0.075, dim=210
+  [83/120] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7862+/-0.057, dim=248
+  [84/120] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7893+/-0.058, dim=277
+  [85/120] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.6961+/-0.099, dim=90
+  [86/120] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7234+/-0.077, dim=94
+  [87/120] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.7135+/-0.090, dim=97
+  [88/120] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7300+/-0.103, dim=210
+  [89/120] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7951+/-0.047, dim=248
+  [90/120] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.7736+/-0.042, dim=277
+  [91/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7885+/-0.038, dim=100
+  [92/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7537+/-0.073, dim=100
+  [93/120] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7458+/-0.083, dim=100
+  [94/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7863+/-0.044, dim=155
+  [95/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7726+/-0.051, dim=164
+  [96/120] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7397+/-0.094, dim=177
+  [97/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7610+/-0.065, dim=100
+  [98/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7829+/-0.047, dim=100
+  [99/120] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7759+/-0.058, dim=100
+  [100/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7566+/-0.057, dim=155
+  [101/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8063+/-0.078, dim=164
+  [102/120] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7757+/-0.050, dim=177
+  [103/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7521+/-0.065, dim=100
+  [104/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7647+/-0.055, dim=100
+  [105/120] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7621+/-0.060, dim=100
+  [106/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7718+/-0.050, dim=155
+  [107/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7482+/-0.081, dim=164
+  [108/120] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7484+/-0.077, dim=177
+  [109/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7509+/-0.073, dim=100
+  [110/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7692+/-0.062, dim=100
+  [111/120] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7781+/-0.044, dim=100
+  [112/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7507+/-0.079, dim=155
+  [113/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7846+/-0.064, dim=164
+  [114/120] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7777+/-0.060, dim=177
+  [115/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6906+/-0.090, dim=100
+  [116/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.7188+/-0.049, dim=100
+  [117/120] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.6896+/-0.098, dim=100
+  [118/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.6987+/-0.126, dim=155
+  [119/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7638+/-0.040, dim=164
+  [120/120] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.7125+/-0.095, dim=177
+  Feature selection dedup: 430 fold evaluations skipped (470 unique selections cached)
+
+Fitting best configs on full data (5 models)...
+
+Best features per model x budget (auc):
+  model         b=100    b=500  
+  ------------------------------
+  dnn           0.7234  0.7951
+  lightgbm      0.7732  0.7762
+  rf            0.7955  0.7863
+  svm           0.7781  0.7893
+  xgboost       0.7829  0.8063
+  budget split [dnn, performance_weighted, budget 500]: 500 features across 3 of 3 representations; the largest share is 245 (49%). blosum=245, onehot=207, mutation_features=48
+  budget split [lightgbm, performance_weighted, budget 500]: 500 features across 4 of 4 representations; the largest share is 221 (44%). blosum=221, onehot=191, mutation_features=48, aac=40
+  budget split [rf, softmax_T1, budget 100]: 100 features across 2 of 2 representations; the largest share is 52 (52%). blosum=52, mutation_features=48
+  budget split [svm, performance_weighted, budget 500]: 500 features across 4 of 4 representations; the largest share is 221 (44%). blosum=221, onehot=191, mutation_features=48, aac=40
+  budget split [xgboost, wglobal_power2, budget 500]: 136 features across 3 of 3 representations; the largest share is 108 (79%). blosum=108, mutation_features=26, onehot=2
+[cache] cache stats — baseline: 0 hit / 8 miss / 92 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [tz_her2_binary/fold4] pruning_mode=default_pruning (no per-model overrides)
+Models: ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn']
+Representations: ['blosum', 'onehot', 'aac', 'mutation_features'] (dims: [5600, 5600, 40, 48])
+
+Evaluating full-dimension baselines [auc, BIGGER IS BETTER]...
+  blosum: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__blosum__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  Cache tz_her2_binary__blosum__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  blosum (dim=5600): rf=0.874, xgboost=0.872, lightgbm=0.881, svm=0.847, dnn=0.826
+  onehot: 5600 features, scored on the top 500 per fold (high-dimension filter). This is NOT a full-dimension baseline.
+  Cache tz_her2_binary__onehot__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  Cache tz_her2_binary__onehot__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 5600), expected=(4987, 5600)) — will recompute.
+  onehot (dim=5600): rf=0.873, xgboost=0.867, lightgbm=0.871, svm=0.833, dnn=0.844
+  Cache tz_her2_binary__aac__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 40), expected=(4987, 40)) — will recompute.
+  Cache tz_her2_binary__aac__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 40), expected=(4987, 40)) — will recompute.
+  Cache tz_her2_binary__aac__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 40), expected=(4987, 40)) — will recompute.
+  Cache tz_her2_binary__aac__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 40), expected=(4987, 40)) — will recompute.
+  Cache tz_her2_binary__aac__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 40), expected=(4987, 40)) — will recompute.
+  aac (dim=40): rf=0.754, xgboost=0.763, lightgbm=0.775, svm=0.769, dnn=0.767
+  Cache tz_her2_binary__mutation_features__rf__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 48), expected=(4987, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__xgboost__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 48), expected=(4987, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__lightgbm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 48), expected=(4987, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__svm__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 48), expected=(4987, 48)) — will recompute.
+  Cache tz_her2_binary__mutation_features__dnn__auc__5f_42.pkl: meta drift on 'rep_shape' (stored=(1965, 48), expected=(4987, 48)) — will recompute.
+  mutation_features (dim=48): rf=0.783, xgboost=0.757, lightgbm=0.760, svm=0.791, dnn=0.791
+
+Searching 150 unique configurations...
+  Pre-computing importance: 1 methods × 5 folds × 4 reps...
+  Importance pre-computed in 31.7s (5/5 successful, 0 read from disk)
+  Allocation scores pre-computed in 116.4s (1 evaluators × 10 metrics, 0 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 150 configs...
+  !! the budget is a MAXIMUM and it was not filled: 193 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 154, 'aac': 20, 'mutation_features': 15, 'blosum': 4}). The hybrid is 307 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 193 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 154, 'aac': 20, 'mutation_features': 15, 'blosum': 4}). The hybrid is 307 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 193 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 154, 'aac': 20, 'mutation_features': 15, 'blosum': 4}). The hybrid is 307 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+
+  Evaluating 150 configs (all 5 folds)...
+  [1/150] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8663+/-0.077, dim=100
+  [2/150] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8478+/-0.081, dim=100
+  [3/150] rf/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8415+/-0.094, dim=98
+  [4/150] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8629+/-0.083, dim=260
+  [5/150] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8686+/-0.068, dim=293
+  [6/150] rf/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8625+/-0.076, dim=313
+  [7/150] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8712+/-0.077, dim=100
+  [8/150] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8448+/-0.090, dim=100
+  [9/150] xgboost/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8509+/-0.081, dim=98
+  [10/150] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8644+/-0.086, dim=260
+  [11/150] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8427+/-0.104, dim=293
+  [12/150] xgboost/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8688+/-0.073, dim=313
+  [13/150] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8720+/-0.070, dim=100
+  [14/150] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8527+/-0.086, dim=100
+  [15/150] lightgbm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8593+/-0.068, dim=98
+  [16/150] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8799+/-0.072, dim=260
+  [17/150] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8748+/-0.061, dim=293
+  [18/150] lightgbm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8639+/-0.077, dim=313
+  [19/150] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8577+/-0.080, dim=100
+  [20/150] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8581+/-0.079, dim=100
+  [21/150] svm/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8542+/-0.078, dim=98
+  [22/150] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8675+/-0.078, dim=260
+  [23/150] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8628+/-0.083, dim=293
+  [24/150] svm/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8638+/-0.081, dim=313
+  [25/150] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8337+/-0.076, dim=100
+  [26/150] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8524+/-0.067, dim=100
+  [27/150] dnn/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.8393+/-0.075, dim=98
+  [28/150] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8407+/-0.066, dim=260
+  [29/150] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8432+/-0.065, dim=293
+  [30/150] dnn/performance_weighted/lightgbm_gain/b=500/ev=rf: score=0.8450+/-0.072, dim=313
+  [31/150] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8509+/-0.089, dim=100
+  [32/150] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8553+/-0.083, dim=100
+  [33/150] rf/power_2/lightgbm_gain/b=100/ev=rf: score=0.8345+/-0.096, dim=100
+  [34/150] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8629+/-0.083, dim=260
+  [35/150] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8686+/-0.068, dim=293
+  [36/150] rf/power_2/lightgbm_gain/b=500/ev=rf: score=0.8625+/-0.076, dim=313
+  [37/150] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.8719+/-0.076, dim=100
+  [38/150] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.8491+/-0.093, dim=100
+  [39/150] xgboost/power_2/lightgbm_gain/b=100/ev=rf: score=0.8368+/-0.097, dim=100
+  [40/150] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8644+/-0.086, dim=260
+  [41/150] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8427+/-0.104, dim=293
+  [42/150] xgboost/power_2/lightgbm_gain/b=500/ev=rf: score=0.8688+/-0.073, dim=313
+  [43/150] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8619+/-0.082, dim=100
+  [44/150] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8582+/-0.075, dim=100
+  [45/150] lightgbm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8484+/-0.086, dim=100
+  [46/150] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8799+/-0.072, dim=260
+  [47/150] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8748+/-0.061, dim=293
+  [48/150] lightgbm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8639+/-0.077, dim=313
+  [49/150] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8561+/-0.081, dim=100
+  [50/150] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8633+/-0.074, dim=100
+  [51/150] svm/power_2/lightgbm_gain/b=100/ev=rf: score=0.8539+/-0.080, dim=100
+  [52/150] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8675+/-0.078, dim=260
+  [53/150] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8628+/-0.083, dim=293
+  [54/150] svm/power_2/lightgbm_gain/b=500/ev=rf: score=0.8638+/-0.081, dim=313
+  [55/150] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8380+/-0.063, dim=100
+  [56/150] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8571+/-0.060, dim=100
+  [57/150] dnn/power_2/lightgbm_gain/b=100/ev=rf: score=0.8518+/-0.065, dim=100
+  [58/150] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8407+/-0.066, dim=260
+  [59/150] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8432+/-0.065, dim=293
+  [60/150] dnn/power_2/lightgbm_gain/b=500/ev=rf: score=0.8450+/-0.072, dim=313
+  [61/150] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8715+/-0.068, dim=100
+  [62/150] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8470+/-0.084, dim=100
+  [63/150] rf/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8384+/-0.089, dim=97
+  [64/150] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8629+/-0.083, dim=260
+  [65/150] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8686+/-0.068, dim=293
+  [66/150] rf/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8625+/-0.076, dim=313
+  [67/150] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8658+/-0.085, dim=100
+  [68/150] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8473+/-0.090, dim=100
+  [69/150] xgboost/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8474+/-0.082, dim=97
+  [70/150] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8644+/-0.086, dim=260
+  [71/150] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8427+/-0.104, dim=293
+  [72/150] xgboost/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8688+/-0.073, dim=313
+  [73/150] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8655+/-0.078, dim=100
+  [74/150] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8675+/-0.065, dim=100
+  [75/150] lightgbm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8590+/-0.071, dim=97
+  [76/150] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8799+/-0.072, dim=260
+  [77/150] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8748+/-0.061, dim=293
+  [78/150] lightgbm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8639+/-0.077, dim=313
+  [79/150] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8587+/-0.079, dim=100
+  [80/150] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8589+/-0.077, dim=100
+  [81/150] svm/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8551+/-0.074, dim=97
+  [82/150] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8675+/-0.078, dim=260
+  [83/150] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8628+/-0.083, dim=293
+  [84/150] svm/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8638+/-0.081, dim=313
+  [85/150] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8428+/-0.068, dim=100
+  [86/150] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8622+/-0.061, dim=100
+  [87/150] dnn/softmax_T1/lightgbm_gain/b=100/ev=rf: score=0.8386+/-0.068, dim=97
+  [88/150] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8407+/-0.066, dim=260
+  [89/150] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8432+/-0.065, dim=293
+  [90/150] dnn/softmax_T1/lightgbm_gain/b=500/ev=rf: score=0.8450+/-0.072, dim=313
+  [91/150] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8478+/-0.095, dim=100
+  [92/150] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8517+/-0.081, dim=100
+  [93/150] rf/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8453+/-0.090, dim=100
+  [94/150] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8629+/-0.083, dim=260
+  [95/150] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8686+/-0.068, dim=293
+  [96/150] rf/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8625+/-0.076, dim=313
+  [97/150] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8712+/-0.073, dim=100
+  [98/150] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8524+/-0.087, dim=100
+  [99/150] xgboost/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8452+/-0.090, dim=100
+  [100/150] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8644+/-0.086, dim=260
+  [101/150] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8427+/-0.104, dim=293
+  [102/150] xgboost/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8688+/-0.073, dim=313
+  [103/150] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8718+/-0.069, dim=100
+  [104/150] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8639+/-0.070, dim=100
+  [105/150] lightgbm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8461+/-0.089, dim=100
+  [106/150] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8799+/-0.072, dim=260
+  [107/150] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8748+/-0.061, dim=293
+  [108/150] lightgbm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8639+/-0.077, dim=313
+  [109/150] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8533+/-0.083, dim=100
+  [110/150] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8606+/-0.075, dim=100
+  [111/150] svm/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8551+/-0.077, dim=100
+  [112/150] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8675+/-0.078, dim=260
+  [113/150] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8628+/-0.083, dim=293
+  [114/150] svm/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8638+/-0.081, dim=313
+  [115/150] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8256+/-0.081, dim=100
+  [116/150] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8468+/-0.074, dim=100
+  [117/150] dnn/rank_exp_d0.3/lightgbm_gain/b=100/ev=rf: score=0.8418+/-0.065, dim=100
+  [118/150] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8407+/-0.066, dim=260
+  [119/150] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8432+/-0.065, dim=293
+  [120/150] dnn/rank_exp_d0.3/lightgbm_gain/b=500/ev=rf: score=0.8450+/-0.072, dim=313
+  [121/150] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8649+/-0.077, dim=100
+  [122/150] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8452+/-0.092, dim=100
+  [123/150] rf/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8361+/-0.107, dim=100
+  [124/150] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8722+/-0.072, dim=170
+  [125/150] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8654+/-0.070, dim=189
+  [126/150] rf/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8587+/-0.079, dim=202
+  [127/150] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8691+/-0.084, dim=100
+  [128/150] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8635+/-0.078, dim=100
+  [129/150] xgboost/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8536+/-0.091, dim=100
+  [130/150] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8879+/-0.063, dim=170
+  [131/150] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8659+/-0.075, dim=189
+  [132/150] xgboost/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8446+/-0.105, dim=202
+  [133/150] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8748+/-0.071, dim=100
+  [134/150] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8566+/-0.085, dim=100
+  [135/150] lightgbm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8603+/-0.079, dim=100
+  [136/150] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8773+/-0.071, dim=170
+  [137/150] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8660+/-0.076, dim=189
+  [138/150] lightgbm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8708+/-0.067, dim=202
+  [139/150] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8463+/-0.092, dim=100
+  [140/150] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8503+/-0.090, dim=100
+  [141/150] svm/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8462+/-0.095, dim=100
+  [142/150] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8487+/-0.093, dim=170
+  [143/150] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8502+/-0.095, dim=189
+  [144/150] svm/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8552+/-0.087, dim=202
+  [145/150] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8383+/-0.062, dim=100
+  [146/150] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8340+/-0.091, dim=100
+  [147/150] dnn/wglobal_power2/lightgbm_gain/b=100/ev=rf: score=0.8488+/-0.081, dim=100
+  [148/150] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8399+/-0.063, dim=170
+  [149/150] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8494+/-0.053, dim=189
+  [150/150] dnn/wglobal_power2/lightgbm_gain/b=500/ev=rf: score=0.8435+/-0.061, dim=202
+  Feature selection dedup: 555 fold evaluations skipped (495 unique selections cached)
+
+Fitting best configs on full data (5 models)...
+
+Best features per model x budget (auc):
+  model         b=100    b=500  
+  ------------------------------
+  dnn           0.8622  0.8494
+  lightgbm      0.8748  0.8799
+  rf            0.8715  0.8722
+  svm           0.8633  0.8675
+  xgboost       0.8719  0.8879
+  budget split [dnn, softmax_T1, budget 100]: 100 features across 3 of 3 representations; the largest share is 36 (36%). blosum=36, onehot=34, mutation_features=30
+  budget split [lightgbm, performance_weighted, budget 500]: 500 features across 2 of 2 representations; the largest share is 256 (51%). blosum=256, onehot=244
+  budget split [rf, wglobal_power2, budget 500]: 179 features across 1 of 2 representations; the largest share is 179 (100%). blosum=179
+  budget split [svm, performance_weighted, budget 500]: 500 features across 2 of 2 representations; the largest share is 256 (51%). blosum=256, onehot=244
+  budget split [xgboost, wglobal_power2, budget 500]: 179 features across 1 of 2 representations; the largest share is 179 (100%). blosum=179
+[cache] cache stats — baseline: 0 hit / 8 miss / 112 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Top-3 base reps (fold 0): blosum=0.8627, onehot=0.8608, aac=0.7354
+    kirby_hybrid              dnn       E@1%=1.0000  AUROC=0.8002  ***
+    kirby_hybrid              lightgbm  E@1%=1.0000  AUROC=0.7876  ***
+    kirby_hybrid              rf        E@1%=1.0000  AUROC=0.8414  ***
+    kirby_hybrid              svm       E@1%=1.0000  AUROC=0.7944  ***
+    kirby_hybrid              xgboost   E@1%=1.0000  AUROC=0.8000  ***
+
+====================================================================================================
+TRASTUZUMAB ENRICHMENT COMPARISON (OPIG B1)
+  5000 samples, base binder rate = 0.328
+====================================================================================================
+  Method                             E@1%     E@5%    E@10%    AUROC      Acc
+  ------------------------------ -------- -------- -------- -------- --------
+  Random baseline                  0.3278   0.3278   0.3278   0.5000        —
+  — Paper (pred. binder %) —    
+  Random (paper)                   13.00%        —        —        —        —
+  ProteinMPNN (paper)              19.00%        —        —        —        —
+  BLOSUM62 (paper)                 26.00%        —        —        —        —
+  AbLang mask-all (paper)          27.00%        —        —        —        —
+  AbLang mask-one (paper)          29.00%        —        —        —        —
+  ESM mask-one (paper)             30.00%        —        —        —        —
+  DMS oracle (paper)               33.00%        —        —        —        —
+  . . .                         
+  blosum (rf)                      1.0000   0.9111   0.8802   0.8156   0.8152
+  blosum (xgboost)                 1.0000   0.9084   0.8839   0.8318   0.8321
+  blosum (lightgbm)                1.0000   0.9306   0.8755   0.8616   0.8497
+  mutation_features (dnn)          1.0000   0.8549   0.8169   0.7073   0.7917
+  mutation_features (lightgbm)     1.0000   0.8846   0.7970   0.7255   0.7757
+  onehot (rf)                      1.0000   0.8957   0.8859   0.8473   0.8226
+  onehot (xgboost)                 1.0000   0.8957   0.8598   0.7982   0.8335
+  onehot (svm)                     1.0000   0.8264   0.7915   0.7687   0.7599
+  onehot (dnn)                     1.0000   0.8486   0.8151   0.8047   0.7996
+  onehot (lightgbm)                1.0000   0.8957   0.8924   0.8334   0.8512
+  kirby_hybrid (rf)                1.0000   0.9179   0.8617   0.8414   0.8254 ***
+  kirby_hybrid (xgboost)           1.0000   0.9140   0.8722   0.8000   0.8318 ***
+  kirby_hybrid (svm)               1.0000   0.8709   0.8728   0.7944   0.8065 ***
+  kirby_hybrid (dnn)               1.0000   0.8695   0.8518   0.8002   0.8043 ***
+  kirby_hybrid (lightgbm)          1.0000   0.8917   0.8701   0.7876   0.8308 ***
+  mutation_features (rf)           0.9933   0.8818   0.8114   0.7301   0.7792
+  mutation_features (svm)          0.9933   0.8590   0.8053   0.6970   0.8075
+  aac (lightgbm)                   0.9800   0.8174   0.7857   0.7484   0.7705
+  mutation_features (xgboost)      0.9800   0.8611   0.7876   0.7035   0.7534
+  aac (dnn)                        0.9790   0.8200   0.7894   0.7087   0.7714
+  aac (rf)                         0.9590   0.7933   0.7417   0.6914   0.7491
+  aac (xgboost)                    0.9524   0.8180   0.7857   0.7113   0.7820
+  blosum (dnn)                     0.9000   0.8486   0.8154   0.7874   0.8008
+  aac (svm)                        0.8657   0.8424   0.7795   0.6913   0.7739
+  blosum (svm)                     0.8000   0.8655   0.8661   0.7794   0.8112
+
+  Summary (Enrichment @ top-1%):
+    Best individual: blosum (rf) E@1% = 1.0000
+
+  Hybrid vs best single representation (leave-one-fold-out, AUROC, fold(s) [0] dropped from both arms):
+    Model          Hybrid   BestSingle      Delta  Folds
+    ---------- ---------- ------------ ---------- ------
+    dnn            0.7930       0.7706    +0.0224      4
+    lightgbm       0.8141       0.8601    -0.0460      4
+    rf             0.8151       0.8677    -0.0526      4
+    svm            0.7854       0.7655    +0.0199      4
+    xgboost        0.7924       0.8787    -0.0863      4
+
+  Hybrid vs best single representation (leave-one-fold-out, binder enrichment):
+    Hybrid and BestSingle are the fraction of the top-ranked held-out rows that are binders. Delta is the per-fold difference, averaged over the folds where both arms scored.
+       Top Model          Hybrid   BestSingle      Delta  Folds
+    ------ ---------- ---------- ------------ ---------- ------
+        1% dnn            1.0000       0.9000    +0.1000      5
+        1% lightgbm       1.0000       0.9800    +0.0200      5
+        1% rf             1.0000       1.0000    +0.0000      5
+        1% svm            1.0000       0.7933    +0.2067      5
+        1% xgboost        1.0000       1.0000    +0.0000      5
+        5% dnn            0.8695       0.8105    +0.0591      5
+        5% lightgbm       0.8917       0.9306    -0.0389      5
+        5% rf             0.9179       0.9111    +0.0068      5
+        5% svm            0.8709       0.7739    +0.0970      5
+        5% xgboost        0.9140       0.8930    +0.0210      5
+       10% dnn            0.8518       0.7650    +0.0868      5
+       10% lightgbm       0.8701       0.8701    +0.0000      5
+       10% rf             0.8617       0.8748    -0.0131      5
+       10% svm            0.8728       0.8661    +0.0067      5
+       10% xgboost        0.8722       0.8839    -0.0117      5
+
+Results saved: /Users/apunt/repos/KIRBy/scratchpad/opig_verify/trastuzumab.json
+
+  !! warnings raised more than 3 times (printed once each here):
+        623x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'blosum': #, 'aac': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        510x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'blosum': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        465x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'blosum': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        349x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'aac': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        125x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         85x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         70x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'blosum': #, 'aac': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         30x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'aac': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         25x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': #, 'onehot': #, 'aac': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         20x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'aac': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         15x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'mutation_features': #, 'aac': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         15x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'blosum': #, 'mutation_features': #, 'aac': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         15x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': #, 'aac': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         12x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'aac': #, 'blosum': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         10x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'aac': #, 'mutation_features': #, 'onehot': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         10x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'aac': #, 'onehot': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         10x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': #, 'onehot': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         10x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': #, 'onehot': #, 'aac': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         10x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'aac': #, 'mutation_features': #, 'blosum': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+          5x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'aac': #, 'blosum': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+          5x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'aac': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+          5x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': #, 'onehot': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+          5x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': #, 'aac': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+EXIT=0
