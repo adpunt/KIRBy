@@ -34,6 +34,7 @@ from experiments.federated.federated_helpers import (
     _resolve_match, fit_fed_classifier, fed_to_kirby_model,
     binarise_labels,
     smoke_grid, smoke_n_folds, smoke_k_silos, smoke_search_kwargs,
+    federated_budgets,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
 
@@ -43,12 +44,16 @@ from kirby.hybrid import create_hybrid, apply_feature_selection
 
 K = smoke_k_silos(5)
 SMOOTH_FACTORS = smoke_grid([0, 0.01, 0.05, 0.1, 0.2], [0, 0.05])
-BUDGET = 100
+# Every number this file reported was a number about 100 features. The
+# three arms are compared at each width in BUDGETS; the headline tables
+# below are the headline width so they read as they always did.
+BUDGETS = federated_budgets()
+HEADLINE_BUDGET = 100 if 100 in BUDGETS else BUDGETS[0]
 N_FOLDS = smoke_n_folds(5)
 
 
 def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
-                                budget=BUDGET,
+                                budget=HEADLINE_BUDGET,
                                 alloc='performance_weighted',
                                 imp='treeshap',
                                 int_eval='match',
@@ -195,7 +200,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         _search, _meta = get_best_search_for_downstream(
             reps, labels_binary, groups,
-            downstream_model=fed_to_kirby_model(fed_model), budget=BUDGET,
+            downstream_model=fed_to_kirby_model(fed_model),
+            budget=HEADLINE_BUDGET,
             augmentations=augs,
             metric='auc',
             task_type='classification',
@@ -207,7 +213,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _bp = _meta['best_config']['blueprint'] if _meta else None
         if _bp is None:
             print("  WARN: the search returned no recipe for "
-                  f"{fed_to_kirby_model(fed_model)} at budget {BUDGET} — "
+                  f"{fed_to_kirby_model(fed_model)} at budget "
+                  f"{HEADLINE_BUDGET} — "
                   "falling back to performance_weighted / treeshap / match.")
     except Exception as e:
         print(f"  WARN: pool selection failed: {e}, using defaults")
@@ -233,298 +240,309 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             "Random splits are forbidden — fix the loader to provide groups.")
 
     fold_records = []
-    for fold_id, (train_idx, test_idx) in enumerate(cv_split(
-            groups, N_FOLDS, np.zeros(n_samples), labels_binary,
-            seed=fed_seed)):
-        print(f"\n=== Fold {fold_id + 1}/{N_FOLDS}: "
-              f"{len(train_idx)} train / {len(test_idx)} test ===")
+    # The folds are drawn once and reused at every width, so a difference
+    # between two budgets is a difference in width and nothing else.
+    _folds = list(cv_split(groups, N_FOLDS, np.zeros(n_samples),
+                           labels_binary, seed=fed_seed))
+    for BUDGET in BUDGETS:
+        print(f"\n########## budget {BUDGET} features "
+              f"({BUDGETS.index(BUDGET) + 1} of {len(BUDGETS)}) ##########")
+        for fold_id, (train_idx, test_idx) in enumerate(_folds):
+            print(f"\n=== Fold {fold_id + 1}/{N_FOLDS}: "
+                  f"{len(train_idx)} train / {len(test_idx)} test ===")
 
-        y_train = labels_binary[train_idx]
-        y_test = labels_binary[test_idx]
+            y_train = labels_binary[train_idx]
+            y_test = labels_binary[test_idx]
 
-        train_reps = {r: arr[train_idx] for r, arr in reps.items()}
-        test_reps = {r: arr[test_idx] for r, arr in reps.items()}
-        train_augs = ({k: v[train_idx] for k, v in augs.items()}
-                      if augs else None)
+            train_reps = {r: arr[train_idx] for r, arr in reps.items()}
+            test_reps = {r: arr[test_idx] for r, arr in reps.items()}
+            train_augs = ({k: v[train_idx] for k, v in augs.items()}
+                          if augs else None)
 
-        # CLUSTER TRAINING DATA ONLY — matching FLuID's pattern
-        t0 = time.time()
-        train_fluid_df = fluid_df_all.iloc[train_idx]
-        train_silo_indices, cluster_data, kmeans_model = cluster_training_only(
-            train_fluid_df, k=K, smooth_factor=0.05, seed=fed_seed)
-        print(f"  Clustering (train only): K={K}, {time.time() - t0:.1f}s")
+            # CLUSTER TRAINING DATA ONLY — matching FLuID's pattern
+            t0 = time.time()
+            train_fluid_df = fluid_df_all.iloc[train_idx]
+            train_silo_indices, cluster_data, kmeans_model = cluster_training_only(
+                train_fluid_df, k=K, smooth_factor=0.05, seed=fed_seed)
+            print(f"  Clustering (train only): K={K}, {time.time() - t0:.1f}s")
 
-        for s in range(1, K + 1):
-            idx = train_silo_indices[s]
-            n_act = int(y_train[idx].sum())
-            print(f"    Silo {s}: {len(idx)} samples "
-                  f"({n_act} active, {len(idx) - n_act} inactive)")
+            for s in range(1, K + 1):
+                idx = train_silo_indices[s]
+                n_act = int(y_train[idx].sum())
+                print(f"    Silo {s}: {len(idx)} samples "
+                      f"({n_act} active, {len(idx) - n_act} inactive)")
 
-        # Assign test molecules to nearest training cluster centroid
-        test_fps = np.asarray(list(fluid_df_all.iloc[test_idx].FP))
-        test_silo = kmeans_model.predict(test_fps) + 1  # 1-indexed to match silos
+            # Assign test molecules to nearest training cluster centroid
+            test_fps = np.asarray(list(fluid_df_all.iloc[test_idx].FP))
+            test_silo = kmeans_model.predict(test_fps) + 1  # 1-indexed to match silos
 
-        # ── Phase 2: Per-cluster importance ──────────────────────────────
-        print("  --- Phase 2: Per-cluster importance (smooth=0.05) ---")
-        profiles, feature_infos, cluster_stats = _compute_cluster_importance(
-            train_reps, y_train, train_silo_indices, K,
-            alloc=_alloc, imp=_imp, int_eval=_int_eval,
-            augs=train_augs, aug_cond=aug_cond,
-            train_groups=(groups[train_idx] if groups is not None else None))
+            # ── Phase 2: Per-cluster importance ──────────────────────────────
+            print("  --- Phase 2: Per-cluster importance (smooth=0.05) ---")
+            profiles, feature_infos, cluster_stats = _compute_cluster_importance(
+                train_reps, y_train, train_silo_indices, K, budget=BUDGET,
+                alloc=_alloc, imp=_imp, int_eval=_int_eval,
+                augs=train_augs, aug_cond=aug_cond,
+                train_groups=(groups[train_idx] if groups is not None else None))
 
-        # Global baseline (full training set)
-        _, fi_global = create_hybrid(
-            train_reps, y_train,
-            groups=(groups[train_idx] if groups is not None else None),
-            allocation_method=_alloc,
-            importance_method=_imp,
-            budget=BUDGET,
-            internal_evaluator=_int_eval,
-            augmentations=train_augs,
-            augmentation_strategy=aug_cond)
-        global_profile = extract_importance_profile(fi_global)
-        global_top = max(global_profile, key=global_profile.get) if global_profile else 'none'
-        print(f"  Global top rep: {global_top}")
+            # Global baseline (full training set)
+            _, fi_global = create_hybrid(
+                train_reps, y_train,
+                groups=(groups[train_idx] if groups is not None else None),
+                allocation_method=_alloc,
+                importance_method=_imp,
+                budget=BUDGET,
+                internal_evaluator=_int_eval,
+                augmentations=train_augs,
+                augmentation_strategy=aug_cond)
+            global_profile = extract_importance_profile(fi_global)
+            global_top = max(global_profile, key=global_profile.get) if global_profile else 'none'
+            print(f"  Global top rep: {global_top}")
 
-        # ── Phase 2b: Null control — a RANDOM partition of the same sizes ─
-        # Phase 3 asks whether two regions of chemical space split the budget
-        # across the representations differently. Two subsamples of a few
-        # hundred rows already split it differently from subsampling alone,
-        # so the number Phase 3 reports has no scale without something to
-        # read it against. This partitions the SAME training rows into the
-        # SAME cluster sizes at random — no chemistry in the assignment — and
-        # runs the identical per-cluster selection over it. The chemical
-        # clusters are doing something only if their profiles agree LESS with
-        # each other than the random parts of the same sizes do.
-        _sizes = [len(train_silo_indices[s]) for s in range(1, K + 1)]
-        _perm = np.random.RandomState(1000 + fed_seed + fold_id).permutation(
-            len(train_idx))
-        _null_indices, _cut = {}, 0
-        for _s, _n in enumerate(_sizes, 1):
-            _null_indices[_s] = _perm[_cut:_cut + _n]
-            _cut += _n
-        null_profiles, _, null_cluster_stats = _compute_cluster_importance(
-            train_reps, y_train, _null_indices, K,
-            alloc=_alloc, imp=_imp, int_eval=_int_eval,
-            augs=train_augs, aug_cond=aug_cond,
-            train_groups=(groups[train_idx] if groups is not None else None))
-        null_spearman, null_pairwise = compare_importance_profiles(
-            null_profiles)
+            # ── Phase 2b: Null control — a RANDOM partition of the same sizes ─
+            # Phase 3 asks whether two regions of chemical space split the budget
+            # across the representations differently. Two subsamples of a few
+            # hundred rows already split it differently from subsampling alone,
+            # so the number Phase 3 reports has no scale without something to
+            # read it against. This partitions the SAME training rows into the
+            # SAME cluster sizes at random — no chemistry in the assignment — and
+            # runs the identical per-cluster selection over it. The chemical
+            # clusters are doing something only if their profiles agree LESS with
+            # each other than the random parts of the same sizes do.
+            _sizes = [len(train_silo_indices[s]) for s in range(1, K + 1)]
+            _perm = np.random.RandomState(1000 + fed_seed + fold_id).permutation(
+                len(train_idx))
+            _null_indices, _cut = {}, 0
+            for _s, _n in enumerate(_sizes, 1):
+                _null_indices[_s] = _perm[_cut:_cut + _n]
+                _cut += _n
+            null_profiles, _, null_cluster_stats = _compute_cluster_importance(
+                train_reps, y_train, _null_indices, K, budget=BUDGET,
+                alloc=_alloc, imp=_imp, int_eval=_int_eval,
+                augs=train_augs, aug_cond=aug_cond,
+                train_groups=(groups[train_idx] if groups is not None else None))
+            null_spearman, null_pairwise = compare_importance_profiles(
+                null_profiles)
 
-        # ── Phase 3: Compare importance profiles ─────────────────────────
-        mean_spearman, pairwise = compare_importance_profiles(profiles)
-        _ms_str = 'n/a' if mean_spearman is None else f"{mean_spearman:.3f}"
-        _ns_str = 'n/a' if null_spearman is None else f"{null_spearman:.3f}"
-        print(f"  Phase 3 mean pairwise Spearman: {_ms_str}  "
-              f"(random partition of the same sizes: {_ns_str})")
-        rep_rankings = {}
-        for s, profile in profiles.items():
-            ranked = sorted(profile.items(), key=lambda x: -x[1])
-            rep_rankings[s] = [r for r, _ in ranked]
+            # ── Phase 3: Compare importance profiles ─────────────────────────
+            mean_spearman, pairwise = compare_importance_profiles(profiles)
+            _ms_str = 'n/a' if mean_spearman is None else f"{mean_spearman:.3f}"
+            _ns_str = 'n/a' if null_spearman is None else f"{null_spearman:.3f}"
+            print(f"  Phase 3 mean pairwise Spearman: {_ms_str}  "
+                  f"(random partition of the same sizes: {_ns_str})")
+            rep_rankings = {}
+            for s, profile in profiles.items():
+                ranked = sorted(profile.items(), key=lambda x: -x[1])
+                rep_rankings[s] = [r for r, _ in ranked]
 
-        # ── Phase 3b: Compare the selected features themselves ───────────
-        # The Spearman above ranks representations by how much of the budget
-        # each one won. Two clusters can split 100 features across the same
-        # representations in the same proportions and still take 100 different
-        # descriptors and fingerprint bits, and that comparison says so.
-        cluster_selections = {
-            s: extract_selected_features(fi)
-            for s, fi in feature_infos.items() if fi is not None}
-        feature_overlap = compare_selected_features(cluster_selections)
-        global_selection = extract_selected_features(fi_global)
-        _global_set = set(global_selection['labels'])
-        # How much of each cluster's own selection the whole-training-fold
-        # selection also took. A cluster at 1.0 is asking for nothing the
-        # global selection does not already give it.
-        cluster_vs_global = {}
-        for s, sel in cluster_selections.items():
-            own = set(sel['labels'])
-            cluster_vs_global[s] = {
-                'n_selected': len(own),
-                'n_also_in_global': len(own & _global_set),
-                'fraction_also_in_global': (
-                    float(len(own & _global_set) / len(own)) if own else None),
-                'not_in_global': sorted(own - _global_set),
-            }
-        _mj = feature_overlap.get('mean_jaccard')
-        _nc = feature_overlap.get('n_clusters', 0)
-        if _mj is None:
-            print(f"  Phase 3b feature overlap: undefined — {_nc} cluster(s) "
-                  f"produced a selection, so there is no pair to compare")
-        else:
-            print(f"  Phase 3b mean pairwise feature overlap: {_mj:.3f} "
-                  f"across {_nc} clusters  "
-                  f"({feature_overlap['n_shared_by_all']} of the "
-                  f"{BUDGET} features taken by every one of them)")
-        for s in sorted(cluster_selections):
-            _top = cluster_selections[s]['labels'][:5]
-            print(f"    Cluster {s} top 5: {', '.join(_top)}")
+            # ── Phase 3b: Compare the selected features themselves ───────────
+            # The Spearman above ranks representations by how much of the budget
+            # each one won. Two clusters can split 100 features across the same
+            # representations in the same proportions and still take 100 different
+            # descriptors and fingerprint bits, and that comparison says so.
+            cluster_selections = {
+                s: extract_selected_features(fi)
+                for s, fi in feature_infos.items() if fi is not None}
+            feature_overlap = compare_selected_features(cluster_selections)
+            global_selection = extract_selected_features(fi_global)
+            _global_set = set(global_selection['labels'])
+            # How much of each cluster's own selection the whole-training-fold
+            # selection also took. A cluster at 1.0 is asking for nothing the
+            # global selection does not already give it.
+            cluster_vs_global = {}
+            for s, sel in cluster_selections.items():
+                own = set(sel['labels'])
+                cluster_vs_global[s] = {
+                    'n_selected': len(own),
+                    'n_also_in_global': len(own & _global_set),
+                    'fraction_also_in_global': (
+                        float(len(own & _global_set) / len(own)) if own else None),
+                    'not_in_global': sorted(own - _global_set),
+                }
+            _mj = feature_overlap.get('mean_jaccard')
+            _nc = feature_overlap.get('n_clusters', 0)
+            if _mj is None:
+                print(f"  Phase 3b feature overlap: undefined — {_nc} cluster(s) "
+                      f"produced a selection, so there is no pair to compare")
+            else:
+                print(f"  Phase 3b mean pairwise feature overlap: {_mj:.3f} "
+                      f"across {_nc} clusters  "
+                      f"({feature_overlap['n_shared_by_all']} of the "
+                      f"{BUDGET} features taken by every one of them)")
+            for s in sorted(cluster_selections):
+                _top = cluster_selections[s]['labels'][:5]
+                print(f"    Cluster {s} top 5: {', '.join(_top)}")
 
-        # ── Phase 4: Cluster-conditional hybrid ──────────────────────────
-        # THREE arms, not two. The two that were here answer a question with
-        # two things moving at once:
-        #   global            — all training rows, ONE feature set for all.
-        #   cluster_model     — this cluster's rows only, its OWN features.
-        # A cluster's rows are a fifth of the fold and FLuID's classifier puts
-        # every fit through RandomUnderSampler first, so on caco2 the
-        # per-cluster forests trained on 58 to 596 rows against roughly a
-        # thousand for the global one (measured 2026-09-18, all five folds).
-        # Whatever the gap between those two arms is, most of it is the row
-        # count, and the experiment reads it as the features.
-        #   cluster_features  — ALL training rows, this cluster's features.
-        # The third arm holds the rows fixed and varies only the feature set,
-        # which is the question fed04 exists to ask. cluster_features minus
-        # global is the value of choosing features per region; cluster_model
-        # minus cluster_features is what fitting on one region's rows costs.
-        per_cluster_models = {}
-        per_cluster_models_allrows = {}
-        per_cluster_fis = {}
-        per_cluster_fit_rows = {}
-        for s in range(1, K + 1):
-            fi = feature_infos.get(s)
-            if fi is None:
-                continue
-            idx = train_silo_indices[s]
-            X_s = apply_feature_selection(train_reps, fi)
-            clf = fit_fed_classifier(
-                fed_model, X_s[idx], y_train[idx], seed=fed_seed)
-            per_cluster_models[s] = clf
-            # Same features, every training row.
-            per_cluster_models_allrows[s] = fit_fed_classifier(
-                fed_model, X_s, y_train, seed=fed_seed)
-            per_cluster_fis[s] = fi
-            # How many rows each arm actually fitted on, AFTER the
-            # under-sampler, so the row-count confound is in the file rather
-            # than only in this comment.
-            _na = int(y_train[idx].sum())
-            per_cluster_fit_rows[s] = {
-                'n_cluster_rows': int(len(idx)),
-                'n_cluster_rows_after_undersample': 2 * min(
-                    _na, int(len(idx)) - _na),
-                'n_all_train_rows': int(len(y_train)),
-                'n_all_train_rows_after_undersample': 2 * min(
-                    int(y_train.sum()), int(len(y_train) - y_train.sum())),
-            }
+            # ── Phase 4: Cluster-conditional hybrid ──────────────────────────
+            # THREE arms, not two. The two that were here answer a question with
+            # two things moving at once:
+            #   global            — all training rows, ONE feature set for all.
+            #   cluster_model     — this cluster's rows only, its OWN features.
+            # A cluster's rows are a fifth of the fold and FLuID's classifier puts
+            # every fit through RandomUnderSampler first, so on caco2 the
+            # per-cluster forests trained on 58 to 596 rows against roughly a
+            # thousand for the global one (measured 2026-09-18, all five folds).
+            # Whatever the gap between those two arms is, most of it is the row
+            # count, and the experiment reads it as the features.
+            #   cluster_features  — ALL training rows, this cluster's features.
+            # The third arm holds the rows fixed and varies only the feature set,
+            # which is the question fed04 exists to ask. cluster_features minus
+            # global is the value of choosing features per region; cluster_model
+            # minus cluster_features is what fitting on one region's rows costs.
+            per_cluster_models = {}
+            per_cluster_models_allrows = {}
+            per_cluster_fis = {}
+            per_cluster_fit_rows = {}
+            for s in range(1, K + 1):
+                fi = feature_infos.get(s)
+                if fi is None:
+                    continue
+                idx = train_silo_indices[s]
+                X_s = apply_feature_selection(train_reps, fi)
+                clf = fit_fed_classifier(
+                    fed_model, X_s[idx], y_train[idx], seed=fed_seed)
+                per_cluster_models[s] = clf
+                # Same features, every training row.
+                per_cluster_models_allrows[s] = fit_fed_classifier(
+                    fed_model, X_s, y_train, seed=fed_seed)
+                per_cluster_fis[s] = fi
+                # How many rows each arm actually fitted on, AFTER the
+                # under-sampler, so the row-count confound is in the file rather
+                # than only in this comment.
+                _na = int(y_train[idx].sum())
+                per_cluster_fit_rows[s] = {
+                    'n_cluster_rows': int(len(idx)),
+                    'n_cluster_rows_after_undersample': 2 * min(
+                        _na, int(len(idx)) - _na),
+                    'n_all_train_rows': int(len(y_train)),
+                    'n_all_train_rows_after_undersample': 2 * min(
+                        int(y_train.sum()), int(len(y_train) - y_train.sum())),
+                }
 
-        # Predict: use ORIGINAL FLuID cluster assignments for test molecules
-        # (test_silo was computed earlier in this fold from the original
-        # clustering — do NOT re-fit KMeans, which would produce misaligned
-        # cluster IDs)
-        per_cluster_test_X = {}
-        for s, fi in per_cluster_fis.items():
-            per_cluster_test_X[s] = apply_feature_selection(test_reps, fi)
+            # Predict: use ORIGINAL FLuID cluster assignments for test molecules
+            # (test_silo was computed earlier in this fold from the original
+            # clustering — do NOT re-fit KMeans, which would produce misaligned
+            # cluster IDs)
+            per_cluster_test_X = {}
+            for s, fi in per_cluster_fis.items():
+                per_cluster_test_X[s] = apply_feature_selection(test_reps, fi)
 
-        # Global hybrid baseline (compute first so fallback is available)
-        X_global_train = apply_feature_selection(train_reps, fi_global)
-        X_global_test = apply_feature_selection(test_reps, fi_global)
-        clf_global = fit_fed_classifier(
-            fed_model, X_global_train, y_train, seed=fed_seed)
-        y_pred_global = clf_global.predict(X_global_test)
-        y_prob_global = clf_global.predict_proba(X_global_test)[:, 1]
+            # Global hybrid baseline (compute first so fallback is available)
+            X_global_train = apply_feature_selection(train_reps, fi_global)
+            X_global_test = apply_feature_selection(test_reps, fi_global)
+            clf_global = fit_fed_classifier(
+                fed_model, X_global_train, y_train, seed=fed_seed)
+            y_pred_global = clf_global.predict(X_global_test)
+            y_prob_global = clf_global.predict_proba(X_global_test)[:, 1]
 
-        # Route each held-out molecule to its own cluster, twice: once to the
-        # model fitted on that cluster's rows, once to the model fitted on
-        # every training row. Same routing, same features, different training
-        # set — so the two differ by the row count and nothing else.
-        def _route(models):
-            y_p = y_pred_global.copy()
-            y_q = y_prob_global.copy()
-            miss = np.ones(len(test_idx), dtype=bool)
-            for i in range(len(test_idx)):
-                cluster = test_silo[i]
-                if cluster in models and cluster in per_cluster_test_X:
-                    mdl = models[cluster]
-                    X_i = per_cluster_test_X[cluster][[i]]
-                    y_p[i] = mdl.predict(X_i)[0]
-                    proba = mdl.predict_proba(X_i)
-                    y_q[i] = proba[0, 1] if proba.shape[1] == 2 else 0.5
-                    miss[i] = False
-            return y_p, y_q, miss
+            # Route each held-out molecule to its own cluster, twice: once to the
+            # model fitted on that cluster's rows, once to the model fitted on
+            # every training row. Same routing, same features, different training
+            # set — so the two differ by the row count and nothing else.
+            def _route(models):
+                y_p = y_pred_global.copy()
+                y_q = y_prob_global.copy()
+                miss = np.ones(len(test_idx), dtype=bool)
+                for i in range(len(test_idx)):
+                    cluster = test_silo[i]
+                    if cluster in models and cluster in per_cluster_test_X:
+                        mdl = models[cluster]
+                        X_i = per_cluster_test_X[cluster][[i]]
+                        y_p[i] = mdl.predict(X_i)[0]
+                        proba = mdl.predict_proba(X_i)
+                        y_q[i] = proba[0, 1] if proba.shape[1] == 2 else 0.5
+                        miss[i] = False
+                return y_p, y_q, miss
 
-        y_pred_conditional, y_prob_conditional, fallback_mask = _route(
-            per_cluster_models)
-        y_pred_featonly, y_prob_featonly, _ = _route(
-            per_cluster_models_allrows)
-        n_fallback = int(fallback_mask.sum())
-        if n_fallback > 0:
-            print(f"  {n_fallback} test samples used global fallback")
+            y_pred_conditional, y_prob_conditional, fallback_mask = _route(
+                per_cluster_models)
+            y_pred_featonly, y_prob_featonly, _ = _route(
+                per_cluster_models_allrows)
+            n_fallback = int(fallback_mask.sum())
+            if n_fallback > 0:
+                print(f"  {n_fallback} test samples used global fallback")
 
-        conditional_metrics = compute_clf_metrics(
-            y_test, y_pred_conditional, y_prob_conditional)
-        featonly_metrics = compute_clf_metrics(
-            y_test, y_pred_featonly, y_prob_featonly)
-        global_metrics = compute_clf_metrics(
-            y_test, y_pred_global, y_prob_global)
-        print(f"  MCC — per-cluster features + per-cluster rows "
-              f"{conditional_metrics['mcc']:.3f} | per-cluster features + ALL "
-              f"rows {featonly_metrics['mcc']:.3f} | global features + all "
-              f"rows {global_metrics['mcc']:.3f}")
+            conditional_metrics = compute_clf_metrics(
+                y_test, y_pred_conditional, y_prob_conditional)
+            featonly_metrics = compute_clf_metrics(
+                y_test, y_pred_featonly, y_prob_featonly)
+            global_metrics = compute_clf_metrics(
+                y_test, y_pred_global, y_prob_global)
+            print(f"  MCC — per-cluster features + per-cluster rows "
+                  f"{conditional_metrics['mcc']:.3f} | per-cluster features + ALL "
+                  f"rows {featonly_metrics['mcc']:.3f} | global features + all "
+                  f"rows {global_metrics['mcc']:.3f}")
 
-        # ── Phase 5: Smooth factor sweep ─────────────────────────────────
-        smooth_sweep = {}
-        for sf in SMOOTH_FACTORS:
-            try:
-                train_silo_idx_sf, _, _ = cluster_training_only(
-                    train_fluid_df, k=K, smooth_factor=sf, seed=fed_seed)
-                # P1 fix: pass augs/aug_cond — Phase 2 does, so Phase 5 must too.
-                prof_sf, _, stats_sf = _compute_cluster_importance(
-                    train_reps, y_train, train_silo_idx_sf, K,
-                    alloc=_alloc, imp=_imp, int_eval=_int_eval,
-                    augs=train_augs, aug_cond=aug_cond,
-                    train_groups=(groups[train_idx] if groups is not None else None))
-                mean_sp, pw = compare_importance_profiles(prof_sf)
-                smooth_sweep[str(sf)] = convert_numpy({
-                    'stability': mean_sp,
-                    'pairwise': pw,
-                    'cluster_stats': stats_sf,
-                    'profiles': prof_sf,
-                })
-            except Exception as e:
-                smooth_sweep[str(sf)] = {'error': str(e)}
+            # ── Phase 5: Smooth factor sweep ─────────────────────────────────
+            smooth_sweep = {}
+            for sf in SMOOTH_FACTORS:
+                try:
+                    train_silo_idx_sf, _, _ = cluster_training_only(
+                        train_fluid_df, k=K, smooth_factor=sf, seed=fed_seed)
+                    # P1 fix: pass augs/aug_cond — Phase 2 does, so Phase 5 must too.
+                    prof_sf, _, stats_sf = _compute_cluster_importance(
+                        train_reps, y_train, train_silo_idx_sf, K, budget=BUDGET,
+                        alloc=_alloc, imp=_imp, int_eval=_int_eval,
+                        augs=train_augs, aug_cond=aug_cond,
+                        train_groups=(groups[train_idx] if groups is not None else None))
+                    mean_sp, pw = compare_importance_profiles(prof_sf)
+                    smooth_sweep[str(sf)] = convert_numpy({
+                        'stability': mean_sp,
+                        'pairwise': pw,
+                        'cluster_stats': stats_sf,
+                        'profiles': prof_sf,
+                    })
+                except Exception as e:
+                    smooth_sweep[str(sf)] = {'error': str(e)}
 
-        fold_records.append({
-            'fold': fold_id,
-            'n_train': len(train_idx),
-            'n_test': len(test_idx),
-            'global_importance': convert_numpy({
-                'profile': global_profile,
-                'top_rep': global_top,
-            }),
-            'per_cluster_importance': convert_numpy({
-                'profiles': profiles,
-                'cluster_stats': cluster_stats,
-                'rep_rankings': rep_rankings,
-            }),
-            'profile_stability': convert_numpy({
-                'mean_spearman': mean_spearman,
-                'pairwise': pairwise,
-            }),
-            'profile_stability_null': convert_numpy({
-                'mean_spearman': null_spearman,
-                'pairwise': null_pairwise,
-                'cluster_stats': null_cluster_stats,
-                'partition': 'random, same cluster sizes as K-Means',
-            }),
-            # Which features, not just which representations. 'per_cluster'
-            # lists every feature each cluster took, most important first;
-            # 'overlap' says how far any two clusters agree; 'vs_global' says
-            # how much each cluster wanted that the whole-training-fold
-            # selection did not give it.
-            'selected_features': convert_numpy({
-                'per_cluster': cluster_selections,
-                'overlap': feature_overlap,
-                'global': global_selection,
-                'vs_global': cluster_vs_global,
-            }),
-            'cluster_conditional_hybrid': convert_numpy(conditional_metrics),
-            'cluster_features_all_rows': convert_numpy(featonly_metrics),
-            'global_hybrid': convert_numpy(global_metrics),
-            'per_cluster_fit_rows': convert_numpy(per_cluster_fit_rows),
-            'smooth_factor_sweep': smooth_sweep,
-            'n_fallback': n_fallback,
-        })
+            fold_records.append({
+                'fold': fold_id,
+                'budget': BUDGET,
+                'n_train': len(train_idx),
+                'n_test': len(test_idx),
+                'global_importance': convert_numpy({
+                    'profile': global_profile,
+                    'top_rep': global_top,
+                }),
+                'per_cluster_importance': convert_numpy({
+                    'profiles': profiles,
+                    'cluster_stats': cluster_stats,
+                    'rep_rankings': rep_rankings,
+                }),
+                'profile_stability': convert_numpy({
+                    'mean_spearman': mean_spearman,
+                    'pairwise': pairwise,
+                }),
+                'profile_stability_null': convert_numpy({
+                    'mean_spearman': null_spearman,
+                    'pairwise': null_pairwise,
+                    'cluster_stats': null_cluster_stats,
+                    'partition': 'random, same cluster sizes as K-Means',
+                }),
+                # Which features, not just which representations. 'per_cluster'
+                # lists every feature each cluster took, most important first;
+                # 'overlap' says how far any two clusters agree; 'vs_global' says
+                # how much each cluster wanted that the whole-training-fold
+                # selection did not give it.
+                'selected_features': convert_numpy({
+                    'per_cluster': cluster_selections,
+                    'overlap': feature_overlap,
+                    'global': global_selection,
+                    'vs_global': cluster_vs_global,
+                }),
+                'cluster_conditional_hybrid': convert_numpy(conditional_metrics),
+                'cluster_features_all_rows': convert_numpy(featonly_metrics),
+                'global_hybrid': convert_numpy(global_metrics),
+                'per_cluster_fit_rows': convert_numpy(per_cluster_fit_rows),
+                'smooth_factor_sweep': smooth_sweep,
+                'n_fallback': n_fallback,
+            })
 
     # ── Aggregate across folds ───────────────────────────────────────────
+    # Every table below this line reads as it did before the sweep: it is
+    # the headline width only. The other widths are in 'by_budget' and in
+    # 'folds', where each fold record carries the width it was measured at.
+    headline_records = [r for r in fold_records
+                        if r.get('budget') == HEADLINE_BUDGET]
     def _mean_metric(records, key, metric):
         vals = [r[key].get(metric) for r in records
                 if isinstance(r[key].get(metric), (int, float))
@@ -538,26 +556,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return float(np.std(vals)) if vals else float('nan')
 
     metric_keys = ['mcc', 'bac', 'f1', 'auroc', 'accuracy', 'f1_weighted']
-    cond_agg = {m: {'mean': _mean_metric(fold_records, 'cluster_conditional_hybrid', m),
-                    'std': _std_metric(fold_records, 'cluster_conditional_hybrid', m)}
+    cond_agg = {m: {'mean': _mean_metric(headline_records, 'cluster_conditional_hybrid', m),
+                    'std': _std_metric(headline_records, 'cluster_conditional_hybrid', m)}
                 for m in metric_keys}
-    glob_agg = {m: {'mean': _mean_metric(fold_records, 'global_hybrid', m),
-                    'std': _std_metric(fold_records, 'global_hybrid', m)}
+    glob_agg = {m: {'mean': _mean_metric(headline_records, 'global_hybrid', m),
+                    'std': _std_metric(headline_records, 'global_hybrid', m)}
                 for m in metric_keys}
-    feat_agg = {m: {'mean': _mean_metric(fold_records,
+    feat_agg = {m: {'mean': _mean_metric(headline_records,
                                          'cluster_features_all_rows', m),
-                    'std': _std_metric(fold_records,
+                    'std': _std_metric(headline_records,
                                        'cluster_features_all_rows', m)}
                 for m in metric_keys}
 
-    stability_vals = [r['profile_stability'].get('mean_spearman') for r in fold_records]
+    stability_vals = [r['profile_stability'].get('mean_spearman') for r in headline_records]
     stability_vals = [v for v in stability_vals
                       if isinstance(v, (int, float)) and not np.isnan(v)]
     # None (JSON null) when no fold produced a defined stability — not NaN.
     mean_stability = float(np.mean(stability_vals)) if stability_vals else None
 
     null_vals = [r.get('profile_stability_null', {}).get('mean_spearman')
-                 for r in fold_records]
+                 for r in headline_records]
     null_vals = [v for v in null_vals
                  if isinstance(v, (int, float)) and not np.isnan(v)]
     mean_stability_null = float(np.mean(null_vals)) if null_vals else None
@@ -574,7 +592,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _global_sel_counts = {}
     _n_global_selections = 0
     _jaccards = []
-    for _r in fold_records:
+    for _r in headline_records:
         _sf = _r.get('selected_features') or {}
         for _s, _sel in (_sf.get('per_cluster') or {}).items():
             _n_cluster_selections += 1
@@ -597,7 +615,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     dataset_feature_preference = {
         'n_cluster_selections': _n_cluster_selections,
         'n_global_selections': _n_global_selections,
-        'budget_per_selection': BUDGET,
+        'budget_per_selection': HEADLINE_BUDGET,
         # Every feature any cluster took, with how many of the
         # n_cluster_selections selections took it. Full list, not a top slice.
         'cluster_selection_counts': dict(_ranked_feats),
@@ -621,7 +639,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for _sf in SMOOTH_FACTORS:
         _key = str(_sf)
         _vals = []
-        for _r in fold_records:
+        for _r in headline_records:
             _e = (_r.get('smooth_factor_sweep') or {}).get(_key) or {}
             _v = _e.get('stability')
             if isinstance(_v, (int, float)) and not np.isnan(_v):
@@ -636,8 +654,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # model and were scored by the whole-fold model instead. A large count
     # makes the two arms of the comparison partly the same arm, so it belongs
     # beside the two scores rather than only inside each fold.
-    _fb = [int(_r.get('n_fallback', 0)) for _r in fold_records]
-    _nte = [int(_r.get('n_test', 0)) for _r in fold_records]
+    _fb = [int(_r.get('n_fallback', 0)) for _r in headline_records]
+    _nte = [int(_r.get('n_test', 0)) for _r in headline_records]
     n_fallback_agg = {
         'mean': float(np.mean(_fb)) if _fb else None,
         'std': float(np.std(_fb)) if _fb else None,
@@ -646,6 +664,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             float(np.mean([a / b for a, b in zip(_fb, _nte) if b]))
             if any(_nte) else None),
     }
+
+    # The three arms at every width. One row is one width; the numbers are
+    # the mean over the folds of that width, in MCC.
+    by_budget = {}
+    for _b in BUDGETS:
+        _recs = [r for r in fold_records if r.get('budget') == _b]
+        if not _recs:
+            continue
+        by_budget[str(_b)] = {
+            'n_folds': len(_recs),
+            'cluster_conditional_hybrid_mcc':
+                _mean_metric(_recs, 'cluster_conditional_hybrid', 'mcc'),
+            'cluster_features_all_rows_mcc':
+                _mean_metric(_recs, 'cluster_features_all_rows', 'mcc'),
+            'global_hybrid_mcc': _mean_metric(_recs, 'global_hybrid', 'mcc'),
+        }
+    print(f"\n  {'budget':>8} {'conditional':>12} {'feat_allrows':>13} "
+          f"{'global':>10}   (mean MCC over folds)")
+    for _b, _row in by_budget.items():
+        print(f"  {_b:>8} {_row['cluster_conditional_hybrid_mcc']:>12.4f} "
+              f"{_row['cluster_features_all_rows_mcc']:>13.4f} "
+              f"{_row['global_hybrid_mcc']:>10.4f}")
 
     results = {
         'experiment': 'fed04_cluster_aware_importance',
@@ -657,11 +697,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'allocation_method': _alloc,
             'importance_method': _imp,
             'internal_evaluator': _int_eval,
-            'budget': BUDGET,
+            'budgets_swept': BUDGETS,
+            'headline_budget': HEADLINE_BUDGET,
             'smooth_factors': SMOOTH_FACTORS,
             'n_samples': n_samples,
             'n_folds': N_FOLDS,
         },
+        'by_budget': convert_numpy(by_budget),
         'folds': fold_records,
         'aggregate': {
             'cluster_conditional_hybrid': cond_agg,
@@ -710,7 +752,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _ov_str = 'n/a' if _ov is None else f"{_ov:.3f}"
     print(f"\n  Features: {_fp['n_distinct_features_ever_taken']} distinct "
           f"features taken across {_fp['n_cluster_selections']} selections of "
-          f"{BUDGET} features each")
+          f"{HEADLINE_BUDGET} features each")
     print(f"  Mean pairwise overlap between two clusters' selections: {_ov_str}")
     print(f"  Taken by every cluster in every fold: "
           f"{_fp['n_taken_by_every_cluster_in_every_fold']} features")
