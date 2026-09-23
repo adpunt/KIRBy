@@ -564,6 +564,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid_wins': hybrid_wins,
         }
 
+        # ⛔ A FAMILY THAT PRODUCED NO NUMBER WAS WRITTEN IN THE SAME SHAPE AS
+        # ONE THAT DID. With no blueprint, _evaluate_cell skips every fold, the
+        # heatmap fills with NaN, and `comparison` is still written with
+        # hybrid_wins=None -- which on its own reads like a family that WAS
+        # measured and tied. The SVM family came back blank on every budget,
+        # because the pool had no hybrid for model=svm.
+        # Each heatmap cell is a dict carrying 'val', not a bare float.
+        _cells = [c.get('val') if isinstance(c, dict) else c
+                  for row in (heatmap or {}).values()
+                  for c in (row or {}).values()]
+        _finite = [v for v in _cells
+                   if v is not None and not np.isnan(float(v))]
+        comparison['family_blank'] = (len(_finite) == 0)
+        if comparison['family_blank']:
+            _errs = pool_lookup_errors.get(fam_name) or {}
+            comparison['family_blank_reason'] = (
+                '; '.join(f'{k}: {v}' for k, v in sorted(_errs.items())[:4])
+                or f'no finite cell in {len(_cells)} (budget, setting) cells')
+
         fam_result = {
             'param_name': param_name,
             # 2026-09-12: the downstream model this family's recipe was chosen
