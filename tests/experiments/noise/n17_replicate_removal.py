@@ -206,6 +206,26 @@ DETECTOR_K = 10
 SPREAD_SCORE = 'measurement_spread'
 SPREAD_SCORES = ('measurement_spread', 'training_label_error')
 
+# THE SMALLEST FLOOR-TO-CEILING DISTANCE THIS FILE WILL DIVIDE BY. Added
+# 2026-09-23.
+#
+# `removal_position` divides a correction's gain by the distance between
+# `floor_measured` and `ceiling`. Until today the only condition on that
+# distance was that it be above zero: the test at `_summarise` was
+# `span > 0`. On herg_ic50 at a removal share of 0.01 the distance came back
+# +0.0071 rmse against a no-cleaning score of 0.7399 rmse, which is 0.96% of
+# it, and `remove` and `repair` were divided by it and printed at -2.003 and
+# -2.340 of the way from floor to ceiling. Those two numbers say a correction
+# landed two whole distances below a distance of seven thousandths of an rmse
+# unit. Nothing in the data supports reading them.
+#
+# n06, n07, n11, n12 and n21 each refuse their own denominator below 2% of the
+# score it is measured against, under the name GAP_MIN_FRAC. Their denominator
+# is the clean-to-corrupted gap and this one is a floor-to-ceiling distance, so
+# the two are not the same quantity and the number is carried across by choice,
+# not because anything measured it here. It is a separate name for that reason.
+SPAN_MIN_FRAC = 0.02
+
 # TWO floors, because there are two things to control for and one floor cannot be
 # the control for both. Added 2026-09-16 after the first floor was fixed and the
 # fix removed a control instead of repairing one.
@@ -1150,8 +1170,10 @@ def _summarise(results, models, spaces, metric_name, lower_is_better,
     `removal_position` is where an arm sits between floor and ceiling. 0.0 is
     level with the floor -- the gain is training-set size and nothing else. 1.0 is
     level with the ceiling -- the detector found what the repeat measurements say
-    is actually worst. It is left undefined when floor and ceiling are within a
-    hair of each other, because there is then no distance to be a fraction of.
+    is actually worst. It is left undefined when the ceiling does not beat its
+    floor, and also when it beats it by less than SPAN_MIN_FRAC of the
+    no-cleaning score, because there is then no distance worth being a fraction
+    of.
 
     Every number is computed inside one space. Nothing here averages a
     representation against another one or against the hybrid.
@@ -1225,13 +1247,26 @@ def _summarise(results, models, spaces, metric_name, lower_is_better,
             # DIFFERENT entities. Where the flag count met or passed the number of
             # entities with a disagreement, both removed all of them, so the span is
             # zero by construction and says nothing about the data.
-            span_is_real = bool(np.isfinite(span) and span > 0 and not exhausted)
+            #
+            # And a span above zero is still not a distance when it is a few
+            # thousandths of the score it is measured against: dividing by it
+            # prints a removal position of hundreds of percent. See
+            # SPAN_MIN_FRAC.
+            span_positive = bool(np.isfinite(span) and span > 0)
+            span_floor = (max(1e-10, SPAN_MIN_FRAC * abs(base))
+                          if np.isfinite(base) else 1e-10)
+            span_too_small = bool(span_positive and not (span > span_floor))
+            span_is_real = bool(span_positive and not span_too_small
+                                and not exhausted)
             row = {
                 'arm_scores': arm_means,
                 'gain_over_no_cleaning': {a: _gain(arm_means[a]['mean_over_draws'])
                                           for a in arms},
                 'floor_to_ceiling_span': float(span) if np.isfinite(span) else float('nan'),
+                'smallest_span_this_file_divides_by': float(span_floor),
+                'span_min_frac_of_no_cleaning': SPAN_MIN_FRAC,
                 'ceiling_beats_floor': span_is_real,
+                'span_under_its_minimum': span_too_small,
                 'ceiling_exhausted_the_pool': exhausted,
                 'nothing_on_the_table': (
                     None if span_is_real else
@@ -1241,6 +1276,15 @@ def _summarise(results, models, spaces, metric_name, lower_is_better,
                     'construction and says nothing about the data. Lower the flag '
                     'rate, or read this dataset on gain_over_its_own_floor instead.'
                     if exhausted else
+                    f'The ceiling beat its floor by {span:.6g} {metric_name}, '
+                    f'which is under {SPAN_MIN_FRAC:.0%} of the no-cleaning '
+                    f'score ({base:.6g} {metric_name}). A distance that small '
+                    'in the denominator turns a small swing in a correction '
+                    'into a removal position of hundreds of percent, so every '
+                    'removal position is left undefined. The gain each arm '
+                    'made beyond its own floor is still reported and needs no '
+                    'ceiling.'
+                    if span_too_small else
                     'The ceiling did not beat the floor, so removing the entities '
                     'whose repeat measurements really disagree most helped no more '
                     'than removing the same number at random. No detector can be '
@@ -1346,6 +1390,16 @@ def _print_summary(summary, metric_name):
                       "them is zero by construction.")
                 print("      Read this dataset on 'beyond its own floor', or "
                       "lower the flag rate.")
+            elif row.get('span_under_its_minimum'):
+                print(f"      the ceiling beat its floor by "
+                      f"{row['floor_to_ceiling_span']:+.4f} {metric_name}, under "
+                      f"{SPAN_MIN_FRAC:.0%} of the no-cleaning score")
+                print(f"      ({row['arm_scores']['no_cleaning']['mean_over_draws']:.4f} "
+                      f"{metric_name}, so the smallest distance this file will "
+                      f"divide by is "
+                      f"{row['smallest_span_this_file_divides_by']:.4f}) —")
+                print("      dividing by it would print a position of hundreds "
+                      "of percent, so no position is reported")
             elif not row['ceiling_beats_floor']:
                 print("      the ceiling did not beat the floor — nothing is on "
                       "the table here, so no position is reported")
