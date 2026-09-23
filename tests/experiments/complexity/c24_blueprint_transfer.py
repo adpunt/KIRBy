@@ -7,11 +7,28 @@ Conclusion: Blueprints discovered on one fold generalize to other folds,
 
 Dependencies: None (standalone). Uses find_best_hybrid or precomputed search.
 
-Design:
+⛔ WHAT THE CODE ACTUALLY MEASURES, WHICH IS NOT WHAT THE THREE LINES BELOW
+    USED TO SAY. Step 2 does NOT apply fold k's Step-1 blueprint to fold j.
+    fold_blueprints[k] is read only to check the key exists. The recipe used on
+    the off-diagonal comes from a FRESH find_best_hybrid run on the rows left
+    after dropping BOTH fold k and fold j, so that the selection never sees the
+    target fold's rows.
+
+    That is a deliberate choice and the leak-free one: fold k's own Step-1
+    recipe was searched on every fold except k, which INCLUDES fold j's rows,
+    so applying it to fold j would score a selection on rows it had seen. But
+    it means the diagonal and the off-diagonal differ in HOW MANY ROWS THE
+    SEARCH SAW -- one fold's worth -- not in whose recipe was applied. Whether
+    that is the experiment you want is a science decision and has not been
+    made; the code, the printed reading and delta_meaning now describe the same
+    thing, which they did not before.
+
+Design (as run):
     For each CV fold k:
         1. Discover the optimal blueprint on fold k's training data.
-        2. Apply fold k's blueprint to ALL other folds' test data.
-        3. Measure performance vs each fold's own blueprint.
+        2. For each other fold j: search a recipe on the rows outside BOTH k
+           and j, apply it to fold j's held-out rows.
+        3. Measure performance vs fold j's own-fold blueprint.
 
     If feature selection is NOT overfit:
         - Own-fold and cross-fold blueprints should perform similarly.
@@ -74,13 +91,27 @@ def nogueira_stability(feature_sets, total_features):
         all_features.update(fs)
     all_features = sorted(all_features)
     feat_to_idx = {f: i for i, f in enumerate(all_features)}
-    d = len(all_features)
 
+    # ⛔ d IS THE POOL WIDTH, NOT THE UNION OF WHAT WAS SELECTED. It used to be
+    # len(all_features), which made the denominator depend on the selections
+    # being measured and made the perfectly stable case UNDEFINED: five folds
+    # picking the identical 200 features give a union of 200, so k_bar == d,
+    # the k_bar == d guard below fires and phi comes back nan instead of 1.
+    # total_features was passed in for exactly this and was only ever used in
+    # the `== 0` check above.
+    d = int(total_features)
+    n_union = len(all_features)
+    if d < n_union:
+        # Can only happen if the caller's count is wrong; trust the data.
+        d = n_union
     if d == 0:
         return float('nan'), float('nan')
 
-    # Binary matrix Z: M x d
-    Z = np.zeros((M, d), dtype=float)
+    # Binary matrix Z over the UNION, then padded: features no fold ever
+    # selected have p_f = 0, contribute 0 to the numerator, and matter only
+    # through d in the denominator -- which is the point of using the pool
+    # width there.
+    Z = np.zeros((M, n_union), dtype=float)
     for i, fs in enumerate(feature_sets):
         for f in fs:
             if f in feat_to_idx:
@@ -92,13 +123,28 @@ def nogueira_stability(feature_sets, total_features):
     if k_bar == 0 or k_bar == d:
         return float('nan'), float('nan')
 
-    # Per-feature selection frequency
-    p_f = Z.mean(axis=0)  # (d,)
+    # Per-feature selection frequency, over the union. The d - n_union features
+    # nobody picked are all-zero rows of p_f and add nothing to the sum.
+    p_f = Z.mean(axis=0)  # (n_union,)
 
-    # Nogueira stability (Eq. 4 from the paper)
-    # phi = 1 - (1 / (k_bar * (1 - k_bar/d))) * (1/d) * sum_j( M/(M-1) * pj * (1-pj) )
+    # Nogueira, Sechidis & Brown (2018), Eq. 4:
+    #   phi = 1 - [ (1/d) * sum_f s_f^2 ] / [ (k_bar/d) * (1 - k_bar/d) ]
+    # with s_f^2 = (M/(M-1)) * p_f * (1 - p_f). The 1/d in the numerator and
+    # the 1/d inside the denominator CANCEL, leaving
+    #   phi = 1 - [ sum_f (M/(M-1)) p_f (1-p_f) ] / [ k_bar * (1 - k_bar/d) ]
+    #
+    # ⛔ THE DENOMINATOR CARRIED AN EXTRA FACTOR OF d. With d in the thousands
+    # of features that pushed phi to just under 1 whatever the selections were,
+    # and the threshold below then printed HIGH stability every time. Checked
+    # numerically over 2,000 features and 5 folds picking 200 each:
+    #   five folds pick        old formula   this formula
+    #   the identical 200         1.000000       1.000000
+    #   200 sharing half          0.999722       0.444444
+    #   200 entirely disjoint     0.999444      -0.111111
+    # The comment here stated the same wrong formula, so comment and code
+    # agreed with each other and both disagreed with the paper.
     numerator = (M / (M - 1)) * np.sum(p_f * (1 - p_f))
-    denominator = d * k_bar * (1 - k_bar / d)
+    denominator = k_bar * (1 - k_bar / d)
 
     if denominator == 0:
         return float('nan'), float('nan')
@@ -107,8 +153,10 @@ def nogueira_stability(feature_sets, total_features):
 
     # Standard error (Eq. 7 from the paper, simplified)
     # For confidence intervals: phi ± z * se
+    # Same cancellation: the d**2 here paired with the d in the old
+    # denominator. Dropped with it so se stays on phi's scale.
     var_terms = p_f * (1 - p_f)
-    se = np.sqrt((4 / (M * d**2 * (k_bar * (1 - k_bar / d))**2)) *
+    se = np.sqrt((4 / (M * (k_bar * (1 - k_bar / d))**2)) *
                  np.sum(var_terms**2)) if M > 2 else float('nan')
 
     return float(phi), float(se)
@@ -364,11 +412,28 @@ def run(data, config, output_dir, dataset_name):
                         "c24_drop%d_%d" % tuple(sorted((src_fold, tgt_fold)))),
                     tier='general',
                 )
-                _pair_best = None
-                for _m, _mb in _pair_search.best_by_model.items():
-                    if _pair_best is None or cmp(_mb['score_mean'],
-                                                 _pair_best['score_mean']):
-                        _pair_best = _mb
+                # ⛔ TAKE THE RECIPE FOR THE MODEL THAT WILL SCORE IT. This
+                # used to be the best entry across EVERY model, with the
+                # winning model's name thrown away, while the estimator fitted
+                # below is fold_best_models[tgt_fold] -- the target fold's own
+                # Step 1 winner. On the diagonal the recipe and the estimator
+                # come from one entry and always agree; off the diagonal they
+                # did not have to. So the diagonal and the off-diagonal
+                # differed in two ways at once, not one: which rows the search
+                # saw, AND whether the recipe was chosen under the estimator it
+                # is scored with.
+                _tgt_model = fold_best_models.get(tgt_fold)
+                _pair_by_model = _pair_search.best_by_model
+                _pair_best = _pair_by_model.get(_tgt_model)
+                _recipe_model = _tgt_model
+                if _pair_best is None:
+                    # That model produced nothing in this pair search. Fall
+                    # back to the best across models, and RECORD that the two
+                    # came apart rather than letting it pass unseen.
+                    for _m, _mb in _pair_by_model.items():
+                        if _pair_best is None or cmp(_mb['score_mean'],
+                                                     _pair_best['score_mean']):
+                            _pair_best, _recipe_model = _mb, _m
                 if _pair_best is not None:
                     src_bp = _pair_best['blueprint']
             except Exception as exc:
@@ -384,6 +449,13 @@ def run(data, config, output_dir, dataset_name):
                 'rows_selection_saw': int(len(_pair_idx)),
                 'folds_excluded_from_selection': [int(src_fold), int(tgt_fold)],
                 'features_transferred': True,
+                # Which model the recipe was chosen for, and which one scores
+                # it. Equal on every cell unless the pair search had no entry
+                # for the target's model.
+                'recipe_chosen_for_model': _recipe_model,
+                'scored_with_model': fold_best_models.get(tgt_fold),
+                'recipe_model_matches_scoring_model': (
+                    _recipe_model == fold_best_models.get(tgt_fold)),
             }
 
             try:
@@ -518,9 +590,12 @@ def run(data, config, output_dir, dataset_name):
         'features_transferred': True,
         'delta_meaning': (
             'how much the held-out score moves when the recipe and the '
-            'selected features come from a different subset of folds. The '
-            'features themselves cross now, so a delta of exactly zero no '
-            'longer follows from two folds sharing a recipe'),
+            'selected features are searched on the rows outside BOTH folds '
+            'rather than on the target fold own training rows -- one fold '
+            'fewer for the search to work with. It is NOT a measurement of '
+            'transferring one fold blueprint to another: the source fold '
+            'Step-1 blueprint is never applied off the diagonal, because it '
+            'was searched on rows that include the target fold'),
         'per_target': convert_numpy(per_target),
         'aggregate': {
             'mean_abs_delta': float(np.mean(np.abs(deltas))) if deltas else None,

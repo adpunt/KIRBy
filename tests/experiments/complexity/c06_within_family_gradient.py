@@ -41,9 +41,22 @@ from kirby.find_best_hybrid import _resolve_models, FAST_INTERNAL_EVALUATORS
 # Map c06 family labels to canonical names in DEFAULT_MODELS. List-form
 # _resolve_models is the only way to trigger _max_samples + _DOMAIN_MODEL_SKIPS
 # + _DATASET_STRATEGY_SKIPS; the dict form is a passthrough.
+# ⛔ 'Ridge' WAS A DEAD KEY. get_model_family_variants has returned Lasso, not
+# Ridge, since 2026-07-18. The stale key did two things: `--families Ridge`
+# matched nothing, so the filter below produced {}, the family loop never ran,
+# and c06 SAVED `{'families': {}}` as a result with no error. And Lasso, having
+# no entry, fell through the `canonical is None` branch below and so never went
+# through _resolve_models -- the only thing that applies _max_samples,
+# _DOMAIN_MODEL_SKIPS and _DATASET_STRATEGY_SKIPS.
+#
+# Lasso maps to None deliberately: DEFAULT_MODELS has no 'lasso' (it holds
+# ridge and linear, which are different estimators), so there is no canonical
+# name to gate it by. That is now stated rather than silent -- the loop prints
+# it.
 _FAMILY_TO_CANONICAL = {
-    'RF': 'rf', 'Ridge': 'ridge', 'kNN': 'knn', 'DNN': 'dnn',
+    'RF': 'rf', 'kNN': 'knn', 'DNN': 'dnn',
     'XGBoost': 'xgboost', 'SVM': 'svm', 'GP': 'gp',
+    'Lasso': None,
 }
 
 # DECIDED 2026-09-12: c06 passes the family's evaluator name in its own list.
@@ -70,8 +83,13 @@ _FAMILY_TO_EVALUATOR = {
 # DECIDED 2026-09-12: c06 moves to the fast speed tier, under the rule that an
 # experiment calling find_best_hybrid more than once per dataset runs fast —
 # 28 searches per dataset, seven families at four capacity settings each.
-# Fast cuts the allocation methods to three and the importance methods to two
-# and leaves the budget axis alone, which is the axis c06 reports. Those two
+# Fast cuts the allocation methods to three (performance_weighted, power_2,
+# rank_exp_d0.3) and the importance methods to ONE (lightgbm_gain -- this
+# comment said two and was wrong), and leaves the budget axis alone, which is
+# the axis c06 reports. FAST_INTERNAL_EVALUATORS is
+# ['rf', 'match', 'dnn', 'lightgbm'], so the SVM family searches
+# ['rf', 'svm', 'dnn', 'lightgbm'] and the RF family ['rf', 'dnn', 'lightgbm'];
+# an earlier note here said ['rf', 'match'] and halved the cost estimate. Those two
 # lists are part of the search cache key (find_best_hybrid.py:2643), so a fast
 # search is stored as a separate file from a full one and reuses none of it.
 _C06_SPEED = 'fast'
@@ -157,6 +175,13 @@ def run(data, config, output_dir, dataset_name, families=None):
 
     all_families = get_model_family_variants()
     if families:
+        _unknown = [f for f in families if f not in all_families]
+        if _unknown:
+            raise ValueError(
+                f"--families named {_unknown}, which "
+                f"get_model_family_variants does not return. It returns "
+                f"{sorted(all_families)}. c06 used to filter these out and "
+                f"save an empty result with no error.")
         all_families = {k: v for k, v in all_families.items() if k in families}
 
     # Compute aug_strategy first so we can pass it to the family gate
@@ -169,9 +194,18 @@ def run(data, config, output_dir, dataset_name, families=None):
     # which diverged from DEFAULT_MODELS (gp: 1000, svm: 10000) and didn't
     # inherit domain/dataset skips.
     for fam_name in list(all_families.keys()):
-        canonical = _FAMILY_TO_CANONICAL.get(fam_name)
+        if fam_name not in _FAMILY_TO_CANONICAL:
+            raise ValueError(
+                f"family {fam_name!r} has no entry in _FAMILY_TO_CANONICAL. "
+                f"Add one, or map it to None if no DEFAULT_MODELS name "
+                f"matches it. Falling through silently is how Ridge went "
+                f"stale for two months.")
+        canonical = _FAMILY_TO_CANONICAL[fam_name]
         if canonical is None:
-            continue  # unknown family, leave alone
+            print(f"  {fam_name}: no canonical DEFAULT_MODELS name, so "
+                  f"_max_samples / _DOMAIN_MODEL_SKIPS / "
+                  f"_DATASET_STRATEGY_SKIPS are NOT applied to it")
+            continue
         # Pass strategy so _DATASET_STRATEGY_SKIPS / _DOMAIN_STRATEGY_SKIPS
         # are applied (e.g., 'gp' skipped for flab_thermo_tresanco/uncapped).
         # This gate stays at speed='full' (the default) even though the
@@ -447,7 +481,9 @@ if __name__ == '__main__':
     parser = create_experiment_parser('C06: Within-Family Complexity Gradient',
                                      has_delta=True, has_augment=True)
     parser.add_argument('--families', type=str, nargs='+', default=None,
-                        help='Model families to test (RF, Ridge, kNN, DNN, XGBoost, SVM, GP)')
+                        help='Model families to test (RF, Lasso, kNN, DNN, '
+                             'XGBoost, SVM, GP). Ridge was replaced by Lasso '
+                             'on 2026-07-18.')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, args.reps,
