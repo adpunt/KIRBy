@@ -197,42 +197,48 @@ precision over `local_variance_ratio` in 140 of 198 paired readings.
 neighbours than one that reads a residual. Both are swept, so nothing is
 currently decided by this.
 
-### B5c. n21's forest proximity, swept over its shape for the first time — RUNNING
+### B5c. n21's forest proximity, swept over its shape for the first time — CLOSED 2026-09-23
 The forest whose leaves the proximity is read off ships at 100 trees and 5
-molecules a leaf, and the comment beside the second says "5 is stated, recorded
-and overridable, not tuned". `_loop_n21_forest.py` sweeps 100, 200 and 300 trees
-against 1, 5, 20 and 50 molecules a leaf, on flab_thermo_tresanco in onehot,
-under outlier_p10 at level 0.5, detection only.
+molecules a leaf. `_loop_n21_forest.py` swept 100, 200 and 300 trees against 1,
+5, 20 and 50 molecules a leaf, on flab_thermo_tresanco in onehot, under
+outlier_p10 at level 0.5, detection only. It is finished: all 6 passes, one pass
+being one (fold, corruption draw), 34 to 46 of the 448 training molecules given
+a moved label, in
+`/Volumes/seagate/local_noise_run/loop_n21/flab_thermo_tresanco__forest_shape.json`.
 
-At 2 of its 6 passes, one pass being one (fold, corruption draw), 12 cells per
-arm, with 43 of the 448 training molecules moved on average:
+Arm means over the 36 cells of (fold, corruption draw, detector, neighbour
+count), detection average precision:
 
-    forest, 300 trees, 1 per leaf     0.2636 detection average precision
-    forest, 200 trees, 5 per leaf     0.2607
-    forest, 100 trees, 5 per leaf     0.2537   ← what n21 ships
-    forest, 300 trees, 50 per leaf    0.2193
-    plain representation, manhattan   0.2026
+    forest, 300 trees, 1 per leaf      0.2438
+    forest, 100 trees, 1 per leaf      0.2437
+    forest, 200 trees, 5 per leaf      0.2391
+    forest, 100 trees, 5 per leaf      0.2366   ← what n21 ships
+    forest, 100 trees, 50 per leaf     0.2152
+    plain representation, manhattan    0.1879
+    plain representation, euclidean    0.1844
 
-Every forest shape beats the plain representation: the plain euclidean row wins
-1 of the 12 cells against the shipped forest, mean -0.0516 average precision.
+⛔ THE TREE COUNT LOST AND 200 HAS BEEN PUT BACK TO 100. It was taken at 3
+passes, where it had gained 0.0082 average precision on 3 of the 3 passes then
+on disk. Paired on the full 36 cells, 200 trees gains 0.0025 average precision
+and wins 20 of the 36 cells, against a spread over those 36 cell gains of
+0.0151 — six times the gain. On precision at the number of molecules that
+really moved, 0.2637 at 100 trees against 0.2683 at 200, winning 14 of the 36
+cells. 300 trees gains 0.0020 on the same cells. The doubled forest fit is not
+paid. Recorded in coverage_loops.json with kept false.
 
-CHANGED 2026-09-21: `FOREST_TREES` 100 → 200. Against 100 trees at the shipped
-leaf size, 200 gained +0.0082 detection average precision on 3 of the 3 passes
--- per pass +0.0049, +0.0091, +0.0107, spread over passes 0.0030 -- and 300
-gained +0.0081, the same number, so the extra hundred trees were not taken. The
-forest fit is most of the cost of a proximity and 200 trees is twice the fit of
-100: about 84 seconds against 42 on 448 training molecules over 5600 features.
+⛔ THE LEAF SIZE STAYS AT 5, and the same 6 passes settle it. 50 molecules a
+leaf loses 0.0214 average precision in 26 of the 36 cells. 1 molecule a leaf
+gains 0.0072 and 20 molecules a leaf gains 0.0033, each inside its own spread
+over the 36 cell gains — 0.0446 and 0.0422 — and both lose on precision at the
+moved count, 0.0191 and 0.0080 below the shipped 5.
 
-⛔ THE LEAF SIZE HAS NOT BEEN CHANGED AND THE TWO READINGS DISAGREE. On average precision
-the smallest leaf leads; on precision at the number of molecules that really
-moved, the SHIPPED leaf size of 5 is first at 0.2895 and one molecule a leaf is
-sixth at 0.2685. So one molecule a leaf ranks more moved molecules highly across
-the whole ranking and the shipped size is better at the very top of it. 50
-molecules a leaf is last on both readings, -0.0344 average precision against the
-shipped setting in 10 of 12 cells.
+WHAT THE FOREST ITSELF IS WORTH did not change: at the shipped 100 trees and 5
+molecules a leaf the proximity beats the plain representation under euclidean
+by 0.0522 average precision in 31 of the 36 cells, and that gain is larger than
+its own spread of 0.0429 over those cells.
 
-⛔ NEXT: 3 passes left. Do not move FOREST_MIN_SAMPLES_LEAF until they land and
-the two readings are read together. One dataset, one condition.
+This is one dataset under one condition, detection only; the repair is not
+measured here.
 
 ### B5d. n21 has never run under a condition its distances could predict —
 ### RUNNING on caco2
