@@ -666,9 +666,37 @@ Each sat under a number that had been reported as a result.
    adme_mdr1's gap falls to 0.21 x the median absolute deviation. Even at 15%
    adme_mdr1 needs a gap of 0.50 x MAD, which is a weak cliff — it has 2,318
    scaffolds among 2,641 molecules.
-2. **The s02 headline cell.** Largest delta comes from no weighting anywhere;
-   the hybrid's own best geometry comes from weighting. They pick different
-   cells.
+2. **The s02 headline cell is really a choice of comparator, and the held-out
+   folds are unanimous.** Read from the three result files 2026-09-23.
+
+   What weighting does to the comparator. Best single representation, the
+   similarity score the file calls `sac_rho`, higher better:
+
+       dataset      unweighted                weighted
+       caco2        top_torsion  +0.2273      ecfp4_count  +0.3460
+       herg_ki      pdv          +0.0886      ecfp4        +0.3364
+       adme_mdr1    atom_pair    +0.2799      atom_pair    +0.3484
+
+   On herg_ki the weighted comparator is 3.8 times the unweighted one. So the
+   "largest delta" cell is largest because its comparator is weak, not because
+   the hybrid is strong there.
+
+   Held out, with the recipe reselected per fold and the comparator weighted,
+   hybrid minus best single:
+
+       dataset      delta      per-fold deltas
+       caco2      +0.0260      +0.0267 +0.0323 +0.0182 +0.0298 +0.0229
+       herg_ki    -0.0237      -0.0251 -0.0382 -0.0316 -0.0053 -0.0183
+       adme_mdr1  -0.0233      -0.0131 -0.0329 -0.0118 -0.0406 -0.0183
+
+   Every one of the five folds agrees with its dataset's sign, on all three
+   datasets. The hybrid wins caco2 and loses the other two, and no fold
+   dissents.
+
+   Recommendation: report the weighted comparator. The hybrid arm is itself
+   importance-weighted, so an unweighted single representation differs from it
+   in two ways at once — the features and the weighting — and the unweighted
+   cell's larger delta is that second difference, not the first.
 3. **Keying `baselines/` and `hybrid_evals/` by coefficient.** The key is
    (dataset, representation, model, metric, folds, seed). No coefficient. A
    `readacross` baseline is a representation's score under a distance, so two
