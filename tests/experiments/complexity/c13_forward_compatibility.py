@@ -471,25 +471,22 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     _dropped = []
     for candidate_model in _candidates:
         try:
-            # ⛔ cache_namespace, NOT condition_suffix alone. condition_suffix
-            # names the search PICKLE and nothing else: it appears nowhere in
-            # result_cache.py, and the per-configuration store's primary key is
-            # IDENTITY_COLS + CONFIG_COLS, whose rep_pool entry is built from
-            # representation NAMES AND FEATURE COUNTS ONLY (_rep_pool_key).
-            # Representation CONTENT is deliberately excluded, because neural
-            # embeddings are not bit-reproducible.
+            # condition_suffix is enough on its own. It looks at first read as
+            # though it only names the search pickle -- it appears nowhere in
+            # result_cache.py -- but find_best_hybrid.py:8801 folds it into
+            # `tier`, and `tier` is IDENTITY_COLS[0]. So two arms differing
+            # only by suffix get different row identities.
             #
-            # The random-Gaussian control replaces one representation with noise
-            # of the SAME NAME and the SAME WIDTH. So its identity was byte-for-
-            # byte the real arm's, the DB file was result_db/<dataset>.db for
-            # both, and every configuration the control asked for was already
-            # stored by the real arm that ran moments earlier. No model was ever
-            # fitted on the noise. D minus D_random came out exactly 0.0 and
-            # every subject was reported as "apparent gain is selection noise".
-            # cache_namespace is the one knob that changes the DB FILE.
-            _extra = ({'condition_suffix': condition_suffix,
-                       'cache_namespace': condition_suffix}
-                      if condition_suffix else {})
+            # That matters most for the random-Gaussian control, which replaces
+            # a representation with noise of the SAME NAME and SAME WIDTH:
+            # _rep_pool_key carries names and feature counts only, and
+            # representation CONTENT is excluded on purpose because neural
+            # embeddings are not bit-reproducible. The suffix is the only thing
+            # keeping the two apart. Checked 2026-09-23 on flab with two
+            # representations at budget 25, sharing one result database: the
+            # real arm scored 0.440540 spearman and the noise arm 0.354353.
+            # See loops/c13/nullcheck.py.
+            _extra = {'condition_suffix': condition_suffix} if condition_suffix else {}
             # ⛔ speed='fast' SINCE 2026-09-18, OWNER'S DECISION.
             #
             # Every search c13 runs is built live. Each condition carries a
@@ -1103,12 +1100,11 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             # of identical width earns exactly that inflation and nothing else,
             # so the null minus the without-side measures the bias and the
             # representation's own contribution is the with-side minus the null.
-            # ⛔ THIS COMMENT USED TO SAY THE SUFFIX GAVE THIS ITS OWN CACHE
-            # FILE. It did not. find_best_hybrid keys the result DB on
-            # dataset_name + cache_namespace, and condition_suffix is not in
-            # the key at all -- so this control read the real representation's
-            # stored rows and fitted nothing. Fixed 2026-09-23 by passing
-            # cache_namespace as well; see the note at the _extra dict.
+            # The distinct condition_suffix gives it its own cache file AND
+            # its own row identity (it rides on `tier`,
+            # find_best_hybrid.py:8801), so it is computed live on the random
+            # content and never collides. Verified 2026-09-23, not assumed:
+            # loops/c13/nullcheck.py.
             null_reps = {**without_reps, rep_name: X_null}
             print(f"\n  Condition {dr_key}: those {len(without_reps)} plus a "
                   f"random-Gaussian matrix, {X_new.shape[1]} features, the same "
