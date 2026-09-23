@@ -51,6 +51,42 @@ on all three. s10's kNN task found distance-weighted voting lowered held-out
 error in 20 of 21 representation-dataset pairs; this says that gain does not
 survive into the hybrid-minus-reference difference, because it lifts both arms.
 
+## What "optimisation done" meant, audited 2026-09-23
+
+Read out of the finished result files, not from this table. Only s06 was swept.
+
+    experiment   swept                                left at one value
+    s06          coefficient, exponent, statistic,    --
+                 neighbour count -- 2,628 cells
+    s10          neighbour count, q-RASAR             importance exponent 0.5,
+                 neighbours, GP length-scale start    kNN vote uniform,
+                                                      normalize_y, weight convention
+    s05          neighbour count, two values          exponent, vote -- one point
+                                                      per dataset
+    s13          cluster count                        retrieval neighbours 5,
+                                                      exponent, coefficient
+
+⛔ s10 was scored at importance exponent 0.5 and uniform voting. Its own kNN
+task, in the same file and the same run, measured distance-weighted voting
+better in 20 of 21 (representation, dataset) pairs and the hardcoded 0.5 never
+best. So the GP and q-RASAR tasks were scored at two settings the file had
+already measured as losing.
+
+Measured wall clock on this machine, which is what makes a full sweep a cluster
+job rather than a laptop one: s05 43 to 50 minutes a run, s13 2.4 hours,
+s10 4.8 to 8.3 hours.
+
+Queued 2026-09-23 as a result:
+
+- **s05, the full grid.** Two voting schemes by four importance exponents
+  (0, 0.25, 0.5, 1.0) on three datasets, 24 runs, with the neighbour count swept
+  inside each run over 5, 7, 10, 15 and 25. This is the sweep the table claimed
+  and the files did not have.
+- **s10, one cell, not a sweep.** Distance voting at exponent 0.25 on all three
+  datasets, so the GP and q-RASAR nulls are re-read at the settings s10's own
+  kNN task chose. Three runs. A full 8-cell grid at 6 hours a run is roughly
+  two days of this laptop and belongs on the cluster.
+
 ## s01–s13
 
 | exp | kind | smoke tested / debugged | methods to optimise | optimisation done |
