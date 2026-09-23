@@ -704,3 +704,62 @@ same:
 Note what is NOT in doubt: the DETECTION numbers. How well a source ranks the
 molecules that moved is measured against a known set and needs no such control.
 It is the step from a good ranking to a better model that this breaks.
+
+### F2. The same control for a MOVE arm, on herg_ki — MEASURED 2026-09-23
+Verified from `/Volumes/seagate/local_noise_run/loop_n23/shuffled_move_probe.json`,
+written by `loop_n23/shuffled_move_probe.py`. It adds no arm and no source to
+n23.
+
+herg_ki, 1412 molecules, 941 in each of the 3 training blocks, ecfp4 at 2048
+features, rmse, LOWER IS BETTER, 3 outer folds, random forest, outlier_p10 at
+level 0.5, one corruption draw. On this dataset every drop arm loses and
+`move_proportional@0.25` wins, for all five uncertainty sources at once.
+
+WHAT THE MOVE ARM DOES. `smooth_by_scores` at noise_estimation.py:1971-1972
+rescales the spreads to run from zero to one and sets each training label to
+`y + strength * rescaled_spread * (target - y)`, with `strength` 0.25.
+
+THE CONTROL. The spread vector is permuted across the 941 training molecules
+before the labels are moved, at 20 seeds. The same multiset of shrink fractions
+is handed out, to different molecules. Same folds, same draw, same strength,
+same target, same features, same forest seed.
+
+    source                    real ranking        20 shuffled draws
+    heteroscedastic_nn     2 of 3 folds won    0 to 3 folds won, 1.50 on average
+                           mean +0.00305 rmse  mean gain -0.00602 to +0.00682 rmse
+    activity_cliff_aware   2 of 3 folds won    1 to 3 folds won, 1.75 on average
+                           mean +0.00197 rmse  mean gain -0.00436 to +0.00758 rmse
+
+⛔ THE RANKING DOES NOT WIN MORE FOLDS THAN A PERMUTATION OF ITSELF. On
+heteroscedastic_nn, 9 of the 20 shuffled draws won at least as many of the 3
+folds as the real ranking and 3 of the 20 won more. On activity_cliff_aware, 10
+of the 20 won at least as many and 5 of the 20 won more. So the herg_ki move
+result is the shrinkage, not the detection: what earns the gain is pulling every
+label a quarter of the way toward its out-of-fold prediction.
+
+ON MEAN GAIN THE READING IS WEAKER BUT NOT NOTHING. The real ranking's mean gain
+sits above 17 of the 20 shuffled draws on heteroscedastic_nn and above 12 of the
+20 on activity_cliff_aware. `folds won` is the count n23's headline is stated
+in; `mean gain` is not, and neither the mean gain nor the fold count clears the
+standard deviation over the three fold gains, 0.00481 and 0.00310 rmse.
+
+⛔ THE CONTROL MATCHES THE SHRINK FRACTIONS AND NOT HOW FAR THE LABELS TRAVEL.
+On activity_cliff_aware, fold 0, the real ranking moves a label 0.0400 pKi units
+on average and a shuffled draw moves it 0.0238, because the molecules with the
+widest spread are also the ones furthest from their neighbour mean. That pair
+differs in two ways at once, not one. On heteroscedastic_nn the same pair is
+0.0668 against 0.0647 and is close to matched, so that source's reading is the
+cleaner of the two.
+
+⛔ THE INJECTED DAMAGE ON ONE FOLD IS BELOW THE FLOOR. Clean to corrupted, per
+fold: 0.0429, 0.0060 and 0.0165 rmse against a floor of 2 percent of that fold's
+clean score. The middle fold does not clear it. No share of the injected damage
+is computed anywhere in the probe or above.
+
+THE PROBE REPRODUCES n23's OWN NUMBERS. All 9 stored scores for these two
+sources in `n23_uncertainty_cleaning/herg_ki__outlier_p10_cond3.json` — the
+three uncleaned fits and the six move-arm fits — come back bit-identical.
+
+⛔ NEXT, AND IT IS THE OWNER'S: one corruption draw, 3 folds, two of the five
+sources, one strength. Whether a shuffled-ranking arm is ADDED to n23 beside the
+random-drop one is the same open question section F already puts to the owner.
