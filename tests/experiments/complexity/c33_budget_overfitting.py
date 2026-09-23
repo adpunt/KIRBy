@@ -350,6 +350,31 @@ def _summarise_model(per_budget, base_folds, lower_is_better, min_train_rows):
             'per_fold_delta_std': _fold_spread(per_fold),
             'n_paired_folds': n_paired,
             'budget_exceeds_train_rows': bool(int(budget) > min_train_rows),
+            # ⛔ THE REGION ABOVE IS LABELLED BY THE BUDGET ASKED FOR, AND THE
+            # HYBRID DOES NOT ALWAYS GET IT. create_hybrid cuts a quota to the
+            # features the importance method scored above zero, and
+            # lightgbm_gain writes exactly 0.0 for any feature its trees never
+            # split on. Measured on herg_ki: budget 1,000 against 1,129 training
+            # rows is labelled 'interpolation' and realises 826 features, which
+            # is 'under'. A budget of 2,000 labelled 'over' that realises 1,050
+            # was never over the line. c33's whole question is what happens ON
+            # and ABOVE that line, so the label has to come from the width the
+            # hybrid actually had.
+            'n_features_per_fold': b.get('n_features_per_fold'),
+            'n_features_mean': _f(b.get('n_features_mean')),
+            'width_below_budget': (
+                None if b.get('n_features_mean') is None
+                else bool(float(b['n_features_mean']) < int(budget))),
+            'width_shortfall': (
+                None if b.get('n_features_mean') is None
+                else int(budget) - float(b['n_features_mean'])),
+            'region_from_realised_width': (
+                None if not b.get('n_features_mean')
+                else _region(float(b['n_features_mean']), min_train_rows)),
+            'region_disagrees_with_width': (
+                None if not b.get('n_features_mean')
+                else _region(int(budget), min_train_rows)
+                     != _region(float(b['n_features_mean']), min_train_rows)),
         }
 
     scored = [(b, r['reselected_mean']) for b, r in rows.items()
