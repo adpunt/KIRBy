@@ -13,6 +13,29 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin
 
 
+def _cap_torch_threads():
+    """Hold torch to KIRBY_TORCH_THREADS cores, if it is set.
+
+    torch takes every core by default. s11's BO loop refits this network once
+    per iteration, so several concurrent runs each open a full-core thread pool
+    per fit and the process is killed outright -- no traceback, because it is
+    the kernel doing it, which is why nine s11 attempts over 2026-09-22 and
+    09-23 died inside the hybrid_bnn condition with empty logs. Same shape as
+    the lightgbm segfault that KIRBY_LGBM_THREADS=1 fixes.
+
+    Unset leaves torch alone, so nothing on the cluster changes.
+    """
+    import os
+    _t = os.environ.get('KIRBY_TORCH_THREADS')
+    if not _t:
+        return
+    try:
+        import torch
+        torch.set_num_threads(max(1, int(_t)))
+    except Exception:
+        pass
+
+
 class BNNRegressor(BaseEstimator, RegressorMixin):
     """MC-Dropout BNN regressor with sklearn interface.
 
@@ -50,6 +73,7 @@ class BNNRegressor(BaseEstimator, RegressorMixin):
         import torch.nn as nn
         from ._es_split import early_stopping_split
 
+        _cap_torch_threads()
         rng = np.random.RandomState(self.random_state)
         torch.manual_seed(self.random_state)
 
@@ -181,6 +205,7 @@ class BNNClassifier(BaseEstimator, ClassifierMixin):
         import torch.nn as nn
         from ._es_split import early_stopping_split
 
+        _cap_torch_threads()
         rng = np.random.RandomState(self.random_state)
         torch.manual_seed(self.random_state)
 
