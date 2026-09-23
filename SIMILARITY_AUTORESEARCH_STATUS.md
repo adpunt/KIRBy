@@ -302,6 +302,31 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
+**s11 — FIXED 2026-09-23. It was torch taking every core, not the model.**
+`hybrid_bnn` fits a PyTorch MC-dropout network, and torch opens a full-core
+thread pool by default. s11's loop refits the surrogate once per BO iteration,
+so every fit opened one, and several concurrent runs multiplied it. The kernel
+kills a process that does that, and a kill leaves no traceback — which is
+exactly the empty logs all nine attempts produced.
+
+`KIRBY_TORCH_THREADS` now caps it, in both the regressor and the classifier in
+`src/kirby/models/bnn.py`. Unset leaves torch alone so nothing on the cluster
+changes. Measured: unset gives 4 threads, `=1` gives 1, fit and predictions
+unchanged either way.
+
+With the cap, both arms that had never produced a number completed on caco2 at
+250 molecules, 3 picks, 1 seed:
+
+    condition          dim   surrogate failures   picks by row order
+    hybrid_bnn          50            0                3 of 3
+    hybrid_gauche_gp    50            0                0 of 3
+
+That is the first number either arm has produced in this campaign. All eleven
+arms are back in the six queued local runs. `hybrid_bnn` taking 3 of 3 picks by
+row order at three iterations is not yet meaningful — it is three picks — but it
+is the same flat-acquisition signature the other arms show and should be read
+against the full runs.
+
 **s11 — one arm of eleven kills the process, and it is why nothing finished.**
 Measured 2026-09-23 on caco2 at 250 molecules, 3 picks, 1 seed, with nothing
 else running on the machine. The nine conditions before `hybrid_bnn` completed
