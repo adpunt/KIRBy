@@ -962,6 +962,14 @@ def predict_fluid_similarity_ensemble(teacher_models, cluster_data_train,
 
         # 8-NN distance weighting using TRAIN-ONLY teacher data
         teacher_fps = np.asarray(list(teacher_df.FP))
+        # A silo with no training rows has nothing to measure a distance
+        # from. max(1, int(0.2 * 0)) asks numpy for one sample out of an
+        # empty array, which raises. The student pipeline above already
+        # handles this by giving that teacher a flat weight; do the same
+        # here so one empty cluster cannot end the whole run.
+        if len(teacher_fps) == 0:
+            all_weights[t] = np.ones(len(test_fps))
+            continue
         n_sample = max(1, int(0.2 * len(teacher_fps)))
         rng = np.random.RandomState(seed + t)
         sample_idx = rng.choice(len(teacher_fps), size=n_sample, replace=False)
@@ -1933,6 +1941,14 @@ def predict_fluid_similarity_ensemble_regression(teacher_models,
         all_preds[t] = reg.predict(X_test_t)
 
         # 8-NN distance weighting in this silo's OWN feature space
+        # A silo with no training rows has nothing to measure a distance
+        # from. max(1, int(0.2 * 0)) asks numpy for one sample out of an
+        # empty array, which raises. The student pipeline above already
+        # handles this by giving that teacher a flat weight; do the same
+        # here so one empty cluster cannot end the whole run.
+        if len(X_train_t) == 0:
+            all_weights[t] = np.ones(len(X_test_t))
+            continue
         n_sample = max(1, int(0.2 * len(X_train_t)))
         rng = np.random.RandomState(seed + t)
         sample_idx = rng.choice(len(X_train_t), size=n_sample, replace=False)
@@ -2081,6 +2097,14 @@ def predict_fluid_similarity_ensemble_classification(
         all_probs[t] = clf.predict_proba(X_test_t)
 
         # 8-NN distance weighting in this silo's OWN feature space
+        # A silo with no training rows has nothing to measure a distance
+        # from. max(1, int(0.2 * 0)) asks numpy for one sample out of an
+        # empty array, which raises. The student pipeline above already
+        # handles this by giving that teacher a flat weight; do the same
+        # here so one empty cluster cannot end the whole run.
+        if len(X_train_t) == 0:
+            all_weights[t] = np.ones(len(X_test_t))
+            continue
         n_sample = max(1, int(0.2 * len(X_train_t)))
         rng = np.random.RandomState(seed + t)
         sample_idx = rng.choice(len(X_train_t), size=n_sample, replace=False)
