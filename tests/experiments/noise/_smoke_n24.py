@@ -1,0 +1,540 @@
+#!/usr/bin/env python3
+"""Smoke for n24: delete the flagged molecules, or keep them.
+
+The thing that has to be true: the control is real. An experiment that deletes
+molecules a detector chose has to be measured against deleting the same number
+of molecules at random, and if a smoke cannot show that the two arms deleted the
+same count on the same passes, the experiment cannot be read at all.
+
+  1. THE CONTROL DELETES THE SAME NUMBER AS THE DETECTOR DID. Counted out of the
+     result file, per flag rate, summed over the passes.
+
+  2. THE CONTROL IS REPORTED PER SEED AND NEVER AVERAGED. Every seed has its own
+     row, and the best and the worst are both on the file.
+
+  3. EVERY ARM IS SCORED ON THE SAME PASSES AND THE COMPARISONS ARE PAIRED.
+     Passes won never exceeds passes paired, and passes paired never exceeds the
+     (draw, fold) passes that ran.
+
+  4. THE DIRECTION IS READ OFF THE DATASET. Run once where lower wins and once
+     where higher wins. Two checks, and neither is "the same arm wins under both
+     metrics", which would be a claim about the arms: the gain under one
+     direction must be the gain under the other negated, and the passes the
+     summary says an arm won must be the passes where its raw score really is on
+     the better side of no cleaning.
+
+  4b. A RATE-BLIND ARM IS BUILT ONCE, NOT ONCE PER RATE. Counted by wrapping
+     `cleaned_training_set`, and the repeated rows must carry the same numbers.
+
+  4c. THE PARSER BUILDS AND CARRIES EVERY FLAG, checked by running --help.
+
+  5. THE FOUR RATE-BLIND ARMS REALLY ARE RATE-BLIND. Checked against
+     `cleaned_training_set` itself rather than asserted from the table: the
+     cleaned label column at two flag rates is compared, and the two arms that
+     read the rate must differ while the four that do not must be identical.
+
+  6. THE EXACT-COUNT RULE HOLDS. `random_deletion_scores` must make `remove`
+     delete exactly the number asked for, over many (training count, deleted
+     count) pairs.
+
+  7. WHAT THE CONDITION LEFT BEHIND IS MEASURED. Under outlier_p10 the widened
+     molecules carry only part of the squared label error, so deleting exactly
+     them cannot remove all of the damage; under outlier_only_p10 they carry all
+     of it. Both are run and the two shares must come out different.
+
+RUN COST. KIRBY_SMOKE_N sets how many molecules the toy dataset carries, so the
+whole file stays under a couple of minutes. Unset it defaults to 180.
+"""
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
+
+# Two OpenMP runtimes in one process: torch links libiomp5 and LightGBM links
+# libomp, and a multi-threaded fit of one after the other kills the process with
+# exit 139 and no traceback. project_fold_hook_and_lgbm_segfault_2026_09_02.
+os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+
+import tempfile
+
+import numpy as np
+
+import experiments.noise.n24_delete_or_keep as n24
+from experiments.noise.n07_remediation import cleaned_training_set
+
+OUT = tempfile.mkdtemp(prefix='n24_smoke_')
+FAIL = []
+
+# How many molecules the toy dataset carries. KIRBY_SMOKE_N is the repository's
+# own row cap and it is read here for the same purpose.
+try:
+    SMOKE_N = int(os.environ.get('KIRBY_SMOKE_N', '').strip() or 180)
+except ValueError:
+    SMOKE_N = 180
+
+
+def check(name, ok, detail=''):
+    print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
+          + (f" — {detail}" if detail else ''))
+    if not ok:
+        FAIL.append(name)
+
+
+def make_data(n=None, seed=0, domain='molecular'):
+    """Two representations. The label is a function of the first one.
+
+    Groups are singletons: the fold split is not what this file is testing.
+
+    `domain` sets the direction, because that is where the direction actually
+    comes from: an unregistered dataset falls through to
+    `_shared._heuristic_metric_name`, which gives a molecular regression set
+    rmse (lower wins) and an antibody one spearman (higher wins). Passing a
+    'metric' key here would change nothing — get_domain_metric never reads one.
+    """
+    n = SMOKE_N if n is None else n
+    rng = np.random.default_rng(seed)
+    a = rng.normal(size=(n, 6))
+    y = a @ rng.normal(size=6) + rng.normal(0, 0.25, n)
+    b = a[:, ::-1] + rng.normal(0, 0.6, size=a.shape)
+    return {
+        'labels': y,
+        'reps': {'aaa': a, 'bbb': b},
+        'groups': np.arange(n),
+        'task_type': 'regression',
+        'domain': domain,
+    }
+
+
+def no_recipe(*a, **k):
+    """What the pool returns on a dataset it was never built for.
+
+    The hybrid spaces need a precomputed pool and there is none here, so the
+    lookup is replaced and every arm runs in the base representation.
+    """
+    return None, None
+
+
+def run_it(data, name, **kw):
+    """One tiny n24 run, in the base representation only."""
+    real = n24.get_best_search_for_downstream
+    n24.get_best_search_for_downstream = no_recipe
+    try:
+        return n24.run(
+            data, {'n_splits': 3}, OUT, name,
+            models=['rf'], base_rep='aaa',
+            detectors=kw.pop('detectors', ['neighbor_residual']),
+            flag_rates=kw.pop('flag_rates', [0.05, 0.20]),
+            random_seeds=kw.pop('random_seeds', [0, 1, 2]),
+            levels=kw.pop('levels', [0.5]),
+            draws=kw.pop('draws', [0]),
+            **kw)
+    finally:
+        n24.get_best_search_for_downstream = real
+
+
+# ── 1, 2, 3. the control ────────────────────────────────────────────────────
+
+def test_the_control():
+    print("the control — deleting the same number at random:")
+    r = run_it(make_data(seed=1), 'toy')
+
+    deleted = r['molecules_deleted']['0.5']['base']
+    who = sorted(deleted)
+    check('the detector and every random seed have their own deletion counts',
+          'neighbor_residual' in who
+          and len([w for w in who if w.startswith('random_seed')]) == 3,
+          f'{who}')
+
+    same = True
+    for rate in sorted(deleted['neighbor_residual']):
+        by_det = deleted['neighbor_residual'][rate]
+        line = [f"the detector deleted "
+                f"{by_det['molecules_deleted_summed_over_the_passes']} of "
+                f"{by_det['training_molecules_summed_over_the_passes']} "
+                f"training molecules summed over "
+                f"{by_det['passes']} passes"]
+        for w in who:
+            if not w.startswith('random_seed'):
+                continue
+            row = deleted[w].get(rate)
+            if row is None:
+                same = False
+                continue
+            if (row['molecules_deleted_summed_over_the_passes']
+                    != by_det['molecules_deleted_summed_over_the_passes']):
+                same = False
+            line.append(f"{w} deleted "
+                        f"{row['molecules_deleted_summed_over_the_passes']}")
+        print(f"        rate {rate}: " + "; ".join(line))
+    check('every random seed deleted the same number of molecules as the '
+          'detector did', same)
+
+    # How many of the deleted molecules were ones the injector widened, for the
+    # detector and for chance. Printed rather than asserted: what it should be
+    # is the experiment's finding, not the smoke's.
+    for rate in sorted(deleted['neighbor_residual']):
+        d = deleted['neighbor_residual'][rate]
+        print(f"        rate {rate}: of the "
+              f"{d['molecules_deleted_summed_over_the_passes']} molecules the "
+              f"detector deleted, "
+              f"{d['widened_molecules_among_the_deleted_summed_over_the_passes']}"
+              f" were among the "
+              f"{d['widened_molecules_summed_over_the_passes']} the injector "
+              f"widened")
+
+    lvl = r['summary']['per_level']['0.5']['per_space']['base']
+    rrow = lvl['per_detector']['neighbor_residual']['per_flag_rate']
+    ok_per_seed = True
+    for rate, block in rrow.items():
+        for m, csp in block['random_deletion_against_no_cleaning'].items():
+            if len(csp['per_seed']) != 3:
+                ok_per_seed = False
+            gains = [f"{k.split('/')[-1]} {v['passes_won']} of "
+                     f"{v['n_passes_paired']} passes at {v['mean_gain']:+.4f}"
+                     for k, v in csp['per_seed'].items()]
+            print(f"        rate {rate}, {m}: " + "; ".join(gains))
+    check('every seed has its own row and none of them is averaged away',
+          ok_per_seed and all(
+              'best_seed_mean_gain' in csp and 'worst_seed_mean_gain' in csp
+              for block in rrow.values()
+              for csp in block['random_deletion_against_no_cleaning'].values()))
+    check('no mean across seeds is written anywhere in the summary',
+          'mean_across_seeds' not in str(r['summary']))
+
+    # Every arm that is not the control carries its comparison against every
+    # seed, and the verdict is the conjunction over them.
+    checked, ok_bound, ok_vs = 0, True, True
+    n_passes_run = 3          # one draw, three folds
+    for rate, block in rrow.items():
+        for arm, arow in block['per_arm'].items():
+            for m, entry in arow['per_model'].items():
+                nc = entry['vs_no_cleaning']
+                checked += 1
+                if nc['passes_won'] > nc['n_passes_paired']:
+                    ok_bound = False
+                if nc['n_passes_paired'] > n_passes_run:
+                    ok_bound = False
+                if len(nc['pass_gains']) != nc['n_passes_paired']:
+                    ok_bound = False
+                if r['arm_families'][arm] != 'delete_at_random':
+                    if entry.get('random_seeds_compared') != 3:
+                        ok_vs = False
+                    want = all(v['passes_won'] * 2 > v['n_passes_paired']
+                               for v in entry['vs_random_deletion'].values())
+                    if entry['beat_every_random_seed'] != want:
+                        ok_vs = False
+    check('passes won never exceeds passes paired, and the gains line up',
+          ok_bound, f'{checked} readings')
+    check('every detector-driven arm is compared with all three seeds and the '
+          'verdict is the conjunction', ok_vs)
+
+    c = r['summary']['counts']
+    print(f"        beat every random seed AND no cleaning: "
+          f"{c['settings_beating_every_random_seed_AND_no_cleaning']}; "
+          f"beat no cleaning only: "
+          f"{c['settings_beating_no_cleaning_but_not_every_random_seed']}; "
+          f"beat the seeds but LOST to no cleaning: "
+          f"{c['settings_beating_every_random_seed_but_LOSING_to_no_cleaning']}")
+    check('a setting is defined in words on the file',
+          'downstream model' in c['what_a_setting_is'])
+
+    # ⛔ THE HEADLINE COUNT MUST NOT INCLUDE SETTINGS THAT LOST TO NOT
+    # CLEANING. Until 2026-09-23 it did: the bucket was filled by
+    # beat_every_random_seed alone and the no-cleaning comparison was only
+    # reached in the elif, so an arm that cleared all three random deletions
+    # and was WORSE than leaving the labels alone counted as a win. Rebuilt
+    # here from the per-setting entries, which are the same numbers the count
+    # is made of, so the two cannot drift apart silently.
+    won_both, won_nc_only, won_seeds_only = [], [], []
+    for lvl, lrow in r['summary']['per_level'].items():
+        for space, srow in lrow['per_space'].items():
+            for det, drow in srow['per_detector'].items():
+                for rate, rrow in drow['per_flag_rate'].items():
+                    for arm, arow in rrow['per_arm'].items():
+                        for m, e in arow['per_model'].items():
+                            if 'beat_every_random_seed' not in e:
+                                continue
+                            key = f'{lvl}|{space}|{det}|{rate}|{arm}|{m}'
+                            nc = e['vs_no_cleaning']
+                            won_nc = nc['passes_won'] * 2 > nc['n_passes_paired']
+                            if e['beat_every_random_seed'] and won_nc:
+                                won_both.append(key)
+                            elif won_nc:
+                                won_nc_only.append(key)
+                            elif e['beat_every_random_seed']:
+                                won_seeds_only.append(key)
+    check('the headline counts only settings that ALSO beat not cleaning',
+          c['settings_beating_every_random_seed_AND_no_cleaning'] == len(won_both),
+          f"{c['settings_beating_every_random_seed_AND_no_cleaning']} on the "
+          f"file, {len(won_both)} rebuilt from the per-setting entries")
+    check('and a setting that beat the seeds but lost to no cleaning is in '
+          'its own bucket, not the headline',
+          c['settings_beating_every_random_seed_but_LOSING_to_no_cleaning']
+          == len(won_seeds_only),
+          f'{len(won_seeds_only)} such settings')
+    check('the three buckets are disjoint and cover every judged setting',
+          len(set(won_both) & set(won_nc_only)) == 0
+          and len(set(won_both) & set(won_seeds_only)) == 0
+          and len(set(won_nc_only) & set(won_seeds_only)) == 0,
+          f'{len(won_both)} + {len(won_nc_only)} + {len(won_seeds_only)}')
+    return r
+
+
+# ── the rate-blind arms are fitted once, not three times ────────────────────
+
+def test_rate_blind_arms_are_fitted_once():
+    print("\nhow many times each cleanup was built, over two flag rates:")
+    calls = {}
+    real = n24.cleaned_training_set
+
+    def counted(strategy, *a, **k):
+        calls[strategy] = calls.get(strategy, 0) + 1
+        return real(strategy, *a, **k)
+
+    n24.cleaned_training_set = counted
+    try:
+        r = run_it(make_data(seed=11), 'toy_counts',
+                   flag_rates=[0.05, 0.20], random_seeds=[0])
+    finally:
+        n24.cleaned_training_set = real
+
+    # 3 passes, 1 space, 1 detector, 2 flag rates, 1 random-deletion seed.
+    want = {'remove': 3 * 2 + 3 * 2,      # the detector's, plus the control's
+            'knn_smooth': 3 * 2,          # reads the rate, so once per rate
+            'label_smooth': 3, 'oof_smooth': 3,
+            'downweight': 3, 'huber_weight': 3}
+    for cleanup, n in sorted(want.items()):
+        print(f"        {cleanup:14s} built {calls.get(cleanup, 0)} times over "
+              f"3 passes and 2 flag rates, expected {n}")
+    check('a rate-reading arm is built once per flag rate and a rate-blind one '
+          'once in total',
+          all(calls.get(c, 0) == n for c, n in want.items()),
+          f'{calls}')
+
+    # And the numbers written under the second rate are the SAME numbers, not a
+    # second fit that happened to land nearby.
+    by_rate = r['per_level']['0.5']['base']['neighbor_residual']
+    same = all(
+        by_rate['0.05'][arm]['rf'] == by_rate['0.2'][arm]['rf']
+        for arm in ('keep_rewrite/label_smooth', 'keep_rewrite/oof_smooth',
+                    'keep_reweight/downweight', 'keep_reweight/huber_weight'))
+    differs = (by_rate['0.05']['delete/remove']['rf']
+               != by_rate['0.2']['delete/remove']['rf'])
+    check('the rate-blind rows repeat the same per-pass scores and the '
+          'deletion rows do not', same and differs)
+    check('the file says which flag rate each arm was fitted at',
+          r['fitted_at_flag_rate_per_arm']['keep_reweight/downweight'] == 0.05
+          and r['fitted_at_flag_rate_per_arm']['delete/remove'] == 'every rate',
+          f"{r['fitted_at_flag_rate_per_arm']}")
+
+
+# ── 4. the direction ────────────────────────────────────────────────────────
+
+def test_direction():
+    print("\nthe metric direction:")
+    lo = run_it(make_data(seed=4, domain='molecular'), 'toy_rmse')
+    hi = run_it(make_data(seed=4, domain='antibody'), 'toy_spearman')
+    check('the two runs recorded opposite directions',
+          lo['lower_is_better'] is True and hi['lower_is_better'] is False,
+          f"{lo['metric']} lower_is_better={lo['lower_is_better']}, "
+          f"{hi['metric']} lower_is_better={hi['lower_is_better']}")
+
+    # ⛔ NOT "the same arm wins under both metrics". rmse and spearman measure
+    # different things and an arm can improve the rank order while widening the
+    # error, so that comparison would be a claim about the arms rather than a
+    # check on the sign. What is checked is the sign itself, twice.
+
+    # Once on the arithmetic alone: the same two score columns, read under each
+    # direction, must give gains that are exact negatives of each other.
+    base = {'p': 1.0, 'q': 2.0, 'r': 3.0}
+    got = {'p': 0.5, 'q': 2.5, 'r': 2.0}
+    low = n24._paired(base, got, lower_is_better=True)
+    high = n24._paired(base, got, lower_is_better=False)
+    check('a gain under one direction is the same number negated under the '
+          'other',
+          np.allclose(low['pass_gains'], [-g for g in high['pass_gains']])
+          and low['passes_won'] == high['passes_lost'] == 2,
+          f"lower-wins gains {low['pass_gains']}, higher-wins gains "
+          f"{high['pass_gains']}")
+
+    # And once against the raw per-pass scores the same file carries: the count
+    # of passes the summary says an arm won must equal the count of passes
+    # where its score really is on the better side of no cleaning, and "better"
+    # is the opposite side in the two runs.
+    def _recount(res, wants_lower):
+        rows, bad = 0, []
+        for lvl, by_space in res['per_level'].items():
+            for space, by_det in by_space.items():
+                for det, by_rate in by_det.items():
+                    for rate, by_arm in by_rate.items():
+                        nc = by_arm['no_cleaning']
+                        summ = (res['summary']['per_level'][lvl]['per_space']
+                                [space]['per_detector'][det]['per_flag_rate']
+                                [rate]['per_arm'])
+                        for arm, by_model in by_arm.items():
+                            if arm == 'no_cleaning':
+                                continue
+                            for m, per_pass in by_model.items():
+                                b = nc[m]
+                                won = sum(
+                                    1 for k, v in per_pass.items()
+                                    if k in b and ((v < b[k]) if wants_lower
+                                                   else (v > b[k])))
+                                said = (summ[arm]['per_model'][m]
+                                        ['vs_no_cleaning']['passes_won'])
+                                rows += 1
+                                if won != said:
+                                    bad.append((arm, m, rate, won, said))
+        return rows, bad
+
+    n_lo, bad_lo = _recount(lo, wants_lower=True)
+    n_hi, bad_hi = _recount(hi, wants_lower=False)
+    print(f"        rmse: {n_lo} arm readings recounted from the raw per-pass "
+          f"scores, {len(bad_lo)} disagreed")
+    print(f"        spearman: {n_hi} arm readings recounted, "
+          f"{len(bad_hi)} disagreed")
+    check('the passes the summary says an arm won are the passes where its '
+          'score is on the better side, under both directions',
+          not bad_lo and not bad_hi and n_lo > 0 and n_hi > 0,
+          f'{bad_lo + bad_hi}')
+
+
+# ── 5. the rate-blind arms ──────────────────────────────────────────────────
+
+def test_rate_blindness():
+    print("\nwhich arms read the flag rate, checked against the cleanup itself:")
+    rng = np.random.default_rng(3)
+    n = 120
+    X = rng.normal(size=(n, 5))
+    y = X @ rng.normal(size=5) + rng.normal(0, 0.3, n)
+    scores = np.abs(rng.normal(size=n))
+    targets = {'oof': y + rng.normal(0, 0.2, n)}
+
+    def _column(cleanup, rate):
+        got = cleaned_training_set(cleanup, X, y, scores, rate, is_clf=False,
+                                   groups=None, strength=None, targets=targets)
+        if got is None:
+            return None
+        if got['keep'] is not None:
+            # A deletion has no label column; the mask is what changes.
+            return np.asarray(got['keep'], dtype=float)
+        if got['sample_weight'] is not None:
+            return np.asarray(got['sample_weight'], dtype=float)
+        return np.asarray(got['y'], dtype=float)
+
+    ok = True
+    for cleanup in ('remove', 'knn_smooth', 'label_smooth', 'oof_smooth',
+                    'downweight', 'huber_weight'):
+        a, b = _column(cleanup, 0.05), _column(cleanup, 0.20)
+        differs = not np.allclose(a, b)
+        claimed = n24.reads_flag_rate(cleanup, is_clf=False)
+        print(f"        {cleanup:14s} the cleaned training set differs "
+              f"between flag rate 0.05 and 0.20: {differs}; the file says it "
+              f"reads the rate: {claimed}")
+        if differs != claimed:
+            ok = False
+    check('every arm is on the right side of reads_flag_rate', ok)
+
+
+# ── 6. the exact-count rule ─────────────────────────────────────────────────
+
+def test_exact_counts():
+    print("\nthe random deletion removes exactly the number asked for:")
+    bad = []
+    for n in (33, 100, 251, 448):
+        X = np.zeros((n, 2))
+        yv = np.zeros(n)
+        for k in (1, 2, 5, 22, 45):
+            if k >= n:
+                continue
+            s, rate = n24.random_deletion_scores(n, k, seed=k * 7 + n)
+            got = cleaned_training_set('remove', X, yv, s, rate, is_clf=False,
+                                       groups=None, strength=None, targets=None)
+            if got is None:
+                bad.append((n, k, 'declined'))
+                continue
+            removed = int(n - int(np.asarray(got['keep']).sum()))
+            if removed != k:
+                bad.append((n, k, removed))
+    check('every (training count, deleted count) pair deleted exactly that '
+          'many molecules', not bad, f'mismatches: {bad}' if bad else
+          'checked 33, 100, 251 and 448 training molecules')
+
+
+# ── 7. what the condition left behind ───────────────────────────────────────
+
+def test_injury_share():
+    print("\nhow much of the damage sits on the molecules the injector widened:")
+    both = {}
+    for cond in ('outlier_p10', 'outlier_only_p10'):
+        r = run_it(make_data(seed=8), f'toy_{cond}', noise_condition=cond,
+                   flag_rates=[0.10], random_seeds=[0])
+        row = r['injury_carried_by_the_flagged_molecules']['0.5']
+        both[cond] = row['share_of_the_squared_error_on_the_widened_molecules']
+        print(f"        {cond}: the "
+              f"{row['widened_molecules_summed_over_the_passes']} widened "
+              f"molecules of "
+              f"{row['training_molecules_summed_over_the_passes']} training "
+              f"molecules carry {both[cond]:.3f} of the squared label error")
+        check(f'{cond}: the run recorded whether every other label also moved',
+              r['condition_moves_every_other_label'] == (
+                  cond == 'outlier_p10'))
+    check('the widened molecules carry all of the error under '
+          'outlier_only_p10 and only part of it under outlier_p10',
+          both['outlier_only_p10'] > both['outlier_p10'] + 0.1
+          and both['outlier_only_p10'] > 0.99,
+          f"{both['outlier_p10']:.3f} against "
+          f"{both['outlier_only_p10']:.3f}")
+
+
+# ── a condition with no damaged subset is refused ───────────────────────────
+
+def test_condition_guard():
+    print("\na condition where every label moves is refused:")
+    try:
+        run_it(make_data(n=80, seed=2), 'toy_guard', noise_condition='gaussian')
+        check('gaussian is refused because there is no flagged set to delete',
+              False, 'the run returned instead of raising')
+    except ValueError as exc:
+        check('gaussian is refused because there is no flagged set to delete',
+              'no damaged subset' in str(exc), str(exc)[:90])
+
+
+def test_the_command_line():
+    """The flags are checked on the real parser, in a real process.
+
+    Building a second parser here and testing that would test the copy.
+    """
+    print("\nthe command line:")
+    import subprocess
+    out = subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(__file__),
+                                      'n24_delete_or_keep.py'), '--help'],
+        capture_output=True, text=True)
+    wanted = ('--dataset', '--noise-condition', '--levels', '--detectors',
+              '--flag-rates', '--models', '--exp-folds', '--budgets', '--tag',
+              '--random-seeds', '--draws', '--base-rep')
+    missing = [f for f in wanted if f not in out.stdout]
+    check('the parser builds and lists every flag the runner needs',
+          out.returncode == 0 and not missing,
+          f'missing {missing}' if missing
+          else f'{len(wanted)} flags present')
+
+
+if __name__ == '__main__':
+    print(f"toy dataset: {SMOKE_N} molecules (KIRBY_SMOKE_N)")
+    test_the_control()
+    test_rate_blind_arms_are_fitted_once()
+    test_the_command_line()
+    test_direction()
+    test_rate_blindness()
+    test_exact_counts()
+    test_injury_share()
+    test_condition_guard()
+    print("\n" + "=" * 60)
+    if FAIL:
+        print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")
+        sys.exit(1)
+    print("ALL GREEN")
