@@ -672,9 +672,24 @@ Each sat under a number that had been reported as a result.
 3. **Keying `baselines/` and `hybrid_evals/` by coefficient.** Until they are,
    the coefficient axis needs a separate `KIRBY_CACHE_DIR` per coefficient.
    Namespacing them orphans every file already in both directories.
-4. **Which end of the label s11 hunts.** It negates whenever the dataset metric
-   is lower-is-better, so on all three it chases the LOWEST label — the weakest
-   binders, the least effluxed. Nothing in the file says which end is good.
+4. **Which end of the label s11 hunts is decided by the wrong quantity.**
+   `get_domain_metric` returns whether the SCORING METRIC is better when lower.
+   For all three datasets that metric is RMSE, so it returns True on all three.
+   s11 then reads that flag to decide which end of the LABEL to search towards,
+   negating the labels at `compute_combined_objective` line 480 and in the loop
+   it feeds. So the search hunts the lowest label on all three datasets because
+   RMSE is lower-is-better.
+
+   Those are two different questions. An RMSE being better when small says
+   nothing about whether a large or small pKi is the molecule you want. The
+   rule lands differently per dataset by accident: on herg_ki the lowest pKi is
+   the weakest hERG binder, which is the molecule a project usually wants; on
+   caco2 the lowest value is the least permeable, which usually is not.
+
+   Nothing in the file records which end is desirable per dataset, so the flag
+   is the only thing deciding it. This needs a per-dataset statement of which
+   end is good, not a metric direction. Until then every s11 number is an
+   answer to "how fast can the surrogate find the smallest label".
 
 ## Two things that change how the suite must be run
 
