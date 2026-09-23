@@ -689,7 +689,7 @@ def _run_double_descent(data, config, dataset_name=None):
         n_feat = min(budget, total_dim, n_samples - 1)
 
         # --- Hybrid ---
-        hybrid_score = _eval_at_budget(
+        hybrid_score, hybrid_w, _ = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid',
             data=data,
@@ -698,26 +698,26 @@ def _run_double_descent(data, config, dataset_name=None):
         )
 
         # --- PCA ---
-        pca_score = _eval_at_budget_pca(
+        pca_score, pca_w, _ = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
             n_components=n_feat
         )
 
         # --- Random features ---
-        random_score = _eval_at_budget_random(
+        random_score, random_w, _ = _eval_at_budget_random(
             X_concat, labels, groups, n_folds, mode, metric_fn,
             n_features=n_feat
         )
 
         # --- Ridge only (most sensitive to interpolation) ---
-        ridge_hybrid = _eval_at_budget(
+        ridge_hybrid, ridge_hybrid_w, _ = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
             data=data,
             dataset_name=dataset_name, task_type=task_type,
             prefetched_search=_searches_per_budget.get(budget),
         )
-        ridge_pca = _eval_at_budget_pca(
+        ridge_pca, ridge_pca_w, _ = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
             n_components=n_feat, model_name='ridge'
         )
@@ -728,13 +728,23 @@ def _run_double_descent(data, config, dataset_name=None):
         results['random_scores'].append(random_score)
         results['ridge_on_hybrid'].append(ridge_hybrid)
         results['ridge_on_pca'].append(ridge_pca)
+        # The number of features each arm actually got, averaged over folds.
+        # The budget is a maximum, not a target (hybrid.py:423), and the PCA
+        # arm is capped at the training row count -- so the p/n printed below
+        # comes from these, never from the budget.
+        results.setdefault('realised_width_hybrid', []).append(hybrid_w)
+        results.setdefault('realised_width_pca', []).append(pca_w)
+        results.setdefault('realised_width_random', []).append(random_w)
+        results.setdefault('realised_width_ridge_hybrid', []).append(ridge_hybrid_w)
+        results.setdefault('realised_width_ridge_pca', []).append(ridge_pca_w)
 
         ratio = budget / n_samples
         marker = " *** p ≈ n" if 0.8 <= ratio <= 1.2 else ""
-        print(f"    budget={budget:>5} (p/n={ratio:.2f})  "
-              f"hybrid={hybrid_score:>7.4f}  "
-              f"pca={pca_score:>7.4f}  "
-              f"random={random_score:>7.4f}  "
+        print(f"    budget={budget:>5} (asked p/n={ratio:.2f})  "
+              f"hybrid={hybrid_score:>7.4f} [{hybrid_w:.0f} feat, "
+              f"built p/n={hybrid_w / n_samples:.2f}]  "
+              f"pca={pca_score:>7.4f} [{pca_w:.0f} feat]  "
+              f"random={random_score:>7.4f} [{random_w:.0f} feat]  "
               f"ridge_hyb={ridge_hybrid:>7.4f}  "
               f"ridge_pca={ridge_pca:>7.4f}{marker}")
 
@@ -763,7 +773,7 @@ def _run_double_descent(data, config, dataset_name=None):
         instability_ratio = near_n_var / (far_var + 1e-10)
         results['instability_ratio_pca'] = instability_ratio
         print(f"\n    PCA instability near p≈n: variance_ratio={instability_ratio:.2f} "
-              f"({'UNSTABLE' if instability_ratio > 2 else 'stable'})")
+              f"({_stability_word(instability_ratio)})")
 
     hybrid_arr = np.array(results['hybrid_scores'])
     if np.sum(near_n_mask) >= 2 and far_ok:
@@ -774,9 +784,22 @@ def _run_double_descent(data, config, dataset_name=None):
         instability_hybrid = near_n_var_hyb / (far_var_hyb + 1e-10)
         results['instability_ratio_hybrid'] = instability_hybrid
         print(f"    Hybrid instability near p≈n: variance_ratio={instability_hybrid:.2f} "
-              f"({'UNSTABLE' if instability_hybrid > 2 else 'stable'})")
+              f"({_stability_word(instability_hybrid)})")
 
     return results
+
+
+def _stability_word(ratio):
+    """UNSTABLE / stable / not measured.
+
+    A budget where every fold raised, or where no recipe existed, scores nan.
+    np.var over a list holding a nan is nan, and `nan > 2` is False -- so the
+    old inline conditional printed a budget that never ran as evidence of
+    stability.
+    """
+    if ratio is None or not np.isfinite(ratio):
+        return 'NOT MEASURED - a budget in this window scored nan'
+    return 'UNSTABLE' if ratio > 2 else 'stable'
 
 
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
@@ -816,7 +839,7 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
             # of the double-descent curve instead of crashing run().
             print(f"    [c15c] no blueprint for model={model_name} at "
                   f"budget={budget}; recording nan (skipped)")
-            return float('nan')
+            return float('nan'), 0, 0
         bp = best['blueprint']
     else:
         # Pool helper: pick best (tier, aug_cond) cache file for this (model, budget).
@@ -841,17 +864,19 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
             # so this budget drops out of the curve instead of crashing run().
             print(f"    [c15] no pool config for model={model_name} at "
                   f"budget={budget}; recording nan (skipped)")
-            return float('nan')
+            return float('nan'), 0, 0
         best = meta['best_config']
         bp = best['blueprint']
 
-    scores = []
+    scores, widths = [], []
+    n_folds_tried = 0
     sample_X = next(iter(reps.values()))
     # Slice augmentations per-fold if present so build_fold_hybrid rebuilds
     # the same recipe the blueprint was scored under. Dropping augs here
     # would silently mismatch the score from the pool search.
     augs_data = data.get('augmentations') if data is not None else None
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+        n_folds_tried += 1
         train_reps = {k: v[train_idx] for k, v in reps.items()}
         val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -861,13 +886,21 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                     if augs_data else None)
 
         try:
+            # budget_override: without it the rebuild uses bp.budget, which is
+            # whatever width the looked-up recipe happened to carry -- and
+            # get_best_for_downstream falls back to the best recipe across ALL
+            # budgets when none exists at the one asked for. The whole point of
+            # 15c/15d is a fine-grained sweep of p against n, so the loop's
+            # budget has to govern the width, not the recipe's.
             X_train, X_val, feat_info = build_fold_hybrid(
                 train_reps, val_reps_fold, y_train, bp,
                 augmentations_train=train_augs,
                 augmentations_val=val_augs,
                 groups=(groups[train_idx] if groups is not None else None),
+                budget_override=budget,
                 model=make_model(),
                 metric_fn=metric_fn)
+            widths.append(int(X_train.shape[1]))
 
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
@@ -879,7 +912,14 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         except Exception:
             continue
 
-    return float(np.mean(scores)) if scores else float('nan')
+    if len(scores) < n_folds_tried:
+        print(f"    [c15] budget={budget} model={model_name}: "
+              f"{n_folds_tried - len(scores)} of {n_folds_tried} folds raised "
+              f"and were dropped; the score below is the mean over "
+              f"{len(scores)}.")
+    return (float(np.mean(scores)) if scores else float('nan'),
+            float(np.mean(widths)) if widths else 0.0,
+            len(scores))
 
 
 def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
@@ -894,14 +934,19 @@ def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: RandomForestRegressor(
             n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
 
-    scores = []
+    scores, widths = [], []
     for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels, mode=mode):
         try:
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_concat[train_idx])
             X_val_s = scaler.transform(X_concat[val_idx])
 
+            # PCA cannot return more components than min(train rows, features).
+            # At 5 folds that ceiling is 0.8 of the rows, so this arm CANNOT
+            # reach p = n. The realised count is recorded so the curve is read
+            # against what was built, not against what was asked for.
             n_comp = min(n_components, X_train_s.shape[0] - 1, X_train_s.shape[1])
+            widths.append(int(n_comp))
             pca = PCA(n_components=n_comp)
             X_train_pca = pca.fit_transform(X_train_s)
             X_val_pca = pca.transform(X_val_s)
@@ -912,7 +957,9 @@ def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
         except Exception:
             continue
 
-    return float(np.mean(scores)) if scores else float('nan')
+    return (float(np.mean(scores)) if scores else float('nan'),
+            float(np.mean(widths)) if widths else 0.0,
+            len(scores))
 
 
 def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
@@ -933,6 +980,7 @@ def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
     X_sub = X_concat[:, feat_idx]
 
     scores = []
+    width = int(X_sub.shape[1])
     for train_idx, val_idx in cv_split(groups, n_folds, X_sub, labels, mode=mode):
         try:
             scaler = StandardScaler()
@@ -945,7 +993,8 @@ def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
         except Exception:
             continue
 
-    return float(np.mean(scores)) if scores else float('nan')
+    return (float(np.mean(scores)) if scores else float('nan'),
+            float(width), len(scores))
 
 
 # =========================================================================
@@ -1001,7 +1050,7 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         np.random.RandomState(42), task_type=task_type)
     results['rademacher_full'] = full_rademacher
 
-    full_real = _eval_at_budget_pca(
+    full_real, _full_w, _ = _eval_at_budget_pca(
         X_concat, labels, groups, n_folds, mode, metric_fn,
         n_components=min(X_concat.shape[1], n_samples - 1), model_name='ridge')
     results['real_score_full'] = full_real
@@ -1019,7 +1068,7 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
             reps, labels, groups, n_folds, mode, n_random_trials,
             np.random.RandomState(42), budget, data=data,
             task_type=task_type, dataset_name=dataset_name)
-        real_hybrid = _eval_at_budget(
+        real_hybrid, _rh_w, _ = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
             data=data, dataset_name=dataset_name,
@@ -1029,7 +1078,7 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         rad_pca = _estimate_rademacher_pca(
             X_concat, labels, groups, n_folds, mode, n_random_trials,
             np.random.RandomState(42), n_feat, task_type=task_type)
-        real_pca = _eval_at_budget_pca(
+        real_pca, _rp_w, _ = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
             n_components=n_feat, model_name='ridge')
 
@@ -1155,10 +1204,14 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
             # Build hybrid using REAL train labels (supervised selection)
             # but evaluate memorization on RANDOM labels. Augs sliced
             # per fold so the rebuild matches the scored blueprint.
+            # budget_override for the same reason as _eval_at_budget: without
+            # it the complexity below is measured on bp.budget features while
+            # the score it is printed beside was measured on this budget's.
             X_train_hyb, _, _fi = build_fold_hybrid(
                 train_reps, train_reps, y[train_idx], bp,
                 augmentations_train=train_augs,
                 augmentations_val=train_augs,
+                budget_override=budget,
                 groups=(groups[train_idx] if groups is not None else None))
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train_hyb)

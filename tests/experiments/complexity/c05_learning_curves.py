@@ -29,6 +29,7 @@ from experiments._shared import (
     hr_exclude_folds,
 )
 from sklearn.preprocessing import StandardScaler
+from kirby.hybrid import _graded_scores_for_clf
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -155,6 +156,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         hybrid_by_model = {m: [] for m in model_names}
         single_by_model = {m: [] for m in model_names}
         configs_by_model = {m: [] for m in model_names}
+        # THE HYBRID SIDE MAXIMISES OVER A BUDGET LIST THAT GROWS WITH n.
+        # sub_budgets below keeps every sweep budget at or below the training
+        # rows, so at a 50-molecule point it is [10, 25] and at a 1000-molecule
+        # point it is [10, 25, 50, 100, 250, 500]. search.best_by_model is the
+        # argmax across all of them. The single-representation side has no
+        # budget axis at all -- each representation is one score at its own
+        # full width. So part of the rise in delta with n is the number of
+        # configurations maximised over, not sample efficiency. Recorded here
+        # per seed so the confound is visible in the table; NOT corrected,
+        # because which way to correct it is the user's call.
+        budgets_searched_this_n = []
+        rows_drawn_this_n = []
         # Second pass: the all-rows-selected blueprint, features re-selected
         # on the subsample. The recipe itself still came from every label.
         hybrid_fd_by_model = {m: [] for m in model_names}
@@ -189,6 +202,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if picked_count >= n_sub:
                     break
             idx = np.array(sorted(picked))
+            rows_drawn_this_n.append(int(len(idx)))
             sub_reps = {k: v[idx] for k, v in reps.items()}
             sub_labels = labels[idx]
             sub_groups = groups[idx]
@@ -208,10 +222,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             train_size = (int(n_sub * (sub_folds - 1) / sub_folds)
                           if sub_folds > 1 else int(n_sub * 0.8))
             sub_budgets = [b for b in sweep_budgets if b <= train_size]
+            budgets_searched_this_n.append(len(sub_budgets))
             if not sub_budgets:
-                # smallest sweep budget that still fits the training partition
-                sub_budgets = [min((b for b in sweep_budgets if b <= train_size),
-                                   default=max(2, train_size))]
+                # No sweep budget fits the training partition. The old line
+                # here re-evaluated the same empty generator inside min(...),
+                # so its `default` always won -- it never picked a sweep
+                # budget. Say so: this budget is NOT one of the swept ones.
+                sub_budgets = [max(2, train_size)]
+                print(f"    n={n_sub}: no sweep budget fits {train_size} "
+                      f"training rows; using {sub_budgets[0]}, which is not "
+                      f"in the sweep")
             # Subsample-specific cache key — won't collide with main precompute
             # cache. Capped strategy is fine for small subsamples but projects
             # The 250-row gate was removed 2026-08-27. Always capped;
@@ -365,7 +385,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_va_s = scaler.transform(X_va)
                         mdl = model_factory()
                         mdl.fit(X_tr_s, sub_labels[tr_i])
-                        fold_scores.append(metric_fn(sub_labels[va_i], mdl.predict(X_va_s)))
+                        # Ranking metrics need graded scores. An AUROC read off
+                        # hard 0/1 labels collapses to the mean of sensitivity
+                        # and specificity (hybrid.py:2661). The baselines arm
+                        # above was fixed for this; this one was not, so the
+                        # hybrid_all_rows_bp column was a different quantity
+                        # from the hybrid column on every auc dataset.
+                        _hard = mdl.predict(X_va_s)
+                        _y = (_graded_scores_for_clf(mdl, X_va_s, _hard)
+                              if data['task_type'] == 'classification' else _hard)
+                        fold_scores.append(metric_fn(sub_labels[va_i], _y))
                     if fold_scores:
                         hybrid_fd_by_model[model_name].append(float(np.mean(fold_scores)))
                 except Exception:
@@ -401,6 +430,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _val = _v.get(_f)
                     if _val is not None and not np.isnan(_val):
                         reselected_by_model_this_n[_m][_k].append(float(_val))
+
+        # Aligned with sample_sizes. n_budgets_searched is how many budgets the
+        # hybrid side took its maximum over at this point; the single-rep side
+        # always takes its maximum over the representations only. n_rows_drawn
+        # is what the group draw actually returned -- the draw stops at the
+        # first scaffold group that would overshoot, so it can land well under
+        # the size asked for, and the seeds averaged at one point of the curve
+        # are then not all at one size.
+        results.setdefault('n_budgets_searched', []).append(
+            int(max(budgets_searched_this_n)) if budgets_searched_this_n else 0)
+        results.setdefault('n_rows_drawn', []).append(
+            sorted(rows_drawn_this_n))
 
         if last_search is not None:
             top3 = extract_top3_base_reps(last_search)
@@ -463,13 +504,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "-" * 70)
     print("LEARNING CURVE SUMMARY")
     print("-" * 70)
-    header = f"  {'n':>6}"
+    print("  n = molecules asked for; drawn = molecules the group draw "
+          "returned; nb = budgets the hybrid side maximised over")
+    header = f"  {'n':>6} {'drawn':>11} {'nb':>3}"
     for m in model_names:
         header += f"  {m+'_h':>10} {m+'_s':>10} {'delta':>8} {'lofo_d':>8}"
     print(header)
-    print("  " + "-" * (6 + (10 + 10 + 8 + 8 + 5) * len(model_names)))
+    print("  " + "-" * (22 + (10 + 10 + 8 + 8 + 5) * len(model_names)))
+    _nb_all = results.get('n_budgets_searched') or []
+    _drawn_all = results.get('n_rows_drawn') or []
     for i, n_sub in enumerate(sample_sizes):
-        row = f"  {n_sub:>6}"
+        _dr = _drawn_all[i] if i < len(_drawn_all) else []
+        _dr_s = (f"{min(_dr)}-{max(_dr)}" if _dr and min(_dr) != max(_dr)
+                 else (str(_dr[0]) if _dr else '?'))
+        _nb = _nb_all[i] if i < len(_nb_all) else '?'
+        row = f"  {n_sub:>6} {_dr_s:>11} {_nb:>3}"
         for m in model_names:
             h = results['models'][m]['hybrid'][i]
             s = results['models'][m]['best_single'][i]
