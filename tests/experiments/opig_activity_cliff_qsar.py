@@ -143,8 +143,12 @@ def evaluate_qsar(X, labels, groups, model, n_folds):
     is_binary = _is_binary_rep(X)
     rmse_scores, mae_scores, r2_scores, spearman_scores = [], [], [], []
     all_preds = np.full_like(labels, np.nan)
+    # Which fold each compound was HELD OUT in. Dablander splits the matched
+    # pairs by whether a compound's activity was available to the model, so the
+    # pair-level metrics need this. -1 means no fold produced a prediction.
+    held_out_fold = np.full(len(labels), -1, dtype=int)
 
-    for train_idx, val_idx in splits:
+    for _fold_i, (train_idx, val_idx) in enumerate(splits):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = labels[train_idx], labels[val_idx]
 
@@ -165,6 +169,7 @@ def evaluate_qsar(X, labels, groups, model, n_folds):
 
         preds = m.predict(X_val)
         all_preds[val_idx] = preds
+        held_out_fold[val_idx] = _fold_i
 
         ss_res = np.sum((y_val - preds) ** 2)
         ss_tot = np.sum((y_val - y_val.mean()) ** 2)
@@ -186,6 +191,7 @@ def evaluate_qsar(X, labels, groups, model, n_folds):
                'std': np.nanstd(r2_scores) if r2_scores else float('nan')},
         'spearman': {'mean': np.mean(spearman_scores), 'std': np.std(spearman_scores)},
         'predictions': all_preds,
+        'held_out_fold': held_out_fold,
     }
 
 
@@ -205,9 +211,23 @@ def _ac_clf_metrics(y_true, y_pred_prob):
     tn = int(np.sum((y_true == 0) & (y_pred == 0)))
     fn = int(np.sum((y_true == 1) & (y_pred == 0)))
     mcc = float(matthews_corrcoef(y_true, y_pred))
+    # Dablander p.7: "we sometimes encountered the edge case where there were
+    # no positive predictions; we then set MCC=0 and ignored ill-defined
+    # precision measurements". He names SARS-CoV-2 main protease as where this
+    # happens, which is the smallest of the three sets. Without the floor a
+    # model that predicts no cliffs at all lands at a small negative MCC and
+    # reads as worse than chance rather than as silent.
+    n_positive_predictions = tp + fp
+    mcc_floored = (n_positive_predictions == 0)
+    if mcc_floored:
+        mcc = 0.0
     accuracy = (tp + tn) / n
     sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    # Precision is ill-defined with no positive predictions; Dablander drops it
+    # from the average rather than calling it 0.
+    precision = (tp / n_positive_predictions
+                 if n_positive_predictions > 0 else float('nan'))
     try:
         auroc = float(roc_auc_score(y_true, y_pred_prob))
     except ValueError:
@@ -215,11 +235,13 @@ def _ac_clf_metrics(y_true, y_pred_prob):
     return {
         'mcc': mcc, 'accuracy': accuracy, 'auroc': auroc,
         'sensitivity': sensitivity, 'specificity': specificity,
+        'precision': precision, 'mcc_floored_no_positive_preds': mcc_floored,
         'tp': tp, 'fp': fp, 'tn': tn, 'fn': fn, 'n': n,
     }
 
 
-def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0):
+def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
+                            held_out_fold=None):
     """Evaluate activity cliff prediction from QSAR predictions.
 
     Matches Dablander et al. 2023:
@@ -228,7 +250,29 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0):
       - Half-cliffs (1.0 <= |Δ| < 2.0) are EXCLUDED from evaluation
       - Predicted AC probability = 2*arctan(|Δpred|/1.5)/π  (soft score)
 
-    Returns dict with pooled + per-partition AC metrics.
+    That soft score crosses 0.5 exactly when |Δpred| > 1.5, which is
+    Dablander's d_crit, so the classification is his; the arctan only makes it
+    a graded score. He reports MCC, sensitivity and precision and no AUROC.
+
+    THE PAIR PARTITION (added 2026-09-23). Dablander does not pool the matched
+    pairs. He splits them by whether each compound's measured activity was
+    available to the model:
+      M_inter - one compound held out, the other in training, so ONE MEASURED
+                ACTIVITY IS KNOWN. He classifies with |a(known) - f(other)|.
+                This is his "activity of one compound is given" arm, MCC ~0.5.
+      M_test  - both compounds held out together, both activities unknown,
+                classified with |f(s) - f(s~)|. His MCC ~0.3 arm.
+    Under k-fold cross-validation each compound is held out exactly once, so a
+    pair lands in M_test when its two compounds share a held-out fold and in
+    M_inter when they do not. Pooling the two mixes an easier task into a
+    harder one and the pooled number matches neither of his figures.
+
+    `held_out_fold` is the per-compound fold index from evaluate_qsar. Without
+    it only the pooled block is computed, which is what this function did
+    before.
+
+    Returns the pooled metrics, plus 'by_partition' with 'M_inter' and
+    'M_test' when held_out_fold is given.
     """
     if not mmp_pairs:
         return None
@@ -279,6 +323,62 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0):
 
     # Rename primary metric key for backward compat
     result['ac_mcc'] = result['mcc']
+
+    # ---- Dablander's pair partition ------------------------------------
+    # Same cliff definition, same threshold, same soft score; the only
+    # difference is WHICH pairs go in and, for M_inter, that the known
+    # compound contributes its MEASURED activity rather than a prediction.
+    if held_out_fold is not None:
+        held_out_fold = np.asarray(held_out_fold)
+        parts = {'M_inter': ([], []), 'M_test': ([], [])}
+        for i, j, _ in mmp_pairs:
+            fi, fj = held_out_fold[i], held_out_fold[j]
+            if fi < 0 or fj < 0:
+                continue
+            true_delta = abs(labels[i] - labels[j])
+            if 1.0 <= true_delta < ac_threshold:
+                continue
+            is_ac = int(true_delta >= ac_threshold)
+            if fi == fj:
+                # both held out together -> both activities unknown
+                if np.isnan(predictions[i]) or np.isnan(predictions[j]):
+                    continue
+                pred_delta = abs(predictions[i] - predictions[j])
+                key = 'M_test'
+            else:
+                # held out in different folds: in the fold that scored i, j was
+                # in training, so j's measured activity was known. Score the
+                # pair the way Dablander does, measured against predicted, and
+                # take the compound whose prediction exists.
+                if np.isnan(predictions[i]) and np.isnan(predictions[j]):
+                    continue
+                if np.isnan(predictions[i]):
+                    pred_delta = abs(labels[i] - predictions[j])
+                elif np.isnan(predictions[j]):
+                    pred_delta = abs(labels[j] - predictions[i])
+                else:
+                    # both predictions exist (each from its own fold); average
+                    # the two one-known-one-predicted distances so neither
+                    # compound is privileged.
+                    pred_delta = 0.5 * (abs(labels[i] - predictions[j])
+                                        + abs(labels[j] - predictions[i]))
+                key = 'M_inter'
+            parts[key][0].append(is_ac)
+            parts[key][1].append(2.0 * np.arctan(pred_delta / AC_SCALE) / np.pi)
+        by_part = {}
+        for key, (yt, yp) in parts.items():
+            if not yt:
+                by_part[key] = {'n_pairs': 0}
+                continue
+            m = _ac_clf_metrics(np.array(yt), np.array(yp))
+            if m is None:
+                by_part[key] = {'n_pairs': len(yt)}
+                continue
+            m['n_pairs'] = len(yt)
+            m['n_acs'] = int(sum(yt))
+            m['ac_mcc'] = m['mcc']
+            by_part[key] = m
+        result['by_partition'] = by_part
     return result
 
 
@@ -312,6 +412,11 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
         np.zeros((n, 1)), labels, groups=groups))
 
     preds = {mn: np.full(n, np.nan) for mn in models}
+    # Which fold each compound was held out in, so the AC arm can split the
+    # matched pairs into Dablander's M_inter and M_test. Filled per model
+    # because a model whose search found no recipe on a fold has no prediction
+    # for that fold's compounds.
+    held_out = {mn: np.full(n, -1, dtype=int) for mn in models}
     folds = {mn: {'rmse': [], 'mae': [], 'r2': [], 'spearman': [],
                   'blueprint': [], 'n_features': []} for mn in models}
 
@@ -381,6 +486,7 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
                 continue
 
             preds[model_name][val_idx] = p
+            held_out[model_name][val_idx] = fold_i
             fm = folds[model_name]
             ss_res = np.sum((y_va - p) ** 2)
             ss_tot = np.sum((y_va - y_va.mean()) ** 2)
@@ -423,6 +529,7 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
                 'n_folds': len(fm['rmse']),
             },
             'predictions': preds[model_name],
+            'held_out_fold': held_out[model_name],
             'per_fold_blueprint': fm['blueprint'],
             'per_fold_n_features': fm['n_features'],
             # Folds where this model's search scored no configuration, so it
@@ -673,8 +780,9 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
 
             # AC analysis using out-of-fold predictions
             predictions = qsar_res.pop('predictions')
-            ac_res = evaluate_ac_performance(labels, predictions, mmp_pairs,
-                                              data['ac_threshold'])
+            ac_res = evaluate_ac_performance(
+                labels, predictions, mmp_pairs, data['ac_threshold'],
+                held_out_fold=qsar_res.pop('held_out_fold', None))
 
             model_result = {'qsar': qsar_res}
             if ac_res is not None:
@@ -709,8 +817,9 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         hybrid_results = {}
         for model_name, hres in hyb.items():
             predictions = hres.pop('predictions')
-            ac_res = evaluate_ac_performance(labels, predictions, mmp_pairs,
-                                              data['ac_threshold'])
+            ac_res = evaluate_ac_performance(
+                labels, predictions, mmp_pairs, data['ac_threshold'],
+                held_out_fold=hres.pop('held_out_fold', None))
             model_result = {'qsar': hres['qsar'],
                             'per_fold_blueprint': hres['per_fold_blueprint'],
                             'per_fold_n_features': hres['per_fold_n_features']}
