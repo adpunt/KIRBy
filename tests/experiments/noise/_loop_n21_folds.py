@@ -140,7 +140,11 @@ def _restore(prior, ctx):
                         ('noise_condition', ctx['CONDITION']),
                         ('level', ctx['LEVEL']),
                         ('detectors', ctx['detectors']),
-                        ('k_values', ctx['k_values'])):
+                        ('k_values', ctx['k_values']),
+                        # n21's forest constants are read at import, so a run
+                        # restarted after one of them moves would put passes
+                        # from two different forests in one column.
+                        ('forest', dict(ctx['forest_kw']))):
         there = prior.get(field)
         if there != here:
             same.append(f'{field} was {there!r}, is {here!r}')

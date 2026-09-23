@@ -161,15 +161,43 @@ NOISE_SEEDS = (0, 1, 2)
 # min_samples_leaf is 5 rather than sklearn's 1 because a fully grown forest
 # puts most training molecules alone in a leaf, and then two molecules share a
 # leaf mainly when the bootstrap left one of them out. The proximity would be
-# measuring the bootstrap. 5 is stated, recorded and overridable, not tuned.
-FOREST_TREES = 100
+# measuring the bootstrap.
+#
+# 200 trees, MEASURED 2026-09-21 and it replaces 100. Two molecules' distance
+# is one minus the share of trees they land in the same leaf of, so the number
+# of trees is the number of votes that share is taken over: at 100 the distance
+# can only take 101 distinct values. `_loop_n21_forest.py` swept 100, 200 and
+# 300 trees against 1, 5, 20 and 50 molecules a leaf on flab_thermo_tresanco in
+# onehot, under outlier_p10 at level 0.5, 3 of its 6 passes in, one pass being
+# one (fold, corruption draw) with 35 to 44 of the 448 training molecules moved.
+# Against 100 trees at this leaf size, 200 trees gained +0.0082 detection
+# average precision on 3 of the 3 passes, per pass +0.0049, +0.0091 and +0.0107,
+# spread over passes 0.0030; 300 trees gained +0.0081 on 3 of 3, which is the
+# same number, so the extra 100 trees buy nothing and are not taken. Precision
+# at the number of molecules that really moved agrees in direction, +0.0112 on
+# 2 of the 3 passes.
+#
+# WHAT IT COSTS: the forest fit is most of the cost of a proximity, and 200
+# trees is twice the fit of 100. Measured on fold 0 of that dataset at 5
+# molecules a leaf, 448 training molecules over 5600 features: 126 seconds for
+# 300 trees, so about 84 for 200 against 42 for 100.
+#
+# THE LEAF SIZE DID NOT MOVE, and the reason is that the two readings disagree
+# about it. One molecule a leaf leads on average precision, +0.0102 over 5 on 2
+# of the 3 passes, and LOSES on precision at the moved count, -0.0160 on 1 of
+# 3. 50 molecules a leaf is worse on both. 5 stays until the last three passes
+# land.
+FOREST_TREES = 200
 FOREST_MIN_SAMPLES_LEAF = 5
 FOREST_SEED = 42
 
 # Rows of the leaf matrix compared at a time when the proximity distance is
-# built. The intermediate is chunk x n x trees booleans, so 250 rows of a
-# 4000-molecule fold with 100 trees is 100 MB.
-_PROXIMITY_CHUNK = 250
+# built. The intermediate is chunk x n x trees booleans, so 125 rows of a
+# 4000-molecule fold at the 200 trees above is 100 MB. It was 250 rows while
+# the forest had 100 trees, which was the same 100 MB; halving it keeps the
+# intermediate the size it was and changes no number, because the chunk only
+# says how many rows of the same matrix are filled at once.
+_PROXIMITY_CHUNK = 125
 
 # The repair. n12's setting, so the recovery figures are comparable.
 # ⛔ THE REPAIR WAS TOO WEAK TO EXPRESS ANY DIFFERENCE THE DETECTOR MAKES.

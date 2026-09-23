@@ -252,7 +252,11 @@ def main():
         for field, here in (('plain_representation', base_rep),
                             ('detectors', detectors),
                             ('k_values', k_values),
-                            ('conditions', [list(c) for c in CONDITIONS])):
+                            ('conditions', [list(c) for c in CONDITIONS]),
+                            # n21's forest constants are read at import, so a
+                            # run restarted after one of them moves would put
+                            # passes from two different forests in one column.
+                            ('forest', dict(forest_kw))):
             if prior.get(field) != here:
                 mismatch.append(f'{field} was {prior.get(field)!r}, '
                                 f'is {here!r}')

@@ -434,8 +434,51 @@ def _rank_stored(rows, lower_is_better, top_n):
     return ordered[:int(top_n)]
 
 
+def _rep_scores_from_search(search):
+    """The per-representation scores every STORED blueprint lost.
+
+    ⛔ WHAT IS BROKEN, and it is not in this file. `find_best_hybrid` attaches
+    `rep_scores` to each blueprint at find_best_hybrid.py:9312. It writes its
+    rows to the result store at :7245, :7403, :7442 and :9215. All four writes
+    happen before that line, and the blueprint is pickled at the write. So
+    every blueprint in every `result_db/*.db` has `rep_scores = None`.
+
+    What that costs: `build_fold_hybrid` refuses to rebuild a recipe whose
+    `rep_count` names fewer representations than the pool unless something
+    says WHICH ones (tests/experiments/_shared.py:5095). It refuses rather
+    than rebuilding on the whole pool and filing the result under the
+    winner's name, which is the right refusal. But read back from the store,
+    EVERY such recipe raises. Measured on this dataset 2026-09-21: of the 5
+    configurations stored across the fold-0 and fold-1 searches, the ones
+    carrying rep_count 3 and rep_count 5 could not be rebuilt at all, and
+    those are the configurations that make n20's question answerable.
+
+    The scores are a property of the SEARCH and not of one configuration --
+    each representation's best baseline over every row the search ran on --
+    and every blueprint in one search carries the same representation list.
+    So one dict serves all of that search's stored rows, and it is lifted
+    from the in-memory result rather than recomputed from the baselines.
+
+    Returns the dict, or None when this search's own blueprints have none
+    either, in which case nothing here can supply it.
+    """
+    if search is None:
+        return None
+    seen = list(search.all_results or [])
+    for by_model in (getattr(search, 'best_by_model', None) or {}).values():
+        if isinstance(by_model, dict):
+            seen.append(by_model)
+    for r in seen:
+        bp = r.get('blueprint') if isinstance(r, dict) else None
+        scores = getattr(bp, 'rep_scores', None)
+        if scores:
+            return dict(scores)
+    return None
+
+
 def _feature_frequency(top_rows, train_reps, val_reps, y_col, groups_train,
-                       model_factory, metric_fn, lower_is_better):
+                       model_factory, metric_fn, lower_is_better,
+                       rep_scores=None):
     """How many of these hybrids selected each feature.
 
     A feature is the PAIR (representation, column index inside that
@@ -443,16 +486,30 @@ def _feature_frequency(top_rows, train_reps, val_reps, y_col, groups_train,
     representation's own matrix (hybrid.py:2236). saprot's column 7 and
     onehot's column 7 are two features.
 
-    Returns (counts, n_built, widths). `counts` maps the pair to how many of
-    the hybrids that BUILT selected it. `n_built` is how many of the
-    configurations handed in produced a hybrid at all, which is the
-    denominator every frequency below is out of.
+    Returns (counts, n_built, widths, n_refused). `counts` maps the pair to
+    how many of the hybrids that BUILT selected it. `n_built` is how many of
+    the configurations handed in produced a hybrid at all, which is the
+    denominator every frequency below is out of. `n_refused` is how many were
+    not built because the recipe named a representation count and nothing
+    could say which representations it meant.
     """
     counts = {}
     widths = {}
     n_built = 0
+    n_refused_for_missing_rep_scores = 0
     for row in top_rows:
-        out = hybrid_for_fold(train_reps, val_reps, y_col, row['blueprint'],
+        bp = row['blueprint']
+        # The store lost them; see _rep_scores_from_search. Without this the
+        # build raises for every recipe that used fewer than all the pool's
+        # representations, which is the axis the question rides on.
+        if (getattr(bp, 'rep_count', None) is not None
+                and not getattr(bp, 'rep_scores', None)):
+            if rep_scores:
+                bp.rep_scores = dict(rep_scores)
+            else:
+                n_refused_for_missing_rep_scores += 1
+                continue
+        out = hybrid_for_fold(train_reps, val_reps, y_col, bp,
                               groups_train, model_factory(), metric_fn,
                               lower_is_better, want_feature_info=True)
         feat_info = out[2] if len(out) == 3 else None
@@ -469,7 +526,7 @@ def _feature_frequency(top_rows, train_reps, val_reps, y_col, groups_train,
                 counts[(rep_name, int(i))] = counts.get((rep_name, int(i)), 0) + 1
     for rep_name, mat in train_reps.items():
         widths[rep_name] = int(np.asarray(mat).shape[1])
-    return counts, n_built, widths
+    return counts, n_built, widths, n_refused_for_missing_rep_scores
 
 
 def _compare_feature_tables(counts_asis, n_asis, counts_cleaned, n_cleaned,
@@ -1037,14 +1094,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                      per_feature_top_n)
                                 top_c = _rank_stored(rows_c, lower_is_better,
                                                      per_feature_top_n)
-                                cnt_a, built_a, widths = _feature_frequency(
-                                    top_a, train_reps, val_reps, y0, g_tr,
-                                    model_factories[mname], metric_fn,
-                                    lower_is_better)
-                                cnt_c, built_c, _w2 = _feature_frequency(
-                                    top_c, tr_for_search, val_reps, y_t, g_s,
-                                    model_factories[mname], metric_fn,
-                                    lower_is_better)
+                                rs_a = _rep_scores_from_search(search_asis)
+                                rs_c = _rep_scores_from_search(search_cleaned)
+                                cnt_a, built_a, widths, ref_a = \
+                                    _feature_frequency(
+                                        top_a, train_reps, val_reps, y0, g_tr,
+                                        model_factories[mname], metric_fn,
+                                        lower_is_better, rep_scores=rs_a)
+                                cnt_c, built_c, _w2, ref_c = \
+                                    _feature_frequency(
+                                        top_c, tr_for_search, val_reps, y_t,
+                                        g_s, model_factories[mname], metric_fn,
+                                        lower_is_better, rep_scores=rs_c)
                                 cell = _compare_feature_tables(
                                     cnt_a, built_a, cnt_c, built_c, widths)
                                 cell['n_configurations_the_store_held_asis'] = \
@@ -1059,6 +1120,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     {str(r.get('budget')) for r in top_c})
                                 cell['is_the_identity_control'] = bool(
                                     cleanup == IDENTITY_CONTROL)
+                                cell['n_not_built_because_the_stored_recipe_'
+                                     'lost_its_rep_scores_asis'] = int(ref_a)
+                                cell['n_not_built_because_the_stored_recipe_'
+                                     'lost_its_rep_scores_cleaned'] = int(ref_c)
                                 per_feature[
                                     f'{regime}|{lvl_key}|{fold_key}|'
                                     f'{cleanup}|{rate:g}/{mname}'] = cell
