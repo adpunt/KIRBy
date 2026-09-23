@@ -1593,6 +1593,23 @@ def run_all(dataset_name: str, output_dir: str,
         if exp_id == 's11' and os.environ.get('KIRBY_SMOKE_N'):
             kwargs['max_iterations'] = int(os.environ.get('KIRBY_SMOKE_S11_ITERS', '8'))
             kwargs['n_seeds'] = int(os.environ.get('KIRBY_SMOKE_S11_SEEDS', '1'))
+        # KIRBY_S11_CONDITIONS names the arms to run, comma separated. s11's run()
+        # has always taken a `conditions` list; nothing exposed it.
+        #
+        # Why it is needed here: `hybrid_bnn` fits an MC-dropout network and is
+        # what kills every local s11 run. Measured 2026-09-23 on caco2 at 250
+        # molecules, 3 picks and 1 seed, with nothing else on the machine: the
+        # nine conditions before it finished and were checkpointed, and the
+        # process was killed inside hybrid_bnn with no traceback. It matches the
+        # earlier record of the same condition killing three processes at 14 GB
+        # of 15 GB swap and recording nothing. That is a broken arm on this
+        # machine, not a slow one, and it is the stated reason for leaving it
+        # out of a local run. It is not cut from the experiment: name it in
+        # KIRBY_S11_CONDITIONS, or run s11 on the cluster, and it runs.
+        if exp_id == 's11':
+            _c = os.environ.get('KIRBY_S11_CONDITIONS')
+            if _c:
+                kwargs['conditions'] = [x.strip() for x in _c.split(',') if x.strip()]
         # s03 names its own three downstream models (rf, lightgbm, dnn at
         # s03_feature_concentration.py:117) and asks the pool for each. A model
         # the search never scored has no candidate in the pool, and s03 records
