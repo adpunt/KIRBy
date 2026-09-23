@@ -10544,6 +10544,7 @@ def nested_cv_evaluate(
     # picked AT that budget. Reporting code needs the recipe fields
     # (importance/allocation) alongside the honest score.
     budget_bps: Dict[str, Dict[int, List[Optional[Blueprint]]]] = {}
+    budget_widths: Dict[str, Dict[int, dict]] = {}
     inner_searches: List[Optional[SearchResult]] = []
     hybrid_failures: List[Tuple[str, int, str]] = []
     # (model, rep, outer fold, message) for every baseline arm that raised.
@@ -10892,6 +10893,17 @@ def nested_cv_evaluate(
                     bbp_obj = (bbp if isinstance(bbp, Blueprint)
                                else Blueprint.from_dict(bbp))
                     budget_bps[model_name][int(budget)][fold_i] = bbp_obj
+                    # The width the hybrid ACTUALLY had at this budget, before
+                    # augmentation columns are appended. Reporting substituted
+                    # the REQUESTED budget, which the real width matches only by
+                    # coincidence: create_hybrid cuts a quota to the features
+                    # the importance method scored above zero. c33 labels its
+                    # under/interpolation/over regions from this number, and on
+                    # herg_ki a budget of 1,000 against 1,129 training rows
+                    # realises 826 features -- 'interpolation' by the budget,
+                    # 'under' by the width.
+                    budget_widths.setdefault(model_name, {}).setdefault(
+                        int(budget), {})[fold_i] = int(Xb_tr.shape[1])
                     te_b = {k: test_reps[k] for k in bbp_obj.reps if k in test_reps}
                     Xb_te = apply_feature_selection(te_b, bfinfo)
                     b_aug = bfinfo.get('augmentation_info')
@@ -11223,6 +11235,18 @@ def nested_cv_evaluate(
                 # per fold. blueprints_per_fold has them all.
                 'blueprint': bps_b[0] if bps_b else None,
                 'blueprints_per_fold': budget_bps.get(model_name, {}).get(budget),
+                # See the note where budget_widths is filled: the requested
+                # budget and the realised width are not the same number.
+                'n_features_per_fold': [
+                    budget_widths.get(model_name, {}).get(budget, {}).get(i)
+                    for i in range(len(fs))],
+                'n_features_mean': (
+                    float(np.mean([v for v in
+                                   (budget_widths.get(model_name, {})
+                                    .get(budget, {}) or {}).values()
+                                   if v is not None]))
+                    if (budget_widths.get(model_name, {}).get(budget) or {})
+                    else None),
             }
 
     # The other two numbers per budget, same shape, so the budget question can
