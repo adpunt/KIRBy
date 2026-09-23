@@ -355,7 +355,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_folds = config['n_splits']
     budget = kwargs.get('budget', 100)
-    k_retrieval = kwargs.get('k_retrieval', 5)
+    # How many nearest molecules a retrieval is scored over. Hardcoded at 5
+    # until 2026-09-23, so every s13 number on disk is at five neighbours and
+    # the axis has never been swept. s05 and s10 both found the neighbour count
+    # worth 0.007 to 0.072 in their own statistics, and s06's sweep found it the
+    # largest of its four levers, peaking at 150 on caco2 and 15 on adme_mdr1.
+    # KIRBY_S13_K_RETRIEVAL sets it; unset still gives 5, so every stored number
+    # reproduces.
+    k_retrieval = kwargs.get('k_retrieval')
+    if k_retrieval is None:
+        k_retrieval = int(os.environ.get('KIRBY_S13_K_RETRIEVAL', '5'))
     n_clusters_list = kwargs.get('n_clusters_list') or DEFAULT_N_CLUSTERS
     augmentations = data.get('augmentations')
     # The coefficient the retrieval half reads, and the clusterer that would
