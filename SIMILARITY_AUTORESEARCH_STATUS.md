@@ -711,9 +711,13 @@ Each sat under a number that had been reported as a result.
 
 ## Two things that change how the suite must be run
 
-- Every similarity-objective number in this campaign was computed under
-  Euclidean while the suite's default coefficient is manhattan. Reproducing
-  them needs `--distance-metric euclidean`.
+- ⛔ SUPERSEDED, checked 2026-09-23. Every result file on disk records
+  `manhattan`: twelve experiments on three datasets each, `distance_metric` and
+  `input_fingerprint.distance_metric` agreeing in all of them, and no file
+  disagreeing with another. The euclidean runs this line described were
+  overwritten by the 18–19 September re-runs, which took the default. Do NOT
+  pass `--distance-metric euclidean` to reproduce what is on disk now; it would
+  produce different numbers from the stored ones.
 - Manhattan is the BETTER coefficient for that objective on caco2, beating
   euclidean on all seven representations by 0.012 to 0.051 Spearman. The code
   was using the worse one by accident.
