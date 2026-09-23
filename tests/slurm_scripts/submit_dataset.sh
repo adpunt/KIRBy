@@ -35,6 +35,22 @@ DATASET=${2:?Usage: sbatch submit_dataset.sh CATEGORY DATASET [EXPERIMENTS]}
 EXPERIMENTS=${3:-}
 PRUNING_MODE="${PRUNING_MODE:-aggressive_pruning}"
 
+# WHICH NOISE IS INJECTED. An environment variable, not a fourth positional
+# argument: every caller of this script passes three, and PRUNING_MODE and
+# KIRBY_NO_COLD_SEARCH already arrive this way.
+#
+# ADDED 2026-09-23. run_dataset.py has taken --noise-condition since 2026-09-12
+# -- it forwards the name to the experiment AND writes it into the output
+# filename, so two conditions on one dataset land on two files. Nothing ever
+# passed it. This script's two run lines carried a pruning mode, a force flag
+# and an experiment list and no condition, so every noise job ever submitted ran
+# each experiment's own default: gaussian for n09, n11 and n12, the outlier
+# condition for n07. The condition axis existed in the code and had never
+# reached the queue.
+#
+# Empty leaves that default in place, so an existing submission is unchanged.
+NOISE_CONDITION="${NOISE_CONDITION:-}"
+
 # Expand 'all' to the bundled category set. Comma-separated CATEGORY arg
 # (e.g. 'complexity,similarity') is split below.
 if [ "$CATEGORY" = "all" ]; then
@@ -112,6 +128,7 @@ echo "Cold-search refusal: ${KIRBY_NO_COLD_SEARCH:-off}"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node:   $(hostname)"
 echo "Pruning mode: ${PRUNING_MODE}"
+echo "Noise condition: ${NOISE_CONDITION:-per-experiment default}"
 echo "Start:  $(date)"
 
 # Loop the requested categories sequentially within this single SLURM job.
@@ -125,15 +142,24 @@ for CAT in "${_CATEGORIES[@]}"; do
     # -u: unbuffered stdout. Without this Python's ~8KB block buffer hides
     # progress from slurm-<jid>.out until the buffer fills (can be hours on
     # cache-hit jobs), making monitor_slurm.sh blind to running jobs.
+    # Only the noise category takes a condition. run_dataset.py prints a
+    # warning and ignores it for the others, which in a bundled
+    # 'complexity,similarity,noise' job would put that warning in the log twice
+    # for something that is working as intended.
+    COND_FLAG=""
+    if [ "${CAT}" = "noise" ] && [ -n "${NOISE_CONDITION}" ]; then
+        COND_FLAG="--noise-condition ${NOISE_CONDITION}"
+        echo "    noise condition: ${NOISE_CONDITION}"
+    fi
     if [ -n "$EXPERIMENTS" ]; then
         python -u tests/experiments/run_dataset.py ${CAT} ${DATASET} \
             --pruning-mode "${PRUNING_MODE}" \
-            ${FORCE_FLAG} \
+            ${FORCE_FLAG} ${COND_FLAG} \
             --experiments ${EXPERIMENTS}
     else
         python -u tests/experiments/run_dataset.py ${CAT} ${DATASET} \
             --pruning-mode "${PRUNING_MODE}" \
-            ${FORCE_FLAG}
+            ${FORCE_FLAG} ${COND_FLAG}
     fi
     RC=$?
     # Track the WORST (highest) exit code so signal-killed children (RC 128+sig)
