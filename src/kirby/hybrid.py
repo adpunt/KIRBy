@@ -2847,6 +2847,44 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
             return (-np.inf, None) if return_predictions else -np.inf
 
+    elif internal_evaluator in ('rf_exact', 'lightgbm_exact'):
+        # THE DOWNSTREAM MODEL'S OWN HYPERPARAMETERS, not a smaller cousin.
+        #
+        # 'rf' above is 50 trees at depth 10 considering every feature at each
+        # split. The downstream random forest this study scores with is 100
+        # trees, no depth cap, max_features='sqrt' (DEFAULT_MODELS['rf']).
+        # Three hyperparameters differ, so c23's "matched" condition has been
+        # measuring same-family-SMALLER -- which is the question its condition D
+        # exists to ask, asked by accident. 'lightgbm' differs from the
+        # downstream lightgbm in two.
+        #
+        # Measured on flab_thermo_tresanco, 5 held-out outer folds, spearman:
+        # rf scored by 'rf' 0.6207, by 'lightgbm' 0.6258, by 'svm' 0.6175, by
+        # 'knn' 0.5979, and by 'rf_exact' 0.6345 -- the exact match wins by more
+        # than the spread between matched and mismatched.
+        #
+        # Neither name is in any default evaluator list and no search selects
+        # one, so nothing changes unless a caller asks for it by name. Same
+        # shape as 'dnn_small' and 'dnn_wide' above.
+        if internal_evaluator == 'rf_exact':
+            from sklearn.ensemble import (RandomForestClassifier,
+                                          RandomForestRegressor)
+            _C, _R = RandomForestClassifier, RandomForestRegressor
+            _kw = dict(n_estimators=100, max_features='sqrt',
+                       random_state=42, n_jobs=-1)
+        else:
+            try:
+                from lightgbm import LGBMRegressor, LGBMClassifier
+            except ImportError as _e:
+                _refuse_missing_evaluator_library('lightgbm_exact', 'lightgbm', _e)
+            _C, _R = LGBMClassifier, LGBMRegressor
+            _kw = dict(random_state=42, verbosity=-1, n_jobs=lgbm_n_jobs())
+        m = _C(**_kw) if is_classification else _R(**_kw)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
+
     elif internal_evaluator == 'xgboost':
         try:
             from xgboost import XGBRegressor, XGBClassifier
@@ -3114,7 +3152,8 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 
     else:
         raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
-                         f"Use 'rf', 'xgboost', 'lightgbm', 'svm', 'gp', "
+                         f"Use 'rf', 'rf_exact', 'xgboost', 'lightgbm', "
+                         f"'lightgbm_exact', 'svm', 'gp', "
                          f"'knn', 'catboost', 'dnn', 'dnn_small', 'dnn_wide', "
                          f"'cnn', 'ngboost', 'bnn', 'mlp' (cut from the suite "
                          f"2026-09-18, still built when named), or a callable "
