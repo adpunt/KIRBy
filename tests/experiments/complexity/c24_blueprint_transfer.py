@@ -349,7 +349,19 @@ def run(data, config, output_dir, dataset_name):
                     verbose=False,
                     cache=True,
                     dataset_name=dataset_name,
-                    condition_suffix=f"c24_drop{src_fold}_{tgt_fold}",
+                    # SORTED, so the two ordered pairs that drop the SAME two
+                    # folds share one cache key. _pair_idx is the rows left
+                    # after dropping src_fold AND tgt_fold, which is identical
+                    # for (A,B) and (B,A): same rows, same labels, same groups,
+                    # same budgets, one search. condition_suffix rides on `tier`
+                    # and so enters the key, so c24_drop1_3 and c24_drop3_1 were
+                    # two keys for one search and each was computed cold. Ten of
+                    # the twenty pair searches were duplicates -- flagged in the
+                    # 2026-09-18 compute audit and never acted on. Sorting takes
+                    # c24 from 25 searches per dataset to 15 with no axis cut
+                    # and no reported number changed.
+                    condition_suffix=(
+                        "c24_drop%d_%d" % tuple(sorted((src_fold, tgt_fold)))),
                     tier='general',
                 )
                 _pair_best = None
