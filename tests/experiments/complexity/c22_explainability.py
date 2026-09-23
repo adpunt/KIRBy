@@ -176,7 +176,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
 
-        all_feature_infos.append(feature_info)
+        all_feature_infos.append((fold_idx, feature_info))
 
         # Train each model, collect scores
         fold_model_scores = {}
@@ -256,7 +256,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'model': best_model_name,
                     'n_val_samples': len(X_val_s),
                 }
-                all_shap_values.append(mean_abs_shap)
+                all_shap_values.append((fold_idx, mean_abs_shap))
                 # Aggregate to representations INSIDE the fold, while this
                 # fold's own feature map is in hand. Position 37 names a
                 # different feature in each fold, because create_hybrid splits
@@ -299,7 +299,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # how many features moves, and position 37 names a different feature in
     # each one. The last fold's map is kept only for the top-feature listing,
     # which is therefore that fold's listing and is labelled as such.
-    feature_info = all_feature_infos[-1]
+    # ⛔ THE MAP AND THE SHAP VECTOR MUST COME FROM THE SAME FOLD. These used
+    # to be two bare lists taken at [-1] each: a feature map was appended for
+    # every fold that BUILT, a SHAP vector only for every fold that also
+    # EXPLAINED. So whenever SHAP failed on the last built fold and succeeded
+    # on an earlier one, the two came from different folds -- and explain_hybrid
+    # zips them by position. Position 37 names a different feature in each fold,
+    # which is the reason given a few lines above for not averaging across
+    # folds in the first place. Both lists now carry their fold index and the
+    # pair is chosen from the folds that have both.
+    _shap_folds = {f for f, _ in all_shap_values}
+    _paired = [f for f, _ in all_feature_infos if f in _shap_folds]
+    _pair_fold = _paired[-1] if _paired else all_feature_infos[-1][0]
+    feature_info = next(fi for f, fi in all_feature_infos if f == _pair_fold)
+    top_feature_fold = int(_pair_fold)
 
     # Which representations actually moved between folds. Two folds with
     # different allocations cannot share a feature-position map at all.
@@ -322,8 +335,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # map before anything was averaged.
     last_fold_shap = None
     if all_shap_values:
-        last_fold_shap = all_shap_values[-1]
-        feature_counts = {len(sv) for sv in all_shap_values}
+        last_fold_shap = next((sv for f, sv in all_shap_values
+                               if f == _pair_fold), None)
+        if last_fold_shap is None:
+            print(f"  No fold both built and explained; the top-feature "
+                  f"listing is dropped rather than paired across folds.")
+        feature_counts = {len(sv) for _f, sv in all_shap_values}
         if len(feature_counts) > 1:
             print(f"  Hybrid width differs between folds "
                   f"{sorted(feature_counts)}; the top-feature listing is the "
@@ -445,6 +462,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # caco2 it was empty on all five folds because shap's safe_isinstance
         # reached into a lazily-imported transformers and pulled in TensorFlow.
         'shap_folds_scored': len(all_shap_values),
+        # Which fold the top-feature listing and its SHAP vector both come
+        # from, and how many folds built at all. A build that raised used to
+        # be invisible here: n_folds is the count ASKED for.
+        'top_feature_fold': top_feature_fold,
+        'build_folds_scored': len(all_feature_infos),
+        'build_folds_requested': int(n_folds),
         'shap_folds_requested': n_folds,
         'shap_failures': shap_failures,
         'shap_by_rep_folds': shap_by_rep_folds,
