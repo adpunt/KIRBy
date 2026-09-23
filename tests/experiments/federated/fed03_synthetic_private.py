@@ -196,7 +196,26 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
 
     # Get optimal hybrid config from precomputed search
     augs = data.get('augmentations')
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    # Part A is a two-class experiment — every condition below trains on
+    # blocker / non-blocker. get_domain_metric returns herg_ki's REGISTERED
+    # metric, which is rmse, because the registry knows herg_ki as continuous
+    # pKi. fed01 (metric_name = 'auc') and fed04 (metric='auc') both override
+    # it for exactly this reason and say so; Part A did not.
+    #
+    # What that cost, measured 2026-09-23. The engine turns a metric into a
+    # skill score, 1 - error / null_error, and clips it at zero. On 0/1 labels
+    # with hard predictions the null model — predicting the mean — has RMSE
+    # 0.4745, and a classifier at 70% accuracy has RMSE 0.5477, WORSE than the
+    # null. Part A's classifiers sit near 0.5 MCC, so every representation
+    # clipped to exactly zero and the engine fell back to an equal split,
+    # inside every silo, on every fold: "allocation 'linear': every
+    # representation weighed zero (6 representations, scores [0.0]), so the
+    # budget was split EQUALLY". The allocation method named in the recipe was
+    # doing nothing, and the silo scores that divide the budget across the
+    # three sources were computed on the wrong quantity too.
+    metric_name = 'auc'
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    metric_fn, lower_is_better = BUILTIN_METRICS[metric_name]
     try:
         _search, _meta = get_best_search_for_downstream(
             reps_chembl, labels_chembl, data.get('groups'),
