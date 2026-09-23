@@ -369,11 +369,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # Above the cap the mrmr arm's ranking simply stops, so the
                 # strategies it is compared against still cover every budget and
                 # mrmr covers the ones it can afford.
-                _mrmr_budget = min(max(budgets), MRMR_MAX_BUDGET)
-                if max(budgets) > MRMR_MAX_BUDGET:
-                    print(f"    mRMR ranking capped at {MRMR_MAX_BUDGET} "
-                          f"features (budgets reach {max(budgets)}); the other "
-                          f"four strategies are uncapped")
+                # BUILD TO THE LARGEST BUDGET A CELL CAN ACTUALLY SERVE,
+                # which is the largest budget at or below the cap -- not the cap
+                # itself. The greedy ranking is prefix-monotone, so a budget-k
+                # cell reads the first k of it; a cell above MRMR_MAX_BUDGET
+                # raises by design and reads nothing. Building to 200 when the
+                # budgets are 10, 50, 250 and 1000 computed 150 of 200 picks per
+                # fold and discarded every one. Measured on flab_thermo_tresanco:
+                # the ranking is ~0.5 h per fold at 50 against ~7.8 h at 200, and
+                # no reported cell changes.
+                _servable = [b for b in budgets if b <= MRMR_MAX_BUDGET]
+                _mrmr_budget = max(_servable) if _servable else 0
+                if not _servable:
+                    print(f"    mRMR: no budget at or below MRMR_MAX_BUDGET="
+                          f"{MRMR_MAX_BUDGET} (budgets {sorted(budgets)}); the "
+                          f"mrmr arm serves no cell and no ranking is built")
+                    raise RuntimeError('no servable mrmr budget')
+                print(f"    mRMR ranking built to {_mrmr_budget} features "
+                      f"(the largest budget the mrmr arm can serve; cap is "
+                      f"MRMR_MAX_BUDGET={MRMR_MAX_BUDGET}, budgets reach "
+                      f"{max(budgets)})")
                 _rank = _greedy_mrmr(_X_rank, _y_rank, budget=_mrmr_budget,
                                      k_mi=5, max_features=_mf)
             except Exception as _e:
