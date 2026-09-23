@@ -92,12 +92,22 @@ DRY_RUN=false
 DOMAIN="all"
 EXPLICIT_DATASETS=""
 SKIP_DATASETS=""
+# Which noise conditions to submit, space separated. Empty submits one job per
+# dataset with no condition named, which is what every submission before
+# 2026-09-23 did -- each noise experiment then runs its own default, gaussian
+# for n09/n11/n12 and the outlier condition for n07.
+#
+# Set, it submits one job per (dataset, condition) and names each job after
+# both, so two conditions on one dataset are two jobs and two result files
+# rather than one overwriting the other.
+NOISE_CONDITIONS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run)  DRY_RUN=true; shift ;;
         --trial)    EXPLICIT_DATASETS="$TRIAL"; shift ;;
         --domain)   DOMAIN=$2; shift 2 ;;
+        --noise-conditions) NOISE_CONDITIONS=$2; shift 2 ;;
         --datasets) EXPLICIT_DATASETS=$2; shift 2 ;;
         --skip)     SKIP_DATASETS=$2; shift 2 ;;
         molecular|molecular_clf|dta|antibody|abagym|ab_clf|ginkgo|reaction|tcga|nucleotide) DOMAIN=$1; shift ;;
@@ -197,22 +207,59 @@ _EXPORTS="ALL,PRUNING_MODE=${PRUNING_MODE}"
 [ -n "${KIRBY_TUNE:-}" ] && _EXPORTS="${_EXPORTS},KIRBY_TUNE=${KIRBY_TUNE}"
 EXPORT_FLAG="--export=${_EXPORTS}"
 
+# ── Check the condition names before submitting anything ────────────────
+# A typo here costs the whole submission: every job reaches the compute node,
+# pulls, imports, and only then raises on a name noiseInject does not carry.
+# The list it is checked against is the one the experiments read.
+if [ -n "${NOISE_CONDITIONS}" ]; then
+    if [ "$CATEGORY" != "noise" ] && [[ "$CATEGORY" != *noise* ]]; then
+        echo "--noise-conditions is only meaningful for the noise category; got '${CATEGORY}'." >&2
+        exit 1
+    fi
+    _BAD=$(python -c '
+import sys
+sys.path.insert(0, "src")
+from kirby.noise_spec import REGRESSION_STRATEGIES, CLASSIFICATION_STRATEGIES
+known = set(REGRESSION_STRATEGIES) | set(CLASSIFICATION_STRATEGIES)
+print(" ".join(c for c in sys.argv[1].split() if c not in known))
+' "${NOISE_CONDITIONS}" 2>/dev/null)
+    if [ -n "${_BAD}" ]; then
+        echo "Unknown noise condition(s): ${_BAD}" >&2
+        echo "Known names are in src/kirby/noise_spec.py (REGRESSION_STRATEGIES, CLASSIFICATION_STRATEGIES)." >&2
+        exit 1
+    fi
+fi
+
 # ── Submit ──────────────────────────────────────────────────────────────
 COUNT=0
+# One entry when no condition was asked for, so the loop body is one code path.
+# The empty string leaves NOISE_CONDITION unset in submit_dataset.sh.
+_COND_LIST="${NOISE_CONDITIONS:-__none__}"
 for DS in $DATASETS; do
     MEM_OVERRIDE=$(get_mem_override $DS)
-    if [ -n "$MEM_OVERRIDE" ]; then
-        CMD="sbatch ${EXPORT_FLAG} --job-name=${PREFIX}_${DS} --mem=${MEM_OVERRIDE} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
-    else
-        CMD="sbatch ${EXPORT_FLAG} --job-name=${PREFIX}_${DS} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
-    fi
-    if [ "$DRY_RUN" = true ]; then
-        echo "[dry-run] $CMD"
-    else
-        echo "Submitting: ${CATEGORY}/${DS}${MEM_OVERRIDE:+ (mem=${MEM_OVERRIDE})}  pruning=${PRUNING_MODE}"
-        $CMD
-    fi
-    COUNT=$((COUNT + 1))
+    for COND in $_COND_LIST; do
+        if [ "$COND" = "__none__" ]; then
+            JOB_NAME="${PREFIX}_${DS}"
+            COND_EXPORT=""
+            COND_NOTE=""
+        else
+            JOB_NAME="${PREFIX}_${DS}_${COND}"
+            COND_EXPORT=",NOISE_CONDITION=${COND}"
+            COND_NOTE="  condition=${COND}"
+        fi
+        if [ -n "$MEM_OVERRIDE" ]; then
+            CMD="sbatch ${EXPORT_FLAG}${COND_EXPORT} --job-name=${JOB_NAME} --mem=${MEM_OVERRIDE} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
+        else
+            CMD="sbatch ${EXPORT_FLAG}${COND_EXPORT} --job-name=${JOB_NAME} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
+        fi
+        if [ "$DRY_RUN" = true ]; then
+            echo "[dry-run] $CMD"
+        else
+            echo "Submitting: ${CATEGORY}/${DS}${MEM_OVERRIDE:+ (mem=${MEM_OVERRIDE})}  pruning=${PRUNING_MODE}${COND_NOTE}"
+            $CMD
+        fi
+        COUNT=$((COUNT + 1))
+    done
 done
 
 echo ""
