@@ -167,6 +167,34 @@ from experiments.noise.n07_remediation import (
 IDENTITY_CONTROL = 'no_cleaning'
 CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth')
 
+# THE RANDOM-FLAG CONTROL. Each name on the left runs the cleanup on the right,
+# with the detector's per-molecule suspicion score replaced by a seeded
+# permutation of itself. The same number of training molecules are flagged, the
+# same cleanup is applied to them, and the only thing that changes is WHICH
+# molecules get flagged.
+#
+# Why a permuted FLAG SET and not a random DROP. n20's headline is not a
+# cleaning-against-no-cleaning count: it is a count of held-out folds where
+# searching the recipe on the cleaned labels beat searching it on the labels as
+# they are. Both sides of that pair flag the same molecules and differ only in
+# which label column the search was handed. So the control that matches it
+# feeds a random flag set to BOTH sides, and one run of it covers the ordering
+# gain and the fourth arm at once.
+#
+# ⛔ BOTH NAMES SHARE ONE PERMUTATION PER FOLD, seeded from the regime, the
+# level, the draw and the fold index. That is what the detector-driven pair
+# does: one suspicion score per fold serves every cleanup. Two permutations
+# would make the pair differ in a second way.
+RANDOM_FLAG_CLEANUPS = {
+    'remove_random_flag': 'remove',
+    'knn_smooth_random_flag': 'knn_smooth',
+}
+
+# Fixed so the permutation is the same on a re-run. Changing it re-runs every
+# random-flag search from cold: the flagged rows change, so the cleaned label
+# column changes, so its cache identity changes.
+RANDOM_FLAG_SEED = 20260923
+
 # How many training rows in every hundred are treated as suspect. n18's, for
 # n18's reason: n07 sets this to the share it corrupted, and nobody can do that
 # here because the searched-on-cleaned arms have to run in the regime where
@@ -301,6 +329,26 @@ def _label_column_key(y):
     import hashlib
     a = np.ascontiguousarray(np.asarray(y, dtype=np.float64))
     return hashlib.sha1(a.tobytes()).hexdigest()[:8]
+
+
+def _permuted_suspicion(suspicion, cell_key):
+    """The same suspicion scores, in a shuffled order over the training rows.
+
+    Every cleanup in n07 turns the score into a flag by thresholding it at the
+    (1 - flag rate) quantile, so a permutation of the score flags exactly as
+    many training molecules as the real one does and flags a different set.
+    Nothing else about the cleanup changes.
+
+    `cell_key` names the regime, the level, the corruption draw and the
+    held-out fold. It seeds the permutation, so the two random-flag cleanups
+    inside one fold receive the same shuffled order, a re-run reproduces it,
+    and two folds do not share one.
+    """
+    import hashlib
+    h = hashlib.sha1(f'{RANDOM_FLAG_SEED}|{cell_key}'.encode()).digest()
+    rng = np.random.default_rng(int.from_bytes(h[:8], 'big'))
+    order = rng.permutation(len(suspicion))
+    return np.asarray(suspicion)[order], order
 
 
 def _run_one_search(train_reps, y_score, y_train_col, groups_train, *,
@@ -689,6 +737,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'searched-on-cleaned arms are undefined, not zero.'),
         'label_smooth': 'produces a full-length cleaned label column',
         'knn_smooth': 'produces a full-length cleaned label column',
+        'remove_random_flag': (
+            'drops rows, exactly as `remove` does and exactly as many, chosen '
+            'by a shuffled suspicion score instead of the detector'),
+        'knn_smooth_random_flag': (
+            'produces a full-length cleaned label column, exactly as '
+            '`knn_smooth` does and moving exactly as many labels, chosen by a '
+            'shuffled suspicion score instead of the detector'),
     }
 
     results = {
@@ -730,6 +785,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             "labels under either setting."),
         'search_budgets': list(budgets),
         'cleanup_reaches_feature_selection': reach,
+        'random_flag_cleanups': dict(RANDOM_FLAG_CLEANUPS),
+        'random_flag_seed': RANDOM_FLAG_SEED,
+        'random_flag_note': (
+            'A cleanup named here ran with the detector output shuffled over '
+            'the training rows and nothing else changed. It flags the same '
+            'number of training molecules as its detector-driven twin and '
+            'flags different ones. Read it against that twin, on the same '
+            'held-out folds and the same corruption draws: the claim that the '
+            'detector is doing the work survives only if the twin wins more '
+            'folds than this does.'),
         'claim_scope': (
             'Measures what it costs to apply a cleanup AFTER the recipe is '
             'fixed rather than before it. Every score is against held-out '
@@ -928,9 +993,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                        'sample_weight': None, 'keep': None,
                                        'label_column': y0}
                         else:
+                            # A random-flag name runs its own cleanup with the
+                            # suspicion score shuffled over the training rows.
+                            # Same cleanup, same number flagged, different
+                            # molecules flagged.
+                            strategy = RANDOM_FLAG_CLEANUPS.get(cleanup,
+                                                                cleanup)
+                            if strategy != cleanup:
+                                score_used, _order = _permuted_suspicion(
+                                    suspicion,
+                                    f'{regime}|{lvl_key}|d{draw}|f{fold_i}')
+                            else:
+                                score_used = suspicion
                             try:
                                 cleaned = cleaned_training_set(
-                                    cleanup, X_base_tr, y0, suspicion, rate,
+                                    strategy, X_base_tr, y0, score_used, rate,
                                     is_clf=is_clf)
                             except Exception as exc:
                                 errors[f'{regime}|{lvl_key}|{cleanup}|{rate}|'
