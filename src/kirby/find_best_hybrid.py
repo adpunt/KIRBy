@@ -2462,6 +2462,52 @@ def _get_lgbm_classifier():
                                       random_state=42, n_jobs=-1)
 
 
+def _get_lgbm_huber_regressor():
+    """LightGBM under the Huber loss instead of squared error.
+
+    The gradient is clipped once a molecule's residual passes alpha, so one
+    badly wrong activity value pulls the fit by a bounded amount rather than by
+    its squared error. Everything else matches _get_lgbm_regressor above, so the
+    pair differs in the loss and in nothing else.
+
+    It costs nothing. Measured 2026-09-23, one fit, 500 dense Gaussian features,
+    seconds, squared error against huber:
+          448 molecules   12.85   13.17    1.02x
+        2,000 molecules   54.49   67.76    1.24x
+        5,000 molecules   77.91   69.85    0.90x
+    """
+    try:
+        from kirby.hybrid import lgbm_n_jobs
+        from lightgbm import LGBMRegressor
+        return LGBMRegressor(objective='huber', n_estimators=100,
+                             random_state=42, n_jobs=lgbm_n_jobs(), verbose=-1)
+    except ImportError:
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        # Not silently the squared-error forest _get_lgbm_regressor falls back
+        # to: a model named for its robust loss must not quietly become one
+        # without it. HistGradientBoosting carries an absolute_error loss.
+        return HistGradientBoostingRegressor(loss='absolute_error',
+                                             random_state=42)
+
+
+def _robust_loss_classifier(name, loss_name):
+    """Every robust-loss entry here is regression only, and says so.
+
+    Huber and absolute error are losses on a NUMBER. There is no halfway point
+    between two nominal classes for a residual to be large in, so neither
+    LGBMClassifier nor RandomForestClassifier accepts them. _resolve_models
+    reaches DEFAULT_MODELS[name]['classifier']() directly, so the entry has to
+    exist; it raises rather than handing back the ordinary classifier, which
+    would file a squared-error result under a robust-loss name.
+    """
+    def _raise():
+        raise ValueError(
+            f"{name!r} is a regression-only model: {loss_name} is a loss on a "
+            f"number and has no classification form. Use 'lightgbm' or 'rf' for "
+            f"a classification task.")
+    return _raise
+
+
 def _get_catboost_regressor():
     try:
         from catboost import CatBoostRegressor
@@ -2770,6 +2816,47 @@ DEFAULT_MODELS = {
         'classifier': lambda: __import__('ngboost', fromlist=['NGBClassifier']).NGBClassifier(
             n_estimators=500, learning_rate=0.05, random_state=42, verbose=False),
         'tier': 'extra',
+    },
+    # ── ROBUST LOSSES. Added 2026-09-23. ───────────────────────────────────
+    # Nothing in src/kirby/ reached criterion='absolute_error' or LightGBM's
+    # huber objective -- zero hits before this. So every cleaning result the
+    # noise suite has produced was measured against squared error alone, and the
+    # comparison it never made is whether changing the LOSS gets the same gain
+    # for free. If it does, a cleaning method has to beat that, not the plain
+    # baseline. This is prediction P3 in tests/experiments/noise/PREDICTIONS.md,
+    # written before either entry existed.
+    #
+    # Both are tier 'extra': never auto-selected, available by name. So
+    # AUTO_SELECTED_TIERS does not change and no cached search is invalidated.
+    # Both are regression only; see _robust_loss_classifier.
+    'lightgbm_huber': {
+        'regressor': _get_lgbm_huber_regressor,
+        'classifier': _robust_loss_classifier('lightgbm_huber', 'the huber objective'),
+        'tier': 'extra',
+    },
+    'rf_l1': {
+        # A random forest that splits on absolute error rather than squared
+        # error, and whose leaves therefore predict the median of the molecules
+        # in them instead of the mean.
+        'regressor': lambda: __import__('sklearn.ensemble', fromlist=['RandomForestRegressor']).RandomForestRegressor(
+            n_estimators=100, max_features='sqrt', criterion='absolute_error',
+            random_state=42, n_jobs=-1),
+        'classifier': _robust_loss_classifier('rf_l1', "the 'absolute_error' split criterion"),
+        'tier': 'extra',
+        # 5,000 training molecules. sklearn evaluates the absolute-error
+        # criterion in time linear in the molecules at a node where squared
+        # error is constant-time, so the cost per fit does not merely rise, its
+        # RATIO to the ordinary forest rises. Measured 2026-09-23, one fit, 500
+        # dense Gaussian features, seconds, squared against absolute:
+        #       448 molecules     1.00      4.57     4.6x
+        #     1,000 molecules     1.89     18.27     9.6x
+        #     2,000 molecules     5.94     58.20     9.8x
+        #     5,000 molecules    15.27    401.44    26.3x
+        # At 5,000 one fit is 6.7 minutes, and a noise experiment fits per
+        # (cleanup, flag rate, strength, fold). This is a cap on a model nothing
+        # auto-selects, in the same place svm's 10,000 and gp's 1,000 sit. Raise
+        # or delete the number if the owner wants the larger datasets measured.
+        '_max_samples': 5000,
     },
     'ridge': {
         # Linear baseline. tier 'off' since 2026-09-09: never auto-selected
