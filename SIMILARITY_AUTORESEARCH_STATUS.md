@@ -669,9 +669,27 @@ Each sat under a number that had been reported as a result.
 2. **The s02 headline cell.** Largest delta comes from no weighting anywhere;
    the hybrid's own best geometry comes from weighting. They pick different
    cells.
-3. **Keying `baselines/` and `hybrid_evals/` by coefficient.** Until they are,
-   the coefficient axis needs a separate `KIRBY_CACHE_DIR` per coefficient.
-   Namespacing them orphans every file already in both directories.
+3. **Keying `baselines/` and `hybrid_evals/` by coefficient.** The key is
+   (dataset, representation, model, metric, folds, seed). No coefficient. A
+   `readacross` baseline is a representation's score under a distance, so two
+   coefficients sharing a cache root read each other's numbers.
+
+   The cost of namespacing them was overstated here. Counted 2026-09-23:
+   `baselines/` holds 185 files and under 1 MB, `hybrid_evals/` is empty,
+   `fold_scores/` holds 16 files and 2 MB. Nothing outside this campaign reads
+   that root. Under the standing rule that a wiped cache is not a cost, there is
+   no obstacle left in the numbers — only the design question of whether the
+   coefficient belongs in the key.
+
+   ⛔ This was live, not theoretical. Six s06 runs were queued on 2026-09-23
+   under minkowski p=0.5 and euclidean while pointing at the root that already
+   held 60 `readacross` baselines from earlier runs. They were stopped before
+   any of them wrote a result. Each coefficient now has its own root:
+   `kirby_cache_minkowski`, `kirby_cache_euclidean`, `kirby_cache_manhattan`.
+   The original root is left alone because the coefficient its stored
+   `readacross` baselines were computed under is not recorded in their names,
+   and this campaign is known to have computed similarity numbers under
+   euclidean while the suite default is manhattan.
 4. **Which end of the label s11 hunts is decided by the wrong quantity.**
    `get_domain_metric` returns whether the SCORING METRIC is better when lower.
    For all three datasets that metric is RMSE, so it returns True on all three.
