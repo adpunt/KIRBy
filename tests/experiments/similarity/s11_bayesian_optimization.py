@@ -48,6 +48,7 @@ Usage:
 """
 import sys
 import os
+import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -199,6 +200,44 @@ def _rbf_with_init(X, init=None):
         return RBF(length_scale=1.0)
     ls = float(np.median(d))
     return RBF(length_scale=ls, length_scale_bounds=(ls / 100.0, ls * 100.0))
+
+
+# Each condition is seven arms x n_seeds x max_iterations of GP refits, and the
+# whole of `results` was only written by the caller after the last one finished.
+# On this laptop that is two to five hours, and the run was killed by the kernel
+# nine times out of nine over 2026-09-22/23 -- silently, because SIGKILL leaves
+# nothing in the log. Every kill threw away every condition that had already
+# finished. These two functions write each condition as it completes and read
+# back what a previous attempt got through, so an interrupted run resumes
+# instead of restarting.
+def _ckpt_path(output_dir, dataset_name):
+    return os.path.join(output_dir, f'.s11_checkpoint_{dataset_name}.json')
+
+
+def _ckpt_load(output_dir, dataset_name):
+    f = _ckpt_path(output_dir, dataset_name)
+    try:
+        with open(f) as fh:
+            d = json.load(fh)
+        if isinstance(d, dict) and isinstance(d.get('conditions'), dict):
+            return d['conditions']
+    except Exception:
+        pass
+    return {}
+
+
+def _ckpt_save(output_dir, dataset_name, conditions):
+    """Write via a temporary file and rename, so a kill mid-write cannot leave a
+    half-written checkpoint that the next attempt would read as truth."""
+    f = _ckpt_path(output_dir, dataset_name)
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        tmp = f + '.tmp'
+        with open(tmp, 'w') as fh:
+            json.dump({'conditions': conditions}, fh)
+        os.replace(tmp, f)
+    except Exception as e:
+        print(f"  [checkpoint] could not write {f}: {e}")
 
 
 def fit_gp(X_train, y_train, optimize=True, kernel_type='rbf'):
@@ -1171,7 +1210,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     _has_ecfp4 = 'ecfp4' in reps
 
+    # Resume whatever a killed attempt already finished. Nothing is recomputed
+    # for a condition that is already on disk.
+    _resume = _ckpt_load(output_dir, dataset_name)
+    if _resume:
+        results['conditions'].update(_resume)
+        _already = [c for c in conditions if c in _resume]
+        if _already:
+            print(f"  [checkpoint] resuming; {len(_already)} condition(s) "
+                  f"already done: {_already}")
+    results['config']['resumed_conditions'] = sorted(_resume)
+
     for condition in conditions:
+        if condition in _resume:
+            continue
         print(f"\n  {'='*60}")
         print(f"  Condition: {condition}")
         print(f"  {'='*60}")
@@ -1607,6 +1659,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"/{m['iters_to_top1pct_found']} found, "
                       f"top5%: {m['iters_to_top5pct_mean']}"
                       f"/{m['iters_to_top5pct_found']} found")
+
+        # this condition is complete; put it on disk before starting the next
+        _ckpt_save(output_dir, dataset_name, results['conditions'])
 
     # =================================================================
     # FINAL SUMMARY

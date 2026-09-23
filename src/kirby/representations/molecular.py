@@ -3910,12 +3910,28 @@ def create_map4(smiles_list, n_bits=1024):
 
     Requires: pip install map4
     """
+    # The package renamed this class. Older releases expose MAP4Calculator,
+    # current ones expose MAP4; both take `dimensions` and both have
+    # `.calculate(mol)`. Asking only for the old name raised
+    # "MAP4 requires the map4 package" on a machine where map4 was installed
+    # and importable, which sent three separate runs looking for a missing
+    # dependency that was already there.
+    _map4_cls = None
     try:
-        from map4 import MAP4Calculator
-    except ImportError:
-        raise ImportError("MAP4 requires the map4 package: pip install map4")
+        import map4 as _map4_mod
+    except ImportError as e:
+        raise ImportError(
+            f"MAP4 requires the map4 package: pip install map4 ({e})")
+    for _name in ('MAP4Calculator', 'MAP4'):
+        _map4_cls = getattr(_map4_mod, _name, None)
+        if _map4_cls is not None:
+            break
+    if _map4_cls is None:
+        raise ImportError(
+            "the map4 package is installed but exposes neither MAP4Calculator "
+            f"nor MAP4; it has {sorted(n for n in dir(_map4_mod) if not n.startswith('_'))}")
 
-    calc = MAP4Calculator(dimensions=n_bits)
+    calc = _map4_cls(dimensions=n_bits)
     all_fps = []
     failed = 0
 
