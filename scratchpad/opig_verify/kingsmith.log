@@ -1,0 +1,1232 @@
+======================================================================
+COMPONENT-WISE EXTRAPOLATION EXPERIMENT
+  King-Smith et al. (2024), Saebi et al. (2024)
+  Datasets: ['buchwald_hartwig']
+  Split axes: ['ligand', 'base']
+  Models: ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+  Folds: TRUE LOO (n_folds == n_groups per split)
+======================================================================
+
+============================================================
+Dataset: buchwald_hartwig
+============================================================
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+  [SMOKE] dropping heavy reps: ['reactant_mordred', 'reactiont5']
+  CGR Morgan: mapping 3955 reactions with rxnmapper...
+    rxnmapper progress: 500/3955
+    rxnmapper progress: 1000/3955
+    rxnmapper progress: 1500/3955
+    rxnmapper progress: 2000/3955
+    rxnmapper progress: 2500/3955
+    rxnmapper progress: 3000/3955
+    rxnmapper progress: 3500/3955
+  CGR Morgan fingerprint: (3955, 2048) (3955/3955 non-zero rows)
+  cgr_morgan: (3955, 2048)
+  reactant_maccs: (3955, 167)
+  WARNING: rxnfp failed: No module named 'rxnfp'
+  product_pharmacophore3d: (3955, 49)
+  onehot_components: (3955, 45)
+  diff_maccs: (3955, 167)
+  product_maccs: (3955, 167)
+  reactant_pharmacophore3d: (3955, 49)
+Loading MHG-GNN from /Users/apunt/repos/materials...
+MHG-GNN model loaded successfully
+Encoding 3955 molecules with MHG-GNN (124 batches of 32)...
+  Batch 1/124 (molecules 0-31)... done
+  Batch 2/124 (molecules 32-63)... done
+  Batch 3/124 (molecules 64-95)... done
+  Batch 4/124 (molecules 96-127)... done
+  Batch 5/124 (molecules 128-159)... done
+  Batch 6/124 (molecules 160-191)... done
+  Batch 7/124 (molecules 192-223)... done
+  Batch 8/124 (molecules 224-255)... done
+  Batch 9/124 (molecules 256-287)... done
+  Batch 10/124 (molecules 288-319)... done
+  Batch 11/124 (molecules 320-351)... done
+  Batch 12/124 (molecules 352-383)... done
+  Batch 13/124 (molecules 384-415)... done
+  Batch 14/124 (molecules 416-447)... done
+  Batch 15/124 (molecules 448-479)... done
+  Batch 16/124 (molecules 480-511)... done
+  Batch 17/124 (molecules 512-543)... done
+  Batch 18/124 (molecules 544-575)... done
+  Batch 19/124 (molecules 576-607)... done
+  Batch 20/124 (molecules 608-639)... done
+  Batch 21/124 (molecules 640-671)... done
+  Batch 22/124 (molecules 672-703)... done
+  Batch 23/124 (molecules 704-735)... done
+  Batch 24/124 (molecules 736-767)... done
+  Batch 25/124 (molecules 768-799)... done
+  Batch 26/124 (molecules 800-831)... done
+  Batch 27/124 (molecules 832-863)... done
+  Batch 28/124 (molecules 864-895)... done
+  Batch 29/124 (molecules 896-927)... done
+  Batch 30/124 (molecules 928-959)... done
+  Batch 31/124 (molecules 960-991)... done
+  Batch 32/124 (molecules 992-1023)... done
+  Batch 33/124 (molecules 1024-1055)... done
+  Batch 34/124 (molecules 1056-1087)... done
+  Batch 35/124 (molecules 1088-1119)... done
+  Batch 36/124 (molecules 1120-1151)... done
+  Batch 37/124 (molecules 1152-1183)... done
+  Batch 38/124 (molecules 1184-1215)... done
+  Batch 39/124 (molecules 1216-1247)... done
+  Batch 40/124 (molecules 1248-1279)... done
+  Batch 41/124 (molecules 1280-1311)... done
+  Batch 42/124 (molecules 1312-1343)... done
+  Batch 43/124 (molecules 1344-1375)... done
+  Batch 44/124 (molecules 1376-1407)... done
+  Batch 45/124 (molecules 1408-1439)... done
+  Batch 46/124 (molecules 1440-1471)... done
+  Batch 47/124 (molecules 1472-1503)... done
+  Batch 48/124 (molecules 1504-1535)... done
+  Batch 49/124 (molecules 1536-1567)... done
+  Batch 50/124 (molecules 1568-1599)... done
+  Batch 51/124 (molecules 1600-1631)... done
+  Batch 52/124 (molecules 1632-1663)... done
+  Batch 53/124 (molecules 1664-1695)... done
+  Batch 54/124 (molecules 1696-1727)... done
+  Batch 55/124 (molecules 1728-1759)... done
+  Batch 56/124 (molecules 1760-1791)... done
+  Batch 57/124 (molecules 1792-1823)... done
+  Batch 58/124 (molecules 1824-1855)... done
+  Batch 59/124 (molecules 1856-1887)... done
+  Batch 60/124 (molecules 1888-1919)... done
+  Batch 61/124 (molecules 1920-1951)... done
+  Batch 62/124 (molecules 1952-1983)... done
+  Batch 63/124 (molecules 1984-2015)... done
+  Batch 64/124 (molecules 2016-2047)... done
+  Batch 65/124 (molecules 2048-2079)... done
+  Batch 66/124 (molecules 2080-2111)... done
+  Batch 67/124 (molecules 2112-2143)... done
+  Batch 68/124 (molecules 2144-2175)... done
+  Batch 69/124 (molecules 2176-2207)... done
+  Batch 70/124 (molecules 2208-2239)... done
+  Batch 71/124 (molecules 2240-2271)... done
+  Batch 72/124 (molecules 2272-2303)... done
+  Batch 73/124 (molecules 2304-2335)... done
+  Batch 74/124 (molecules 2336-2367)... done
+  Batch 75/124 (molecules 2368-2399)... done
+  Batch 76/124 (molecules 2400-2431)... done
+  Batch 77/124 (molecules 2432-2463)... done
+  Batch 78/124 (molecules 2464-2495)... done
+  Batch 79/124 (molecules 2496-2527)... done
+  Batch 80/124 (molecules 2528-2559)... done
+  Batch 81/124 (molecules 2560-2591)... done
+  Batch 82/124 (molecules 2592-2623)... done
+  Batch 83/124 (molecules 2624-2655)... done
+  Batch 84/124 (molecules 2656-2687)... done
+  Batch 85/124 (molecules 2688-2719)... done
+  Batch 86/124 (molecules 2720-2751)... done
+  Batch 87/124 (molecules 2752-2783)... done
+  Batch 88/124 (molecules 2784-2815)... done
+  Batch 89/124 (molecules 2816-2847)... done
+  Batch 90/124 (molecules 2848-2879)... done
+  Batch 91/124 (molecules 2880-2911)... done
+  Batch 92/124 (molecules 2912-2943)... done
+  Batch 93/124 (molecules 2944-2975)... done
+  Batch 94/124 (molecules 2976-3007)... done
+  Batch 95/124 (molecules 3008-3039)... done
+  Batch 96/124 (molecules 3040-3071)... done
+  Batch 97/124 (molecules 3072-3103)... done
+  Batch 98/124 (molecules 3104-3135)... done
+  Batch 99/124 (molecules 3136-3167)... done
+  Batch 100/124 (molecules 3168-3199)... done
+  Batch 101/124 (molecules 3200-3231)... done
+  Batch 102/124 (molecules 3232-3263)... done
+  Batch 103/124 (molecules 3264-3295)... done
+  Batch 104/124 (molecules 3296-3327)... done
+  Batch 105/124 (molecules 3328-3359)... done
+  Batch 106/124 (molecules 3360-3391)... done
+  Batch 107/124 (molecules 3392-3423)... done
+  Batch 108/124 (molecules 3424-3455)... done
+  Batch 109/124 (molecules 3456-3487)... done
+  Batch 110/124 (molecules 3488-3519)... done
+  Batch 111/124 (molecules 3520-3551)... done
+  Batch 112/124 (molecules 3552-3583)... done
+  Batch 113/124 (molecules 3584-3615)... done
+  Batch 114/124 (molecules 3616-3647)... done
+  Batch 115/124 (molecules 3648-3679)... done
+  Batch 116/124 (molecules 3680-3711)... done
+  Batch 117/124 (molecules 3712-3743)... done
+  Batch 118/124 (molecules 3744-3775)... done
+  Batch 119/124 (molecules 3776-3807)... done
+  Batch 120/124 (molecules 3808-3839)... done
+  Batch 121/124 (molecules 3840-3871)... done
+  Batch 122/124 (molecules 3872-3903)... done
+  Batch 123/124 (molecules 3904-3935)... done
+  Batch 124/124 (molecules 3936-3954)... done
+Encoding 19775 molecules with MHG-GNN (618 batches of 32)...
+  Batch 1/618 (molecules 0-31)... done
+  Batch 2/618 (molecules 32-63)... done
+  Batch 3/618 (molecules 64-95)... done
+  Batch 4/618 (molecules 96-127)... done
+  Batch 5/618 (molecules 128-159)... done
+  Batch 6/618 (molecules 160-191)... done
+  Batch 7/618 (molecules 192-223)... done
+  Batch 8/618 (molecules 224-255)... done
+  Batch 9/618 (molecules 256-287)... done
+  Batch 10/618 (molecules 288-319)... done
+  Batch 11/618 (molecules 320-351)... done
+  Batch 12/618 (molecules 352-383)... done
+  Batch 13/618 (molecules 384-415)... done
+  Batch 14/618 (molecules 416-447)... done
+  Batch 15/618 (molecules 448-479)... done
+  Batch 16/618 (molecules 480-511)... done
+  Batch 17/618 (molecules 512-543)... done
+  Batch 18/618 (molecules 544-575)... done
+  Batch 19/618 (molecules 576-607)... done
+  Batch 20/618 (molecules 608-639)... done
+  Batch 21/618 (molecules 640-671)... done
+  Batch 22/618 (molecules 672-703)... done
+  Batch 23/618 (molecules 704-735)... done
+  Batch 24/618 (molecules 736-767)... done
+  Batch 25/618 (molecules 768-799)... done
+  Batch 26/618 (molecules 800-831)... done
+  Batch 27/618 (molecules 832-863)... done
+  Batch 28/618 (molecules 864-895)... done
+  Batch 29/618 (molecules 896-927)... done
+  Batch 30/618 (molecules 928-959)... done
+  Batch 31/618 (molecules 960-991)... done
+  Batch 32/618 (molecules 992-1023)... done
+  Batch 33/618 (molecules 1024-1055)... done
+  Batch 34/618 (molecules 1056-1087)... done
+  Batch 35/618 (molecules 1088-1119)... done
+  Batch 36/618 (molecules 1120-1151)... done
+  Batch 37/618 (molecules 1152-1183)... done
+  Batch 38/618 (molecules 1184-1215)... done
+  Batch 39/618 (molecules 1216-1247)... done
+  Batch 40/618 (molecules 1248-1279)... done
+  Batch 41/618 (molecules 1280-1311)... done
+  Batch 42/618 (molecules 1312-1343)... done
+  Batch 43/618 (molecules 1344-1375)... done
+  Batch 44/618 (molecules 1376-1407)... done
+  Batch 45/618 (molecules 1408-1439)... done
+  Batch 46/618 (molecules 1440-1471)... done
+  Batch 47/618 (molecules 1472-1503)... done
+  Batch 48/618 (molecules 1504-1535)... done
+  Batch 49/618 (molecules 1536-1567)... done
+  Batch 50/618 (molecules 1568-1599)... done
+  Batch 51/618 (molecules 1600-1631)... done
+  Batch 52/618 (molecules 1632-1663)... done
+  Batch 53/618 (molecules 1664-1695)... done
+  Batch 54/618 (molecules 1696-1727)... done
+  Batch 55/618 (molecules 1728-1759)... done
+  Batch 56/618 (molecules 1760-1791)... done
+  Batch 57/618 (molecules 1792-1823)... done
+  Batch 58/618 (molecules 1824-1855)... done
+  Batch 59/618 (molecules 1856-1887)... done
+  Batch 60/618 (molecules 1888-1919)... done
+  Batch 61/618 (molecules 1920-1951)... done
+  Batch 62/618 (molecules 1952-1983)... done
+  Batch 63/618 (molecules 1984-2015)... done
+  Batch 64/618 (molecules 2016-2047)... done
+  Batch 65/618 (molecules 2048-2079)... done
+  Batch 66/618 (molecules 2080-2111)... done
+  Batch 67/618 (molecules 2112-2143)... done
+  Batch 68/618 (molecules 2144-2175)... done
+  Batch 69/618 (molecules 2176-2207)... done
+  Batch 70/618 (molecules 2208-2239)... done
+  Batch 71/618 (molecules 2240-2271)... done
+  Batch 72/618 (molecules 2272-2303)... done
+  Batch 73/618 (molecules 2304-2335)... done
+  Batch 74/618 (molecules 2336-2367)... done
+  Batch 75/618 (molecules 2368-2399)... done
+  Batch 76/618 (molecules 2400-2431)... done
+  Batch 77/618 (molecules 2432-2463)... done
+  Batch 78/618 (molecules 2464-2495)... done
+  Batch 79/618 (molecules 2496-2527)... done
+  Batch 80/618 (molecules 2528-2559)... done
+  Batch 81/618 (molecules 2560-2591)... done
+  Batch 82/618 (molecules 2592-2623)... done
+  Batch 83/618 (molecules 2624-2655)... done
+  Batch 84/618 (molecules 2656-2687)... done
+  Batch 85/618 (molecules 2688-2719)... done
+  Batch 86/618 (molecules 2720-2751)... done
+  Batch 87/618 (molecules 2752-2783)... done
+  Batch 88/618 (molecules 2784-2815)... done
+  Batch 89/618 (molecules 2816-2847)... done
+  Batch 90/618 (molecules 2848-2879)... done
+  Batch 91/618 (molecules 2880-2911)... done
+  Batch 92/618 (molecules 2912-2943)... done
+  Batch 93/618 (molecules 2944-2975)... done
+  Batch 94/618 (molecules 2976-3007)... done
+  Batch 95/618 (molecules 3008-3039)... done
+  Batch 96/618 (molecules 3040-3071)... done
+  Batch 97/618 (molecules 3072-3103)... done
+  Batch 98/618 (molecules 3104-3135)... done
+  Batch 99/618 (molecules 3136-3167)... done
+  Batch 100/618 (molecules 3168-3199)... done
+  Batch 101/618 (molecules 3200-3231)... done
+  Batch 102/618 (molecules 3232-3263)... done
+  Batch 103/618 (molecules 3264-3295)... done
+  Batch 104/618 (molecules 3296-3327)... done
+  Batch 105/618 (molecules 3328-3359)... done
+  Batch 106/618 (molecules 3360-3391)... done
+  Batch 107/618 (molecules 3392-3423)... done
+  Batch 108/618 (molecules 3424-3455)... done
+  Batch 109/618 (molecules 3456-3487)... done
+  Batch 110/618 (molecules 3488-3519)... done
+  Batch 111/618 (molecules 3520-3551)... done
+  Batch 112/618 (molecules 3552-3583)... done
+  Batch 113/618 (molecules 3584-3615)... done
+  Batch 114/618 (molecules 3616-3647)... done
+  Batch 115/618 (molecules 3648-3679)... done
+  Batch 116/618 (molecules 3680-3711)... done
+  Batch 117/618 (molecules 3712-3743)... done
+  Batch 118/618 (molecules 3744-3775)... done
+  Batch 119/618 (molecules 3776-3807)... done
+  Batch 120/618 (molecules 3808-3839)... done
+  Batch 121/618 (molecules 3840-3871)... done
+  Batch 122/618 (molecules 3872-3903)... done
+  Batch 123/618 (molecules 3904-3935)... done
+  Batch 124/618 (molecules 3936-3967)... done
+  Batch 125/618 (molecules 3968-3999)... done
+  Batch 126/618 (molecules 4000-4031)... done
+  Batch 127/618 (molecules 4032-4063)... done
+  Batch 128/618 (molecules 4064-4095)... done
+  Batch 129/618 (molecules 4096-4127)... done
+  Batch 130/618 (molecules 4128-4159)... done
+  Batch 131/618 (molecules 4160-4191)... done
+  Batch 132/618 (molecules 4192-4223)... done
+  Batch 133/618 (molecules 4224-4255)... done
+  Batch 134/618 (molecules 4256-4287)... done
+  Batch 135/618 (molecules 4288-4319)... done
+  Batch 136/618 (molecules 4320-4351)... done
+  Batch 137/618 (molecules 4352-4383)... done
+  Batch 138/618 (molecules 4384-4415)... done
+  Batch 139/618 (molecules 4416-4447)... done
+  Batch 140/618 (molecules 4448-4479)... done
+  Batch 141/618 (molecules 4480-4511)... done
+  Batch 142/618 (molecules 4512-4543)... done
+  Batch 143/618 (molecules 4544-4575)... done
+  Batch 144/618 (molecules 4576-4607)... done
+  Batch 145/618 (molecules 4608-4639)... done
+  Batch 146/618 (molecules 4640-4671)... done
+  Batch 147/618 (molecules 4672-4703)... done
+  Batch 148/618 (molecules 4704-4735)... done
+  Batch 149/618 (molecules 4736-4767)... done
+  Batch 150/618 (molecules 4768-4799)... done
+  Batch 151/618 (molecules 4800-4831)... done
+  Batch 152/618 (molecules 4832-4863)... done
+  Batch 153/618 (molecules 4864-4895)... done
+  Batch 154/618 (molecules 4896-4927)... done
+  Batch 155/618 (molecules 4928-4959)... done
+  Batch 156/618 (molecules 4960-4991)... done
+  Batch 157/618 (molecules 4992-5023)... done
+  Batch 158/618 (molecules 5024-5055)... done
+  Batch 159/618 (molecules 5056-5087)... done
+  Batch 160/618 (molecules 5088-5119)... done
+  Batch 161/618 (molecules 5120-5151)... done
+  Batch 162/618 (molecules 5152-5183)... done
+  Batch 163/618 (molecules 5184-5215)... done
+  Batch 164/618 (molecules 5216-5247)... done
+  Batch 165/618 (molecules 5248-5279)... done
+  Batch 166/618 (molecules 5280-5311)... done
+  Batch 167/618 (molecules 5312-5343)... done
+  Batch 168/618 (molecules 5344-5375)... done
+  Batch 169/618 (molecules 5376-5407)... done
+  Batch 170/618 (molecules 5408-5439)... done
+  Batch 171/618 (molecules 5440-5471)... done
+  Batch 172/618 (molecules 5472-5503)... done
+  Batch 173/618 (molecules 5504-5535)... done
+  Batch 174/618 (molecules 5536-5567)... done
+  Batch 175/618 (molecules 5568-5599)... done
+  Batch 176/618 (molecules 5600-5631)... done
+  Batch 177/618 (molecules 5632-5663)... done
+  Batch 178/618 (molecules 5664-5695)... done
+  Batch 179/618 (molecules 5696-5727)... done
+  Batch 180/618 (molecules 5728-5759)... done
+  Batch 181/618 (molecules 5760-5791)... done
+  Batch 182/618 (molecules 5792-5823)... done
+  Batch 183/618 (molecules 5824-5855)... done
+  Batch 184/618 (molecules 5856-5887)... done
+  Batch 185/618 (molecules 5888-5919)... done
+  Batch 186/618 (molecules 5920-5951)... done
+  Batch 187/618 (molecules 5952-5983)... done
+  Batch 188/618 (molecules 5984-6015)... done
+  Batch 189/618 (molecules 6016-6047)... done
+  Batch 190/618 (molecules 6048-6079)... done
+  Batch 191/618 (molecules 6080-6111)... done
+  Batch 192/618 (molecules 6112-6143)... done
+  Batch 193/618 (molecules 6144-6175)... done
+  Batch 194/618 (molecules 6176-6207)... done
+  Batch 195/618 (molecules 6208-6239)... done
+  Batch 196/618 (molecules 6240-6271)... done
+  Batch 197/618 (molecules 6272-6303)... done
+  Batch 198/618 (molecules 6304-6335)... done
+  Batch 199/618 (molecules 6336-6367)... done
+  Batch 200/618 (molecules 6368-6399)... done
+  Batch 201/618 (molecules 6400-6431)... done
+  Batch 202/618 (molecules 6432-6463)... done
+  Batch 203/618 (molecules 6464-6495)... done
+  Batch 204/618 (molecules 6496-6527)... done
+  Batch 205/618 (molecules 6528-6559)... done
+  Batch 206/618 (molecules 6560-6591)... done
+  Batch 207/618 (molecules 6592-6623)... done
+  Batch 208/618 (molecules 6624-6655)... done
+  Batch 209/618 (molecules 6656-6687)... done
+  Batch 210/618 (molecules 6688-6719)... done
+  Batch 211/618 (molecules 6720-6751)... done
+  Batch 212/618 (molecules 6752-6783)... done
+  Batch 213/618 (molecules 6784-6815)... done
+  Batch 214/618 (molecules 6816-6847)... done
+  Batch 215/618 (molecules 6848-6879)... done
+  Batch 216/618 (molecules 6880-6911)... done
+  Batch 217/618 (molecules 6912-6943)... done
+  Batch 218/618 (molecules 6944-6975)... done
+  Batch 219/618 (molecules 6976-7007)... done
+  Batch 220/618 (molecules 7008-7039)... done
+  Batch 221/618 (molecules 7040-7071)... done
+  Batch 222/618 (molecules 7072-7103)... done
+  Batch 223/618 (molecules 7104-7135)... done
+  Batch 224/618 (molecules 7136-7167)... done
+  Batch 225/618 (molecules 7168-7199)... done
+  Batch 226/618 (molecules 7200-7231)... done
+  Batch 227/618 (molecules 7232-7263)... done
+  Batch 228/618 (molecules 7264-7295)... done
+  Batch 229/618 (molecules 7296-7327)... done
+  Batch 230/618 (molecules 7328-7359)... done
+  Batch 231/618 (molecules 7360-7391)... done
+  Batch 232/618 (molecules 7392-7423)... done
+  Batch 233/618 (molecules 7424-7455)... done
+  Batch 234/618 (molecules 7456-7487)... done
+  Batch 235/618 (molecules 7488-7519)... done
+  Batch 236/618 (molecules 7520-7551)... done
+  Batch 237/618 (molecules 7552-7583)... done
+  Batch 238/618 (molecules 7584-7615)... done
+  Batch 239/618 (molecules 7616-7647)... done
+  Batch 240/618 (molecules 7648-7679)... done
+  Batch 241/618 (molecules 7680-7711)... done
+  Batch 242/618 (molecules 7712-7743)... done
+  Batch 243/618 (molecules 7744-7775)... done
+  Batch 244/618 (molecules 7776-7807)... done
+  Batch 245/618 (molecules 7808-7839)... done
+  Batch 246/618 (molecules 7840-7871)... done
+  Batch 247/618 (molecules 7872-7903)... done
+  Batch 248/618 (molecules 7904-7935)... done
+  Batch 249/618 (molecules 7936-7967)... done
+  Batch 250/618 (molecules 7968-7999)... done
+  Batch 251/618 (molecules 8000-8031)... done
+  Batch 252/618 (molecules 8032-8063)... done
+  Batch 253/618 (molecules 8064-8095)... done
+  Batch 254/618 (molecules 8096-8127)... done
+  Batch 255/618 (molecules 8128-8159)... done
+  Batch 256/618 (molecules 8160-8191)... done
+  Batch 257/618 (molecules 8192-8223)... done
+  Batch 258/618 (molecules 8224-8255)... done
+  Batch 259/618 (molecules 8256-8287)... done
+  Batch 260/618 (molecules 8288-8319)... done
+  Batch 261/618 (molecules 8320-8351)... done
+  Batch 262/618 (molecules 8352-8383)... done
+  Batch 263/618 (molecules 8384-8415)... done
+  Batch 264/618 (molecules 8416-8447)... done
+  Batch 265/618 (molecules 8448-8479)... done
+  Batch 266/618 (molecules 8480-8511)... done
+  Batch 267/618 (molecules 8512-8543)... done
+  Batch 268/618 (molecules 8544-8575)... done
+  Batch 269/618 (molecules 8576-8607)... done
+  Batch 270/618 (molecules 8608-8639)... done
+  Batch 271/618 (molecules 8640-8671)... done
+  Batch 272/618 (molecules 8672-8703)... done
+  Batch 273/618 (molecules 8704-8735)... done
+  Batch 274/618 (molecules 8736-8767)... done
+  Batch 275/618 (molecules 8768-8799)... done
+  Batch 276/618 (molecules 8800-8831)... done
+  Batch 277/618 (molecules 8832-8863)... done
+  Batch 278/618 (molecules 8864-8895)... done
+  Batch 279/618 (molecules 8896-8927)... done
+  Batch 280/618 (molecules 8928-8959)... done
+  Batch 281/618 (molecules 8960-8991)... done
+  Batch 282/618 (molecules 8992-9023)... done
+  Batch 283/618 (molecules 9024-9055)... done
+  Batch 284/618 (molecules 9056-9087)... done
+  Batch 285/618 (molecules 9088-9119)... done
+  Batch 286/618 (molecules 9120-9151)... done
+  Batch 287/618 (molecules 9152-9183)... done
+  Batch 288/618 (molecules 9184-9215)... done
+  Batch 289/618 (molecules 9216-9247)... done
+  Batch 290/618 (molecules 9248-9279)... done
+  Batch 291/618 (molecules 9280-9311)... done
+  Batch 292/618 (molecules 9312-9343)... done
+  Batch 293/618 (molecules 9344-9375)... done
+  Batch 294/618 (molecules 9376-9407)... done
+  Batch 295/618 (molecules 9408-9439)... done
+  Batch 296/618 (molecules 9440-9471)... done
+  Batch 297/618 (molecules 9472-9503)... done
+  Batch 298/618 (molecules 9504-9535)... done
+  Batch 299/618 (molecules 9536-9567)... done
+  Batch 300/618 (molecules 9568-9599)... done
+  Batch 301/618 (molecules 9600-9631)... done
+  Batch 302/618 (molecules 9632-9663)... done
+  Batch 303/618 (molecules 9664-9695)... done
+  Batch 304/618 (molecules 9696-9727)... done
+  Batch 305/618 (molecules 9728-9759)... done
+  Batch 306/618 (molecules 9760-9791)... done
+  Batch 307/618 (molecules 9792-9823)... done
+  Batch 308/618 (molecules 9824-9855)... done
+  Batch 309/618 (molecules 9856-9887)... done
+  Batch 310/618 (molecules 9888-9919)... done
+  Batch 311/618 (molecules 9920-9951)... done
+  Batch 312/618 (molecules 9952-9983)... done
+  Batch 313/618 (molecules 9984-10015)... done
+  Batch 314/618 (molecules 10016-10047)... done
+  Batch 315/618 (molecules 10048-10079)... done
+  Batch 316/618 (molecules 10080-10111)... done
+  Batch 317/618 (molecules 10112-10143)... done
+  Batch 318/618 (molecules 10144-10175)... done
+  Batch 319/618 (molecules 10176-10207)... done
+  Batch 320/618 (molecules 10208-10239)... done
+  Batch 321/618 (molecules 10240-10271)... done
+  Batch 322/618 (molecules 10272-10303)... done
+  Batch 323/618 (molecules 10304-10335)... done
+  Batch 324/618 (molecules 10336-10367)... done
+  Batch 325/618 (molecules 10368-10399)... done
+  Batch 326/618 (molecules 10400-10431)... done
+  Batch 327/618 (molecules 10432-10463)... done
+  Batch 328/618 (molecules 10464-10495)... done
+  Batch 329/618 (molecules 10496-10527)... done
+  Batch 330/618 (molecules 10528-10559)... done
+  Batch 331/618 (molecules 10560-10591)... done
+  Batch 332/618 (molecules 10592-10623)... done
+  Batch 333/618 (molecules 10624-10655)... done
+  Batch 334/618 (molecules 10656-10687)... done
+  Batch 335/618 (molecules 10688-10719)... done
+  Batch 336/618 (molecules 10720-10751)... done
+  Batch 337/618 (molecules 10752-10783)... done
+  Batch 338/618 (molecules 10784-10815)... done
+  Batch 339/618 (molecules 10816-10847)... done
+  Batch 340/618 (molecules 10848-10879)... done
+  Batch 341/618 (molecules 10880-10911)... done
+  Batch 342/618 (molecules 10912-10943)... done
+  Batch 343/618 (molecules 10944-10975)... done
+  Batch 344/618 (molecules 10976-11007)... done
+  Batch 345/618 (molecules 11008-11039)... done
+  Batch 346/618 (molecules 11040-11071)... done
+  Batch 347/618 (molecules 11072-11103)... done
+  Batch 348/618 (molecules 11104-11135)... done
+  Batch 349/618 (molecules 11136-11167)... done
+  Batch 350/618 (molecules 11168-11199)... done
+  Batch 351/618 (molecules 11200-11231)... done
+  Batch 352/618 (molecules 11232-11263)... done
+  Batch 353/618 (molecules 11264-11295)... done
+  Batch 354/618 (molecules 11296-11327)... done
+  Batch 355/618 (molecules 11328-11359)... done
+  Batch 356/618 (molecules 11360-11391)... done
+  Batch 357/618 (molecules 11392-11423)... done
+  Batch 358/618 (molecules 11424-11455)... done
+  Batch 359/618 (molecules 11456-11487)... done
+  Batch 360/618 (molecules 11488-11519)... done
+  Batch 361/618 (molecules 11520-11551)... done
+  Batch 362/618 (molecules 11552-11583)... done
+  Batch 363/618 (molecules 11584-11615)... done
+  Batch 364/618 (molecules 11616-11647)... done
+  Batch 365/618 (molecules 11648-11679)... done
+  Batch 366/618 (molecules 11680-11711)... done
+  Batch 367/618 (molecules 11712-11743)... done
+  Batch 368/618 (molecules 11744-11775)... done
+  Batch 369/618 (molecules 11776-11807)... done
+  Batch 370/618 (molecules 11808-11839)... done
+  Batch 371/618 (molecules 11840-11871)... done
+  Batch 372/618 (molecules 11872-11903)... done
+  Batch 373/618 (molecules 11904-11935)... done
+  Batch 374/618 (molecules 11936-11967)... done
+  Batch 375/618 (molecules 11968-11999)... done
+  Batch 376/618 (molecules 12000-12031)... done
+  Batch 377/618 (molecules 12032-12063)... done
+  Batch 378/618 (molecules 12064-12095)... done
+  Batch 379/618 (molecules 12096-12127)... done
+  Batch 380/618 (molecules 12128-12159)... done
+  Batch 381/618 (molecules 12160-12191)... done
+  Batch 382/618 (molecules 12192-12223)... done
+  Batch 383/618 (molecules 12224-12255)... done
+  Batch 384/618 (molecules 12256-12287)... done
+  Batch 385/618 (molecules 12288-12319)... done
+  Batch 386/618 (molecules 12320-12351)... done
+  Batch 387/618 (molecules 12352-12383)... done
+  Batch 388/618 (molecules 12384-12415)... done
+  Batch 389/618 (molecules 12416-12447)... done
+  Batch 390/618 (molecules 12448-12479)... done
+  Batch 391/618 (molecules 12480-12511)... done
+  Batch 392/618 (molecules 12512-12543)... done
+  Batch 393/618 (molecules 12544-12575)... done
+  Batch 394/618 (molecules 12576-12607)... done
+  Batch 395/618 (molecules 12608-12639)... done
+  Batch 396/618 (molecules 12640-12671)... done
+  Batch 397/618 (molecules 12672-12703)... done
+  Batch 398/618 (molecules 12704-12735)... done
+  Batch 399/618 (molecules 12736-12767)... done
+  Batch 400/618 (molecules 12768-12799)... done
+  Batch 401/618 (molecules 12800-12831)... done
+  Batch 402/618 (molecules 12832-12863)... done
+  Batch 403/618 (molecules 12864-12895)... done
+  Batch 404/618 (molecules 12896-12927)... done
+  Batch 405/618 (molecules 12928-12959)... done
+  Batch 406/618 (molecules 12960-12991)... done
+  Batch 407/618 (molecules 12992-13023)... done
+  Batch 408/618 (molecules 13024-13055)... done
+  Batch 409/618 (molecules 13056-13087)... done
+  Batch 410/618 (molecules 13088-13119)... done
+  Batch 411/618 (molecules 13120-13151)... done
+  Batch 412/618 (molecules 13152-13183)... done
+  Batch 413/618 (molecules 13184-13215)... done
+  Batch 414/618 (molecules 13216-13247)... done
+  Batch 415/618 (molecules 13248-13279)... done
+  Batch 416/618 (molecules 13280-13311)... done
+  Batch 417/618 (molecules 13312-13343)... done
+  Batch 418/618 (molecules 13344-13375)... done
+  Batch 419/618 (molecules 13376-13407)... done
+  Batch 420/618 (molecules 13408-13439)... done
+  Batch 421/618 (molecules 13440-13471)... done
+  Batch 422/618 (molecules 13472-13503)... done
+  Batch 423/618 (molecules 13504-13535)... done
+  Batch 424/618 (molecules 13536-13567)... done
+  Batch 425/618 (molecules 13568-13599)... done
+  Batch 426/618 (molecules 13600-13631)... done
+  Batch 427/618 (molecules 13632-13663)... done
+  Batch 428/618 (molecules 13664-13695)... done
+  Batch 429/618 (molecules 13696-13727)... done
+  Batch 430/618 (molecules 13728-13759)... done
+  Batch 431/618 (molecules 13760-13791)... done
+  Batch 432/618 (molecules 13792-13823)... done
+  Batch 433/618 (molecules 13824-13855)... done
+  Batch 434/618 (molecules 13856-13887)... done
+  Batch 435/618 (molecules 13888-13919)... done
+  Batch 436/618 (molecules 13920-13951)... done
+  Batch 437/618 (molecules 13952-13983)... done
+  Batch 438/618 (molecules 13984-14015)... done
+  Batch 439/618 (molecules 14016-14047)... done
+  Batch 440/618 (molecules 14048-14079)... done
+  Batch 441/618 (molecules 14080-14111)... done
+  Batch 442/618 (molecules 14112-14143)... done
+  Batch 443/618 (molecules 14144-14175)... done
+  Batch 444/618 (molecules 14176-14207)... done
+  Batch 445/618 (molecules 14208-14239)... done
+  Batch 446/618 (molecules 14240-14271)... done
+  Batch 447/618 (molecules 14272-14303)... done
+  Batch 448/618 (molecules 14304-14335)... done
+  Batch 449/618 (molecules 14336-14367)... done
+  Batch 450/618 (molecules 14368-14399)... done
+  Batch 451/618 (molecules 14400-14431)... done
+  Batch 452/618 (molecules 14432-14463)... done
+  Batch 453/618 (molecules 14464-14495)... done
+  Batch 454/618 (molecules 14496-14527)... done
+  Batch 455/618 (molecules 14528-14559)... done
+  Batch 456/618 (molecules 14560-14591)... done
+  Batch 457/618 (molecules 14592-14623)... done
+  Batch 458/618 (molecules 14624-14655)... done
+  Batch 459/618 (molecules 14656-14687)... done
+  Batch 460/618 (molecules 14688-14719)... done
+  Batch 461/618 (molecules 14720-14751)... done
+  Batch 462/618 (molecules 14752-14783)... done
+  Batch 463/618 (molecules 14784-14815)... done
+  Batch 464/618 (molecules 14816-14847)... done
+  Batch 465/618 (molecules 14848-14879)... done
+  Batch 466/618 (molecules 14880-14911)... done
+  Batch 467/618 (molecules 14912-14943)... done
+  Batch 468/618 (molecules 14944-14975)... done
+  Batch 469/618 (molecules 14976-15007)... done
+  Batch 470/618 (molecules 15008-15039)... done
+  Batch 471/618 (molecules 15040-15071)... done
+  Batch 472/618 (molecules 15072-15103)... done
+  Batch 473/618 (molecules 15104-15135)... done
+  Batch 474/618 (molecules 15136-15167)... done
+  Batch 475/618 (molecules 15168-15199)... done
+  Batch 476/618 (molecules 15200-15231)... done
+  Batch 477/618 (molecules 15232-15263)... done
+  Batch 478/618 (molecules 15264-15295)... done
+  Batch 479/618 (molecules 15296-15327)... done
+  Batch 480/618 (molecules 15328-15359)... done
+  Batch 481/618 (molecules 15360-15391)... done
+  Batch 482/618 (molecules 15392-15423)... done
+  Batch 483/618 (molecules 15424-15455)... done
+  Batch 484/618 (molecules 15456-15487)... done
+  Batch 485/618 (molecules 15488-15519)... done
+  Batch 486/618 (molecules 15520-15551)... done
+  Batch 487/618 (molecules 15552-15583)... done
+  Batch 488/618 (molecules 15584-15615)... done
+  Batch 489/618 (molecules 15616-15647)... done
+  Batch 490/618 (molecules 15648-15679)... done
+  Batch 491/618 (molecules 15680-15711)... done
+  Batch 492/618 (molecules 15712-15743)... done
+  Batch 493/618 (molecules 15744-15775)... done
+  Batch 494/618 (molecules 15776-15807)... done
+  Batch 495/618 (molecules 15808-15839)... done
+  Batch 496/618 (molecules 15840-15871)... done
+  Batch 497/618 (molecules 15872-15903)... done
+  Batch 498/618 (molecules 15904-15935)... done
+  Batch 499/618 (molecules 15936-15967)... done
+  Batch 500/618 (molecules 15968-15999)... done
+  Batch 501/618 (molecules 16000-16031)... done
+  Batch 502/618 (molecules 16032-16063)... done
+  Batch 503/618 (molecules 16064-16095)... done
+  Batch 504/618 (molecules 16096-16127)... done
+  Batch 505/618 (molecules 16128-16159)... done
+  Batch 506/618 (molecules 16160-16191)... done
+  Batch 507/618 (molecules 16192-16223)... done
+  Batch 508/618 (molecules 16224-16255)... done
+  Batch 509/618 (molecules 16256-16287)... done
+  Batch 510/618 (molecules 16288-16319)... done
+  Batch 511/618 (molecules 16320-16351)... done
+  Batch 512/618 (molecules 16352-16383)... done
+  Batch 513/618 (molecules 16384-16415)... done
+  Batch 514/618 (molecules 16416-16447)... done
+  Batch 515/618 (molecules 16448-16479)... done
+  Batch 516/618 (molecules 16480-16511)... done
+  Batch 517/618 (molecules 16512-16543)... done
+  Batch 518/618 (molecules 16544-16575)... done
+  Batch 519/618 (molecules 16576-16607)... done
+  Batch 520/618 (molecules 16608-16639)... done
+  Batch 521/618 (molecules 16640-16671)... done
+  Batch 522/618 (molecules 16672-16703)... done
+  Batch 523/618 (molecules 16704-16735)... done
+  Batch 524/618 (molecules 16736-16767)... done
+  Batch 525/618 (molecules 16768-16799)... done
+  Batch 526/618 (molecules 16800-16831)... done
+  Batch 527/618 (molecules 16832-16863)... done
+  Batch 528/618 (molecules 16864-16895)... done
+  Batch 529/618 (molecules 16896-16927)... done
+  Batch 530/618 (molecules 16928-16959)... done
+  Batch 531/618 (molecules 16960-16991)... done
+  Batch 532/618 (molecules 16992-17023)... done
+  Batch 533/618 (molecules 17024-17055)... done
+  Batch 534/618 (molecules 17056-17087)... done
+  Batch 535/618 (molecules 17088-17119)... done
+  Batch 536/618 (molecules 17120-17151)... done
+  Batch 537/618 (molecules 17152-17183)... done
+  Batch 538/618 (molecules 17184-17215)... done
+  Batch 539/618 (molecules 17216-17247)... done
+  Batch 540/618 (molecules 17248-17279)... done
+  Batch 541/618 (molecules 17280-17311)... done
+  Batch 542/618 (molecules 17312-17343)... done
+  Batch 543/618 (molecules 17344-17375)... done
+  Batch 544/618 (molecules 17376-17407)... done
+  Batch 545/618 (molecules 17408-17439)... done
+  Batch 546/618 (molecules 17440-17471)... done
+  Batch 547/618 (molecules 17472-17503)... done
+  Batch 548/618 (molecules 17504-17535)... done
+  Batch 549/618 (molecules 17536-17567)... done
+  Batch 550/618 (molecules 17568-17599)... done
+  Batch 551/618 (molecules 17600-17631)... done
+  Batch 552/618 (molecules 17632-17663)... done
+  Batch 553/618 (molecules 17664-17695)... done
+  Batch 554/618 (molecules 17696-17727)... done
+  Batch 555/618 (molecules 17728-17759)... done
+  Batch 556/618 (molecules 17760-17791)... done
+  Batch 557/618 (molecules 17792-17823)... done
+  Batch 558/618 (molecules 17824-17855)... done
+  Batch 559/618 (molecules 17856-17887)... done
+  Batch 560/618 (molecules 17888-17919)... done
+  Batch 561/618 (molecules 17920-17951)... done
+  Batch 562/618 (molecules 17952-17983)... done
+  Batch 563/618 (molecules 17984-18015)... done
+  Batch 564/618 (molecules 18016-18047)... done
+  Batch 565/618 (molecules 18048-18079)... done
+  Batch 566/618 (molecules 18080-18111)... done
+  Batch 567/618 (molecules 18112-18143)... done
+  Batch 568/618 (molecules 18144-18175)... done
+  Batch 569/618 (molecules 18176-18207)... done
+  Batch 570/618 (molecules 18208-18239)... done
+  Batch 571/618 (molecules 18240-18271)... done
+  Batch 572/618 (molecules 18272-18303)... done
+  Batch 573/618 (molecules 18304-18335)... done
+  Batch 574/618 (molecules 18336-18367)... done
+  Batch 575/618 (molecules 18368-18399)... done
+  Batch 576/618 (molecules 18400-18431)... done
+  Batch 577/618 (molecules 18432-18463)... done
+  Batch 578/618 (molecules 18464-18495)... done
+  Batch 579/618 (molecules 18496-18527)... done
+  Batch 580/618 (molecules 18528-18559)... done
+  Batch 581/618 (molecules 18560-18591)... done
+  Batch 582/618 (molecules 18592-18623)... done
+  Batch 583/618 (molecules 18624-18655)... done
+  Batch 584/618 (molecules 18656-18687)... done
+  Batch 585/618 (molecules 18688-18719)... done
+  Batch 586/618 (molecules 18720-18751)... done
+  Batch 587/618 (molecules 18752-18783)... done
+  Batch 588/618 (molecules 18784-18815)... done
+  Batch 589/618 (molecules 18816-18847)... done
+  Batch 590/618 (molecules 18848-18879)... done
+  Batch 591/618 (molecules 18880-18911)... done
+  Batch 592/618 (molecules 18912-18943)... done
+  Batch 593/618 (molecules 18944-18975)... done
+  Batch 594/618 (molecules 18976-19007)... done
+  Batch 595/618 (molecules 19008-19039)... done
+  Batch 596/618 (molecules 19040-19071)... done
+  Batch 597/618 (molecules 19072-19103)... done
+  Batch 598/618 (molecules 19104-19135)... done
+  Batch 599/618 (molecules 19136-19167)... done
+  Batch 600/618 (molecules 19168-19199)... done
+  Batch 601/618 (molecules 19200-19231)... done
+  Batch 602/618 (molecules 19232-19263)... done
+  Batch 603/618 (molecules 19264-19295)... done
+  Batch 604/618 (molecules 19296-19327)... done
+  Batch 605/618 (molecules 19328-19359)... done
+  Batch 606/618 (molecules 19360-19391)... done
+  Batch 607/618 (molecules 19392-19423)... done
+  Batch 608/618 (molecules 19424-19455)... done
+  Batch 609/618 (molecules 19456-19487)... done
+  Batch 610/618 (molecules 19488-19519)... done
+  Batch 611/618 (molecules 19520-19551)... done
+  Batch 612/618 (molecules 19552-19583)... done
+  Batch 613/618 (molecules 19584-19615)... done
+  Batch 614/618 (molecules 19616-19647)... done
+  Batch 615/618 (molecules 19648-19679)... done
+  Batch 616/618 (molecules 19680-19711)... done
+  Batch 617/618 (molecules 19712-19743)... done
+  Batch 618/618 (molecules 19744-19774)... done
+  diff_mhg_gnn: (3955, 1024)
+Failed to patch pandas - PandasTools will have limited functionality
+Loading mol2vec model from model_300dim.pkl...
+  reactant_mol2vec: (3955, 300)
+  diff_avalon: (3955, 2048)
+  WARNING: reactant_grover failed: Could not find GROVER repo. Searched: ['/Users/apunt/kirby_models/grover', '/Users/apunt/repos/grover', '/Users/apunt/kirby_models/grover', '/Users/apunt/grover', '../grover']
+Clone to: /Users/apunt/kirby_models/grover
+From: https://github.com/tencent-ailab/grover.git
+
+  --- Split: leave-one-ligand-out (4 groups, 4-fold TRUE LOO) ---
+  Building KIRBy hybrid per fold (4 folds, train-only) ...
+  [buchwald_hartwig/loo_ligand/fold0] pruning_mode=default_pruning (no per-model overrides)
+Augmentations: {'reactant_maccs': 167, 'product_pharmacophore3d': 49, 'product_maccs': 167, 'reactant_pharmacophore3d': 49} (strategy=uncapped)
+Models: ['rf', 'lightgbm', 'dnn']
+Representations: ['cgr_morgan', 'onehot_components', 'diff_maccs', 'diff_mhg_gnn', 'reactant_mol2vec', 'diff_avalon'] (dims: [2048, 45, 167, 1024, 300, 2048])
+
+Evaluating full-dimension baselines [rmse, SMALLER IS BETTER]...
+  Cache buchwald_hartwig__cgr_morgan__rf__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__lightgbm__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  cgr_morgan (dim=2048): rf=9.488, lightgbm=11.802, dnn=11.588
+  Cache buchwald_hartwig__onehot_components__rf__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  Cache buchwald_hartwig__onehot_components__lightgbm__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  onehot_components (dim=45): rf=10.426, lightgbm=12.819, dnn=15.269
+  Cache buchwald_hartwig__diff_maccs__rf__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  Cache buchwald_hartwig__diff_maccs__lightgbm__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  diff_maccs (dim=167): rf=15.349, lightgbm=14.497, dnn=17.514
+  diff_mhg_gnn (dim=1024): rf=14.917, lightgbm=14.673, dnn=262.721
+  Cache buchwald_hartwig__reactant_mol2vec__rf__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  Cache buchwald_hartwig__reactant_mol2vec__lightgbm__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  reactant_mol2vec (dim=300): rf=17.881, lightgbm=17.884, dnn=16.652
+  Cache buchwald_hartwig__diff_avalon__rf__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  Cache buchwald_hartwig__diff_avalon__lightgbm__rmse__5f_42.pkl: meta drift on 'objective' (stored=None, expected='predictive') — will recompute.
+  diff_avalon (dim=2048): rf=10.553, lightgbm=12.984, dnn=13.281
+
+Searching 18 unique configurations...
+  Pre-computing importance: 1 methods × 3 folds × 6 reps...
+  Importance pre-computed in 55.4s (3/3 successful, 0 read from disk)
+  Allocation scores pre-computed in 215.6s (1 evaluators × 10 metrics, 0 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 18 configs...
+
+  Evaluating 18 configs (all 5 folds)...
+  [1/18] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=15.3230+/-4.209, dim=28
+  [2/18] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=14.5357+/-3.683, dim=41
+  [3/18] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=17.3016+/-6.634, dim=33
+  [4/18] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=17.0328+/-7.037, dim=30
+  [5/18] dnn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=16.9086+/-4.377, dim=30
+  [6/18] dnn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=18.3082+/-5.696, dim=40
+  [7/18] rf/power_2/lightgbm_gain/b=25/ev=rf: score=15.5714+/-5.153, dim=26
+  [8/18] rf/power_2/lightgbm_gain/b=25/ev=rf: score=16.5208+/-4.641, dim=36
+  [9/18] lightgbm/power_2/lightgbm_gain/b=25/ev=rf: score=17.2768+/-7.505, dim=33
+  [10/18] lightgbm/power_2/lightgbm_gain/b=25/ev=rf: score=17.4809+/-7.374, dim=45
+  [11/18] dnn/power_2/lightgbm_gain/b=25/ev=rf: score=16.4434+/-4.059, dim=33
+  [12/18] dnn/power_2/lightgbm_gain/b=25/ev=rf: score=15.9949+/-2.208, dim=36
+  [13/18] rf/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=15.7229+/-4.863, dim=26
+  [14/18] rf/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=15.8538+/-3.862, dim=45
+  [15/18] lightgbm/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=17.6896+/-7.230, dim=33
+  [16/18] lightgbm/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=17.8885+/-6.604, dim=38
+  [17/18] dnn/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=16.4098+/-3.971, dim=30
+  [18/18] dnn/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=16.5413+/-2.695, dim=28
+  Feature selection dedup: 41 fold evaluations skipped (49 unique selections cached)
+
+Fitting best configs on full data (3 models)...
+
+Best features per model x budget (rmse):
+  model         b=25   
+  ---------------------
+  dnn           15.9949
+  lightgbm      17.0328
+  rf            14.5357
+  budget split [dnn, power_2, budget 25]: 25 features across 6 of 6 representations; the largest share is 6 (24%). cgr_morgan=6, diff_mhg_gnn=5, reactant_mol2vec=4, diff_avalon=4 ...
+  budget split [lightgbm, performance_weighted, budget 25]: 25 features across 6 of 6 representations; the largest share is 5 (20%). cgr_morgan=5, onehot_components=4, diff_maccs=4, diff_mhg_gnn=4 ...
+  budget split [rf, performance_weighted, budget 25]: 25 features across 6 of 6 representations; the largest share is 5 (20%). cgr_morgan=5, onehot_components=4, diff_maccs=4, diff_mhg_gnn=4 ...
+[cache] cache stats — baseline: 0 hit / 8 miss / 10 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+    fold 0: no hybrid configuration stored for downstream model xgboost
+    fold 0: no hybrid configuration stored for downstream model svm
+  [buchwald_hartwig/loo_ligand/fold1] pruning_mode=default_pruning (no per-model overrides)
+Augmentations: {'reactant_maccs': 167, 'product_pharmacophore3d': 49, 'product_maccs': 167, 'reactant_pharmacophore3d': 49} (strategy=uncapped)
+Models: ['rf', 'lightgbm', 'dnn']
+Representations: ['cgr_morgan', 'onehot_components', 'diff_maccs', 'diff_mhg_gnn', 'reactant_mol2vec', 'diff_avalon'] (dims: [2048, 45, 167, 1024, 300, 2048])
+
+Evaluating full-dimension baselines [rmse, SMALLER IS BETTER]...
+  Cache buchwald_hartwig__cgr_morgan__rf__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__lightgbm__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__dnn__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  cgr_morgan (dim=2048): rf=17.939, lightgbm=19.519, dnn=17.337
+  Cache buchwald_hartwig__onehot_components__rf__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__onehot_components__lightgbm__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__onehot_components__dnn__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  onehot_components (dim=45): rf=19.834, lightgbm=27.296, dnn=27.951
+  Cache buchwald_hartwig__diff_maccs__rf__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__lightgbm__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__dnn__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  diff_maccs (dim=167): rf=23.545, lightgbm=22.486, dnn=23.269
+  Cache buchwald_hartwig__diff_mhg_gnn__rf__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__diff_mhg_gnn__lightgbm__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__diff_mhg_gnn__dnn__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  diff_mhg_gnn (dim=1024): rf=21.244, lightgbm=22.822, dnn=40.781
+  Cache buchwald_hartwig__reactant_mol2vec__rf__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__reactant_mol2vec__lightgbm__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__reactant_mol2vec__dnn__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  reactant_mol2vec (dim=300): rf=20.462, lightgbm=21.374, dnn=22.771
+  Cache buchwald_hartwig__diff_avalon__rf__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__diff_avalon__lightgbm__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  Cache buchwald_hartwig__diff_avalon__dnn__rmse__5f_42.pkl: meta drift on 'labels_hash' (stored=6114181882459807185, expected=9965696025470951029) — will recompute.
+  diff_avalon (dim=2048): rf=20.175, lightgbm=18.825, dnn=21.255
+
+Searching 18 unique configurations...
+  Pre-computing importance: 1 methods × 3 folds × 6 reps...
+  Importance pre-computed in 0.7s (3/3 successful, 3 read from disk)
+  Allocation scores pre-computed in 103.7s (1 evaluators × 10 metrics, 1 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 18 configs...
+
+  Evaluating 18 configs (all 5 folds)...
+  [1/18] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=24.0309+/-6.685, dim=46
+  [2/18] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=23.8978+/-6.516, dim=48
+  [3/18] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=25.1077+/-8.607, dim=58
+  [4/18] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=25.2878+/-8.798, dim=51
+  [5/18] dnn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=31.1621+/-8.038, dim=48
+  [6/18] dnn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=27.4018+/-3.059, dim=36
+  [7/18] rf/power_2/lightgbm_gain/b=25/ev=rf: score=23.0693+/-7.412, dim=45
+  [8/18] rf/power_2/lightgbm_gain/b=25/ev=rf: score=22.9171+/-7.201, dim=46
+  [9/18] lightgbm/power_2/lightgbm_gain/b=25/ev=rf: score=24.8795+/-8.523, dim=58
+  [10/18] lightgbm/power_2/lightgbm_gain/b=25/ev=rf: score=24.9333+/-8.582, dim=51
+  [11/18] dnn/power_2/lightgbm_gain/b=25/ev=rf: score=32.2163+/-6.507, dim=41
+  [12/18] dnn/power_2/lightgbm_gain/b=25/ev=rf: score=31.3052+/-5.219, dim=41
+  [13/18] rf/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=23.7349+/-7.514, dim=45
+  [14/18] rf/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=23.2085+/-7.283, dim=43
+  [15/18] lightgbm/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=22.3745+/-8.520, dim=45
+  [16/18] lightgbm/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=21.8989+/-8.651, dim=38
+  [17/18] dnn/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=31.1672+/-7.251, dim=30
+  [18/18] dnn/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=29.7266+/-3.809, dim=41
+  Feature selection dedup: 51 fold evaluations skipped (39 unique selections cached)
+
+Fitting best configs on full data (3 models)...
+
+Best features per model x budget (rmse):
+  model         b=25   
+  ---------------------
+  dnn           27.4018
+  lightgbm      21.8989
+  rf            22.9171
+  budget split [dnn, performance_weighted, budget 25]: 25 features across 6 of 6 representations; the largest share is 5 (20%). cgr_morgan=5, onehot_components=4, diff_maccs=4, diff_mhg_gnn=4 ...
+  budget split [lightgbm, rank_exp_d0.3, budget 25]: 25 features across 6 of 6 representations; the largest share is 8 (32%). cgr_morgan=8, diff_mhg_gnn=6, reactant_mol2vec=4, diff_avalon=3 ...
+  budget split [rf, power_2, budget 25]: 25 features across 6 of 6 representations; the largest share is 6 (24%). cgr_morgan=6, diff_mhg_gnn=5, reactant_mol2vec=4, diff_avalon=4 ...
+[cache] cache stats — baseline: 0 hit / 8 miss / 28 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [buchwald_hartwig/loo_ligand/fold2] pruning_mode=default_pruning (no per-model overrides)
+Augmentations: {'reactant_maccs': 167, 'product_pharmacophore3d': 49, 'product_maccs': 167, 'reactant_pharmacophore3d': 49} (strategy=uncapped)
+Models: ['rf', 'lightgbm', 'dnn']
+Representations: ['cgr_morgan', 'onehot_components', 'diff_maccs', 'diff_mhg_gnn', 'reactant_mol2vec', 'diff_avalon'] (dims: [2048, 45, 167, 1024, 300, 2048])
+
+Evaluating full-dimension baselines [rmse, SMALLER IS BETTER]...
+  Cache buchwald_hartwig__cgr_morgan__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 2048), expected=(2966, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 2048), expected=(2966, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 2048), expected=(2966, 2048)) — will recompute.
+  cgr_morgan (dim=2048): rf=19.687, lightgbm=21.581, dnn=20.740
+  Cache buchwald_hartwig__onehot_components__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 45), expected=(2966, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 45), expected=(2966, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 45), expected=(2966, 45)) — will recompute.
+  onehot_components (dim=45): rf=19.834, lightgbm=19.957, dnn=22.698
+  Cache buchwald_hartwig__diff_maccs__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 167), expected=(2966, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 167), expected=(2966, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 167), expected=(2966, 167)) — will recompute.
+  diff_maccs (dim=167): rf=24.460, lightgbm=24.159, dnn=22.785
+  Cache buchwald_hartwig__diff_mhg_gnn__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 1024), expected=(2966, 1024)) — will recompute.
+  Cache buchwald_hartwig__diff_mhg_gnn__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 1024), expected=(2966, 1024)) — will recompute.
+  Cache buchwald_hartwig__diff_mhg_gnn__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 1024), expected=(2966, 1024)) — will recompute.
+  diff_mhg_gnn (dim=1024): rf=25.251, lightgbm=24.683, dnn=46.086
+  Cache buchwald_hartwig__reactant_mol2vec__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 300), expected=(2966, 300)) — will recompute.
+  Cache buchwald_hartwig__reactant_mol2vec__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 300), expected=(2966, 300)) — will recompute.
+  Cache buchwald_hartwig__reactant_mol2vec__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 300), expected=(2966, 300)) — will recompute.
+  reactant_mol2vec (dim=300): rf=27.433, lightgbm=30.082, dnn=21.839
+  Cache buchwald_hartwig__diff_avalon__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 2048), expected=(2966, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_avalon__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 2048), expected=(2966, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_avalon__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2965, 2048), expected=(2966, 2048)) — will recompute.
+  diff_avalon (dim=2048): rf=22.119, lightgbm=20.260, dnn=22.129
+
+Searching 18 unique configurations...
+  Pre-computing importance: 1 methods × 3 folds × 6 reps...
+  Importance pre-computed in 18.2s (3/3 successful, 2 read from disk)
+  Allocation scores pre-computed in 113.7s (1 evaluators × 10 metrics, 1 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 18 configs...
+
+  Evaluating 18 configs (all 5 folds)...
+  [1/18] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=26.3772+/-4.082, dim=35
+  [2/18] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=26.9903+/-4.504, dim=38
+  [3/18] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=29.3762+/-6.172, dim=43
+  [4/18] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=28.3458+/-4.582, dim=53
+  [5/18] dnn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=23.7274+/-2.679, dim=33
+  [6/18] dnn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=27.2605+/-1.371, dim=46
+  [7/18] rf/power_2/lightgbm_gain/b=25/ev=rf: score=26.4446+/-4.135, dim=33
+  [8/18] rf/power_2/lightgbm_gain/b=25/ev=rf: score=26.6876+/-4.313, dim=35
+  [9/18] lightgbm/power_2/lightgbm_gain/b=25/ev=rf: score=29.4433+/-6.041, dim=40
+  [10/18] lightgbm/power_2/lightgbm_gain/b=25/ev=rf: score=29.2383+/-5.558, dim=51
+  [11/18] dnn/power_2/lightgbm_gain/b=25/ev=rf: score=24.8277+/-1.904, dim=33
+  [12/18] dnn/power_2/lightgbm_gain/b=25/ev=rf: score=25.2125+/-1.821, dim=35
+  [13/18] rf/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=26.4404+/-4.313, dim=31
+  [14/18] rf/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=28.1955+/-3.078, dim=33
+  [15/18] lightgbm/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=29.1303+/-6.388, dim=40
+  [16/18] lightgbm/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=32.7444+/-1.093, dim=38
+  [17/18] dnn/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=25.2161+/-2.267, dim=28
+  [18/18] dnn/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=27.9272+/-2.333, dim=43
+  Feature selection dedup: 47 fold evaluations skipped (43 unique selections cached)
+
+Fitting best configs on full data (3 models)...
+
+Best features per model x budget (rmse):
+  model         b=25   
+  ---------------------
+  dnn           23.7274
+  lightgbm      28.3458
+  rf            26.3772
+  budget split [dnn, performance_weighted, budget 25]: 25 features across 3 of 3 representations; the largest share is 11 (44%). cgr_morgan=11, onehot_components=8, diff_maccs=6
+  budget split [lightgbm, performance_weighted, budget 25]: 25 features across 6 of 6 representations; the largest share is 7 (28%). cgr_morgan=7, onehot_components=5, diff_maccs=4, diff_mhg_gnn=4 ...
+  budget split [rf, performance_weighted, budget 25]: 25 features across 3 of 3 representations; the largest share is 11 (44%). cgr_morgan=11, onehot_components=8, diff_maccs=6
+[cache] cache stats — baseline: 0 hit / 8 miss / 46 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [buchwald_hartwig/loo_ligand/fold3] pruning_mode=default_pruning (no per-model overrides)
+Augmentations: {'reactant_maccs': 167, 'product_pharmacophore3d': 49, 'product_maccs': 167, 'reactant_pharmacophore3d': 49} (strategy=uncapped)
+Models: ['rf', 'lightgbm', 'dnn']
+Representations: ['cgr_morgan', 'onehot_components', 'diff_maccs', 'diff_mhg_gnn', 'reactant_mol2vec', 'diff_avalon'] (dims: [2048, 45, 167, 1024, 300, 2048])
+
+Evaluating full-dimension baselines [rmse, SMALLER IS BETTER]...
+  Cache buchwald_hartwig__cgr_morgan__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 2048), expected=(2969, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 2048), expected=(2969, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 2048), expected=(2969, 2048)) — will recompute.
+  cgr_morgan (dim=2048): rf=14.450, lightgbm=15.859, dnn=18.987
+  Cache buchwald_hartwig__onehot_components__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 45), expected=(2969, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 45), expected=(2969, 45)) — will recompute.
+  Cache buchwald_hartwig__onehot_components__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 45), expected=(2969, 45)) — will recompute.
+  onehot_components (dim=45): rf=17.897, lightgbm=18.734, dnn=21.707
+  Cache buchwald_hartwig__diff_maccs__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 167), expected=(2969, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 167), expected=(2969, 167)) — will recompute.
+  Cache buchwald_hartwig__diff_maccs__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 167), expected=(2969, 167)) — will recompute.
+  diff_maccs (dim=167): rf=17.689, lightgbm=18.721, dnn=17.957
+  Cache buchwald_hartwig__diff_mhg_gnn__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 1024), expected=(2969, 1024)) — will recompute.
+  Cache buchwald_hartwig__diff_mhg_gnn__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 1024), expected=(2969, 1024)) — will recompute.
+  Cache buchwald_hartwig__diff_mhg_gnn__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 1024), expected=(2969, 1024)) — will recompute.
+  diff_mhg_gnn (dim=1024): rf=21.637, lightgbm=20.569, dnn=44.042
+  Cache buchwald_hartwig__reactant_mol2vec__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 300), expected=(2969, 300)) — will recompute.
+  Cache buchwald_hartwig__reactant_mol2vec__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 300), expected=(2969, 300)) — will recompute.
+  Cache buchwald_hartwig__reactant_mol2vec__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 300), expected=(2969, 300)) — will recompute.
+  reactant_mol2vec (dim=300): rf=26.577, lightgbm=29.921, dnn=24.452
+  Cache buchwald_hartwig__diff_avalon__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 2048), expected=(2969, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_avalon__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 2048), expected=(2969, 2048)) — will recompute.
+  Cache buchwald_hartwig__diff_avalon__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2966, 2048), expected=(2969, 2048)) — will recompute.
+  diff_avalon (dim=2048): rf=16.240, lightgbm=15.801, dnn=18.452
+
+Searching 18 unique configurations...
+  Pre-computing importance: 1 methods × 3 folds × 6 reps...
+  Importance pre-computed in 20.8s (3/3 successful, 1 read from disk)
+  Allocation scores pre-computed in 86.3s (1 evaluators × 10 metrics, 1 read from disk, evaluators: ['rf'])
+
+  Adaptive pruning: evaluating fold 0 for 18 configs...
+
+  Evaluating 18 configs (all 5 folds)...
+  [1/18] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=19.7458+/-4.582, dim=43
+  [2/18] rf/performance_weighted/lightgbm_gain/b=25/ev=rf: score=22.4325+/-5.459, dim=45
+  [3/18] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=21.5323+/-5.031, dim=41
+  [4/18] lightgbm/performance_weighted/lightgbm_gain/b=25/ev=rf: score=25.0526+/-7.156, dim=55
+  [5/18] dnn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=20.6820+/-3.032, dim=28
+  [6/18] dnn/performance_weighted/lightgbm_gain/b=25/ev=rf: score=24.4548+/-1.297, dim=30
+  [7/18] rf/power_2/lightgbm_gain/b=25/ev=rf: score=19.0875+/-5.390, dim=38
+  [8/18] rf/power_2/lightgbm_gain/b=25/ev=rf: score=18.6949+/-4.672, dim=45
+  [9/18] lightgbm/power_2/lightgbm_gain/b=25/ev=rf: score=21.6804+/-5.772, dim=38
+  [10/18] lightgbm/power_2/lightgbm_gain/b=25/ev=rf: score=23.1450+/-7.408, dim=45
+  [11/18] dnn/power_2/lightgbm_gain/b=25/ev=rf: score=23.1618+/-4.489, dim=35
+  [12/18] dnn/power_2/lightgbm_gain/b=25/ev=rf: score=24.5684+/-1.640, dim=40
+  [13/18] rf/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=20.8022+/-4.663, dim=40
+  [14/18] rf/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=22.1518+/-4.192, dim=55
+  [15/18] lightgbm/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=21.7710+/-4.584, dim=25
+  [16/18] lightgbm/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=26.8878+/-4.170, dim=45
+  [17/18] dnn/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=22.8927+/-2.063, dim=25
+  [18/18] dnn/rank_exp_d0.3/lightgbm_gain/b=25/ev=rf: score=23.7362+/-1.970, dim=30
+  Feature selection dedup: 42 fold evaluations skipped (48 unique selections cached)
+
+Fitting best configs on full data (3 models)...
+
+Best features per model x budget (rmse):
+  model         b=25   
+  ---------------------
+  dnn           20.6820
+  lightgbm      21.5323
+  rf            18.6949
+  budget split [dnn, performance_weighted, budget 25]: 25 features across 3 of 3 representations; the largest share is 10 (40%). cgr_morgan=10, diff_avalon=8, diff_maccs=7
+  budget split [lightgbm, performance_weighted, budget 25]: 25 features across 3 of 3 representations; the largest share is 10 (40%). cgr_morgan=10, diff_avalon=8, diff_maccs=7
+  budget split [rf, power_2, budget 25]: 25 features across 6 of 6 representations; the largest share is 8 (32%). cgr_morgan=8, onehot_components=5, diff_maccs=5, diff_avalon=5 ...
+[cache] cache stats — baseline: 0 hit / 8 miss / 64 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Top-3 base reps (fold 0): cgr_morgan=9.4879, onehot_components=10.4258, diff_avalon=10.5535
+  Evaluating 10 base reps x 5 models x 4-fold LOO...
+    cgr_morgan                rf        R2=0.3692  RMSE=15.03  (7.9s)
+    cgr_morgan                xgboost   R2=0.1159  RMSE=17.76  (29.8s)
+    cgr_morgan                svm       R2=0.1506  RMSE=21.45  (266.5s)
+    cgr_morgan                dnn       R2=0.5192  RMSE=13.29  (384.2s)
+    cgr_morgan                lightgbm  R2=-0.1766  RMSE=17.28  (9.0s)
+    diff_avalon               rf        R2=0.2216  RMSE=17.13  (14.9s)
+    diff_avalon               xgboost   R2=0.3432  RMSE=16.11  (48.1s)
+    diff_avalon               svm       R2=0.1041  RMSE=22.75  (292.4s)
+    diff_avalon               dnn       R2=0.3171  RMSE=16.04  (260.7s)
+    diff_avalon               lightgbm  R2=0.3551  RMSE=16.04  (18.2s)
+    diff_maccs                rf        R2=-0.0202  RMSE=20.83  (2.3s)
+    diff_maccs                xgboost   R2=0.0162  RMSE=20.59  (3.3s)
+    diff_maccs                svm       R2=0.0148  RMSE=23.05  (35.3s)
+    diff_maccs                dnn       R2=-0.1373  RMSE=20.42  (47.8s)
+    diff_maccs                lightgbm  R2=0.0451  RMSE=20.30  (1.6s)
+    diff_mhg_gnn              rf        R2=0.1504  RMSE=19.57  (14.8s)
+    diff_mhg_gnn              xgboost   R2=0.0308  RMSE=19.27  (97.2s)
+    diff_mhg_gnn              svm       R2=0.0200  RMSE=23.88  (114.4s)
+    diff_mhg_gnn              dnn       R2=-380.2948  RMSE=299.57  (175.3s)
+    diff_mhg_gnn              lightgbm  R2=0.0558  RMSE=19.03  (93.3s)
+    onehot_components         rf        R2=0.3681  RMSE=15.00  (1.6s)
+    onehot_components         xgboost   R2=0.3158  RMSE=16.55  (1.0s)
+    onehot_components         svm       R2=0.1815  RMSE=22.06  (17.2s)
+    onehot_components         dnn       R2=0.2633  RMSE=16.36  (68.9s)
+    onehot_components         lightgbm  R2=0.3371  RMSE=15.35  (1.1s)
+    product_maccs             rf        R2=-0.1709  RMSE=26.22  (1.3s)
+    product_maccs             xgboost   R2=-0.1700  RMSE=26.21  (1.5s)
+    product_maccs             svm       R2=-0.3230  RMSE=27.99  (30.1s)
+    product_maccs             dnn       R2=-0.1266  RMSE=26.06  (18.8s)
+    product_maccs             lightgbm  R2=-0.1700  RMSE=26.21  (0.6s)
+    product_pharmacophore3d   rf        R2=-0.1709  RMSE=26.22  (1.5s)
+    product_pharmacophore3d   xgboost   R2=-0.1700  RMSE=26.21  (0.7s)
+    product_pharmacophore3d   svm       R2=-0.3285  RMSE=28.05  (17.5s)
+    product_pharmacophore3d   dnn       R2=-0.1301  RMSE=26.02  (15.7s)
+    product_pharmacophore3d   lightgbm  R2=-0.1700  RMSE=26.21  (0.8s)
+    reactant_maccs            rf        R2=-0.1762  RMSE=23.39  (2.1s)
+    reactant_maccs            xgboost   R2=-0.1283  RMSE=22.78  (3.0s)
+    reactant_maccs            svm       R2=-0.1201  RMSE=25.25  (27.0s)
+    reactant_maccs            dnn       R2=-0.3027  RMSE=23.31  (48.5s)
+    reactant_maccs            lightgbm  R2=0.0221  RMSE=21.14  (1.8s)
+    reactant_mol2vec          rf        R2=0.0833  RMSE=20.35  (22.2s)
+    reactant_mol2vec          xgboost   R2=0.1848  RMSE=18.96  (91.7s)
+    reactant_mol2vec          svm       R2=-0.0079  RMSE=23.03  (66.6s)
+    reactant_mol2vec          dnn       R2=0.2893  RMSE=15.96  (97.0s)
+    reactant_mol2vec          lightgbm  R2=-0.0220  RMSE=19.70  (68.9s)
+    reactant_pharmacophore3d  rf        R2=-0.2913  RMSE=27.21  (2.0s)
+    reactant_pharmacophore3d  xgboost   R2=-0.4890  RMSE=29.16  (2.4s)
+    reactant_pharmacophore3d  svm       R2=-0.4352  RMSE=29.37  (20.0s)
+    reactant_pharmacophore3d  dnn       R2=-0.4717  RMSE=29.61  (40.5s)
+    reactant_pharmacophore3d  lightgbm  R2=-0.3099  RMSE=27.34  (2.8s)
+    kirby_hybrid              rf        R2=-0.1217  RMSE=20.46  ***
+    kirby_hybrid              xgboost   R2=-0.2272  RMSE=21.74  ***
+    kirby_hybrid              svm       R2=-0.1376  RMSE=23.71  ***
+    kirby_hybrid              dnn       R2=-0.0306  RMSE=20.52  ***
+    kirby_hybrid              lightgbm  R2=-0.4871  RMSE=23.01  ***
+
+  --- Split: leave-one-base-out (3 groups, 3-fold TRUE LOO) ---
+  Building KIRBy hybrid per fold (3 folds, train-only) ...
+  [buchwald_hartwig/loo_base/fold0] pruning_mode=default_pruning (no per-model overrides)
+Augmentations: {'reactant_maccs': 167, 'product_pharmacophore3d': 49, 'product_maccs': 167, 'reactant_pharmacophore3d': 49} (strategy=uncapped)
+Models: ['rf', 'lightgbm', 'dnn']
+Representations: ['cgr_morgan', 'onehot_components', 'diff_maccs', 'diff_mhg_gnn', 'reactant_mol2vec', 'diff_avalon'] (dims: [2048, 45, 167, 1024, 300, 2048])
+
+Evaluating full-dimension baselines [rmse, SMALLER IS BETTER]...
+  Cache buchwald_hartwig__cgr_morgan__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2969, 2048), expected=(2635, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2969, 2048), expected=(2635, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2969, 2048), expected=(2635, 2048)) — will recompute.
+    fold 0: find_best_hybrid failed: With n_samples=1, test_size=0.2 and train_size=None, the resulting train set will be empty. Adjust any of the aforementioned parameters.
+  [buchwald_hartwig/loo_base/fold1] pruning_mode=default_pruning (no per-model overrides)
+Augmentations: {'reactant_maccs': 167, 'product_pharmacophore3d': 49, 'product_maccs': 167, 'reactant_pharmacophore3d': 49} (strategy=uncapped)
+Models: ['rf', 'lightgbm', 'dnn']
+Representations: ['cgr_morgan', 'onehot_components', 'diff_maccs', 'diff_mhg_gnn', 'reactant_mol2vec', 'diff_avalon'] (dims: [2048, 45, 167, 1024, 300, 2048])
+
+Evaluating full-dimension baselines [rmse, SMALLER IS BETTER]...
+  Cache buchwald_hartwig__cgr_morgan__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2635, 2048), expected=(2637, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2635, 2048), expected=(2637, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2969, 2048), expected=(2637, 2048)) — will recompute.
+    fold 1: find_best_hybrid failed: With n_samples=1, test_size=0.2 and train_size=None, the resulting train set will be empty. Adjust any of the aforementioned parameters.
+  [buchwald_hartwig/loo_base/fold2] pruning_mode=default_pruning (no per-model overrides)
+Augmentations: {'reactant_maccs': 167, 'product_pharmacophore3d': 49, 'product_maccs': 167, 'reactant_pharmacophore3d': 49} (strategy=uncapped)
+Models: ['rf', 'lightgbm', 'dnn']
+Representations: ['cgr_morgan', 'onehot_components', 'diff_maccs', 'diff_mhg_gnn', 'reactant_mol2vec', 'diff_avalon'] (dims: [2048, 45, 167, 1024, 300, 2048])
+
+Evaluating full-dimension baselines [rmse, SMALLER IS BETTER]...
+  Cache buchwald_hartwig__cgr_morgan__rf__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2637, 2048), expected=(2638, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__lightgbm__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2637, 2048), expected=(2638, 2048)) — will recompute.
+  Cache buchwald_hartwig__cgr_morgan__dnn__rmse__5f_42.pkl: meta drift on 'rep_shape' (stored=(2969, 2048), expected=(2638, 2048)) — will recompute.
+    fold 2: find_best_hybrid failed: With n_samples=1, test_size=0.2 and train_size=None, the resulting train set will be empty. Adjust any of the aforementioned parameters.
+  Evaluating 10 base reps x 5 models x 3-fold LOO...
+    cgr_morgan                rf        R2=0.5113  RMSE=18.20  (6.2s)
+    cgr_morgan                xgboost   R2=0.4828  RMSE=18.84  (29.7s)
+    cgr_morgan                svm       R2=0.3625  RMSE=21.14  (209.5s)
+    cgr_morgan                dnn       R2=0.3821  RMSE=20.17  (233.9s)
+    cgr_morgan                lightgbm  R2=0.6013  RMSE=16.40  (6.0s)
+    diff_avalon               rf        R2=0.6049  RMSE=16.41  (7.4s)
+    diff_avalon               xgboost   R2=0.4909  RMSE=18.81  (24.7s)
+    diff_avalon               svm       R2=0.2956  RMSE=22.28  (185.0s)
+    diff_avalon               dnn       R2=0.5744  RMSE=17.09  (157.2s)
+    diff_avalon               lightgbm  R2=0.5080  RMSE=18.26  (12.9s)
+    diff_maccs                rf        R2=0.2673  RMSE=22.71  (2.2s)
+    diff_maccs                xgboost   R2=-0.0880  RMSE=27.54  (2.8s)
+    diff_maccs                svm       R2=0.1916  RMSE=23.90  (30.9s)
+    diff_maccs                dnn       R2=-0.3802  RMSE=30.53  (38.2s)
+    diff_maccs                lightgbm  R2=0.0140  RMSE=26.23  (2.6s)
+    diff_mhg_gnn              rf        R2=0.4401  RMSE=19.79  (15.0s)
+    diff_mhg_gnn              xgboost   R2=0.3657  RMSE=21.14  (91.1s)
+    diff_mhg_gnn              svm       R2=0.0610  RMSE=25.60  (108.6s)
+    diff_mhg_gnn              dnn       R2=-1.0936  RMSE=38.28  (153.8s)
+    diff_mhg_gnn              lightgbm  R2=0.3354  RMSE=21.67  (96.5s)
+    onehot_components         rf        R2=0.5320  RMSE=17.61  (1.6s)
+    onehot_components         xgboost   R2=0.5036  RMSE=18.12  (1.3s)
+    onehot_components         svm       R2=0.3139  RMSE=21.98  (24.0s)
+    onehot_components         dnn       R2=0.5435  RMSE=17.51  (90.7s)
+    onehot_components         lightgbm  R2=0.2841  RMSE=21.97  (1.4s)
+    product_maccs             rf        R2=0.0291  RMSE=26.08  (1.5s)
+    product_maccs             xgboost   R2=0.0287  RMSE=26.08  (2.0s)
+    product_maccs             svm       R2=-0.0388  RMSE=27.07  (25.0s)
+    product_maccs             dnn       R2=0.0224  RMSE=26.17  (21.3s)
+    product_maccs             lightgbm  R2=0.0287  RMSE=26.08  (0.6s)
+    product_pharmacophore3d   rf        R2=0.0291  RMSE=26.08  (1.1s)
+    product_pharmacophore3d   xgboost   R2=0.0287  RMSE=26.08  (0.7s)
+    product_pharmacophore3d   svm       R2=-0.0469  RMSE=27.17  (16.6s)
+    product_pharmacophore3d   dnn       R2=0.0251  RMSE=26.13  (11.2s)
+    product_pharmacophore3d   lightgbm  R2=0.0287  RMSE=26.08  (0.7s)
+    reactant_maccs            rf        R2=0.1769  RMSE=24.00  (1.8s)
+    reactant_maccs            xgboost   R2=-0.1246  RMSE=28.10  (3.1s)
+    reactant_maccs            svm       R2=0.1130  RMSE=25.03  (31.5s)
+    reactant_maccs            dnn       R2=-0.1243  RMSE=27.92  (62.6s)
+    reactant_maccs            lightgbm  R2=-0.0410  RMSE=26.88  (2.7s)
+    reactant_mol2vec          rf        R2=0.1354  RMSE=24.69  (21.4s)
+    reactant_mol2vec          xgboost   R2=0.1083  RMSE=24.88  (90.1s)
+    reactant_mol2vec          svm       R2=0.0350  RMSE=26.08  (46.6s)
+    reactant_mol2vec          dnn       R2=0.4507  RMSE=19.67  (90.2s)
+    reactant_mol2vec          lightgbm  R2=0.0893  RMSE=25.15  (69.7s)
+    reactant_pharmacophore3d  rf        R2=0.2870  RMSE=22.13  (2.6s)
+    reactant_pharmacophore3d  xgboost   R2=0.2518  RMSE=22.58  (3.1s)
+    reactant_pharmacophore3d  svm       R2=-0.0914  RMSE=27.70  (26.2s)
+    reactant_pharmacophore3d  dnn       R2=-14.0323  RMSE=79.31  (57.7s)
+    reactant_pharmacophore3d  lightgbm  R2=0.2008  RMSE=23.33  (2.4s)
+
+====================================================================================================
+COMPONENT-WISE EXTRAPOLATION ANALYSIS (King-Smith et al. 2024)
+====================================================================================================
+
+  Dataset: buchwald_hartwig (3955 reactions)
+  Split key       #Groups Model       Hybrid RMSE  BestBase RMSE  Delta RMSE  Comps   Delta R2  Comps
+  --------------- ------- ---------- ------------ -------------- ----------- ------ ---------- ------
+  additive              — SKIPPED               —              —           —      —          —      —  (not run)
+  aryl_halide           — SKIPPED               —              —           —      —          —      —  (not run)
+  ligand                4 dnn             20.5223        13.2866     -7.2357      4    -0.5498      4
+                          lightgbm        23.0058        19.3181     -3.6877      4    -0.2521      4
+                          rf              20.4576        16.1310     -4.3266      4    -0.4427      4
+                          svm             23.7104        24.8699     +1.1595      4    -0.2229      4
+                          xgboost         21.7362        17.1054     -4.6308      4    -0.5390      4
+  base                  3 NO PER-FOLD SCORES  (re-run: this result file predates rmse_per_fold)
+
+  Key question: does the hybrid maintain its advantage as split
+  difficulty increases (additive > aryl_halide > ligand > base)?
+  If hybrid delta stays positive or grows, it suggests the hybrid
+  captures complementary chemical info that aids extrapolation.
+
+Results saved: /Users/apunt/repos/KIRBy/scratchpad/opig_verify/kingsmith.json
+EXIT=0

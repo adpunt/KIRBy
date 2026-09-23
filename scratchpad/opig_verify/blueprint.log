@@ -1,0 +1,250 @@
+  Loaded 5028 molecules from OpenADMET-LogD
+    atom_pair: cached (2048D)
+    avalon: cached (2048D)
+    ecfp4: cached (2048D)
+    maccs: cached (167D)
+    mordred: cached (1613D)
+    pdv: cached (200D)
+  logd: 5028 samples, 2413 scaffolds, 6 reps (atom_pair=2048, avalon=2048, ecfp4=2048, maccs=167, mordred=1613, pdv=200)
+  Loading cached ChEMBL hERG Ki from /Users/apunt/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    atom_pair: cached (2048D)
+    avalon: cached (2048D)
+    ecfp4: cached (2048D)
+    maccs: cached (167D)
+    mordred: cached (1613D)
+    pdv: cached (200D)
+  herg_ki: 1412 samples, 769 scaffolds, 6 reps (atom_pair=2048, avalon=2048, ecfp4=2048, maccs=167, mordred=1613, pdv=200)
+
+======================================================================
+OPIG C5: CROSS-DATASET BLUEPRINT TRANSFER
+  Source: logd (5028 samples)
+  Target: herg_ki (1412 samples)
+======================================================================
+
+  Shared reps (6): atom_pair, avalon, ecfp4, maccs, mordred, pdv
+  Metric: rmse (lower is better)
+  [logd] pruning_mode=default_pruning (no per-model overrides)
+  [herg_ki] pruning_mode=default_pruning (no per-model overrides)
+
+  Step 1: Hybrid search on source (logd)
+  !! the budget is a MAXIMUM and it was not filled: 80 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 80}). The hybrid is 420 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 83 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 83}). The hybrid is 417 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 50 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 50}). The hybrid is 450 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 1 feature slots went unused because no feature left in those representations scored above zero importance ({'maccs': 1}). The hybrid is 499 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 1 feature slots went unused because no feature left in those representations scored above zero importance ({'maccs': 1}). The hybrid is 499 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 1 feature slots went unused because no feature left in those representations scored above zero importance ({'maccs': 1}). The hybrid is 499 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 30 hit / 0 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+
+  Step 2: Hybrid search on target (herg_ki)
+  !! the budget is a MAXIMUM and it was not filled: 87 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 87}). The hybrid is 413 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 4 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 4}). The hybrid is 496 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 87 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 87}). The hybrid is 413 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 30 hit / 0 miss / 30 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+
+  Step 3: Per-model evaluation (5-fold CV)
+  Models available from search: ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+
+  Per-fold searches on target (herg_ki), 5 folds
+  [herg_ki/heldout_fold0] pruning_mode=default_pruning (no per-model overrides)
+  !! the budget is a MAXIMUM and it was not filled: 75 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 49, 'ecfp4': 26}). The hybrid is 425 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 75 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 49, 'ecfp4': 26}). The hybrid is 425 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 75 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 49, 'ecfp4': 26}). The hybrid is 425 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 80 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 41, 'pdv': 39}). The hybrid is 420 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 80 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 41, 'pdv': 39}). The hybrid is 420 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 80 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 41, 'pdv': 39}). The hybrid is 420 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 30 hit / 0 miss / 60 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [herg_ki/heldout_fold1] pruning_mode=default_pruning (no per-model overrides)
+[cache] cache stats — baseline: 30 hit / 0 miss / 90 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [herg_ki/heldout_fold2] pruning_mode=default_pruning (no per-model overrides)
+[cache] cache stats — baseline: 30 hit / 0 miss / 120 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [herg_ki/heldout_fold3] pruning_mode=default_pruning (no per-model overrides)
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'maccs': 1, 'pdv': 1}). The hybrid is 498 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'maccs': 1, 'pdv': 1}). The hybrid is 498 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 2 feature slots went unused because no feature left in those representations scored above zero importance ({'maccs': 1, 'pdv': 1}). The hybrid is 498 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 30 hit / 0 miss / 150 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [herg_ki/heldout_fold4] pruning_mode=default_pruning (no per-model overrides)
+[cache] cache stats — baseline: 30 hit / 0 miss / 180 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Per-fold searches on source (logd), 5 folds
+  [logd/heldout_fold0] pruning_mode=default_pruning (no per-model overrides)
+[cache] cache stats — baseline: 30 hit / 0 miss / 210 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [logd/heldout_fold1] pruning_mode=default_pruning (no per-model overrides)
+[cache] cache stats — baseline: 30 hit / 0 miss / 240 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [logd/heldout_fold2] pruning_mode=default_pruning (no per-model overrides)
+[cache] cache stats — baseline: 30 hit / 0 miss / 270 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [logd/heldout_fold3] pruning_mode=default_pruning (no per-model overrides)
+[cache] cache stats — baseline: 30 hit / 0 miss / 300 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  [logd/heldout_fold4] pruning_mode=default_pruning (no per-model overrides)
+  !! the budget is a MAXIMUM and it was not filled: 117 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 60, 'maccs': 57}). The hybrid is 383 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 117 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 60, 'maccs': 57}). The hybrid is 383 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 117 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 60, 'maccs': 57}). The hybrid is 383 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 30 hit / 0 miss / 330 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+
+    rf:
+      Source BP: budget=100, alloc=wglobal_power2, imp=lightgbm_gain, eval=rf
+      Target BP: budget=500, alloc=softmax_T1, imp=lightgbm_gain, eval=rf
+      Source blueprint feature selection:
+        atom_pair: 5/2048
+        avalon: 6/2048
+        ecfp4: 7/2048
+        mordred: 63/1613
+        pdv: 19/200
+      Best base rep on all target rows (context): ecfp4
+      Best base rep on all source rows (context): pdv
+      Target evaluation (herg_ki):
+        Fold 0: base=0.5723 (ecfp4), native=0.6019, recipe=0.5927, full=0.5981
+        Fold 1: base=0.6504 (ecfp4), native=0.6300, recipe=0.6299, full=0.6278
+        Fold 2: base=0.6253 (ecfp4), native=0.6480, recipe=0.6461, full=0.6537
+        Fold 3: base=0.5804 (ecfp4), native=0.5990, recipe=0.5963, full=0.6412
+        Fold 4: base=0.5685 (ecfp4), native=0.5412, recipe=0.5501, full=0.5777
+      Source evaluation (logd):
+        Fold 0: base=0.5759 (pdv), hybrid=0.5460
+        Fold 1: base=0.6215 (pdv), hybrid=0.5928
+        Fold 2: base=0.5823 (pdv), hybrid=0.5364
+        Fold 3: base=0.6083 (pdv), hybrid=0.5899
+        Fold 4: base=0.5482 (pdv), hybrid=0.5231
+
+    xgboost:
+      Source BP: budget=500, alloc=softmax_T1, imp=lightgbm_gain, eval=rf
+      Target BP: budget=500, alloc=power_2, imp=lightgbm_gain, eval=rf
+      Source blueprint feature selection:
+        atom_pair: 81/2048
+        avalon: 83/2048
+        ecfp4: 84/2048
+        maccs: 73/167
+        mordred: 91/1613
+        pdv: 88/200
+      Best base rep on all target rows (context): ecfp4
+      Best base rep on all source rows (context): mordred
+      Target evaluation (herg_ki):
+        Fold 0: base=0.6178 (atom_pair), native=0.6186, recipe=0.6252, full=0.5978
+        Fold 1: base=0.6569 (ecfp4), native=0.6848, recipe=0.6955, full=0.6745
+        Fold 2: base=0.6589 (ecfp4), native=0.7150, recipe=0.6832, full=0.6706
+        Fold 3: base=0.5737 (avalon), native=0.6139, recipe=0.6201, full=0.6265
+        Fold 4: base=0.6055 (ecfp4), native=0.5732, recipe=0.5996, full=0.5693
+      Source evaluation (logd):
+        Fold 0: base=0.5199 (pdv), hybrid=0.4846
+        Fold 1: base=0.6024 (pdv), hybrid=0.5289
+        Fold 2: base=0.5282 (pdv), hybrid=0.4990
+        Fold 3: base=0.5938 (pdv), hybrid=0.5301
+        Fold 4: base=0.4892 (pdv), hybrid=0.4685
+
+    svm:
+      Source BP: budget=500, alloc=performance_weighted, imp=lightgbm_gain, eval=rf
+      Target BP: budget=500, alloc=softmax_T1, imp=lightgbm_gain, eval=rf
+      Source blueprint feature selection:
+        atom_pair: 65/2048
+        avalon: 86/2048
+        ecfp4: 90/2048
+        mordred: 139/1613
+        pdv: 118/200
+      Best base rep on all target rows (context): ecfp4
+      Best base rep on all source rows (context): pdv
+      Target evaluation (herg_ki):
+        Fold 0: base=0.6624 (ecfp4), native=0.5653, recipe=0.5683, full=0.5823
+        Fold 1: base=0.6952 (ecfp4), native=0.6050, recipe=0.6050, full=0.6031
+        Fold 2: base=0.7015 (ecfp4), native=0.6177, recipe=0.6095, full=0.6257
+        Fold 3: base=0.6466 (atom_pair), native=0.5427, recipe=0.5438, full=0.5644
+        Fold 4: base=0.6024 (ecfp4), native=0.5159, recipe=0.5125, full=0.5367
+      Source evaluation (logd):
+        Fold 0: base=0.5068 (pdv), hybrid=0.4110
+        Fold 1: base=0.5565 (mordred), hybrid=0.4879
+        Fold 2: base=0.5078 (mordred), hybrid=0.4447
+        Fold 3: base=0.5406 (pdv), hybrid=0.4467
+        Fold 4: base=0.5006 (mordred), hybrid=0.4187
+
+    dnn:
+      Source BP: budget=500, alloc=power_2, imp=lightgbm_gain, eval=rf
+      Target BP: budget=500, alloc=performance_weighted, imp=lightgbm_gain, eval=rf
+      Source blueprint feature selection:
+        atom_pair: 40/2048
+        avalon: 70/2048
+        ecfp4: 75/2048
+        mordred: 180/1613
+        pdv: 118/200
+      Best base rep on all target rows (context): pdv
+      Best base rep on all source rows (context): mordred
+      Target evaluation (herg_ki):
+        Fold 0: base=0.6515 (atom_pair), native=0.6037, recipe=0.5720, full=0.5871
+        Fold 1: base=0.7437 (avalon), native=0.6440, recipe=0.6279, full=0.6154
+        Fold 2: base=0.6766 (mordred), native=0.6318, recipe=0.6753, full=0.6561
+        Fold 3: base=0.6038 (atom_pair), native=0.5898, recipe=0.5590, full=0.5477
+        Fold 4: base=0.6213 (ecfp4), native=0.5626, recipe=0.5372, full=1.0014
+      Source evaluation (logd):
+        Fold 0: base=0.4348 (mordred), hybrid=0.3799
+        Fold 1: base=0.4510 (mordred), hybrid=0.4299
+        Fold 2: base=0.4342 (mordred), hybrid=0.4208
+        Fold 3: base=0.4777 (mordred), hybrid=0.4567
+        Fold 4: base=0.4142 (mordred), hybrid=0.4072
+
+    lightgbm:
+      Source BP: budget=500, alloc=power_2, imp=lightgbm_gain, eval=rf
+      Target BP: budget=500, alloc=rank_exp_d0.3, imp=lightgbm_gain, eval=rf
+      Source blueprint feature selection:
+        atom_pair: 40/2048
+        avalon: 70/2048
+        ecfp4: 75/2048
+        mordred: 180/1613
+        pdv: 118/200
+      Best base rep on all target rows (context): pdv
+      Best base rep on all source rows (context): mordred
+      Target evaluation (herg_ki):
+        Fold 0: base=0.6507 (atom_pair), native=0.5761, recipe=0.5974, full=0.5968
+        Fold 1: base=0.6703 (avalon), native=0.6246, recipe=0.6364, full=0.6224
+        Fold 2: base=0.6650 (ecfp4), native=0.6328, recipe=0.6582, full=0.6469
+        Fold 3: base=0.6128 (mordred), native=0.5875, recipe=0.5896, full=0.5922
+        Fold 4: base=0.5603 (mordred), native=0.5414, recipe=0.5277, full=0.5441
+      Source evaluation (logd):
+        Fold 0: base=0.4907 (mordred), hybrid=0.4499
+        Fold 1: base=0.5569 (mordred), hybrid=0.5536
+        Fold 2: base=0.5076 (mordred), hybrid=0.4610
+        Fold 3: base=0.5255 (mordred), hybrid=0.4990
+        Fold 4: base=0.4623 (mordred), hybrid=0.4351
+
+  ==========================================================================================
+  CROSS-DATASET BLUEPRINT TRANSFER SUMMARY
+  Source: logd -> Target: herg_ki
+  Metric: rmse (↓ better)
+  ==========================================================================================
+
+  Source (logd):
+  Model              Base     Hybrid      Delta
+  ------------------------------------------
+  rf               0.5872     0.5577    +0.0296
+  xgboost          0.5467     0.5022    +0.0445
+  svm              0.5225     0.4418    +0.0806
+  dnn              0.4424     0.4189    +0.0235
+  lightgbm         0.5086     0.4797    +0.0289
+
+  Target (herg_ki):
+  Model              Base     Native     Recipe       Full   d(Rec)  folds       sd  d(Full)  folds       sd
+  ----------------------------------------------------------------------------------------------------------
+  rf               0.5994     0.6040     0.6030     0.6197  -0.0037      5   0.0189  -0.0203      5   0.0272
+  xgboost          0.6226     0.6411     0.6447     0.6277  -0.0222      5   0.0193  -0.0052      5   0.0310
+  svm              0.6616     0.5693     0.5678     0.5824  +0.0938      5   0.0047  +0.0791      5   0.0086
+  dnn              0.6594     0.6064     0.5943     0.6815  +0.0651      5   0.0390  -0.0222      5   0.1823
+  lightgbm         0.6318     0.5925     0.6019     0.6005  +0.0300      5   0.0152  +0.0314      5   0.0161
+
+  Mean delta recipe: +0.0326  (wins 3/5 models)
+  Mean delta full:   +0.0126  (wins 2/5 models)
+
+  RESULT: Blueprint RECIPE transfers. Rerun feature selection with the source recipe on target data.
+  [saved /Users/apunt/repos/KIRBy/scratchpad/opig_verify/opig_blueprint_transfer/logd_to_herg_ki.json]
+
+  !! warnings raised more than 3 times (printed once each here):
+       2238x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        572x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp#': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        245x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'maccs': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        152x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': #, 'ecfp#': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         95x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp#': #, 'pdv': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         20x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': #, 'maccs': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         15x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'maccs': #, 'pdv': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+EXIT=0

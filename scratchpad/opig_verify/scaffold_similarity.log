@@ -1,0 +1,47 @@
+Scaffold-diff similarity experiment | modes=['representations', 'features', 'controls'] | datasets=2 | pairs=32000
+Excluded datasets: flab_thermo_hie (n=10 — far too small); flab_binding_rosace (n=14 — far too small); ddg_combined (multi-point mutations + multi-PDB; needs the multi-mutation generalisation, not yet built); flab_binding_phillips_h3 (CUT 2026-07-18 (DATASET_STATUS.md) — single-WT combinatorial library, no clean grouped split, saturated (aac AUROC 0.98 while leaking)); graphinity_foldx (CUT 2026-07-09 — labels are FoldX simulation output, not measurements. Its sibling graphinity_rosetta went with it, and opig_graphinity_ddg dropped both conditions on 2026-09-04)
+  FLAb flab_expression_koenig: 4275 samples, paired, property=Expression (enrichment ratio)
+  Fitness range: [0.0009766, 3.178], mean=1.005, std=0.5711
+  Wildtype heavy: EVQLVESGGGLVQPGGSLRLSCAASGFTIS...
+  4275/4275 samples have mutations, avg 1.0 mutations/sample
+  flab_expression_koenig     done (52s)
+  FLAb flab_expression_adams: 10970 samples, paired, property=Expression (enrichment ratio)
+  Fitness range: [0.01074, 3.881], mean=0.7583, std=0.4785
+  Subsampling 10970 → 5000...
+  After subsampling: 5000 samples
+  Wildtype heavy: EVKLDETGGGLVQPGRPMKLSCVASGFTFS...
+  4945/5000 samples have mutations, avg 1.8 mutations/sample
+  flab_expression_adams      done (101s)
+
+==============================================================================
+SCAFFOLD-DIFF SIMILARITY — SUMMARY
+Spearman rank correlation over variant pairs, -1..1, higher better.
+Count-controlled and basis-independent throughout. No model trained.
+==============================================================================
+
+## 1. REPRESENTATIONS (best clean, count-controlled score)
+  dataset                    muts/var  best rep x metric                    score
+  flab_expression_koenig         1.00  dPhysChem_pos x euclidean            0.415
+  flab_expression_adams          1.75  dPhysChem_pos x euclidean            0.528
+
+## 2. FEATURES — does signal or non-redundancy decide?
+  Subsets chosen on one half of the variants, scored on the other. "fit" is greedy on its own half, for contrast.
+  dataset                     all 14  top-k solo  greedy greedy fit  raw units  selected
+  flab_expression_koenig       0.513       0.629   0.678      0.683      0.417  aromaticity, polarity, volume, hydropathy, flexibility, mol_weight
+  flab_expression_adams        0.593       0.619   0.736      0.748      0.506  volume, polarity, aromaticity
+
+  High-signal features REJECTED for redundancy (solo score good, but duplicates a chosen axis):
+    flab_expression_koenig     sasa           solo=0.350 corr=0.96 delta=-0.027
+    flab_expression_koenig     sheet_prop     solo=0.293 corr=0.49 delta=-0.003
+    flab_expression_adams      mol_weight     solo=0.508 corr=0.93 delta=-0.027
+    flab_expression_adams      sasa           solo=0.422 corr=0.91 delta=-0.040
+    flab_expression_adams      sheet_prop     solo=0.328 corr=0.63 delta=-0.033
+
+## 3. CONTROLS
+  dataset                    muts/var  count contamination  verdict
+  flab_expression_koenig         1.00                0.106  CLEAN
+    C3: position_gated vs Grantham ground truth — spearman 1.000000, max diff 0.0e+00 => IDENTICAL — not a metric result
+  flab_expression_adams          1.75                0.855  CONTAMINATED — raw scores inflated
+
+wrote /Users/apunt/repos/KIRBy/scratchpad/opig_verify/scaffold_similarity.json
+EXIT=0

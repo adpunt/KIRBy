@@ -1,0 +1,261 @@
+======================================================================
+ACTIVITY CLIFF QSAR EXPERIMENT (Dablander et al. 2023)
+  Paper: J Cheminformatics 15:47
+  Targets: ['mpro']
+  Reps: ecfp4,maccs,pdv,avalon
+  Models: ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+  Folds: 5
+======================================================================
+
+============================================================
+Target: mpro
+============================================================
+  SARS-CoV-2 Mpro: 1924 compounds, pActivity range [3.70, 8.57] (from f_avg_IC50 [uM])
+  12594 MMP pairs, 521 activity cliffs (|delta pActivity| >= 2.0)
+  1924 compounds, 1087 scaffolds, 521 ACs (threshold=2.0)
+
+Generating 4 base representations (+ 0 per-fold factory reps)...
+  ecfp4: loaded from cache (2048 features)
+  maccs: loaded from cache (167 features)
+  pdv: loaded from cache (200 features)
+  avalon: loaded from cache (2048 features)
+  4 reps loaded
+  [chembl_qsar/mpro] pruning_mode=default_pruning (no per-model overrides)
+  !! the budget is a MAXIMUM and it was not filled: 222 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 126, 'pdv': 96}). The hybrid is 278 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 63 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 63}). The hybrid is 437 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 64 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 64}). The hybrid is 436 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 32 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 32}). The hybrid is 468 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 222 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 126, 'pdv': 96}). The hybrid is 278 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 63 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 63}). The hybrid is 437 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 64 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 64}). The hybrid is 436 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 222 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 126, 'pdv': 96}). The hybrid is 278 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 63 feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp4': 63}). The hybrid is 437 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 17 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 9, 'ecfp4': 8}). The hybrid is 483 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 17 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 9, 'ecfp4': 8}). The hybrid is 483 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 17 feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': 9, 'ecfp4': 8}). The hybrid is 483 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 0 hit / 2 miss / 13 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Top-3 base reps (by RF): ecfp4=0.5036, avalon=0.5205, pdv=0.5502
+
+  Evaluating 4 reps × 5 models × 5-fold CV...
+    avalon                    rf        MAE=0.5205  AC-MCC=0.0226  (38.1s)
+    avalon                    xgboost   MAE=0.5081  AC-MCC=0.0591  (51.8s)
+    avalon                    svm       MAE=0.4622  AC-MCC=0.0755  (108.7s)
+    avalon                    dnn       MAE=0.4999  AC-MCC=0.0481  (106.9s)
+    avalon                    lightgbm  MAE=0.4836  AC-MCC=0.0892  (34.8s)
+    ecfp4                     rf        MAE=0.5036  AC-MCC=0.0684  (33.9s)
+    ecfp4                     xgboost   MAE=0.4948  AC-MCC=0.0440  (36.9s)
+    ecfp4                     svm       MAE=0.4495  AC-MCC=0.0605  (110.7s)
+    ecfp4                     dnn       MAE=0.5062  AC-MCC=-0.0022  (97.1s)
+    ecfp4                     lightgbm  MAE=0.4817  AC-MCC=0.0681  (12.5s)
+    maccs                     rf        MAE=0.5607  AC-MCC=0.1313  (8.6s)
+    maccs                     xgboost   MAE=0.5791  AC-MCC=0.0541  (8.4s)
+    maccs                     svm       MAE=0.5360  AC-MCC=-0.0048  (17.7s)
+    maccs                     dnn       MAE=0.5442  AC-MCC=-0.0085  (47.1s)
+    maccs                     lightgbm  MAE=0.5529  AC-MCC=0.0127  (4.1s)
+    pdv                       rf        MAE=0.5488  AC-MCC=0.0812  (22.6s)
+    pdv                       xgboost   MAE=0.5378  AC-MCC=0.2058  (59.6s)
+    pdv                       svm       MAE=0.5054  AC-MCC=0.0595  (18.4s)
+    pdv                       dnn       MAE=0.5284  AC-MCC=0.0552  (37.4s)
+    pdv                       lightgbm  MAE=0.5254  AC-MCC=0.3280  (36.1s)
+
+  Per-fold hybrid × 5 models × 5-fold CV...
+[cache] cache stats — baseline: 0 hit / 2 miss / 28 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+[cache] cache stats — baseline: 0 hit / 2 miss / 43 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+[cache] cache stats — baseline: 0 hit / 2 miss / 58 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+[cache] cache stats — baseline: 0 hit / 2 miss / 73 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+[cache] cache stats — baseline: 0 hit / 2 miss / 88 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+    kirby_hybrid              rf        MAE=0.4991  AC-MCC=0.0565  (5/5 folds)
+    kirby_hybrid              xgboost   MAE=0.5008  AC-MCC=0.2362  (5/5 folds)
+    kirby_hybrid              svm       MAE=0.4601  AC-MCC=0.0427  (5/5 folds)
+    kirby_hybrid              dnn       MAE=0.4781  AC-MCC=-0.0029  (5/5 folds)
+    kirby_hybrid              lightgbm  MAE=0.4778  AC-MCC=0.0733  (5/5 folds)
+
+====================================================================================================
+ACTIVITY CLIFF QSAR COMPARISON (Dablander et al. 2023)
+====================================================================================================
+
+  --- SARS-CoV-2 Mpro (1924 compounds, 521 ACs) ---
+  Rep                       Model         MAE     RMSE       R2   AC-MCC  AC-Sens
+  ------------------------- -------- -------- -------- -------- -------- --------
+  ecfp4                     svm        0.4495   0.6469   0.6072   0.0605   0.0038
+  kirby_hybrid              svm        0.4601   0.6520   0.5992   0.0427   0.0019
+  avalon                    svm        0.4622   0.6573   0.5925   0.0755   0.0077
+  kirby_hybrid              lightgbm   0.4778   0.6687   0.5779   0.0733   0.0096
+  kirby_hybrid              dnn        0.4781   0.6665   0.5807  -0.0029   0.0019
+  ecfp4                     lightgbm   0.4817   0.6678   0.5815   0.0681   0.0077
+  avalon                    lightgbm   0.4836   0.6770   0.5663   0.0892   0.0115
+  ecfp4                     xgboost    0.4948   0.6857   0.5585   0.0440   0.0192
+  kirby_hybrid              rf         0.4991   0.6922   0.5506   0.0565   0.0115
+  avalon                    dnn        0.4999   0.6753   0.5690   0.0481   0.0038
+  kirby_hybrid              xgboost    0.5008   0.7087   0.5305   0.2362   0.1440
+  ecfp4                     rf         0.5036   0.6927   0.5497   0.0684   0.0096
+  pdv                       svm        0.5054   0.6892   0.5543   0.0595   0.0154
+  ecfp4                     dnn        0.5062   0.6751   0.5735  -0.0022   0.0000
+  avalon                    xgboost    0.5081   0.7088   0.5269   0.0591   0.0326
+  avalon                    rf         0.5205   0.7068   0.5301   0.0226   0.0058
+  pdv                       lightgbm   0.5254   0.7246   0.5057   0.3280   0.1977
+  pdv                       dnn        0.5284   0.7280   0.4951   0.0552   0.0134
+  maccs                     svm        0.5360   0.7284   0.4989  -0.0048   0.0000
+  pdv                       xgboost    0.5378   0.7427   0.4807   0.2058   0.1555
+  maccs                     dnn        0.5442   0.7343   0.4874  -0.0085   0.0019
+  pdv                       rf         0.5488   0.7203   0.5107   0.0812   0.0192
+  maccs                     lightgbm   0.5529   0.7467   0.4713   0.0127   0.0134
+  maccs                     rf         0.5607   0.7438   0.4776   0.1313   0.0422
+  maccs                     xgboost    0.5791   0.7861   0.4124   0.0541   0.0441
+
+  Cross-target summary:
+  Target     Best rep                       MAE   nMAE   AC-MCC   nMCC
+  ---------- ------------------------- -------- ------ -------- ------
+  mpro       ecfp4                       0.4495     20   0.3280     25
+
+  Honest per-model held-out (LOFO) QSAR-MAE — hybrid vs best single rep:
+  Target     Model       Hybrid  BestSingle     Delta  Folds
+  ---------- -------- --------- ----------- --------- ------
+  mpro       dnn         0.4683      0.4758   +0.0075      4
+  mpro       lightgbm    0.4755      0.4862   +0.0106      4
+  mpro       rf          0.4978      0.4986   +0.0008      4
+  mpro       svm         0.4493      0.4452   -0.0041      4
+  mpro       xgboost     0.5073      0.4964   -0.0110      4
+
+Results saved: /Users/apunt/repos/KIRBy/scratchpad/opig_verify/qsar_mpro.json
+
+  !! warnings raised more than 3 times (printed once each here):
+        719x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp#': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        396x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'ecfp#': #, 'pdv': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        292x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': #, 'ecfp#': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        233x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'pdv': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+EXIT=0
+ng/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/pool.py", line 136, in worker
+    put((job, i, (False, wrapped)))
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+Process SpawnPoolWorker-8:
+Traceback (most recent call last):
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/pool.py", line 131, in worker
+    put((job, i, result))
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/pool.py", line 136, in worker
+    put((job, i, (False, wrapped)))
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+Process SpawnPoolWorker-5:
+Traceback (most recent call last):
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/pool.py", line 131, in worker
+    put((job, i, result))
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/pool.py", line 136, in worker
+    put((job, i, (False, wrapped)))
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+Process SpawnPoolWorker-3:
+Traceback (most recent call last):
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/pool.py", line 131, in worker
+    put((job, i, result))
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/pool.py", line 136, in worker
+    put((job, i, (False, wrapped)))
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe

@@ -1,0 +1,167 @@
+======================================================================
+GRAPHINITY DDG EXPERIMENT (OPIG B2)
+  Paper: Hummer et al. 2025, Nature Computational Science
+  Conditions: ['experimental']
+  Reps: ['mutation_features', 'onehot', 'blosum', 'aac', 'antiberty_cdr']
+  Models: ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+  Folds: 5
+  Max samples (FoldX): 5000
+======================================================================
+
+============================================================
+Condition: experimental (dataset: ddg_combined)
+============================================================
+  Loading combined ΔΔG dataset (SKEMPI 2.0 Ab-Ag + AB-Bind)...
+  SKEMPI: 1231/7085 entries are Ab-Ag
+  SKEMPI: 267 valid Ab-Ag entries, 964 skipped
+  AB-Bind: 230 valid entries, 524 skipped
+  Deduplication: 35 overlapping entries (AB-Bind preferred)
+  Combined: 454 unique entries (267 SKEMPI + 230 AB-Bind - 35 overlap)
+  Outlier filter: removed 25 entries (|ddG|>8 or >3σ from mean)
+  Final: 429 entries
+  ΔΔG range: [-4.061, 6.000] kcal/mol, mean=0.472
+  429 samples, DDG range [-4.06, 6.00]
+  30 groups (PDB complexes)
+  mutation_features: 48D (cached) [ddg_combined_429]
+  onehot: 5600D (cached) [ddg_combined_429]
+  blosum: 5600D (cached) [ddg_combined_429]
+  aac: 40D (cached) [ddg_combined_429]
+  antiberty_cdr: 1024D (cached) [ddg_combined_429]
+  [ddg_combined/n429] pruning_mode=default_pruning (no per-model overrides)
+  !! the budget is a MAXIMUM and it was not filled: 29 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 29}). The hybrid is 71 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 29 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 29}). The hybrid is 71 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 29 feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': 29}). The hybrid is 71 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 83 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 54, 'mutation_features': 29}). The hybrid is 117 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 383 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 354, 'mutation_features': 29}). The hybrid is 117 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 173 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 148, 'antiberty_cdr': 25}). The hybrid is 327 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 244 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 131, 'blosum': 84, 'mutation_features': 29}). The hybrid is 256 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 148 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 124, 'mutation_features': 23, 'antiberty_cdr': 1}). The hybrid is 352 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 142 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 80, 'blosum': 33, 'mutation_features': 29}). The hybrid is 358 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 134 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 111, 'mutation_features': 23}). The hybrid is 366 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 173 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 148, 'antiberty_cdr': 25}). The hybrid is 327 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 244 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 131, 'blosum': 84, 'mutation_features': 29}). The hybrid is 256 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 148 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 124, 'mutation_features': 23, 'antiberty_cdr': 1}). The hybrid is 352 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 173 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 148, 'antiberty_cdr': 25}). The hybrid is 327 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 148 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 124, 'mutation_features': 23, 'antiberty_cdr': 1}). The hybrid is 352 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 106 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 61, 'mutation_features': 29, 'blosum': 16}). The hybrid is 394 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 106 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 61, 'mutation_features': 29, 'blosum': 16}). The hybrid is 394 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 106 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 61, 'mutation_features': 29, 'blosum': 16}). The hybrid is 394 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 148 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 96, 'antiberty_cdr': 29, 'mutation_features': 23}). The hybrid is 352 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 148 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 96, 'antiberty_cdr': 29, 'mutation_features': 23}). The hybrid is 352 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 148 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 96, 'antiberty_cdr': 29, 'mutation_features': 23}). The hybrid is 352 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 35 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 35}). The hybrid is 165 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 294 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 234, 'blosum': 60}). The hybrid is 206 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 236 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 207, 'mutation_features': 29}). The hybrid is 264 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 253 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 226, 'mutation_features': 27}). The hybrid is 247 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 136 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 107, 'mutation_features': 29}). The hybrid is 364 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 235 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 208, 'mutation_features': 27}). The hybrid is 265 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 35 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 35}). The hybrid is 165 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 294 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 234, 'blosum': 60}). The hybrid is 206 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 136 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 107, 'mutation_features': 29}). The hybrid is 364 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 35 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 35}). The hybrid is 165 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 294 feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': 234, 'blosum': 60}). The hybrid is 206 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 136 feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': 107, 'mutation_features': 29}). The hybrid is 364 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+  !! the budget is a MAXIMUM and it was not filled: 255 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 255}). The hybrid is 245 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 255 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 255}). The hybrid is 245 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! the budget is a MAXIMUM and it was not filled: 255 feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': 255}). The hybrid is 245 features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+  !! (further occurrences of that warning are counted, not printed; the total is reported at exit)
+[cache] cache stats — baseline: 20 hit / 0 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+[cache] cache stats — baseline: 40 hit / 0 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+[cache] cache stats — baseline: 60 hit / 0 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  Top-3 base reps (by RF): onehot=0.3199, blosum=0.1706, mutation_features=0.1372
+  deltas x dnn       hybrid=0.2080  minus the mean of the 4 representations that fed it: +0.1425  minus the best representation (mutation_features): +0.0355
+  deltas x lightgbm  hybrid=0.2068  minus the mean of the 4 representations that fed it: +0.0472  minus the best representation (onehot): -0.0104
+  deltas x rf        hybrid=0.2406  minus the mean of the 4 representations that fed it: +0.0813  minus the best representation (onehot): -0.0793
+  deltas x svm       hybrid=0.2675  minus the mean of the 4 representations that fed it: +0.1365  minus the best representation (mutation_features): +0.0398
+  deltas x xgboost   hybrid=0.1575  minus the mean of the 4 representations that fed it: +0.0392  minus the best representation (onehot): -0.0353
+
+  Evaluating 5 reps × 5 models × 5-fold CV...
+    aac                       rf        r=0.1629  r_g=-0.1668  rho=0.0645  (3.1s)
+    aac                       xgboost   r=0.2045  r_g=-0.1124  rho=0.1517  (2.3s)
+    aac                       svm       r=-0.0355  r_g=-0.3826  rho=-0.0034  (0.9s)
+    aac                       dnn       r=-0.1216  r_g=-0.4096  rho=-0.0603  (8.2s)
+    aac                       lightgbm  r=0.2839  r_g=-0.0291  rho=0.1909  (1.5s)
+    antiberty_cdr             rf        r=0.1253  r_g=-0.1717  rho=-0.0755  (48.2s)
+    antiberty_cdr             xgboost   r=0.1207  r_g=-0.0692  rho=0.0156  (84.4s)
+    antiberty_cdr             svm       r=0.1139  r_g=-0.2612  rho=0.0895  (41.4s)
+    antiberty_cdr             dnn       r=-0.0200  r_g=-0.3360  rho=-0.0581  (77.5s)
+    antiberty_cdr             lightgbm  r=0.1847  r_g=-0.0225  rho=0.0796  (61.1s)
+    blosum                    rf        r=0.2753  r_g=-0.0072  rho=0.1706  (123.9s)
+    blosum                    xgboost   r=0.1412  r_g=-0.1208  rho=0.1037  (114.9s)
+    blosum                    svm       r=0.1616  r_g=-0.2002  rho=0.0798  (119.1s)
+    blosum                    dnn       r=0.0865  r_g=-0.1154  rho=0.0439  (157.7s)
+    blosum                    lightgbm  r=0.2297  r_g=-0.0068  rho=0.1618  (116.0s)
+    mutation_features         rf        r=0.1446  r_g=0.0658  rho=0.1372  (2.0s)
+    mutation_features         xgboost   r=0.1262  r_g=0.1273  rho=0.1196  (1.7s)
+    mutation_features         svm       r=0.2039  r_g=0.1935  rho=0.2277  (0.7s)
+    mutation_features         dnn       r=0.1066  r_g=0.0467  rho=0.1714  (5.1s)
+    mutation_features         lightgbm  r=0.1619  r_g=0.1357  rho=0.1691  (1.3s)
+    onehot                    rf        r=0.2453  r_g=-0.0039  rho=0.3199  (84.2s)
+    onehot                    xgboost   r=0.2457  r_g=0.0058  rho=0.1928  (101.7s)
+    onehot                    svm       r=0.1957  r_g=-0.0898  rho=0.1523  (63.5s)
+    onehot                    dnn       r=0.1912  r_g=-0.0174  rho=0.1904  (99.1s)
+    onehot                    lightgbm  r=0.2495  r_g=0.0392  rho=0.2172  (64.8s)
+
+====================================================================================================
+GRAPHINITY DDG COMPARISON (OPIG B2)
+====================================================================================================
+
+  Paper baselines:
+    Graphinity EGNN synthetic FoldX (random): Pearson r = 0.90
+    Graphinity EGNN synthetic FoldX (cutoff_100): Pearson r = 0.89
+    Graphinity EGNN synthetic FoldX (cutoff_90): Pearson r = 0.89
+    Graphinity EGNN synthetic FoldX (cutoff_70): Pearson r = 0.89
+    Graphinity EGNN experimental (random): Pearson r = 0.53
+    Graphinity EGNN experimental (cutoff_100): Pearson r = 0.27
+    Graphinity EGNN experimental (cutoff_90): Pearson r = 0.29
+    Graphinity EGNN experimental (cutoff_70): Pearson r = 0.22
+    Graphinity EGNN exp+nonbinders (random): Pearson r = 0.38
+    Graphinity EGNN exp+nonbinders (cutoff_70): Pearson r = 0.04
+    FoldX vs experimental: Pearson r = 0.46
+
+  Condition                  N                  Best rep    Model  Pearson r   Spearman
+  -------------------- ------- ------------------------- -------- ---------- ----------
+  experimental             429                       aac lightgbm     0.2839     0.1909
+
+  Structure-based EGNN reference (cutoff_100): Pearson r = 0.271
+    experimental: best individual Pearson r_g = 0.1935, gap to EGNN = 0.0775
+
+====================================================================================================
+HONEST PER-MODEL HELD-OUT RE-SCORE
+====================================================================================================
+
+  experimental (scores in spearman, higher better; Delta > 0 means the hybrid is better):
+       Model     Hybrid  BestSingle     Delta  Folds
+         dnn     0.0515      0.0263   +0.0252      4
+    lightgbm     0.0559      0.1421   -0.0862      4
+          rf     0.1279      0.3087   -0.1808      4
+         svm     0.1109      0.2597   -0.1488      4
+     xgboost    -0.0314     -0.1116   +0.0802      4
+
+Results saved: /Users/apunt/repos/KIRBy/scratchpad/opig_verify/graphinity.json
+
+  !! warnings raised more than 3 times (printed once each here):
+       1575x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        375x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        330x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'blosum': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        135x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        135x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        120x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'antiberty_cdr': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        105x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'mutation_features': #, 'antiberty_cdr': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+        105x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'mutation_features': #, 'blosum': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         60x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'blosum': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         45x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'antiberty_cdr': #, 'mutation_features': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         45x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'onehot': #, 'blosum': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+         45x  the budget is a MAXIMUM and it was not filled: # feature slots went unused because no feature left in those representations scored above zero importance ({'antiberty_cdr': #}). The hybrid is # features wide. Padding them out would have added features the importance method ranked at exactly zero, chosen by column order.
+EXIT=0
