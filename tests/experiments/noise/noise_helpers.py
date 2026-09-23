@@ -1127,7 +1127,11 @@ def _experiment_full_name(exp_id: str) -> str:
 # n21 takes a condition but only the five in DETECTION_IS_DEFINED, because
 # average precision is its headline and under the other six every training
 # molecule's label moves. It raises on the other six naming all five.
-HONOURS_NOISE_CONDITION = {'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23'}
+# n07 joined 2026-09-23: it sweeps through sweep_conditions now (c46b71e), which
+# reads `noise_condition`, so it can run one condition like the others. Left
+# out, a job given a condition dropped it and n07 ran only in the no-condition
+# job, all fourteen conditions end to end.
+HONOURS_NOISE_CONDITION = {'n07', 'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
 
 
@@ -1484,9 +1488,22 @@ def run_all(dataset_name: str, output_dir: str,
             results[exp_id] = exp_result
 
             exp_full_name = _experiment_full_name(exp_id)
-            save_experiment_results(exp_result, output_dir, exp_full_name,
-                                    dataset_name, fingerprint=_fingerprint,
-                                    filename_suffix=noise_condition)
+            # ⛔ A SWEEP UNDER A NAMED CONDITION HAS ALREADY WRITTEN ITS FILE.
+            # sweep_conditions saves each condition to
+            # <exp>/<dataset>__<condition>.json as it lands and returns an
+            # INDEX of those files. Saving that index here under the same
+            # suffix wrote it to the same path and replaced the scores with the
+            # list of filenames. Without a condition the index goes to
+            # <dataset>.json, a different file, which is what the status
+            # scripts read -- so that save stays.
+            if (noise_condition and isinstance(exp_result, dict)
+                    and 'conditions_written' in exp_result):
+                print(f"  {exp_id}: condition file written by the sweep itself "
+                      f"-- not overwriting it with the sweep index")
+            else:
+                save_experiment_results(exp_result, output_dir, exp_full_name,
+                                        dataset_name, fingerprint=_fingerprint,
+                                        filename_suffix=noise_condition)
             print(f"  {exp_id} done in {time.time() - t_exp:.1f}s")
 
         except Exception as e:
