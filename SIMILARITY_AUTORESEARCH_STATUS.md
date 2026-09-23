@@ -266,6 +266,46 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
+**s11 — one arm of eleven kills the process, and it is why nothing finished.**
+Measured 2026-09-23 on caco2 at 250 molecules, 3 picks, 1 seed, with nothing
+else running on the machine. The nine conditions before `hybrid_bnn` completed
+and were written to disk; the process was then killed inside `hybrid_bnn` with
+no traceback and no exit message. That is the same condition this file already
+records as killing three processes at 14 GB of 15 GB swap and recording nothing.
+
+So the nine launches over 2026-09-22 and 09-23 that each ran two to five hours
+and produced nothing were not defeated by run length or by machine load. They
+reached `hybrid_bnn` and died there. `hybrid_gauche_gp` is listed after it and
+has therefore never run once, on any dataset, in this campaign. The `gauche`
+package is installed at 0.1.6, so that arm is expected to work; it has simply
+never been reached.
+
+The condition list, in the order s11 runs it:
+
+    1 ecfp4_raw          5 hybrid_50d         9 hybrid_ngboost
+    2 tanimoto_ecfp4     6 hybrid_50d_refit  10 hybrid_bnn        <- kills the process
+    3 best_single        7 random_50d        11 hybrid_gauche_gp  <- never reached
+    4 pca_50d            8 random_acq
+
+**s11 now writes each condition as it finishes.** Everything was held in memory
+and returned to the caller only after the last condition, so every kill threw
+away every condition already done. Each one is now written to
+`<output_dir>/.s11_checkpoint_<dataset>.json` through a temporary file and a
+rename, and a rerun skips what is already there. Verified by reading the file
+mid-run: nine conditions on disk while the process was still going.
+
+⛔ The checkpoint sits in the directory the driver passes as `output_dir`, which
+is the parent — not the `s11_bayesian_optimization/` subfolder the results land
+in. Two checks for it in the wrong place on 2026-09-23 reported it missing when
+it was being written correctly.
+
+**The local runs name ten arms, and `hybrid_bnn` is not cut.** `run()` has always
+taken a `conditions` list; nothing exposed it. `KIRBY_S11_CONDITIONS` now does.
+The six queued local runs name the ten that complete. Naming `hybrid_bnn`, or
+running s11 on the cluster, runs it. The stated reason for leaving it out of a
+local run is that it kills the process and records nothing — broken on this
+machine, not slow on it.
+
 **s11 — the arms the hybrid beats were not using their surrogate.** Counted from
 the three budget-100 logs, picks made by dataset row order out of 300 (three
 seeds of 100 picks each):
