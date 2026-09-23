@@ -21,8 +21,9 @@ each check below shows the new cleanup doing something the old one does not.
   js_shrink      against `oof_smooth`. Both move a label toward the same
                  out-of-fold prediction. oof_smooth moves it by a fraction the
                  CALLER chooses; js_shrink's fraction is DERIVED from the two
-                 variances, so there is no alpha. Test 6 shows it declines
-                 rather than inventing a target when no prediction exists.
+                 variances, so there is no alpha. It BUILDS its own target
+                 when the caller hoists none, because n07 hoists none at all --
+                 declining there made it look broken rather than untested.
 
 Cheap by design: pure functions on in-memory arrays, no find_best_hybrid, no
 result store, no dataset. Runs while every store is stale.
@@ -47,7 +48,7 @@ import numpy as np
 
 from experiments.noise.n07_remediation import (
     cleaned_training_set, CLEANUPS, REGRESSION_ONLY_CLEANUPS,
-    PROX_SMOOTH_MAX_ROWS)
+    PROX_SMOOTH_MAX_ROWS, CLEANUP_TARGETS, targets_needed)
 
 _FAILS = []
 
@@ -179,15 +180,54 @@ def test_js_shrink_moves_the_suspect_labels_most():
            and np.allclose(out['label_column'], out['y']))
 
 
-def test_js_shrink_declines_without_a_target():
-    """No out-of-fold prediction: decline rather than shrink toward the fold
-    mean, which is a different method wearing this one's name."""
-    X, y, scores, groups, _ = _fixture()
+def test_js_shrink_builds_its_own_target_when_none_is_hoisted():
+    """⛔ THE ONE THAT CAUGHT A REAL BUG.
+
+    js_shrink first DECLINED when no out-of-fold prediction was handed to it.
+    That looked principled -- better than shrinking toward the fold mean, which
+    is a different method -- and it was wrong, because n07 hoists no targets at
+    all: all three of its `_evaluate_fold` callers leave targets at None. So
+    js_shrink skipped on every n07 fold and would have read as broken rather
+    than untested.
+
+    It now builds its own target, exactly as `oof_smooth` already did, and
+    declines only when building one FAILS.
+    """
+    X, y, scores, groups, bad = _fixture()
+    clean = np.setdiff1d(np.arange(len(y)), bad)
     for targets in (None, {}, {'oof': None}):
         out = cleaned_training_set('js_shrink', X, y, scores, 0.1,
                                    groups=groups, targets=targets)
-        _check(f'js_shrink declines when targets={targets!r} rather than '
-               f'inventing one', out is None)
+        _check(f'js_shrink builds its own target when targets={targets!r}',
+               out is not None)
+        if out is None:
+            continue
+        moved = np.abs(out['y'] - y)
+        _check(f'  and still moves the wrecked labels furthest, targets='
+               f'{targets!r}',
+               moved[bad].mean() > moved[clean].mean(),
+               f"{moved[bad].mean():.4f} against {moved[clean].mean():.4f} "
+               f"label units")
+
+
+def test_every_cleanup_declares_the_target_it_needs():
+    """The mapping that stops the next method hitting the same gap.
+
+    n18 used to write the cleanup-to-target pairs out by hand, three of them,
+    so a fourth cleanup needing a target could not appear in the list. It is
+    now one declaration that every caller derives from.
+    """
+    _check('CLEANUP_TARGETS names a target for js_shrink',
+           CLEANUP_TARGETS.get('js_shrink') == 'oof',
+           f"got {CLEANUP_TARGETS.get('js_shrink')!r}")
+    _check('every cleanup it names is a real cleanup',
+           set(CLEANUP_TARGETS) <= set(CLEANUPS),
+           f"unknown: {sorted(set(CLEANUP_TARGETS) - set(CLEANUPS))}")
+    need = targets_needed(CLEANUPS)
+    _check('targets_needed covers all three hoistable targets',
+           set(need) == {'oof', 'gp', 'quantile'}, f"got {need}")
+    _check('targets_needed asks for nothing when no cleanup needs anything',
+           targets_needed(['remove', 'downweight', 'huber_weight']) == [])
 
 
 def test_prox_smooth_beats_euclidean_where_most_features_are_noise():
@@ -266,7 +306,9 @@ def main():
     test_prox_smooth_refuses_a_training_block_it_cannot_hold()
     print("\njs_shrink — the shrink is derived, not chosen:")
     test_js_shrink_moves_the_suspect_labels_most()
-    test_js_shrink_declines_without_a_target()
+    test_js_shrink_builds_its_own_target_when_none_is_hoisted()
+    print("\nThe declaration that stops the next method being forgotten:")
+    test_every_cleanup_declares_the_target_it_needs()
     print(f"\n=== {'ALL GREEN' if not _FAILS else f'{len(_FAILS)} FAILED: {_FAILS}'} ===")
     sys.exit(1 if _FAILS else 0)
 

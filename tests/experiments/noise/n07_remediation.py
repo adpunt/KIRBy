@@ -192,6 +192,28 @@ CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
 # the range, not about a suspicion score.
 SCORE_DRIVEN_CLEANUPS = tuple(c for c in CLEANUPS if c != 'quantile_clip')
 
+# Which cleanups read a target that `correction_targets` can hoist, and which
+# target each reads. ⛔ DECLARE A NEW CLEANUP HERE. Callers used to write this
+# mapping out by hand -- n18 carried its own three-pair list -- so js_shrink,
+# added 2026-09-23, was built and then never given a target by anyone. A
+# cleanup that silently receives None looks broken rather than untested.
+#
+# Every one of these can also build its own target when the caller hoists
+# none; the hoist exists because the target depends on the features, labels
+# and groups and on nothing else, so sweeping settings would otherwise refit
+# the same model for every one of them.
+CLEANUP_TARGETS = {
+    'oof_smooth': 'oof',
+    'gp_smooth': 'gp',
+    'quantile_clip': 'quantile',
+    'js_shrink': 'oof',          # same out-of-fold prediction as oof_smooth
+}
+
+
+def targets_needed(cleanups):
+    """The hoisted targets a list of cleanups needs between them."""
+    return sorted({CLEANUP_TARGETS[c] for c in cleanups if c in CLEANUP_TARGETS})
+
 # The three cleanups added 2026-09-17. All three repair a REGRESSION label:
 # 'oof_smooth' and 'gp_smooth' move it toward a predicted value, 'quantile_clip'
 # pulls it back into a numeric range. None of the three is defined on a nominal
@@ -593,12 +615,24 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # is DERIVED -- it is the ratio of the two variances, so there is no
         # alpha to tune and the shrinkage is whatever the data says it should
         # be. If the two disagree, the difference is the tuning.
-        oof = None if targets is None else targets.get('oof')
+        # Build the target when the caller hoisted none, exactly as
+        # `oof_smooth` does. Declining instead was wrong: n07 passes no targets
+        # at all -- its three callers of `_evaluate_fold` leave targets at None
+        # -- so js_shrink skipped on every n07 fold and the cleanup would have
+        # looked broken rather than untested. n18 DOES hoist them, and its
+        # want-list is now derived from CLEANUP_TARGETS so a new cleanup cannot
+        # be forgotten there again.
+        oof = (targets or {}).get('oof')
         if oof is None:
-            print("      js_shrink: no out-of-fold prediction to shrink "
-                  "toward; skipping this cleanup rather than shrinking "
-                  "toward the fold mean, which is a different method.")
-            return None
+            try:
+                oof = oof_predict(X_tr_s, y_tr, groups,
+                                  n_splits=min(REPAIR_OOF_SPLITS, len(y_tr)))
+            except Exception as exc:
+                print(f"      js_shrink: could not build an out-of-fold "
+                      f"prediction ({type(exc).__name__}: {exc}); skipping "
+                      f"rather than shrinking toward the fold mean, which is "
+                      f"a different method.")
+                return None
         oof = np.asarray(oof, dtype=float)
         resid = np.asarray(y_tr, dtype=float) - oof
         tau2 = float(np.var(resid))

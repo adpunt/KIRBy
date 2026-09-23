@@ -105,7 +105,7 @@ from experiments.noise.noise_helpers import hybrid_for_fold
 # noise unless it is handed a training label vector, and it is handed one here --
 # the labels exactly as the loader produced them. So the same code runs, over the
 # real labels, with nothing corrupted.
-from experiments.noise.n07_remediation import (_evaluate_fold,
+from experiments.noise.n07_remediation import (_evaluate_fold, targets_needed,
                                                correction_targets)
 from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
 
@@ -804,10 +804,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # carries for the detector, and what n11 does with EXTRA_TARGETS.
             _targets = correction_targets(
                 X_tr_s, y_train, groups=g_tr,
-                want=[t for t, c in (('oof', 'oof_smooth'),
-                                     ('gp', 'gp_smooth'),
-                                     ('quantile', 'quantile_clip'))
-                      if c in CLEANUPS])
+                # Derived from n07.CLEANUP_TARGETS rather than written out
+                # here. The hand-written list this replaces named three
+                # cleanups, so js_shrink -- added 2026-09-23 and needing the
+                # same out-of-fold prediction oof_smooth uses -- was never
+                # given one.
+                want=targets_needed(CLEANUPS))
 
             base_score = {}
             for mname in downstream_models:
