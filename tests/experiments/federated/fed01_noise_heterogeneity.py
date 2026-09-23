@@ -908,8 +908,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"C2 MCC={c2_mcc:.3f}, C5 MCC={c5_mcc:.3f}")
 
             except Exception as e:
-                smooth_sweep[str(sf)] = {'error': str(e)}
+                # Record the traceback, as every other condition in this
+                # file does. Without it this phase failed at smooth_factor 0
+                # and 0.01 on herg_ki for a whole run with nothing but "'a'
+                # cannot be empty unless no samples are taken" to go on — a
+                # numpy choice over an empty array, and four call sites plus
+                # RandomUnderSampler's own internals all produce that message.
+                # Two of five points on a swept axis were missing and the
+                # cause was not locatable from the file. The trigger is
+                # known: the log line above each failure is FLuID's cluster
+                # chart raising because a cluster holds one class only, which
+                # happens with no smoothing and stops at smooth_factor 0.05.
+                smooth_sweep[str(sf)] = {
+                    'error': str(e), 'traceback': traceback.format_exc()}
                 print(f"FAILED: {e}")
+                traceback.print_exc()
 
         # Accumulate this fold's results.
         per_fold_primary.append(primary_sweep)

@@ -1207,13 +1207,62 @@ def _resolve_match(internal_evaluator, downstream_model_name=None):
     return 'rf'
 
 
+def allocate_budget_across_silos(silo_scores, budget, k,
+                                 rule='proportional'):
+    """How much of the feature budget each silo gets, from its own score.
+
+    The coordinator has one number per silo — the score that silo reported on
+    rows it held out — and one budget to divide. 'proportional' is what this
+    has always done: a silo's share is its score over the total. That rule
+    had never been measured against an equal split, so whether the scores
+    were buying anything at all was unknown.
+
+    equal        — budget // k each. The null: if nothing beats this, the
+                   silo scores are not being used for anything.
+    proportional — share = score / total. The long-standing behaviour.
+    power2       — share = score^2 / total. Widens the gap between a good
+                   silo and a mediocre one when the raw scores sit close
+                   together, which they do when every silo is a cluster of
+                   the same dataset.
+    sqrt         — share = sqrt(score) / total. Flatter, for when one silo's
+                   score is an outlier and would take nearly the whole budget.
+    rank_linear  — share from the silo's RANK, not its score. Immune to the
+                   scale of the scores, which are R squared on one dataset
+                   and spearman on another.
+    """
+    ids = list(range(1, k + 1))
+    sc = {s: max(0.0, float(silo_scores.get(s, 0.0))) for s in ids}
+    total = sum(sc.values())
+
+    if rule == 'equal' or total <= 0:
+        w = {s: 1.0 / k for s in ids}
+    elif rule == 'proportional':
+        w = {s: sc[s] / total for s in ids}
+    elif rule == 'power2':
+        t = sum(v * v for v in sc.values())
+        w = {s: (sc[s] ** 2) / t for s in ids} if t > 0 else {s: 1.0 / k for s in ids}
+    elif rule == 'sqrt':
+        t = sum(np.sqrt(v) for v in sc.values())
+        w = {s: float(np.sqrt(sc[s]) / t) for s in ids} if t > 0 else {s: 1.0 / k for s in ids}
+    elif rule == 'rank_linear':
+        order = sorted(ids, key=lambda s: sc[s])
+        rank = {s: i + 1 for i, s in enumerate(order)}
+        t = sum(rank.values())
+        w = {s: rank[s] / t for s in ids}
+    else:
+        raise ValueError(f"unknown allocation rule {rule!r}")
+
+    return {s: max(1, int(budget * w[s])) for s in ids}
+
+
 def federated_feature_selection(rep_dict, labels, silo_indices, k,
                                 budget=100, allocation_method='performance_weighted',
                                 importance_method='treeshap',
                                 internal_evaluator='rf', seed=42,
                                 groups=None, task_type=None,
                                 downstream_model=None,
-                                metric_fn=None, lower_is_better=False):
+                                metric_fn=None, lower_is_better=False,
+                                allocation_rule='proportional'):
     """Privacy-preserving federated feature selection.
 
     Protocol:
@@ -1429,15 +1478,9 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
             silo_scores[s] = 0.0
             silo_feature_infos[s] = None
 
-    # Phase 2: Coordinator allocates budget across silos proportional to scores
-    total_score = sum(silo_scores.values())
-    if total_score <= 0:
-        silo_budgets = {s: budget // k for s in range(1, k + 1)}
-    else:
-        silo_budgets = {}
-        for s in range(1, k + 1):
-            silo_budgets[s] = max(1, int(
-                budget * silo_scores[s] / total_score))
+    # Phase 2: Coordinator allocates budget across silos from their scores
+    silo_budgets = allocate_budget_across_silos(
+        silo_scores, budget, k, rule=allocation_rule)
 
     # Phase 3: Apply budget allocation — trim each silo's feature_info to
     # its allocated budget, then deduplicate features across silos.
@@ -2501,7 +2544,12 @@ def compare_importance_profiles(profiles_dict):
             r = float(r)
         except Exception:
             r = float('nan')
-        pairwise[f'({c1},{c2})'] = r
+        # A pair whose correlation is undefined — one cluster's importance
+        # vector is constant, so there is no rank to correlate — was stored
+        # as NaN. NaN is not valid JSON and it is the same defect the mean
+        # below already avoids by returning None. fed04 on herg_ki wrote 130
+        # of them into folds[].profile_stability.pairwise.
+        pairwise[f'({c1},{c2})'] = None if np.isnan(r) else r
         if not np.isnan(r):
             correlations.append(r)
 
