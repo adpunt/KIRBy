@@ -180,7 +180,11 @@ NOISE_SEEDS = [0, 1, 2]
 # same four-name tuple written out three times, and adding a fifth meant
 # finding all three.
 CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
-            'oof_smooth', 'gp_smooth', 'quantile_clip')
+            'oof_smooth', 'gp_smooth', 'quantile_clip',
+            # Added 2026-09-23 from the label-noise menu in the compass review.
+            # Both keep every molecule, which is the family that review
+            # recommends over deletion on small datasets.
+            'huber_weight', 'js_shrink')
 
 # The cleanups that read the detector's per-molecule suspicion score. Every one
 # but the quantile clip: the clip asks whether a label lies outside the range of
@@ -193,7 +197,11 @@ SCORE_DRIVEN_CLEANUPS = tuple(c for c in CLEANUPS if c != 'quantile_clip')
 # pulls it back into a numeric range. None of the three is defined on a nominal
 # class label, so on a classification dataset they are not added to the
 # strategy list at all and the run records that rather than writing NaN rows.
-REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'quantile_clip')
+REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'quantile_clip',
+                            # js_shrink blends a label toward a predicted
+                            # NUMBER; there is no halfway point between two
+                            # nominal classes, so it is regression-only too.
+                            'js_shrink')
 
 # How many inner folds the out-of-fold prediction that 'oof_smooth' smooths
 # toward is built from, and how many the two forests behind 'gp_smooth' and
@@ -321,7 +329,22 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False, detector=None,
     # Each estimator takes its own arguments. Handing every one `k` and
     # `metric` is what kept CrossValResidualEstimator, which takes neither,
     # out of this file and out of n18 (fixed there the same day).
-    offered = {'k': 10, 'metric': None, 'groups': groups, 'is_clf': is_clf}
+    # ⛔ THE GROUPS HAVE TWO NAMES and offering only one refused six estimators.
+    # The model-based family (cross_val, gaussian_process, conformal, ngboost
+    # and eleven others) names the scaffold array `groups`. The neighbour family
+    # (neighbor_residual, local_variance_ratio, distance_weighted,
+    # activity_cliff_aware, leave_one_out) names the SAME array
+    # `exclude_groups`, because for them it is what a molecule's neighbour list
+    # must not contain rather than what a fold must not straddle. Every
+    # estimator in ESTIMATOR_REGISTRY takes one or the other; none takes
+    # neither. Offering both means the undeliverable check below fires only
+    # when an estimator genuinely cannot receive them.
+    #
+    # Before this, `_smoke_n04_n07` failed outright: DETECTORS_GRADED names
+    # activity_cliff_aware, which takes `exclude_groups`, so the check raised
+    # TypeError and the whole of n07 stopped.
+    offered = {'k': 10, 'metric': None, 'is_clf': is_clf,
+               'groups': groups, 'exclude_groups': groups}
     accepts = set(inspect.signature(cls.__init__).parameters)
     # ⛔ A FLAG THIS FILTER CANNOT DELIVER IS AN ERROR, NOT A SHRUG.
     #
@@ -348,8 +371,11 @@ def _compute_noise_scores(X_tr_s, y_tr, is_clf=False, detector=None,
     # Only a flag that would CHANGE something is refused. is_clf=False and
     # groups=None ask for nothing, so an estimator that names neither is used
     # exactly as it was.
+    # `groups` counts as delivered if the estimator accepts EITHER name.
     undeliverable = [k for k, v in (('is_clf', is_clf), ('groups', groups))
-                     if k not in accepts and v is not None and v is not False]
+                     if v is not None and v is not False
+                     and not (k in accepts
+                              or (k == 'groups' and 'exclude_groups' in accepts))]
     if undeliverable:
         raise TypeError(
             f"detector {name!r} ({cls.__name__}) takes no "
@@ -517,6 +543,72 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                     noise_scores,
                     strength=1.0 if strength is None else float(strength)),
                 'keep': None, 'label_column': None}
+
+    if strategy == 'huber_weight':
+        # Huber's redescending weight, w = min(1, c*s/r), with the scale s the
+        # median absolute suspicion score times 1.4826 -- the constant that
+        # makes that a consistent estimator of the standard deviation under a
+        # normal, and c = 1.345 the tuning constant giving 95 percent
+        # efficiency there (Huber 1964).
+        #
+        # HOW THIS DIFFERS FROM `downweight`, which is the point of having
+        # both: downweight's weight is 1/(1 + strength*s_norm), which falls
+        # away smoothly from the very first molecule and never reaches zero.
+        # This one is FLAT at 1.0 for every molecule inside the scale and only
+        # then falls, so a label that looks ordinary is not touched at all.
+        # Which shape is right is an empirical question this suite has never
+        # asked.
+        r = np.abs(np.asarray(noise_scores, dtype=float))
+        s_scale = 1.4826 * np.median(r)
+        if not np.isfinite(s_scale) or s_scale <= 0:
+            # Every score identical: no molecule is more suspect than another,
+            # so the honest weight is a flat one rather than a divide by zero.
+            w = np.ones(len(r))
+        else:
+            c = 1.345 if strength is None else float(strength)
+            w = np.minimum(1.0, c * s_scale / np.maximum(r, 1e-12))
+        w = w / w.mean()          # mean-normalised, as weights_from_scores is
+        return {'X': X_tr_s, 'y': y_tr, 'sample_weight': w,
+                'keep': None, 'label_column': None}
+
+    if strategy == 'js_shrink':
+        # James-Stein / empirical-Bayes shrinkage toward the out-of-fold
+        # prediction. Each label moves by shrink_i = sigma2_i / (sigma2_i +
+        # tau2), where tau2 is the spread of the label about the prediction
+        # across the whole training block -- the signal the model can see --
+        # and sigma2_i is how noisy THIS label looks. A label the detector
+        # finds ordinary barely moves; one it finds wrong moves most of the
+        # way. (James & Stein 1961; Efron & Morris 1975.)
+        #
+        # HOW THIS DIFFERS FROM `oof_smooth`, which also moves a label toward
+        # the same prediction: oof_smooth moves it by `alpha * score_norm`,
+        # a fraction the caller chooses and the score scales. Here the fraction
+        # is DERIVED -- it is the ratio of the two variances, so there is no
+        # alpha to tune and the shrinkage is whatever the data says it should
+        # be. If the two disagree, the difference is the tuning.
+        oof = None if targets is None else targets.get('oof')
+        if oof is None:
+            print("      js_shrink: no out-of-fold prediction to shrink "
+                  "toward; skipping this cleanup rather than shrinking "
+                  "toward the fold mean, which is a different method.")
+            return None
+        oof = np.asarray(oof, dtype=float)
+        resid = np.asarray(y_tr, dtype=float) - oof
+        tau2 = float(np.var(resid))
+        if not np.isfinite(tau2) or tau2 <= 0:
+            return None
+        # The suspicion score is not in label units, so it is put on the same
+        # scale as the residuals before being read as a per-molecule variance.
+        sc = np.asarray(noise_scores, dtype=float)
+        rng_sc = np.ptp(sc)
+        if not np.isfinite(rng_sc) or rng_sc <= 0:
+            return None
+        sc_norm = (sc - sc.min()) / rng_sc
+        sigma2 = sc_norm * tau2 * (1.0 if strength is None else float(strength))
+        shrink = sigma2 / (sigma2 + tau2)
+        y_new = (1.0 - shrink) * np.asarray(y_tr, dtype=float) + shrink * oof
+        return {'X': X_tr_s, 'y': y_new, 'sample_weight': None,
+                'keep': None, 'label_column': y_new}
 
     if strategy == 'label_smooth':
         if is_clf:
