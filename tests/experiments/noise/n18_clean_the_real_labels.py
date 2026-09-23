@@ -50,6 +50,9 @@ way.
 WHERE EVERY CLEANUP IS MEASURED. In two feature spaces: one base representation,
 and a hybrid whose recipe comes from the precomputed pool and whose features are
 rebuilt per fold. That is n19's two-space treatment, added here on 2026-09-17.
+The recipe is fetched PER DOWNSTREAM MODEL since 2026-09-23: rf is scored in the
+features rf's recipe chose, svm in svm's. Before that one recipe was fetched for
+the first model in the list and every model was scored on its features.
 Until then this file read `sorted(reps)[0]` and every number in it came from
 whichever representation sorted first, with nothing in the output saying so.
 
@@ -58,9 +61,9 @@ but it is now written to `base_rep` and read against the hybrid rather than
 standing alone.
 
 THE HYBRID IS BUILT ON THE TRAINING MOLECULES OF A FOLD, AT THEIR UNCLEANED
-LABELS. It is built ONCE per fold and every cleanup, flag rate and detector
-shares it, so the only thing differing between two cleanups is what the
-downstream fit was handed. The held-out molecules' labels reach no feature
+LABELS. It is built once per fold per downstream model and every cleanup, flag
+rate and detector that model is scored under shares it, so the only thing
+differing between two cleanups is what the downstream fit was handed. The held-out molecules' labels reach no feature
 ranking and no budget split. Whether a recipe searched AFTER the cleaning would
 do better is a different question and it is n20's.
 
@@ -86,6 +89,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import functools
 import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -100,7 +104,9 @@ from experiments._shared import (
 )
 # One per-fold hybrid build, shared with n17 and n19. It lived in n19 until
 # 2026-09-17.
-from experiments.noise.noise_helpers import hybrid_for_fold
+from experiments.noise.noise_helpers import (hybrid_for_fold,
+                                             pool_recipe_per_downstream_model,
+                                             group_models_by_recipe)
 # The four cleanups are n07's, called directly rather than copied. n07 injects
 # noise unless it is handed a training label vector, and it is handed one here --
 # the labels exactly as the loader produced them. So the same code runs, over the
@@ -505,10 +511,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'oracle caveat n11, n12 and n13 carry does not apply.'),
         'hybrid_sees_cleaned_labels': False,
         'hybrid_sees_cleaned_labels_note': (
-            'The hybrid is built once per fold from that fold\'s training '
-            'molecules at their UNCLEANED labels, and every cleanup, flag rate '
-            'and detector shares it. No cleanup reaches the feature ranking or '
-            'the budget split. Whether a recipe searched after the cleaning '
+            'The hybrid is built once per fold per downstream model from that '
+            'fold\'s training molecules at their UNCLEANED labels, and every '
+            'cleanup, flag rate and detector shares it. No cleanup reaches the '
+            'feature ranking or the budget split. Whether a recipe searched after the cleaning '
             'would do better is n20\'s question.'),
         'weights_reach_feature_selection': False,
         'weights_reach_feature_selection_note': (
@@ -530,56 +536,79 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  flag rates {flag_rates}, detectors {detectors}")
     print(f"  base representation: {base_rep_name}")
 
-    # ── The hybrid recipe, fetched once ──
+    # ── The hybrid recipe, fetched once PER DOWNSTREAM MODEL ──
     # The pool is keyed on the dataset as the precompute built it, so the lookup
     # is handed the representations, labels and fold grouping exactly as n02,
     # n11, n12, n13, n17 and n19 hand them over. What comes back is a recipe --
     # a representation set, an allocation method, an importance method, a budget
     # and an internal evaluator -- and the features are rebuilt per fold below.
-    bp = None
-    bp_sim = None
-    # Bound before the try so the top-2 block below can test it. Until
-    # 2026-09-18 nothing read `search` and an exception here left the name
-    # unbound; reading it would have raised UnboundLocalError on the one path
-    # this file is built to survive -- a dataset the precompute never covered.
-    search = None
-    try:
-        search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model=downstream_models[0], budget=None,
-            augmentations=data.get('augmentations'),
-            dataset_name=dataset_name, task_type=task_type,
-            data=data,
-            pool_subset=POOL_SUBSET,
-        )
-        bp = meta['best_config']['blueprint'] if meta else None
-    except Exception as exc:
-        meta = None
-        # ⛔ WHAT WENT WRONG IS RECORDED, NOT JUST THAT SOMETHING DID. Two
-        # different things put this file in the base representation alone and
-        # they call for opposite responses. One is a dataset the precompute
-        # never covered: this file was built to survive it and no action fixes
-        # it. The other is a stored search written under an older column list
-        # -- result_cache.StaleResultDB -- which one rebuild of that one file
-        # fixes. Both were reported here as "no recipe came back from the
-        # precomputed pool", so a result file could not tell them apart and a
-        # run that should have been re-launched after a rebuild read as a run
-        # with nothing to rebuild.
-        #
-        # Measured on flab_thermo_tresanco 2026-09-20: commit 9c6f7d7 added
-        # distance_metric to the search store's identity that morning, every
-        # stored search on disk was written without it, and three n18 runs
-        # dropped both hybrid spaces while their result files said the pool was
-        # empty. The same commit made four callers in find_best_hybrid and
-        # _shared re-raise StaleResultDB for exactly this reason; this file
-        # still swallows it, because dropping the run would lose every
-        # base-representation number -- so it records the cause instead.
-        _lookup_error = f"{type(exc).__name__}: {exc}"
-        print(f"  hybrid recipe lookup failed: {_lookup_error}")
-    else:
-        _lookup_error = None
+    #
+    # ⛔ IT WAS ONE RECIPE, ASKED FOR downstream_models[0], AND EVERY MODEL WAS
+    # SCORED ON IT. downstream_models[0] is 'rf' in every run this file has
+    # made, so a run over the five models in DOWNSTREAM_MODELS -- rf, xgboost,
+    # svm, dnn, lightgbm -- wrote five numbers measured in the features the
+    # random forest's recipe chose, and the difference between two of those
+    # numbers was not a difference between the two models.
+    # Each model now gets the recipe the search picked FOR it. A model the pool
+    # holds no search for gets NO hybrid space and keeps every
+    # base-representation number; it is never handed another model's recipe.
+    # Changed 2026-09-23.
+    by_model, no_recipe = pool_recipe_per_downstream_model(
+        functools.partial(
+            get_best_search_for_downstream, reps, labels, groups,
+            budget=None, augmentations=data.get('augmentations'),
+            dataset_name=dataset_name, task_type=task_type, data=data,
+            pool_subset=POOL_SUBSET),
+        downstream_models)
 
-    if bp is None:
+    # ⛔ WHAT WENT WRONG IS RECORDED, NOT JUST THAT SOMETHING DID. Two
+    # different things put this file in the base representation alone and
+    # they call for opposite responses. One is a dataset the precompute
+    # never covered: this file was built to survive it and no action fixes
+    # it. The other is a stored search written under an older column list
+    # -- result_cache.StaleResultDB -- which one rebuild of that one file
+    # fixes. Both were reported here as "no recipe came back from the
+    # precomputed pool", so a result file could not tell them apart and a
+    # run that should have been re-launched after a rebuild read as a run
+    # with nothing to rebuild.
+    #
+    # Measured on flab_thermo_tresanco 2026-09-20: commit 9c6f7d7 added
+    # distance_metric to the search store's identity that morning, every
+    # stored search on disk was written without it, and three n18 runs
+    # dropped both hybrid spaces while their result files said the pool was
+    # empty. The same commit made four callers in find_best_hybrid and
+    # _shared re-raise StaleResultDB for exactly this reason; this file
+    # still swallows it, because dropping the run would lose every
+    # base-representation number -- so it records the cause instead.
+    # pool_recipe_per_downstream_model catches it per model and says which of
+    # the two happened; the key below carries one sentence per model that has
+    # no recipe.
+    _raised = [d['lookup_error'] for d in no_recipe.values()
+               if d['lookup_error']]
+    _lookup_error = _raised[0] if _raised else None
+    results['hybrid_unavailable_by_model'] = {
+        m: d['why'] for m, d in no_recipe.items()}
+
+    # {model: {space: recipe}}. A model missing from a space is a model that
+    # space was never built for, and its rows in that space stay empty.
+    recipe_for_space_by_model = {}
+    for _m, _got in by_model.items():
+        # ── The geometry recipe, taken by name and not by preference ──
+        # The pool returns one family and names the rest under by_objective.
+        # This reaches past that and takes the similarity family's own winner,
+        # so both are measured instead of one being measured and the other
+        # recorded. See the SPACES comment for why it matters here in
+        # particular.
+        _sim_entry = ((_got['meta'].get('by_objective') or {})
+                      .get('similarity') or {})
+        _bp_sim_m = (_sim_entry.get('best_config') or {}).get('blueprint')
+        recipe_for_space_by_model[_m] = {'hybrid': _got['blueprint']}
+        if _bp_sim_m is not None:
+            recipe_for_space_by_model[_m]['hybrid_similarity'] = _bp_sim_m
+
+    bp = None
+    meta = None
+    if not by_model:
         # Every cleanup still runs, in the base representation alone. Dropping
         # the run would lose every base-space number because one of two spaces
         # is missing.
@@ -594,13 +623,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
              f'representation only.')
             if _lookup_error else
             (f'no recipe came back from the precomputed pool for subset '
-             f'{POOL_SUBSET!r}, so the hybrid space could not be built. Every '
-             f'cleanup ran in the base representation only.'))
-        print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
-              f"base representation only")
+             f'{POOL_SUBSET!r} for any downstream model, so the hybrid space '
+             f'could not be built. Every cleanup ran in the base '
+             f'representation only.'))
+        print(f"  no hybrid recipe from pool subset {POOL_SUBSET} for any "
+              f"downstream model; base representation only")
     else:
-        spaces = tuple(SPACES)
+        # A space runs when at least one downstream model has a recipe for it,
+        # and inside it only the models that do.
+        spaces = tuple(s for s in SPACES if s == 'base' or any(
+            s in _r for _r in recipe_for_space_by_model.values()))
         results['hybrid_available'] = True
+        results['hybrid_lookup_error'] = _lookup_error
+        results['hybrid_models_with_a_recipe'] = [
+            m for m in downstream_models if m in by_model]
+        results['hybrid_models_without_one'] = [
+            m for m in downstream_models if m not in by_model]
+        # The keys that name ONE recipe describe this model's. Every model's is
+        # in hybrid_recipe_by_model, and every cleanup score was measured in
+        # the features of the model's own recipe.
+        _first = results['hybrid_models_with_a_recipe'][0]
+        meta = by_model[_first]['meta']
+        bp = by_model[_first]['blueprint']
+        results['hybrid_recipe_keys_name_one_model'] = _first
+        results['hybrid_recipe_keys_note'] = (
+            'hybrid_family, hybrid_family_choice, hybrid_pool_subset, '
+            'hybrid_tier, hybrid_aug_condition, hybrid_budget, hybrid_reps, '
+            'hybrid_pool_by_objective and the hybrid_similarity_* keys all '
+            f'describe the recipe the search picked for {_first}. Every other '
+            'downstream model was scored in the features of ITS OWN recipe, '
+            'and all of them are in hybrid_recipe_by_model.')
         results['hybrid_family'] = meta['objective']
         results['hybrid_family_choice'] = meta['objective_choice']
         results['hybrid_pool_subset'] = meta['pool_subset']
@@ -614,37 +666,66 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'lower_is_better': d['lower_is_better']}
             for o, d in (meta.get('by_objective') or {}).items()
         })
-        print(f"  hybrid recipe: {len(results['hybrid_reps'])} representations, "
-              f"budget {results['hybrid_budget']}, searched under objective "
-              f"{meta['objective']} (pool subset {meta['pool_subset']})")
+        # One entry per (downstream model, space): the recipe that model's
+        # features were rebuilt from in that space.
+        results['hybrid_recipe_by_model'] = convert_numpy({
+            m: {sp: {'reps': sorted(getattr(b, 'reps', []) or []),
+                     'budget': getattr(b, 'budget', None),
+                     'allocation_method': getattr(b, 'allocation_method', None),
+                     'importance_method': getattr(b, 'importance_method', None),
+                     'internal_evaluator': getattr(b, 'internal_evaluator',
+                                                   None),
+                     'searched_under_objective': getattr(b, 'objective', None)}
+                for sp, b in _r.items()}
+            for m, _r in recipe_for_space_by_model.items()})
+        for m in results['hybrid_models_with_a_recipe']:
+            _r = recipe_for_space_by_model[m]
+            _bp_m = _r['hybrid']
+            print(f"  {m}: recipe of "
+                  f"{len(sorted(getattr(_bp_m, 'reps', []) or []))} "
+                  f"representations, budget {getattr(_bp_m, 'budget', None)} "
+                  f"features, searched under objective "
+                  f"{by_model[m]['meta']['objective']} (pool subset "
+                  f"{by_model[m]['meta']['pool_subset']}); spaces "
+                  f"{sorted(_r)}")
+        for m in results['hybrid_models_without_one']:
+            print(f"  {m}: no recipe — {no_recipe[m]['why']}")
 
-        # ── The geometry recipe, taken by name and not by preference ──
-        # The pool returns one family and names the rest under by_objective.
-        # This reaches past that and takes the similarity family's own winner,
-        # so both are measured instead of one being measured and the other
-        # recorded. See the SPACES comment for why it matters here in
-        # particular.
-        _by_obj = meta.get('by_objective') or {}
-        _sim = _by_obj.get('similarity')
-        bp_sim = (_sim or {}).get('best_config', {}).get('blueprint')
-        if bp_sim is None:
-            spaces = tuple(x for x in spaces if x != 'hybrid_similarity')
+        # The similarity keys describe the first model that HAS a similarity
+        # recipe, which need not be the model the keys above describe.
+        _sim_model = next(
+            (m for m in downstream_models
+             if 'hybrid_similarity' in recipe_for_space_by_model.get(m, {})),
+            None)
+        _sim = ((by_model[_sim_model]['meta'].get('by_objective') or {})
+                .get('similarity') or {}) if _sim_model else {}
+        _bp_sim = (_sim.get('best_config') or {}).get('blueprint')
+        if 'hybrid_similarity' not in spaces:
             results['hybrid_similarity_available'] = False
+            _any_sim_family = any(
+                'similarity' in (d['meta'].get('by_objective') or {})
+                for d in by_model.values())
             results['hybrid_similarity_unavailable_reason'] = (
                 'the pool held no search under objective=similarity for this '
                 'dataset, so the space whose features were chosen to make the '
-                'neighbour distance predictive could not be built. Every '
-                'cleanup still ran in the other spaces.'
-                if 'similarity' not in _by_obj else
-                'the similarity family was in the pool but its winning '
-                'configuration carried no blueprint.')
+                'neighbour distance predictive could not be built for any '
+                'downstream model. Every cleanup still ran in the other '
+                'spaces.'
+                if not _any_sim_family else
+                'the similarity family was in the pool but no downstream '
+                "model's winning configuration under it carried a recipe.")
             print(f"  no similarity-objective recipe; "
                   f"{results['hybrid_similarity_unavailable_reason']}")
         else:
             results['hybrid_similarity_available'] = True
-            results['hybrid_similarity_budget'] = getattr(bp_sim, 'budget', None)
+            results['hybrid_similarity_keys_name_one_model'] = _sim_model
+            results['hybrid_similarity_models'] = [
+                m for m in downstream_models
+                if 'hybrid_similarity' in recipe_for_space_by_model.get(m, {})]
+            results['hybrid_similarity_budget'] = getattr(_bp_sim, 'budget',
+                                                          None)
             results['hybrid_similarity_reps'] = sorted(
-                getattr(bp_sim, 'reps', []) or [])
+                getattr(_bp_sim, 'reps', []) or [])
             results['hybrid_similarity_score_mean'] = _sim.get('score_mean')
             results['hybrid_similarity_metric_name'] = _sim.get('metric_name')
             results['hybrid_similarity_note'] = (
@@ -655,7 +736,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 "predictive hybrid's. Every cleanup score measured IN it is in "
                 "the dataset's metric and is comparable with everything else "
                 "in this file.")
-            print(f"  similarity recipe: "
+            print(f"  similarity recipe ({_sim_model}): "
                   f"{len(results['hybrid_similarity_reps'])} representations, "
                   f"budget {results['hybrid_similarity_budget']}, scored "
                   f"{_sim.get('score_mean')} under "
@@ -664,31 +745,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── What each downstream model would have picked for itself ──
     # Added 2026-09-18, ADDITIVE. Nothing above or below moves: `base_rep` is
-    # still the one pick_noise_base_rep names, `spaces_run` is still the same 2
-    # spaces, the hybrid is still the 1 recipe fetched for
-    # downstream_models[0], and every fold-win count in 'per_space' is still
-    # measured in those 2 spaces. These 4 keys sit beside them.
+    # still the one pick_noise_base_rep names and every fold-win count in
+    # 'per_space' is still measured in the spaces 'spaces_run' names. These 4
+    # keys sit beside them.
     #
     # What was absent without them: this file scores 5 downstream models on 1
-    # base representation and 1 hybrid recipe, and the result file recorded
-    # neither which representations nor which configurations the other 4
-    # downstream models rank highest. A reader could not tell whether a model
-    # lost because the cleanup did nothing or because it was scored on another
-    # model's recipe.
+    # base representation, and the result file recorded neither which
+    # representations nor which configurations the other 4 downstream models
+    # rank highest. A reader could not tell whether a model lost because the
+    # cleanup did nothing or because it was scored on another model's recipe.
     #
     # 0 new model fits. All four read rows the search already stored:
     # search.baselines for the representations, search.all_results for the
-    # configurations.
+    # configurations. Each model is read out of the SearchResult the pool
+    # returned for that model, since 2026-09-23; before that one search was
+    # fetched for downstream_models[0] and every model read out of it.
     results['top2_base_reps'] = {}
     results['top2_hybrids'] = {}
     results['top2_pairs_by_model'] = {}
     results['hybrid_deltas_by_model'] = {}
-    if search is None:
+    _searches = {m: d['search'] for m, d in by_model.items()
+                 if d['search'] is not None}
+    if not _searches:
         results['top2_unavailable_reason'] = (
-            'the pool returned no SearchResult, so there are no stored rows to '
-            'rank. Every cleanup number in this file stands.')
+            'the pool returned no SearchResult for any downstream model, so '
+            'there are no stored rows to rank. Every cleanup number in this '
+            'file stands.')
     else:
         for _m in downstream_models:
+            search = _searches.get(_m)
+            if search is None:
+                # No stored search was returned for this model, so there is
+                # nothing of its own to rank. Another model's rows would be
+                # another model's answer.
+                continue
             # require_full=False: a downstream model this search never scored
             # comes back a short list carrying its own shortfall_reason,
             # instead of raising and losing every cleanup number below it.
@@ -723,9 +813,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # representations and 2 hybrid configurations, plus 'n_distinct_units'
         # -- how many separate things would have to be BUILT once one
         # representation picked by three downstream models is counted once.
+        # It takes ONE SearchResult and reads every model out of it, so it is
+        # given the one the pool returned for the model named in
+        # 'top2_pairs_search_of_model' and that is written down.
+        _grid_model = next(m for m in downstream_models if m in _searches)
+        results['top2_pairs_search_of_model'] = _grid_model
         try:
             results['top2_pairs_by_model'] = _drop_blueprint(
-                select_model_rep_pairs(search, models=list(downstream_models),
+                select_model_rep_pairs(_searches[_grid_model],
+                                       models=list(downstream_models),
                                        n_base=2, n_hybrids=2,
                                        require_full=False))
         except Exception as _e:
@@ -738,7 +834,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     acc = {s: {d: {r: {m: {c: [] for c in ('no_cleaning',) + CLEANUPS}
                        for m in downstream_models} for r in flag_rates}
                for d in detectors} for s in spaces}
-    folds_ran = {s: {d: {r: 0 for r in flag_rates} for d in detectors}
+    # Which FOLDS produced a score, as a set of fold numbers per (space,
+    # detector, flag rate). A count until 2026-09-23, when a hybrid space
+    # became one feature matrix per downstream model: the loop below then
+    # reaches the same (space, detector, rate) once per model, and a count
+    # would have said five folds ran where one did.
+    folds_ran = {s: {d: {r: set() for r in flag_rates} for d in detectors}
                  for s in spaces}
     hybrid_failures = []
 
@@ -748,9 +849,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         y_val = labels[val_idx]
 
         # ── The feature spaces for this fold ──
-        # The base representation is scaled on this fold's training molecules.
-        # The hybrid is built ONCE, here, from those same training molecules at
-        # their UNCLEANED labels, and every cleanup below shares it.
+        # The base representation is scaled on this fold's training molecules
+        # and is ONE matrix, shared by every downstream model.
+        #
+        # ⛔ A HYBRID SPACE IS ONE MATRIX PER DOWNSTREAM MODEL. Each model's
+        # features are rebuilt from the recipe the search picked for THAT
+        # model, and the accept/reject test inside the build is scored with
+        # that model. Until 2026-09-23 a hybrid space was one matrix, built
+        # from downstream_models[0]'s recipe with downstream_models[0]'s
+        # estimator, and every model was scored on it.
+        #
+        # {space: [(training matrix, held-out matrix, the models scored on
+        # it)]}. Every matrix is built from this fold's training molecules at
+        # their UNCLEANED labels, and every cleanup shares it.
         fold_spaces = {}
         # This fold's training scaffold groups. Bound here and not inside the
         # hybrid branch below, because the detector reads them too and a run
@@ -758,45 +869,82 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         g_tr = (np.asarray(groups)[train_idx]
                 if groups is not None else None)
         scaler = StandardScaler()
-        fold_spaces['base'] = (
+        fold_spaces['base'] = [(
             scaler.fit_transform(np.asarray(X_source[train_idx],
                                             dtype=np.float64)),
-            scaler.transform(np.asarray(X_source[val_idx], dtype=np.float64)))
+            scaler.transform(np.asarray(X_source[val_idx], dtype=np.float64)),
+            list(downstream_models))]
         _tr_reps = {k: np.asarray(v[train_idx], dtype=np.float64)
                     for k, v in reps.items()}
         _va_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
                     for k, v in reps.items()}
-        # (space name, recipe). Both are rebuilt on this fold's training
-        # molecules at their UNCLEANED labels. hybrid_for_fold refuses the
-        # model and metric under a geometry recipe on its own -- it reads the
-        # objective off the blueprint -- so one call serves both.
-        for _sp, _bp in (('hybrid', bp), ('hybrid_similarity', bp_sim)):
-            if _sp not in spaces or _bp is None:
+        # hybrid_for_fold refuses the model and the metric under a geometry
+        # recipe on its own -- it reads the objective off the blueprint -- so
+        # one call serves the predictive space and the similarity one.
+        for _sp in spaces:
+            if _sp == 'base':
                 continue
-            X_tr_h, X_va_h = hybrid_for_fold(
-                _tr_reps, _va_reps, y_train, _bp, g_tr,
-                model_factories[downstream_models[0]](),
-                metric_fn, lower_is_better)
-            if X_tr_h is None:
-                hybrid_failures.append({'fold': int(fold_i), 'space': _sp})
-            else:
+            # ONE BUILD PER DISTINCT RECIPE, NOT PER MODEL -- but only where
+            # the model provably does not enter the build. Under a recipe from
+            # the similarity family no downstream model is fitted inside
+            # build_fold_hybrid and the model is not passed at all
+            # (hybrid_for_fold's own docstring, and it reads the objective off
+            # the blueprint). So two models holding the SAME geometry recipe
+            # get bit-identical matrices and the second build is waste: five
+            # downstream models meant five builds of one matrix per fold.
+            #
+            # It is NOT assumed that they hold the same one. The pool looks the
+            # recipe up per model -- get_best_search_for_downstream skips a
+            # stored search the model is absent from and then takes
+            # get_best_for_downstream for it (_shared.py:6133-6138) -- so two
+            # models can come back with different similarity recipes. The
+            # grouping below compares the recipes it actually got and falls
+            # back to one build per model when they differ, so the worst case
+            # is what this did before.
+            #
+            # Under a predictive recipe the model IS fitted inside the build,
+            # so no grouping is attempted there.
+            _groups = group_models_by_recipe(
+                {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
+                 for _m in downstream_models},
+                downstream_models)
+
+            _cells = []
+            for _bp_m, _mnames, _shareable in _groups:
+                # The model instance is passed only when the build fits one.
+                X_tr_h, X_va_h = hybrid_for_fold(
+                    _tr_reps, _va_reps, y_train, _bp_m, g_tr,
+                    None if _shareable else model_factories[_mnames[0]](),
+                    metric_fn, lower_is_better)
+                if X_tr_h is None:
+                    for mname in _mnames:
+                        hybrid_failures.append({'fold': int(fold_i),
+                                                'space': _sp,
+                                                'model': mname})
+                    continue
                 sc_h = StandardScaler()
-                fold_spaces[_sp] = (sc_h.fit_transform(X_tr_h),
-                                    sc_h.transform(X_va_h))
+                _cells.append((sc_h.fit_transform(X_tr_h),
+                               sc_h.transform(X_va_h), list(_mnames)))
+            if _cells:
+                fold_spaces[_sp] = _cells
 
-        for space in spaces:
-            if space not in fold_spaces:
-                continue
-            X_tr_s, X_va_s = fold_spaces[space]
+        # One pass per (space, feature matrix): once for the base
+        # representation, once per downstream model in each hybrid space.
+        for space, (X_tr_s, X_va_s, cell_models) in (
+                (_sp, _cell) for _sp in spaces
+                for _cell in fold_spaces.get(_sp, ())):
 
-            # The score to beat, IN THIS SPACE. One fit per (fold, space,
+            # The score to beat, ON THIS MATRIX. One fit per (fold, matrix,
             # model), shared by every cleanup, every flag rate and every
             # detector — they all have to beat the same number or the
             # comparison is not paired.
             # ⛔ THE THREE MODEL-BASED CORRECTIONS' TARGETS, ONCE PER
-            # (FOLD, SPACE). Each depends on the features, the labels and the
-            # groups and on nothing else -- not the suspicion score, not the
-            # strength, not which model is about to be fitted. Left in
+            # (FOLD, FEATURE MATRIX). Each depends on the features, the labels
+            # and the groups and on nothing else -- not the suspicion score,
+            # not the strength, not which model is about to be fitted. They
+            # are computed once per matrix, which is once per (fold, space)
+            # for the base representation and once per (fold, space, model)
+            # in a hybrid space, because those matrices differ. Left in
             # cleaned_training_set they were refitted for every setting: 3
             # strengths x 2 detectors x 2 models = 12 identical fits where 1
             # does, and the Gaussian process is cubic in the training rows with
@@ -812,7 +960,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 want=targets_needed(CLEANUPS))
 
             base_score = {}
-            for mname in downstream_models:
+            for mname in cell_models:
                 sc = _evaluate_fold(
                     X_tr_s, X_va_s, y_train, y_val, 'no_noise', 0.0,
                     model_factories[mname], metric_fn, is_clf=is_clf,
@@ -829,8 +977,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if scores is None:
                     continue
                 for slot, rate in enumerate(flag_rates):
-                    folds_ran[space][detector][rate] += 1
-                    for mname in downstream_models:
+                    folds_ran[space][detector][rate].add(int(fold_i))
+                    for mname in cell_models:
                         acc[space][detector][rate][mname]['no_cleaning'].append(
                             base_score[mname])
                         for cleanup in CLEANUPS:
@@ -876,13 +1024,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if hybrid_failures:
         # Named rather than left as a shorter list of folds. Those folds still
         # carry every base-space number.
-        # One entry per (fold, space) that could not be built, so a geometry
-        # recipe failing on a fold is not confused with the predictive one
-        # failing on it. Those folds keep every number from the spaces that
-        # did build.
+        # One entry per (fold, space, downstream model) that could not be
+        # built, so a geometry recipe failing on a fold is not confused with
+        # the predictive one failing on it, and one model's build failing is
+        # not read as every model's. Those folds keep every number from the
+        # matrices that did build.
         results['folds_with_no_hybrid'] = hybrid_failures
         print(f"  a hybrid space could not be built on "
-              f"{len(hybrid_failures)} (fold, space) pairs: "
+              f"{len(hybrid_failures)} (fold, space, model) triples: "
               f"{hybrid_failures}; the spaces that built keep their numbers")
 
     # ── Fold win counts, which are the headline ──
@@ -891,7 +1040,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for detector in detectors:
             space_block[detector] = {}
             for rate in flag_rates:
-                block = {'n_folds_ran': folds_ran[space][detector][rate],
+                block = {'n_folds_ran': len(folds_ran[space][detector][rate]),
                          'per_model': {}}
                 for mname in downstream_models:
                     cell = acc[space][detector][rate][mname]

@@ -311,12 +311,95 @@ def test_runs_without_a_recipe():
                for c, v in r['summary']['per_space']['base']['per_cleanup'].items()}))
 
 
+def test_one_build_per_recipe_not_per_model():
+    """Which downstream models may share one built feature matrix.
+
+    n18 looks the recipe up per downstream model, so five models mean five
+    builds per fold per space. Under a recipe from the similarity family that is
+    waste -- no downstream model is fitted inside the build -- so two models
+    holding the same such recipe share one. Sharing wrongly is the same act as
+    handing a model another model's features, which is the defect the per-model
+    lookup exists to remove, so every way the comparison can fail to give a
+    clean answer has to land on building twice.
+
+    NOTHING ELSE HERE REACHES THIS. The fixture's pool holds no
+    similarity-objective search -- the run above prints that it could not build
+    that space for any model -- so the smoke runs green through the predictive
+    path without entering the grouping at all. These recipes are made up for
+    that reason.
+    """
+    from experiments.noise.noise_helpers import group_models_by_recipe
+    models = ['rf', 'xgboost', 'svm', 'dnn', 'lightgbm']
+
+    class Geo:
+        objective = 'similarity'
+        def __init__(self, tag): self.tag = tag
+        def __eq__(self, o): return isinstance(o, Geo) and o.tag == self.tag
+
+    class Pred:
+        objective = 'predictive'
+        def __init__(self, tag): self.tag = tag
+        def __eq__(self, o): return isinstance(o, Pred) and o.tag == self.tag
+
+    class Raises:
+        objective = 'similarity'
+        def __eq__(self, o): raise RuntimeError('this comparison raises')
+
+    class ReturnsAnArray:
+        objective = 'similarity'
+        def __eq__(self, o): return np.array([True, False])
+
+    one = Geo('a')
+    g = group_models_by_recipe({m: one for m in models}, models)
+    check('five models sharing one geometry recipe object build it once',
+          [(len(x[1]), x[2]) for x in g] == [(5, True)], str(len(g)) + ' build(s)')
+
+    g = group_models_by_recipe({m: Geo('a') for m in models}, models)
+    check('five equal but separate geometry recipes build it once',
+          [(len(x[1]), x[2]) for x in g] == [(5, True)], str(len(g)) + ' build(s)')
+
+    g = group_models_by_recipe(
+        {'rf': Geo('a'), 'xgboost': Geo('a'), 'svm': Geo('b'),
+         'dnn': Geo('b'), 'lightgbm': Geo('c')}, models)
+    check('three distinct geometry recipes build three matrices',
+          [sorted(x[1]) for x in g] == [['rf', 'xgboost'], ['dnn', 'svm'],
+                                        ['lightgbm']],
+          str([sorted(x[1]) for x in g]))
+
+    g = group_models_by_recipe({m: Pred('a') for m in models}, models)
+    check('equal PREDICTIVE recipes are never shared, the model is fitted inside',
+          [(len(x[1]), x[2]) for x in g] == [(1, False)] * 5,
+          str(len(g)) + ' build(s)')
+
+    for cls, why in ((Raises, 'raises'), (ReturnsAnArray, 'returns an array')):
+        g = group_models_by_recipe({m: cls() for m in models}, models)
+        check(f'a recipe whose comparison {why} is built per model',
+              [len(x[1]) for x in g] == [1] * 5, str(len(g)) + ' build(s)')
+
+    g = group_models_by_recipe({'rf': Geo('a'), 'svm': None, 'dnn': Geo('a')},
+                               models)
+    check('a model with no recipe gets no build, not another model\'s',
+          [sorted(x[1]) for x in g] == [['dnn', 'rf']],
+          str([sorted(x[1]) for x in g]))
+
+    check('no recipes at all builds nothing',
+          group_models_by_recipe({}, models) == [], '0 build(s)')
+
+    g = group_models_by_recipe(
+        {'rf': Geo('a'), 'xgboost': Pred('a'), 'svm': Geo('a')}, models)
+    check('a predictive recipe never joins a geometry group',
+          [(sorted(x[1]), x[2]) for x in g] == [(['rf', 'svm'], True),
+                                                (['xgboost'], False)],
+          str([(sorted(x[1]), x[2]) for x in g]))
+
+
 if __name__ == '__main__':
     clean = test_nothing_injected()
     dirty = test_finds_a_real_error(clean)
     test_counts_are_sane(dirty)
     test_qm9_is_marked()
     test_runs_without_a_recipe()
+    test_one_build_per_recipe_not_per_model()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")

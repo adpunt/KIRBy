@@ -116,14 +116,19 @@ def test_detection_before_cleaning():
     print("does the number find the molecules that moved:")
     data = make_data(seed=1)
     r = run_it(data, 'toy', regimes=['injected'], levels=[0.0, 0.5], draws=[0])
+    # {level: {space: {downstream model: {source: reading}}}}. The model level
+    # arrived 2026-09-23: a hybrid space is one feature matrix per downstream
+    # model, so the uncertainty number that grades the molecules is computed
+    # per model. This run asks for one model, 'rf'.
     det = r['detection']
     check('a detection reading was written at the corrupted level',
-          '0.5' in det and det['0.5'].get('base'), f'levels {sorted(det)}')
+          '0.5' in det and (det['0.5'].get('base') or {}).get('rf'),
+          f'levels {sorted(det)}')
     check('nothing was written at level 0.0, where nothing moved',
           not (det.get('0') or {}).get('base'),
           f"level 0 block: {det.get('0')}")
 
-    read = det['0.5']['base']
+    read = det['0.5']['base']['rf']
     for source, d in read.items():
         if not d or not np.isfinite(d['detection_average_precision']):
             continue
