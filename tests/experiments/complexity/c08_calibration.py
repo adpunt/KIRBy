@@ -158,6 +158,18 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 optimal_imp = best['blueprint'].importance_method
                 optimal_internal_eval = best['blueprint'].internal_evaluator
                 optimal_aug_strategy = best['blueprint'].augmentation_strategy
+                # ⛔ rep_count AND THE SCORES THAT SAY WHICH ONES. rep_count is
+                # a searched axis -- 2, 3, 5 or the whole pool -- so a
+                # configuration that won on 2 of the 10 representations is
+                # stored with rep_count=2. Lifting budget, allocation,
+                # importance and evaluator but not this rebuilt every condition
+                # on all 10, which is a different feature set and a different
+                # budget split from the configuration that won, filed under the
+                # winner's name. build_fold_hybrid was fixed for exactly this
+                # on 2026-09-18 and RAISES rather than rebuild wide; c08 calls
+                # create_hybrid directly and never reached that guard.
+                optimal_rep_count = getattr(best['blueprint'], 'rep_count', None)
+                optimal_rep_scores = getattr(best['blueprint'], 'rep_scores', None)
                 best_model = best.get('model', best_model)
                 optimal_model_factory = get_model_factories(
                     [best_model], task_type=data['task_type'],
@@ -249,8 +261,29 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 # including the random-forest ones; without metric_fn the
                 # allocation ranking falls back to r2_score or accuracy instead
                 # of the dataset's own metric.
+                # Cut to the representations the recipe was searched over,
+                # the same way build_fold_hybrid does it (_shared.py:5096):
+                # rank by the blueprint's own rep_scores, break ties by name so
+                # two runs resolve identically.
+                _tr_reps, _va_reps = train_reps, val_reps
+                if (optimal_rep_count is not None
+                        and int(optimal_rep_count) < len(train_reps)):
+                    if not optimal_rep_scores:
+                        raise ValueError(
+                            f"c08: the discovered recipe was searched over "
+                            f"{optimal_rep_count} of the pool's "
+                            f"{len(train_reps)} representations and carries no "
+                            f"rep_scores to say which. Rebuilding on all of "
+                            f"them would score a different feature set under "
+                            f"the winner's name.")
+                    _ranked = sorted(
+                        train_reps,
+                        key=lambda r: (-optimal_rep_scores.get(r, float('-inf')), r))
+                    _keep = set(_ranked[:int(optimal_rep_count)])
+                    _tr_reps = {k: v for k, v in train_reps.items() if k in _keep}
+                    _va_reps = {k: v for k, v in val_reps.items() if k in _keep}
                 X_train, feature_info = create_hybrid(
-                    train_reps, y_train, groups=groups[train_idx],
+                    _tr_reps, y_train, groups=groups[train_idx],
                     allocation_method=alloc,
                     budget=budget,
                     importance_method=imp,
@@ -262,7 +295,9 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     lower_is_better=lower_is_better,
                     is_clf=is_classification,
                 )
-                X_val = apply_feature_selection(val_reps, feature_info)
+                # _va_reps, not val_reps: the same representations the hybrid
+                # was built from, or the column order will not line up.
+                X_val = apply_feature_selection(_va_reps, feature_info)
                 aug_info = feature_info.get('augmentation_info')
                 if aug_info and val_augs:
                     X_val_aug = apply_augmentation_selection(val_augs, aug_info)
