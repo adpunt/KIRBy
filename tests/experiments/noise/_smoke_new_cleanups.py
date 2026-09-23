@@ -46,7 +46,8 @@ warnings.filterwarnings('ignore')
 import numpy as np
 
 from experiments.noise.n07_remediation import (
-    cleaned_training_set, CLEANUPS, REGRESSION_ONLY_CLEANUPS)
+    cleaned_training_set, CLEANUPS, REGRESSION_ONLY_CLEANUPS,
+    PROX_SMOOTH_MAX_ROWS)
 
 _FAILS = []
 
@@ -83,7 +84,7 @@ def _contract(name, out, n_rows):
 
 
 def test_registered():
-    for nm in ('huber_weight', 'js_shrink'):
+    for nm in ('huber_weight', 'js_shrink', 'prox_smooth'):
         _check(f'{nm} is in CLEANUPS', nm in CLEANUPS)
     _check('js_shrink is regression-only, because there is no halfway point '
            'between two nominal classes',
@@ -189,6 +190,69 @@ def test_js_shrink_declines_without_a_target():
                f'inventing one', out is None)
 
 
+def test_prox_smooth_beats_euclidean_where_most_features_are_noise():
+    """THE HEADLINE for prox_smooth, and the reason it is not knn_smooth with a
+    different argument.
+
+    40 features, 2 of them carrying the whole signal. Euclidean distance treats
+    all 40 alike, so 38 columns of noise drown the 2 that matter. A forest
+    proximity cannot have that problem: a feature the trees never split on
+    cannot move two molecules apart.
+
+    The measure is how close a corrected label gets to the value it had before
+    it was wrecked -- which the fixture knows and neither cleanup is told.
+    """
+    rng = np.random.RandomState(0)
+    n, n_bad = 200, 20
+    X = rng.randn(n, 40)
+    signal = X[:, 0] * 3.0 + X[:, 1] * 2.0
+    clean = signal + rng.randn(n) * 0.2
+    y = clean.copy()
+    bad = rng.choice(n, n_bad, replace=False)
+    y[bad] += rng.randn(n_bad) * 6.0
+    scores = np.abs(y - signal)
+    groups = np.repeat(np.arange(n // 10), 10)
+
+    knn = cleaned_training_set('knn_smooth', X, y, scores, 0.1, groups=groups)
+    prx = cleaned_training_set('prox_smooth', X, y, scores, 0.1, groups=groups)
+    _contract('prox_smooth', prx, n)
+    if knn is None or prx is None:
+        return
+
+    before = np.abs(y[bad] - clean[bad]).mean()
+    e_knn = np.abs(knn['y'][bad] - clean[bad]).mean()
+    e_prx = np.abs(prx['y'][bad] - clean[bad]).mean()
+
+    _check('prox_smooth corrects the same molecules knn_smooth does',
+           int((prx['y'] != y).sum()) == int((knn['y'] != y).sum()) == n_bad,
+           f"{int((prx['y'] != y).sum())} and {int((knn['y'] != y).sum())} "
+           f"of the {n_bad} wrecked")
+    _check('prox_smooth moves a wrecked label closer to its true value',
+           e_prx < before,
+           f"{before:.3f} to {e_prx:.3f} label units from the truth")
+    _check('and closer than Euclidean neighbours manage, where most features '
+           'are noise',
+           e_prx < e_knn,
+           f"prox_smooth {e_prx:.3f} against knn_smooth {e_knn:.3f}")
+    _check('prox_smooth leaves the unflagged molecules bit-identical',
+           np.array_equal(prx['y'][prx['y'] == y], y[prx['y'] == y]))
+
+
+def test_prox_smooth_refuses_a_training_block_it_cannot_hold():
+    """The proximity is a square matrix, so its memory is quadratic. Above the
+    cap it is refused, not subsampled: a proximity over a subsample is a
+    different quantity from one over the fold."""
+    _check('PROX_SMOOTH_MAX_ROWS is set', PROX_SMOOTH_MAX_ROWS > 0,
+           f"{PROX_SMOOTH_MAX_ROWS} molecules")
+    n = PROX_SMOOTH_MAX_ROWS + 1
+    rng = np.random.RandomState(1)
+    X = rng.randn(n, 4).astype(np.float32)
+    y = rng.randn(n)
+    out = cleaned_training_set('prox_smooth', X, y, np.abs(y), 0.1)
+    _check('prox_smooth declines above the cap rather than building the matrix',
+           out is None, f"at {n} molecules")
+
+
 def main():
     print("=== SMOKE: cleanups added from the compass review ===\n")
     print("Registration:")
@@ -197,6 +261,9 @@ def main():
     test_huber_has_a_flat_region()
     test_huber_separates_harder_than_downweight()
     test_huber_survives_identical_scores()
+    print("\nprox_smooth — the forest's own similarity, not Euclidean:")
+    test_prox_smooth_beats_euclidean_where_most_features_are_noise()
+    test_prox_smooth_refuses_a_training_block_it_cannot_hold()
     print("\njs_shrink — the shrink is derived, not chosen:")
     test_js_shrink_moves_the_suspect_labels_most()
     test_js_shrink_declines_without_a_target()
