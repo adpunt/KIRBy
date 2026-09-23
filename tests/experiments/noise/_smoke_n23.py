@@ -372,6 +372,77 @@ def test_the_sweep_checkpoints_and_resumes():
           str(sorted(again['conditions_written'])))
 
 
+def test_every_converted_experiment_has_the_same_shape():
+    """Six experiments sweep the condition now. They must all do it the same way.
+
+    n09, n12 and n16 have no smoke of their own, so without this nothing
+    exercises their converted run() at all. This is a structural check, not a
+    behavioural one: it says each has a one-condition layer, that its run() goes
+    through the shared helper rather than a private copy, and that the index it
+    returns carries the counts. It does NOT say their numbers are right.
+
+    THE COUNTS ARE THE POINT. run_all saves this index at <dir>/<dataset>.json,
+    which is the exact path verify_run_status.py:179 and
+    audit_done_dataset_gaps.py:144 check to decide whether an experiment ran.
+    save_experiment_results stamps result_status from whether the payload holds
+    a computed quantity, so an index of bare filenames was filed as
+    result_status='empty' -- a sweep of fourteen finished conditions reading as
+    a run that produced nothing.
+    """
+    import importlib, inspect
+    print("\nthe six experiments that sweep the condition:")
+    mods = {'n09': 'n09_lnl_survey',
+            'n11': 'n11_estimation_remediation_grid',
+            'n12': 'n12_importance_weighted_distance',
+            'n16': 'n16_importance_under_noise',
+            'n21': 'n21_neighbour_distance',
+            'n23': 'n23_uncertainty_cleaning'}
+    missing_layer, private_copy = [], []
+    for short, name in mods.items():
+        m = importlib.import_module(f'experiments.noise.{name}')
+        if not hasattr(m, '_run_one_condition'):
+            missing_layer.append(short)
+            continue
+        src = inspect.getsource(m.run)
+        if 'sweep_conditions(' not in src:
+            private_copy.append(short)
+    check('every one has a one-condition layer to call',
+          not missing_layer, f'missing: {missing_layer}' if missing_layer else
+          f'{len(mods)} experiments')
+    check('and every one sweeps through the shared helper, not a private copy',
+          not private_copy, f'private: {private_copy}' if private_copy else
+          f'{len(mods)} experiments')
+
+    from experiments.noise.noise_helpers import sweep_conditions
+    calls = []
+
+    def fake_one(data, config, output_dir, dataset_name, **kw):
+        calls.append(kw['noise_condition'])
+        return {'score': 1.0}
+
+    import tempfile
+    out = tempfile.mkdtemp()
+    idx = sweep_conditions(fake_one, 'n_probe', {'task_type': 'regression'},
+                           {}, out, 'ds',
+                           default_conditions=['gaussian', 'laplace'],
+                           kwargs={})
+    for k in ('n_conditions_swept', 'n_conditions_on_disk',
+              'n_conditions_run_this_time', 'n_conditions_skipped'):
+        check(f'the index carries {k}', k in idx, str(idx.get(k)))
+    check('a run with nowhere to write is refused, and says why',
+          _refuses_without_an_output_dir(fake_one))
+
+
+def _refuses_without_an_output_dir(fake_one):
+    from experiments.noise.noise_helpers import sweep_conditions
+    try:
+        sweep_conditions(fake_one, 'n_probe', {'task_type': 'regression'}, {},
+                         None, 'ds', default_conditions=['gaussian'], kwargs={})
+        return False
+    except ValueError as exc:
+        return 'resumable' in str(exc) or 'output directory' in str(exc)
+
+
 if __name__ == '__main__':
     res = test_detection_before_cleaning()
     test_zero_noise_control(res)
@@ -379,6 +450,7 @@ if __name__ == '__main__':
     test_counts_and_grading()
     test_the_other_sources_run()
     test_the_sweep_checkpoints_and_resumes()
+    test_every_converted_experiment_has_the_same_shape()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")

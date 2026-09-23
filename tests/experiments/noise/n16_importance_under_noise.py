@@ -115,6 +115,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import time
 
 import numpy as np
+from kirby.noise_spec import GROUPED_STRATEGIES
+from experiments.noise.noise_helpers import sweep_conditions, conditions_for_task
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser, parse_rep_args,
@@ -429,7 +431,25 @@ def _turnover(a, b, k):
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """N16: feature importance across noise levels. Trains no downstream models."""
+    """n16_importance_under_noise across every condition this dataset can be given.
+
+    The condition is an axis this experiment sweeps, not something a caller
+    runs it once per. The sweep, the per-condition checkpointing, the resume
+    and the stride slice are noise_helpers.sweep_conditions.
+
+    Its headline is a downstream score, which is defined under every condition,
+    so it sweeps the whole list rather than only the ones where a corrupted
+    SUBSET exists. It also records detection, and detection_scores already
+    returns None where that is undefined.
+    """
+    return sweep_conditions(
+        _run_one_condition, 'n16_importance_under_noise',
+        data, config, output_dir, dataset_name,
+        default_conditions=conditions_for_task(data), kwargs=kwargs,
+        groups_needed=GROUPED_STRATEGIES)
+
+
+def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT N16: FEATURE IMPORTANCE ACROSS NOISE LEVELS")
     print("=" * 70)

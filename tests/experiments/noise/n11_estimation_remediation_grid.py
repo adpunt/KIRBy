@@ -80,9 +80,9 @@ from sklearn.preprocessing import StandardScaler
 from experiments.dataset_policy import (
     noise_groups_for, noise_levels as dataset_noise_levels,
 )
+from kirby.noise_spec import GROUPED_STRATEGIES
 from experiments.noise.noise_helpers import (
-    inject_train_labels, noise_spec_for, detection_scores,
-)
+    inject_train_labels, noise_spec_for, detection_scores, sweep_conditions, conditions_for_task)
 from experiments._shared import (
     pick_noise_base_rep,
     load_data, get_config, create_experiment_parser,
@@ -631,7 +631,25 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """N11: Noise estimation × remediation grid."""
+    """n11_estimation_remediation_grid across every condition this dataset can be given.
+
+    The condition is an axis this experiment sweeps, not something a caller
+    runs it once per. The sweep, the per-condition checkpointing, the resume
+    and the stride slice are noise_helpers.sweep_conditions.
+
+    Its headline is a downstream score, which is defined under every condition,
+    so it sweeps the whole list rather than only the ones where a corrupted
+    SUBSET exists. It also records detection, and detection_scores already
+    returns None where that is undefined.
+    """
+    return sweep_conditions(
+        _run_one_condition, 'n11_estimation_remediation_grid',
+        data, config, output_dir, dataset_name,
+        default_conditions=conditions_for_task(data), kwargs=kwargs,
+        groups_needed=GROUPED_STRATEGIES)
+
+
+def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT N11: NOISE ESTIMATION × REMEDIATION GRID")
     print("=" * 70)

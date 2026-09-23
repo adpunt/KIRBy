@@ -194,10 +194,10 @@ def _cells(sigma_result):
 # 1. run() reaches the end and writes scored cells.
 # ---------------------------------------------------------------------------
 def test_run_produces_cells():
-    print("n11.run() end to end (spearman, higher is better):")
+    print("n11._run_one_condition() end to end (spearman, higher is better):")
     data = _tiny_data()
     with _Patched('spearman', _spearman, False):
-        res = n11.run(data, {'n_splits': 2, 'models': ['rf']}, None, 'smoke_n11',
+        res = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None, 'smoke_n11',
                       sigmas=[0.5], noise_seeds=[0])
     check('no early return', 'error' not in res, res.get('error', ''))
     check("the level asked for is the level reported",
@@ -233,7 +233,7 @@ def test_models_come_from_config():
     print("downstream roster reaches run() through config['models']:")
     data = _tiny_data()
     with _Patched('spearman', _spearman, False):
-        res = n11.run(data, {'n_splits': 2, 'models': ['rf']}, None, 'smoke_n11',
+        res = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None, 'smoke_n11',
                       sigmas=[0.5], noise_seeds=[0])
     sr = res['per_sigma']['0.5']
     models = {rv['model'] for _, _, _, rv in _cells(sr)}
@@ -261,9 +261,9 @@ def test_noise_seeds_must_be_passed():
     print("draw count (one noise_provenance key per level x draw):")
     data = _tiny_data()
     with _Patched('spearman', _spearman, False, estimators=['neighbor_residual']):
-        passed = n11.run(data, {'n_splits': 2, 'models': ['rf']}, None,
+        passed = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None,
                          'smoke_n11', sigmas=[0.5], noise_seeds=[0])
-        in_config = n11.run(data, {'n_splits': 2, 'models': ['rf'],
+        in_config = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf'],
                                    'noise_seeds': [0]},
                             None, 'smoke_n11', sigmas=[0.5])
     n_passed = len(passed.get('noise_provenance', {}))
@@ -287,7 +287,7 @@ def test_gap_sign_both_directions():
     data = _tiny_data()
     for mname, mfn, lib in (('spearman', _spearman, False), ('rmse', _rmse, True)):
         with _Patched(mname, mfn, lib, estimators=['neighbor_residual']):
-            res = n11.run(data, {'n_splits': 2, 'models': ['rf']}, None,
+            res = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None,
                           'smoke_n11', sigmas=[0.5], noise_seeds=[0])
         sr = res['per_sigma']['0.5']
         c, nz, gap = sr['clean_score'], sr['noisy_score'], sr['gap']
@@ -364,7 +364,7 @@ def test_extra_targets_list_is_honoured():
         n11.EXTRA_TARGETS = ('oof',)
         with _Patched('spearman', _spearman, False,
                       estimators=['neighbor_residual']):
-            res = n11.run(data, {'n_splits': 2, 'models': ['rf']}, None,
+            res = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None,
                           'smoke_n11', sigmas=[0.5], noise_seeds=[0])
     finally:
         n11.EXTRA_TARGETS = saved
@@ -399,7 +399,7 @@ def test_empty_pool_keeps_the_cross():
     data = _tiny_data()
     with _Patched('spearman', _spearman, False,
                   estimators=['neighbor_residual'], pool=_no_pool):
-        res = n11.run(data, {'n_splits': 2, 'models': ['rf']}, None,
+        res = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None,
                       'smoke_n11', sigmas=[0.5], noise_seeds=[0])
     check('no early return', 'error' not in res, res.get('error', ''))
     sr = res.get('per_sigma', {}).get('0.5', {})
