@@ -497,7 +497,18 @@ def _already_there(dataset_name, y_clean, spec):
 # the label's own value: every label above a cut-point is replaced by that cut-point.
 # Owner's decision 2026-09-12 added it to n09, n11 and n12.
 DETECTION_IS_DEFINED = ('outlier_p01', 'outlier_p05', 'outlier_p10',
+                        'outlier_only_p01', 'outlier_only_p05',
+                        'outlier_only_p10',
                         'grouped_wider', 'censoring')
+
+# ADDED 2026-09-23. The three `outlier_only_*` conditions leave the unselected
+# molecules' labels bit-identical, where the three `outlier_*` conditions widen
+# the selected fraction and still move every other label. Detection is defined
+# under both -- some molecules are in the suspect set and some are not -- but the
+# ORACLE is not the same thing under the two. Under outlier_p10 the widened tenth
+# carries half the injected squared error, so removing exactly those molecules
+# leaves the other half behind; under outlier_only_p10 it carries all of it.
+# Measured 2026-09-23 on 2,000 Gaussian labels: 47.8% against 100.0%.
 
 # Suspect sets that nothing here injected, so they cannot be reached by
 # --noise-condition and are deliberately NOT in the tuple above: n21 offers

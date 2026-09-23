@@ -97,6 +97,24 @@ SHAPE_STRATEGIES = ('gaussian', 'student_t_nu10', 'student_t_nu5', 'student_t_nu
                     'laplace')
 OUTLIER_STRATEGIES = ('outlier_p01', 'outlier_p05', 'outlier_p10')
 
+# The same mechanism with the unselected molecules left exactly alone. Under the
+# three above the multiplier is 3.0 on the selected fraction and 1.0 on the rest,
+# so every label moves and the selected fraction carries only part of the injected
+# error -- at p=0.10 the mean squared multiplier is 0.10*9 + 0.90*1 = 1.8 and the
+# widened tenth therefore carries 0.9/1.8, exactly half, fixed by p and lam. So a
+# method that removes precisely the molecules the mask names leaves the other half
+# behind, and a null result cannot tell "the detector cannot find them" apart from
+# "finding them does not help".
+#
+# Here the multiplier off the selected fraction is 0.0. Measured 2026-09-23 on
+# 2,000 Gaussian labels at a dose of half their spread: outlier_only_p10 moved 208
+# of 2,000 labels against 2,000 of 2,000, and the widened molecules carried 100.0%
+# of the squared error against 47.8%.
+#
+# BOTH families stay in the sweep. The pair is the comparison.
+OUTLIER_ONLY_STRATEGIES = ('outlier_only_p01', 'outlier_only_p05',
+                           'outlier_only_p10')
+
 # These two need one integer scaffold-group id per molecule. Build it with
 # `assign_noise_groups` below, NOT with the fold-geometry grouping.
 GROUPED_STRATEGIES = ('grouped_wider', 'grouped_shifted')
@@ -104,10 +122,11 @@ GROUPED_STRATEGIES = ('grouped_wider', 'grouped_shifted')
 # Censoring's level is the fraction of labels clipped, not a dose.
 CENSORING_STRATEGIES = ('censoring',)
 
-# The eight that need nothing but a label column.
-UNGROUPED_STRATEGIES = SHAPE_STRATEGIES + OUTLIER_STRATEGIES
+# The eleven that need nothing but a label column.
+UNGROUPED_STRATEGIES = (SHAPE_STRATEGIES + OUTLIER_STRATEGIES
+                        + OUTLIER_ONLY_STRATEGIES)
 
-# The ten that are dose-matched. Censoring is not one of them.
+# The thirteen that are dose-matched. Censoring is not one of them.
 DOSE_MATCHED_STRATEGIES = UNGROUPED_STRATEGIES + GROUPED_STRATEGIES
 
 REGRESSION_STRATEGIES = DOSE_MATCHED_STRATEGIES + CENSORING_STRATEGIES
