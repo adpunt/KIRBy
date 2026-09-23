@@ -20,6 +20,37 @@ Two categories, and they need different work:
 
 ---
 
+## Where every experiment stands on disk, 2026-09-23
+
+Checked by opening every result file under `tests/results_local_sim`,
+`tests/results_local_sim_tuned` and the seagate output directories, and reading
+`result_status` and `has_computed_results` out of each. Ten experiments carry a
+computed result for all three datasets:
+
+    s01  s02  s03  s04  s05  s06  s08  s10  s12  s13
+
+s09 is a cross-dataset summary and writes one file, not three. Its only output
+on disk was stamped STALE and dated 5 September, so it was re-run on
+2026-09-23 over the three datasets and now writes
+`/Volumes/seagate/kirby_s09_out/s09_cross_dataset_summary/results.json`, twelve
+series, every one per dataset and never averaged.
+
+s11 is the only experiment with no completed result. See the row below.
+
+**s05's tuning barely moves the number it was tuned for.** s09 reads the
+shipped-arm s05 files; the tuned run is a separate directory. Hybrid minus
+reference at the fixed cell, positive means the hybrid wins:
+
+    kNN_delta_fixed_ref       caco2     herg_ki   adme_mdr1
+    shipped settings         +0.0075     -0.0003     +0.0273
+    tuned settings           +0.0028     -0.0047     +0.0268
+
+Distance-weighted voting, importance exponent 0.25 and neighbour counts 5 and 10
+change the fixed-cell delta by 0.0047, 0.0044 and 0.0005. The sign is unchanged
+on all three. s10's kNN task found distance-weighted voting lowered held-out
+error in 20 of 21 representation-dataset pairs; this says that gain does not
+survive into the hybrid-minus-reference difference, because it lifts both arms.
+
 ## s01–s13
 
 | exp | kind | smoke tested / debugged | methods to optimise | optimisation done |
