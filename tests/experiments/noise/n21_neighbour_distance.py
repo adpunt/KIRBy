@@ -101,8 +101,9 @@ from experiments.dataset_policy import (
 )
 from experiments.noise.noise_helpers import (
     inject_train_labels, noise_spec_for, detection_scores,
-    DETECTION_IS_DEFINED, hybrid_for_fold,
+    DETECTION_IS_DEFINED, hybrid_for_fold, sweep_conditions,
 )
+from kirby.noise_spec import GROUPED_STRATEGIES
 from experiments.noise.n07_remediation import _predict_for_metric
 from experiments._shared import (
     pick_noise_base_rep, load_data, get_config, create_experiment_parser,
@@ -612,7 +613,28 @@ def _spaces_for_pass(X_base_raw, X_base_std, y_noisy, is_clf, specs,
 # ---------------------------------------------------------------------------
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """N21: which distance the neighbours are found in."""
+    """N21 across every condition where detection is defined.
+
+    The condition is an axis this experiment sweeps, not something a caller
+    runs it once per. The sweep, the per-condition checkpointing, the resume
+    and the stride slice are noise_helpers.sweep_conditions; see it for why
+    each condition is written the moment it lands.
+
+    It sweeps DETECTION_IS_DEFINED and nothing else, for the reason the guard
+    below already gave: average precision is n21's headline, and under a
+    constant-width condition every training molecule's label moves, so the list
+    of molecules that moved is the list of all of them and average precision is
+    1.0 by construction.
+    """
+    return sweep_conditions(
+        _run_one_condition, 'n21_neighbour_distance',
+        data, config, output_dir, dataset_name,
+        default_conditions=DETECTION_IS_DEFINED, kwargs=kwargs,
+        groups_needed=GROUPED_STRATEGIES)
+
+
+def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
+    """N21: which distance the neighbours are found in, ONE condition."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N21: WHICH DISTANCE ARE THE NEIGHBOURS FOUND IN")
     print("=" * 70)

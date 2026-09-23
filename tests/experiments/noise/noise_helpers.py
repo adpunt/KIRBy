@@ -692,6 +692,31 @@ def hybrid_for_fold(train_reps, val_reps, y_train, bp, groups_train,
         return None, None
 
 
+def conditions_for_task(data, detection_is_the_headline=False):
+    """Every condition this dataset can be given, for an experiment to sweep.
+
+    A classification set takes the flip models and a regression set the shapes:
+    a flipped class label has no magnitude, so the two families are not
+    interchangeable and noise_spec_for substitutes one for the other silently
+    if handed the wrong kind.
+
+    `detection_is_the_headline` narrows it to the conditions where a corrupted
+    SUBSET exists. Use it only where the number the experiment REPORTS is a
+    detection score -- under a constant-width condition every training label
+    moves, the suspect set is every molecule and precision is 1.0 by
+    construction. An experiment whose headline is a downstream score and which
+    merely also records detection does NOT need this: detection_scores already
+    returns None where it is undefined.
+    """
+    from kirby.noise_spec import (REGRESSION_STRATEGIES,
+                                  CLASSIFICATION_STRATEGIES)
+    if data.get('task_type') == 'classification':
+        return list(CLASSIFICATION_STRATEGIES)
+    if detection_is_the_headline:
+        return list(DETECTION_IS_DEFINED)
+    return list(REGRESSION_STRATEGIES)
+
+
 def sweep_conditions(run_one, exp_id, data, config, output_dir,
                      dataset_name, default_conditions, kwargs,
                      groups_needed=None):
@@ -761,6 +786,14 @@ def sweep_conditions(run_one, exp_id, data, config, output_dir,
         # conditions rather than the first few. Same rule as the OPIG sweep.
         conditions = conditions[k::n]
 
+    if output_dir is None:
+        raise ValueError(
+            f"{exp_id}: sweeping conditions needs an output directory, because "
+            f"each condition is WRITTEN as it finishes and a condition already "
+            f"on disk is skipped -- that is what makes an interrupted sweep "
+            f"resumable. A caller with nowhere to write wants one condition, "
+            f"not a sweep: call the experiment's _run_one_condition directly.")
+
     force = bool(kwargs.pop('force_rerun', False))
     done, ran = {}, []
     for cond in conditions:
@@ -782,11 +815,28 @@ def sweep_conditions(run_one, exp_id, data, config, output_dir,
     for cond, why in skipped.items():
         print(f"  {cond}: not run -- {why}")
 
+    # ⛔ THE COUNTS ARE NOT DECORATION. This index is what run_all saves at
+    # <dir>/<dataset>.json -- the exact path verify_run_status.py:179 and
+    # audit_done_dataset_gaps.py:144 check to decide whether an experiment ran.
+    # save_experiment_results stamps result_status from whether the payload
+    # holds a computed quantity, and a bare list of filenames holds none, so a
+    # sweep of fourteen finished conditions was being filed as
+    # result_status='empty', has_computed_results=False. A completed run read
+    # as a failed one. These counts are the computed quantity.
     return {'swept_conditions': conditions,
             'conditions_written': done,
             'conditions_run_this_time': ran,
             'conditions_skipped_and_why': skipped,
-            'sweep_slice': slice_spec}
+            'sweep_slice': slice_spec,
+            'n_conditions_swept': len(conditions),
+            'n_conditions_on_disk': len(done),
+            'n_conditions_run_this_time': len(ran),
+            'n_conditions_skipped': len(skipped),
+            'what_a_condition_file_holds': (
+                'one condition of this experiment, at '
+                '<dir>/<dataset>__<condition>.json. This file is the INDEX of '
+                'that sweep, not a result: the scores are in the per-condition '
+                'files it names.')}
 
 
 def group_models_by_recipe(recipe_by_model, models):

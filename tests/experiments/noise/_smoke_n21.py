@@ -218,9 +218,17 @@ def _gap_over_plain(ap, space, plain):
 
 
 def _run(signal, seed, folds=3):
+    """ONE condition. `_run_one_condition`, not `run`.
+
+    Since 2026-09-23 n21.run sweeps every condition in DETECTION_IS_DEFINED,
+    writes each to its own file and returns an INDEX of what it wrote, so the
+    scores these checks read are no longer in its return value. They are about
+    one condition's behaviour, so they call the one-condition layer. The sweep
+    itself is covered in _smoke_n23, which tests the shared helper both now use.
+    """
     data = make_data(n=400, seed=seed, signal=signal)
-    return n21.run(data, {'n_splits': folds}, OUT, f'n21smoke_{signal}',
-                   **CHEAP)
+    return n21._run_one_condition(data, {'n_splits': folds}, OUT,
+                                  f'n21smoke_{signal}', **CHEAP)
 
 
 def test_sparse_signal_rewards_the_better_distance():
@@ -344,7 +352,8 @@ def test_the_two_guards():
     kw['metrics'] = ['manhattan']
     kw['importance_exponents'] = [1.0]
     kw['noise_seeds'] = [0]
-    r = n21.run(data, {'n_splits': 2}, OUT, 'n21smoke_levels', **kw)
+    r = n21._run_one_condition(data, {'n_splits': 2}, OUT,
+                               'n21smoke_levels', **kw)
     check('level 0.0 is not in the default grid',
           0.0 not in r['levels'], str(r['levels']))
     check('and the result file says why it is gone',
