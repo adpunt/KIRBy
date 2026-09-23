@@ -246,6 +246,21 @@ def _region(budget, min_train_rows):
     return 'over'
 
 
+def _row_region(row, budget, min_train_rows):
+    """The region this budget's hybrid ACTUALLY sat in.
+
+    From the width it built, not the width it asked for. `n_features_mean` is
+    the mean across folds of what create_hybrid returned, and it already counts
+    any augmentation features appended outside the budget -- which is the other
+    way the two differ. Falls back to the requested budget only when no width
+    was recorded, and `region_source` on the row says which was used.
+    """
+    w = row.get('n_features_mean')
+    if w:
+        return _region(float(w), min_train_rows)
+    return _region(int(budget), min_train_rows)
+
+
 def _double_descent(rows, lower_is_better, min_train_rows):
     """Best under the threshold, worst on it, best above it — and the shape.
 
@@ -261,7 +276,7 @@ def _double_descent(rows, lower_is_better, min_train_rows):
 
     def _pick(region, want_best):
         cand = [(b, r['reselected_mean']) for b, r in scored.items()
-                if _region(b, min_train_rows) == region]
+                if _row_region(r, b, min_train_rows) == region]
         if not cand:
             return None, None
         best_b, best_m = cand[0]
@@ -320,12 +335,18 @@ def _double_descent(rows, lower_is_better, min_train_rows):
         'fall_after_threshold': fall,
         'fold_spread_yardstick': spread,
         'shape': shape,
-        'n_budgets_under': sum(1 for b in scored
-                               if _region(b, min_train_rows) == 'under'),
-        'n_budgets_interpolation': sum(1 for b in scored
-                                       if _region(b, min_train_rows) == 'interpolation'),
-        'n_budgets_over': sum(1 for b in scored
-                              if _region(b, min_train_rows) == 'over'),
+        'n_budgets_under': sum(1 for b, r in scored.items()
+                               if _row_region(r, b, min_train_rows) == 'under'),
+        'n_budgets_interpolation': sum(
+            1 for b, r in scored.items()
+            if _row_region(r, b, min_train_rows) == 'interpolation'),
+        'n_budgets_over': sum(1 for b, r in scored.items()
+                              if _row_region(r, b, min_train_rows) == 'over'),
+        # Which width the regions above were decided on.
+        'regions_from': ('realised width'
+                         if all(r.get('n_features_mean') for r in scored.values())
+                         else 'mixed: realised width where recorded, '
+                              'requested budget otherwise'),
     }
 
 
@@ -336,9 +357,20 @@ def _summarise_model(per_budget, base_folds, lower_is_better, min_train_rows):
     for budget, b in sorted(per_budget.items(), key=lambda kv: int(kv[0])):
         d, per_fold, n_paired = _paired_delta(b.get('fold_scores'), base_folds,
                                               lower_is_better)
+        _w = b.get('n_features_mean')
         rows[int(budget)] = {
-            'region': _region(int(budget), min_train_rows),
+            # THE REGION IS THE ONE THE HYBRID ACTUALLY SAT IN: from the width
+            # it built, falling back to the budget it asked for only when no
+            # width was recorded. The requested-budget label is kept beside it
+            # as region_from_requested_budget.
+            'region': (_region(float(_w), min_train_rows) if _w
+                       else _region(int(budget), min_train_rows)),
+            'region_source': 'realised width' if _w else 'requested budget',
+            'region_from_requested_budget': _region(int(budget), min_train_rows),
             'budget_over_train_rows': round(float(budget) / float(min_train_rows), 3),
+            'realised_width_over_train_rows': (
+                None if not _w
+                else round(float(_w) / float(min_train_rows), 3)),
             'reselected_mean': _f(b.get('reselected_mean')),
             'reselected_std': _f(b.get('reselected_std')),
             'fold_scores': b.get('fold_scores'),
@@ -350,6 +382,8 @@ def _summarise_model(per_budget, base_folds, lower_is_better, min_train_rows):
             'per_fold_delta_std': _fold_spread(per_fold),
             'n_paired_folds': n_paired,
             'budget_exceeds_train_rows': bool(int(budget) > min_train_rows),
+            'width_exceeds_train_rows': (
+                None if not _w else bool(float(_w) > min_train_rows)),
             # ⛔ THE REGION ABOVE IS LABELLED BY THE BUDGET ASKED FOR, AND THE
             # HYBRID DOES NOT ALWAYS GET IT. create_hybrid cuts a quota to the
             # features the importance method scored above zero, and
@@ -368,13 +402,13 @@ def _summarise_model(per_budget, base_folds, lower_is_better, min_train_rows):
             'width_shortfall': (
                 None if b.get('n_features_mean') is None
                 else int(budget) - float(b['n_features_mean'])),
-            'region_from_realised_width': (
-                None if not b.get('n_features_mean')
-                else _region(float(b['n_features_mean']), min_train_rows)),
+            # Kept: True where the budget asked for and the width built fall
+            # in different regions, which is the case this experiment is most
+            # likely to be misread on.
             'region_disagrees_with_width': (
-                None if not b.get('n_features_mean')
+                None if not _w
                 else _region(int(budget), min_train_rows)
-                     != _region(float(b['n_features_mean']), min_train_rows)),
+                     != _region(float(_w), min_train_rows)),
         }
 
     scored = [(b, r['reselected_mean']) for b, r in rows.items()
@@ -471,7 +505,13 @@ def run(data, config, output_dir, dataset_name):
 
     train_rows = _outer_train_rows(reps, labels, groups, n_outer_folds, seed,
                                    task_type)
+    # ONE NUMBER LABELS EVERY FOLD. Group-aware outer folds have unequal
+    # training row counts, so a budget that is 'over' for the smallest fold can
+    # be 'under' for the largest. The spread is recorded below so a reader can
+    # see how far the single threshold is from each fold's own.
     min_train_rows = int(min(train_rows)) if train_rows else n_molecules
+    train_rows_spread = (sorted(int(t) for t in train_rows)
+                         if train_rows else [])
 
     # Budgets placed around this dataset's own interpolation threshold, on top
     # of the fixed list. Without them the threshold falls in a gap and the
@@ -665,6 +705,7 @@ def run(data, config, output_dir, dataset_name):
         'n_molecules': n_molecules,
         'outer_train_rows': train_rows,
         'min_train_rows': min_train_rows,
+        'train_rows_per_outer_fold': train_rows_spread,
         'pool': {
             'reps': sorted(reps.keys()),
             'width_per_rep': pool_widths,
@@ -695,8 +736,9 @@ def run(data, config, output_dir, dataset_name):
     # ---- printed table: one row is one (model, budget) --------------------
     print(f"\n  HONEST SCORE PER BUDGET ({metric_name}, "
           f"{'lower' if lower else 'higher'} is better)")
-    print(f"  A budget marked * is above the {min_train_rows} training rows "
-          f"in the smallest outer fold.")
+    print(f"  * = the hybrid BUILT more than the {min_train_rows} training "
+          f"rows in the smallest outer fold. ~ = it ASKED for more than that "
+          f"and built fewer. A budget is a maximum, not a width.")
     print(f"  bias > 0 means the inner search over-promised at that budget.\n")
     hdr = (f"  {'model':<10} {'budget':>7} {'honest':>9} {'+/-':>7} "
            f"{'search':>9} {'bias':>8} {'vs best rep':>12}")
@@ -705,7 +747,13 @@ def run(data, config, output_dir, dataset_name):
     for model in sorted(by_model_budget):
         for b_str in sorted(by_model_budget[model], key=int):
             r = by_model_budget[model][b_str]
-            star = '*' if r['budget_exceeds_train_rows'] else ' '
+            # The star follows the width built, not the width asked for.
+            if r.get('width_exceeds_train_rows'):
+                star = '*'
+            elif r['budget_exceeds_train_rows']:
+                star = '~'
+            else:
+                star = ' '
             def _s(v, w=9, p=4):
                 return f"{v:>{w}.{p}f}" if v is not None else f"{'-':>{w}}"
             print(f"  {model:<10} {b_str + star:>7} {_s(r['reselected_mean'])} "
