@@ -34,6 +34,13 @@ per-row suspicion score, min-max normalised by weights_from_scores, handed to
                to --space, which is what n02 does today: the rows are weighted
                in whatever space they are fitted in. Naming a different one
                separates the two, which nothing in n02 has ever done.
+  --shuffle-seeds
+               hands the SAME weight vector to the training rows in a permuted
+               order, one arm per named seed, beside the arm that keeps the
+               pairing. Both arms hold the identical multiset of weights, so
+               the top-to-bottom row weight ratio is identical and the only
+               difference is which row got which weight. Nothing in n02 has
+               ever measured that.
   --importance-exponents
                the power the feature importance is raised to before it scales
                the axes of that neighbour search. n02 uses the square root,
@@ -166,6 +173,12 @@ def main():
     p.add_argument('--weight-shapes', default='inverse',
                    help="comma separated: inverse (what n02 ships), soft, "
                         "exponential, or stepR for a flag rate, e.g. step0.05")
+    p.add_argument('--shuffle-seeds', default='',
+                   help='comma separated integers. For every arm this run '
+                        'builds, also fit one arm per seed whose weights are '
+                        'that arm\'s weights reordered under that seed. The '
+                        'seed is written into the arm name and into the '
+                        'result file, so a shuffled arm can be re-read.')
     p.add_argument('--importance-method', default='lightgbm_gain')
     p.add_argument('--importance-exponents', default='0.5',
                    help='the power the feature importance is raised to before '
@@ -191,6 +204,9 @@ def main():
     strengths = [float(s) for s in a.strengths.split(',') if s.strip()]
     exponents = [float(e) for e in a.importance_exponents.split(',') if e.strip()]
     shapes = [w.strip() for w in a.weight_shapes.split(',') if w.strip()]
+    shuffle_seeds = [int(x) for x in a.shuffle_seeds.split(',') if x.strip()]
+    if len(set(shuffle_seeds)) != len(shuffle_seeds):
+        raise SystemExit(f'repeated shuffle seed in {shuffle_seeds}')
     for _sh in shapes:
         if _sh not in ('inverse', 'soft', 'exponential'):
             if not _sh.startswith('step'):
@@ -233,7 +249,9 @@ def main():
     print(f'importance exponents swept: {exponents} '
           f'(0.5 is the square root n02 ships, 0.0 is no scaling at all)')
     print(f'weight shapes swept: {shapes} '
-          f"('inverse' is what n02 ships and it moves every training row)",
+          f"('inverse' is what n02 ships and it moves every training row)")
+    print(f'shuffle seeds: {shuffle_seeds or "none"} '
+          f'(each one reorders the same weights among the training rows)',
           flush=True)
 
     # One stored recipe per hybrid space this run needs -- the space the model
@@ -377,18 +395,33 @@ def main():
                 if flat:
                     notes.append(f'fold {fold_i} score {method}{_etag} is flat')
                 arm = f'{method}@{st}{_etag}{_stag}'
-                score_spread.setdefault(arm, []).append(
-                    float(w.max() / max(w.min(), 1e-12)))
-                for mname, factory in factories.items():
-                    try:
-                        mdl = factory()
-                        mdl.fit(X_tr, y_tr, sample_weight=w)
-                        fold_rows[mname][arm] = float(
-                            metric_fn(y_va, mdl.predict(X_va)))
-                    except Exception as exc:
-                        notes.append(f'fold {fold_i} {mname} {arm} failed: '
-                                     f'{type(exc).__name__}: {exc}')
-                        fold_ok = False
+                # The scored vector, then that SAME vector handed to the
+                # training rows in a permuted order, one arm per named seed.
+                # A shuffled arm holds exactly the weights the scored arm
+                # holds, so its top-to-bottom row weight ratio is identical
+                # and the only thing that differs is which row got which
+                # weight. The draw is keyed on the seed and the fold index,
+                # so every fold gets its own permutation and re-running the
+                # same seed reproduces it.
+                arms_here = [(arm, w)]
+                for _seed in shuffle_seeds:
+                    _rng = np.random.default_rng([int(_seed), int(fold_i)])
+                    arms_here.append((f'{arm}|shuffled_seed{_seed}',
+                                      w[_rng.permutation(len(w))]))
+                for arm_name, w_use in arms_here:
+                    score_spread.setdefault(arm_name, []).append(
+                        float(w_use.max() / max(w_use.min(), 1e-12)))
+                    for mname, factory in factories.items():
+                        try:
+                            mdl = factory()
+                            mdl.fit(X_tr, y_tr, sample_weight=w_use)
+                            fold_rows[mname][arm_name] = float(
+                                metric_fn(y_va, mdl.predict(X_va)))
+                        except Exception as exc:
+                            notes.append(f'fold {fold_i} {mname} {arm_name} '
+                                         f'failed: {type(exc).__name__}: '
+                                         f'{exc}')
+                            fold_ok = False
             if not fold_ok:
                 break
           if not fold_ok:
@@ -439,6 +472,10 @@ def main():
         'importance_method': a.importance_method,
         'importance_exponents': exponents,
         'weight_shapes': shapes,
+        'shuffle_seeds': shuffle_seeds,
+        'shuffle_draw': ('numpy default_rng([seed, fold_index]).permutation '
+                         'of the training rows, applied to the weight vector '
+                         'the scored arm uses' if shuffle_seeds else None),
         'methods': methods,
         'strengths': strengths,
         'models': list(factories),
