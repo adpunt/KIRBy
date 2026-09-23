@@ -2399,7 +2399,7 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
         # at one of the two selection points and not the other.
         # Fixed 2026-09-10 (metric-direction audit).
         _pos = int(np.sum(np.asarray(imp) > 0))
-        if _pos > 0:
+        if _pos > 0 and os.environ.get('KIRBY_FILL_ZERO_GAIN') != '1':
             k = min(k, _pos)
         top_local = np.argsort(imp)[-k:][::-1]
         X_tr = rep_dict_train[rn][:, top_local]
@@ -2419,9 +2419,24 @@ def allocate_weighted_global(rep_dict_train, rep_dict_val, train_labels, val_lab
         # Same positive-importance cut as the per-representation take above and
         # as concatenate_features: the budget is a ceiling, not a quota to fill
         # from a block of exact zeros. Fixed 2026-09-10 (metric-direction audit).
+        #
+        # ⛔ THIS IS WHERE wglobal_power2's SHORTFALL COMES FROM, NOT THE
+        # ALLOCATOR. One importance fit ranks the whole glued pool at once;
+        # whatever it never split on scores exactly 0.0 and is cut here. On
+        # flab_thermo_tresanco at budget 1,000 the pool is ~2,000 features wide
+        # and about 400 of them score above zero, which is the 362-423 the
+        # sweep records. Measured with KIRBY_ZERO_GAIN_TRACE=1.
         _pos_g = int(np.sum(np.asarray(gimp) > 0))
+        if os.environ.get('KIRBY_ZERO_GAIN_TRACE') == '1':
+            print(f"      [zero-gain] weighted_global: pool {glued.shape[1]} "
+                  f"features wide, {_pos_g} score above zero, budget asked "
+                  f"{int(total_budget)}, B before the cut {B}", flush=True)
         if _pos_g > 0:
-            B = min(B, _pos_g)
+            # KIRBY_FILL_ZERO_GAIN: the same measurement switch concatenate_features
+            # carries, extended to this path. Without it here, a comparison of the
+            # two behaviours under weighted_global runs identical code twice.
+            if os.environ.get('KIRBY_FILL_ZERO_GAIN') != '1':
+                B = min(B, _pos_g)
         if B > 0:
             top_global = np.argsort(gimp)[-B:][::-1]
             per_rep = {}
@@ -5418,6 +5433,16 @@ def concatenate_features(base_reps, importance_scores, allocation):
         _positive = int(np.sum(np.asarray(scores) > 0))
         if _positive > 0:
             n_select = min(n_requested, _positive)
+            # MEASUREMENT SWITCH, default off and env-gated. The cut above is
+            # the subject of an open decision: when the importance method scores
+            # most of a representation at exactly zero, the quota comes back
+            # short and six experiments have been reading a budget the hybrid
+            # never had. KIRBY_FILL_ZERO_GAIN=1 takes the quota in full, ranking
+            # the zero-gain features among themselves by column order, so the
+            # two can be compared on the same folds. It changes what every
+            # stored search means, which is why it is off unless asked for.
+            if os.environ.get('KIRBY_FILL_ZERO_GAIN') == '1':
+                n_select = n_requested
         else:
             n_select = n_requested
         top_indices = np.argsort(scores)[-n_select:][::-1]
