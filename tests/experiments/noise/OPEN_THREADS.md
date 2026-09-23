@@ -431,6 +431,13 @@ left where an experiment names a level itself.
   measurements at all.
 - **n17's one result is negative**: on `herg_ic50` in ecfp4, the ceiling did not
   beat the floor, and its own read-out says so rather than reporting a position.
+  At a removal share of 0.01 it beat the floor by +0.0071 rmse in log units of
+  pIC50, which since 2026-09-23 is under the smallest distance n17 will divide
+  by (2% of the no-cleaning score 0.7399 rmse, so 0.0148 rmse). See E5.
+- **Every n17 number rests on ONE draw** of which measurement became the
+  training label. The spread over draws printed in every result file is 0.0000
+  for that reason, so no n17 number has a wobble to be read against. Three
+  draws cost about 320 minutes of wall clock.
 - **Every n07 result file ever written has an empty detection block.** Eight
   gradings were recorded into a dict built before the loop that fills it. Fixed in
   `0f83448`, but no file written before that has the numbers.
@@ -623,10 +630,22 @@ Over the 405 molecules measured three or more times the two agree at 0.96, 0.95
 and 0.95 spearman, so the disagreement is about which molecules each can reach,
 not how it orders the ones both can.
 
+That run has since returned. On herg_ic50 at a removal share of 0.01 the
+ceiling ranking on `training_label_error` comes back 0.7507 rmse in log units of
+pIC50 against its floor at 0.7702, a distance of +0.0195 rmse. Under
+`measurement_spread` on the same removal share the ceiling comes back 0.7471
+against its floor at 0.7542, a distance of +0.0071 rmse. Both ceilings still
+lose to no cleaning, which is 0.7399 rmse.
+
+Since 2026-09-23 n17 refuses to divide a removal position by a distance under
+`SPAN_MIN_FRAC` of the no-cleaning score, `SPAN_MIN_FRAC` = 0.02, which is
+0.0148 rmse here. The +0.0195 rmse distance clears it and the +0.0071 rmse
+distance does not. So the shipped default now reports no removal position on
+this dataset, and the ranking that is not the default is the only one with a
+distance n17 will divide by.
+
 ⛔ NEXT: owner's decision, not taken. It changes which molecules the ceiling AND
-`floor_measured` can reach, so it changes what n17's headline distance means. A
-run is registered as `n17_ceiling_ranks_label_error` to measure what it does to
-the held-out rmse first.
+`floor_measured` can reach, so it changes what n17's headline distance means.
 
 ---
 
