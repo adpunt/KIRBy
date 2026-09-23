@@ -1577,7 +1577,14 @@ def run_all(dataset_name: str, output_dir: str,
             from experiments._shared import FULL_BUDGETS
             kwargs['budgets'] = config.get('budgets', FULL_BUDGETS)
         if exp_id == 's05':
-            kwargs['k_values'] = config.get('k_values', [5, 10])
+            # Only pass k_values when the caller's config names them. s05
+            # resolves kwargs first and falls back to KIRBY_S05_K_VALUES, so
+            # passing the default here unconditionally made that env lever dead:
+            # a sweep asking for 5,7,10,15,25 silently ran at 5 and 10.
+            if 'k_values' in config:
+                kwargs['k_values'] = config['k_values']
+            elif not os.environ.get('KIRBY_S05_K_VALUES', '').strip():
+                kwargs['k_values'] = [5, 10]
             kwargs['conditions'] = config.get('knn_conditions')
         if exp_id == 's08':
             # s08 uses downstream_model='knn' (distance lineage), so budgets
