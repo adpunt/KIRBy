@@ -51,6 +51,30 @@ on all three. s10's kNN task found distance-weighted voting lowered held-out
 error in 20 of 21 representation-dataset pairs; this says that gain does not
 survive into the hybrid-minus-reference difference, because it lifts both arms.
 
+## A lever can be present, documented and dead
+
+`KIRBY_S05_K_VALUES` did nothing. s05 resolves `kwargs.get('k_values', <env
+fallback>)`, and the driver set `kwargs['k_values'] = config.get('k_values',
+[5, 10])` on every call, so `kwargs` always carried a value and the fallback was
+never reached. A sweep asking for 5, 7, 10, 15 and 25 ran at 5 and 10 and said
+nothing about it.
+
+Caught 2026-09-24 with 24 s05 cells already in flight, by reading the running
+logs and seeing only `k=5` and `k=10` printed. The four cells that were 50
+minutes in were restarted so all 24 share one neighbour list. The driver now
+passes `k_values` only when the config names them or the env var is unset;
+unset still gives [5, 10], so every stored run reproduces.
+
+The rest of the suite was swept for the same shape. `k_values` was the only
+shadowed lever: `n_sample`, `weight_methods` and `budgets` have no environment
+lever to shadow, s05 never reads `conditions` as a keyword so the `None` the
+driver passes is harmless, and s06's, s10's, s11's and s13's levers are read
+directly rather than through the driver.
+
+⛔ The lesson for this table: "the lever exists" and "the sweep used it" are
+different claims. Read the neighbour counts, exponents and coefficients out of
+the result file before recording an axis as swept.
+
 ## What "optimisation done" meant, audited 2026-09-23
 
 Read out of the finished result files, not from this table. Only s06 was swept.
