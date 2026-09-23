@@ -618,6 +618,24 @@ adme_mdr1 representations. Both arms are stored under
 collapsed ones. Which arm should be the headline is the owner's call and has not
 been changed.
 
+**The same collapsed GP scores two different numbers in this suite.**
+s10 fits its Gaussian process with `normalize_y=False`, which leaves the prior
+mean at 0, so a fit that finishes at the bottom of the length-scale bounds
+predicts 0 for every held-out molecule. s11 passes `normalize_y=True` at three
+places, so the identical collapse there predicts the training mean instead.
+
+Measured and recorded at s10_importance_downstream.py:1042 against
+`/Volumes/seagate/kirby_simrun_logs/gp_arms.log`: on herg_ki that difference is
+an rmse of about 5.6 under s10's convention against about 0.92 under s11's, for
+the same failure. It is why herg_ki `atom_pair` reads 5.7443 in the s10 run
+above — that is a GP predicting zero, not a GP fitting badly.
+
+Consequence: a collapsed arm's score is not comparable between s10 and s11, and
+within s10 it is not on the same scale as a working arm. `at_bound` and
+`pred_sd` in `_gp_fit_report` are what identify a collapse; the rmse alone does
+not. `KIRBY_S10_GP_NORMALIZE_Y=1` fits the other convention. Neither default has
+been changed, so no stored number moves.
+
 **s10 q-RASAR — a null.** The four neighbour features carry real signal alone
 (pdv's four reach 0.6730 pKi against 0.9160 for a mean predictor) and add
 nothing to a forest that already has the features.
