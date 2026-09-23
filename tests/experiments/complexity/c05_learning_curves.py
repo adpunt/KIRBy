@@ -76,6 +76,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Search ")
 
     last_search = None
+    search_failures = []
     results = {'sample_sizes': sample_sizes, 'budgets': sweep_budgets,
                 'models': {},
                 # FIX 4d: explicit log of (n, model) all-rows-blueprint
@@ -256,6 +257,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             'allocation': mbest['blueprint'].allocation_method,
                         })
             except Exception as e:
+                # ⛔ RECORDED, NOT JUST PRINTED. At small subsample sizes
+                # allocate_performance_weighted refuses when not one
+                # representation can be scored on a held-out block -- under ten
+                # held-out rows, one scaffold group, or constant activity. It is
+                # right to refuse: splitting equally instead would be filed
+                # under performance_weighted's name and be indistinguishable
+                # from a method that chose an equal split. But c05 caught it per
+                # configuration and carried on, so the point was simply missing
+                # and a NaN at n=67 read the same as a NaN from a model that
+                # scored nothing.
+                search_failures.append({
+                    'n_sub': int(n_sub), 'seed': int(seed),
+                    'n_groups': int(n_unique_groups),
+                    'n_rows': int(len(idx)),
+                    'error': f'{type(e).__name__}: {e}',
+                })
                 print(f"    seed={seed}: find_best_hybrid failed - {e}")
 
             # Baselines per model, read out of the search that just ran.
@@ -589,6 +606,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       else "vs the best single representation: --")
             print(f"    {_m}: {_left}; {_right}")
 
+    # Every configuration whose search refused, with the size and the group
+    # count that caused it, so a missing point on the curve says why.
+    results['search_failures'] = search_failures
+    results['search_failures_by_n'] = {
+        int(n): sum(1 for f in search_failures if f['n_sub'] == int(n))
+        for n in sample_sizes}
     return results
 
 

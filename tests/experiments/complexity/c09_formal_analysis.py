@@ -861,6 +861,21 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
         else:
             print(f"  No c06 results found at {c06_results_dir}")
 
+    # ⛔ WHICH UPSTREAM FILES THIS RUN ACTUALLY READ. c09 decomposes c02's grid,
+    # and run_ds.sh gives every experiment its own process, so run_all's
+    # "move a dependant after its upstream" reorder no longer applies across
+    # processes. Without this, c09 with c02 absent writes a file whose anova
+    # block is simply missing -- and the resume check then matches that file's
+    # fingerprint and skips c09 forever. The absence is now on the record.
+    results['upstream'] = {
+        'c02': {'dir': c02_results_dir, 'found': bool(exp2_results)},
+        'c06': {'dir': c06_results_dir, 'found': bool(exp6_results)},
+    }
+    if not exp2_results:
+        results['upstream']['anova_withheld_reason'] = (
+            'c02 result file absent or unreadable, so the ANOVA over its grid '
+            'was not computed. This is not "no variance explained".')
+
     if 'anova' in all_subs and exp2_results:
         results['anova'] = _run_anova_decomposition(
             exp2_results, metric_name=get_domain_metric(data)[0])
