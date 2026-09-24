@@ -6811,11 +6811,22 @@ def _run_search(
     # ── Checkpoint helpers ──
     _CHECKPOINT_INTERVAL = 100  # save every N configs
 
+    _ckpt_write_failed = []
+
     def _save_checkpoint(data):
         if checkpoint_path is None:
             return
         try:
             import tempfile
+            # ⛔ THE DIRECTORY WAS NEVER CREATED. The checkpoint sits at
+            # <cache>/searches/, and nothing has written a search pickle there
+            # since searches moved to result_db, so on the server the directory
+            # did not exist, mkstemp raised, and the bare `except: pass` below
+            # hid it. Fold-0 progress was never saved: a pass whose fold 0
+            # outlasts one 12-hour link (flab_binding_adams, 6.5 s a
+            # configuration x 8,160) restarted fold 0 from zero on every link
+            # and stored nothing in 48 hours. Found 2026-09-24.
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             # Wrap payload with meta (same envelope as _save_cache_with_meta)
             # so _load_checkpoint can validate parameter alignment.
             wrapper = {
@@ -6826,8 +6837,15 @@ def _run_search(
             with os.fdopen(fd, 'wb') as f:
                 f.write(pickle.dumps(wrapper))
             os.replace(tmp, str(checkpoint_path))
-        except Exception:
-            pass
+        except Exception as _ckpt_err:
+            # Printed once per search, never silent: a checkpoint that cannot
+            # be written means an interrupted run loses everything since the
+            # last one that could.
+            if not _ckpt_write_failed:
+                _ckpt_write_failed.append(True)
+                print(f"  !! CHECKPOINT NOT WRITTEN to {checkpoint_path}: "
+                      f"{type(_ckpt_err).__name__}: {_ckpt_err}. An interrupted "
+                      f"run will restart fold 0 from zero.")
 
     def _load_checkpoint():
         """Load checkpoint, validating that its meta matches the current run.
@@ -7038,6 +7056,10 @@ def _run_search(
             if ckpt and 'fold0_results' in ckpt:
                 fold0_results = ckpt['fold0_results']
                 fold0_done_keys = {r[0] for r in fold0_results}
+                if verbose:
+                    print(f"    fold 0: RESUMED from checkpoint -- "
+                          f"{len(fold0_done_keys)}/{total} already scored "
+                          f"({checkpoint_path})")
                 # Resume mid-flight drops too
                 saved_drops = ckpt.get('dropped_pairs') or {}
                 dropped_pairs = {tuple(k) if isinstance(k, list) else k:
