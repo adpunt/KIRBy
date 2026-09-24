@@ -410,7 +410,30 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                         continue
 
                     alpha = 0.1
-                    conformal_level = min(1.0, np.ceil((len(cal_scores) + 1) * (1 - alpha)) / len(cal_scores))
+                # ⛔ A CALIBRATION HALF THIS SMALL CANNOT CARRY THE LEVEL
+                # ASKED FOR. n_cal above is computed and then IGNORED by the
+                # group-aware branch of _cal_split, which takes
+                # make_cv_splitter(1, ...) -- GroupShuffleSplit at test_size
+                # 0.2 -- so the real size is whatever the groups give. Split
+                # conformal needs at least (1-alpha)/alpha rows, 9 at
+                # alpha=0.1: below that ceil((n+1)(1-alpha))/n exceeds 1, the
+                # min() clamps it, and q becomes the LARGEST calibration
+                # residual. The interval is then the widest the calibration set
+                # can produce, not a 90% one, and the PICP printed beside it is
+                # not coverage at the stated level.
+                    _n_cal_used = len(cal_scores)
+                    _n_cal_actual = _n_cal_used
+                    _raw_level = (np.ceil((_n_cal_actual + 1) * (1 - alpha))
+                                  / _n_cal_actual)
+                    conformal_level = min(1.0, _raw_level)
+                    _level_clamped = bool(_raw_level > 1.0)
+                    if _level_clamped:
+                        print(f"      fold {fold_i}: calibration half has "
+                              f"{_n_cal_actual} rows, under the "
+                              f"{int(np.ceil((1 - alpha) / alpha))} that "
+                              f"alpha={alpha} needs; q is the largest "
+                              f"residual and the interval is NOT at the "
+                              f"{100 * (1 - alpha):.0f}% level")
                     q = np.quantile(cal_scores, conformal_level)
 
                     # Prediction sets on val
@@ -446,6 +469,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                         'avg_set_size': avg_set_size,
                         'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
                         'conformal_q': float(q), 'n_val': len(y_val),
+                        'n_cal': int(_n_cal_used),
+                        'conformal_level_clamped': _level_clamped,
                         'n_classes': n_classes,
                         'ue_corr': ue_corr,
                     }
@@ -497,8 +522,29 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
 
                 # Conformal quantile with finite-sample correction (Romano et al. 2019)
                 alpha = 0.1
+                # ⛔ A CALIBRATION HALF THIS SMALL CANNOT CARRY THE LEVEL
+                # ASKED FOR. n_cal above is computed and then IGNORED by the
+                # group-aware branch of _cal_split, which takes
+                # make_cv_splitter(1, ...) -- GroupShuffleSplit at test_size
+                # 0.2 -- so the real size is whatever the groups give. Split
+                # conformal needs at least (1-alpha)/alpha rows, 9 at
+                # alpha=0.1: below that ceil((n+1)(1-alpha))/n exceeds 1, the
+                # min() clamps it, and q becomes the LARGEST calibration
+                # residual. The interval is then the widest the calibration set
+                # can produce, not a 90% one, and the PICP printed beside it is
+                # not coverage at the stated level.
                 n_cal = len(cal_residuals)
-                conformal_level = min(1.0, np.ceil((n_cal + 1) * (1 - alpha)) / n_cal)
+                _n_cal_used = n_cal
+                _raw_level = np.ceil((n_cal + 1) * (1 - alpha)) / n_cal
+                conformal_level = min(1.0, _raw_level)
+                _level_clamped = bool(_raw_level > 1.0)
+                if _level_clamped:
+                    print(f"      fold {fold_i}: calibration half has {n_cal} "
+                          f"rows, under the "
+                          f"{int(np.ceil((1 - alpha) / alpha))} that "
+                          f"alpha={alpha} needs; q is the largest residual and "
+                          f"the interval is NOT at the "
+                          f"{100 * (1 - alpha):.0f}% level")
                 q = np.quantile(cal_residuals, conformal_level)
 
                 # Reuse y_pred_val above (same model, same X_val_s).
@@ -524,6 +570,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
                     'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
                     'conformal_q': float(q), 'n_val': len(y_val),
+                    'n_cal': int(_n_cal_used),
+                    'conformal_level_clamped': _level_clamped,
                     'ue_corr': ue_corr,
                 }
                 fold_metrics.append(fold_result)
