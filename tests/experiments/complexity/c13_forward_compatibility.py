@@ -342,17 +342,27 @@ def load_forward_compat_reps(dataset_name, domain, n_rows, rep_names=None,
     # chemeleon and mol_jepa (no builder) raised, and catching that around the
     # batch threw away the clamp that had already loaded. One name per call
     # cannot lose a working candidate to a broken neighbour.
+    # ⛔ SystemExit AS WELL AS Exception. A third-party candidate builder can
+    # call sys.exit() instead of raising: AntiFold's loader prints "CSV file
+    # requires columns 'pdb, Hchain, Lchain'" and exits, which `except
+    # Exception` does not catch, so it took the whole c13 run down with exit=1
+    # on flab_thermo_tresanco (2026-09-24 02:16). mint and abcdr_esmc, missing
+    # in the same way on the same run, raised ImportError and were skipped with
+    # a WARNING. A candidate that cannot be built is a candidate that cannot be
+    # built, whichever way its library says so.
     fc_data = None
     try:
         fc_data = _load(wanted)
-    except Exception as e:
+    except (Exception, SystemExit) as e:
         print(f"  Batch load raised ({e}); retrying one candidate at a time so "
               f"a name with no builder cannot take out the ones that work.")
         merged, labels_ref = {}, None
         for name in wanted:
             try:
                 one = _load([name])
-            except Exception:
+            except (Exception, SystemExit) as _e:
+                print(f"    {name}: cannot be built ({type(_e).__name__}: "
+                      f"{_e}); skipped")
                 continue
             got = one.get('reps', {}) or {}
             if name in got:
