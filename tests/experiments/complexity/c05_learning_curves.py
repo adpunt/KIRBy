@@ -104,7 +104,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # arrays below are each a maximum taken on the folds they are
                 # then reported on, over ~600 recipes against ~10
                 # representations, so their difference runs high.
-                'reselected_curve': {}}
+                'reselected_curve': {},
+                # Why hybrid_all_rows_bp is nan wherever it is nan. Filled in
+                # below, per model, per sample size.
+                'all_rows_bp_skips': {}}
 
     # Initialize per-model result structure
     for model_name in model_names:
@@ -128,6 +131,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # picked at size n generalise".
     all_rows_blueprints = {}
     all_rows_meta = {}
+    # {model: [ {n_sub, train_rows, blueprint_budget, reason}, ... ]} for every
+    # point where the second pass was skipped. Without this a nan in
+    # hybrid_all_rows_bp is indistinguishable from a point that was attempted
+    # and failed.
+    all_rows_bp_skips = {}
     full_augs_top = data.get('augmentations')
     for model_name in model_names:
         try:
@@ -333,8 +341,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if bp_fd is None:
                     continue
                 bp_fd_budget = bp_fd.budget
-                if bp_fd_budget is not None and bp_fd_budget > n_sub:
-                    # Blueprint budget exceeds subsample — skip this n.
+                # ⛔ THIS SKIP WROTE NOTHING, AND IT FIRES FOR A WHOLE MODEL AT
+                # EVERY SAMPLE SIZE. Measured on flab_thermo_tresanco
+                # 2026-09-24: the whole-dataset winner for rf carries
+                # budget=1000 while the curve's sample sizes are 67, 168, 336,
+                # 504 and 672 -- so rf's hybrid_all_rows_bp column was nan at
+                # every point, and nothing said why. lightgbm's winner carries
+                # budget=50 and its column is populated throughout. A reader
+                # comparing the two models sees one full column and one empty
+                # one with no explanation.
+                #
+                # Also compared against n_sub, the whole subsample, while the
+                # hybrid is built on the TRAINING partition -- so a budget of
+                # exactly n_sub passed and was then applied to about 0.8 n_sub
+                # rows. It now compares against the training partition, the
+                # same number the other arm caps against.
+                _fd_train = (int(n_sub * (sub_folds - 1) / sub_folds)
+                             if sub_folds > 1 else int(n_sub * 0.8))
+                if bp_fd_budget is not None and bp_fd_budget > _fd_train:
+                    all_rows_bp_skips.setdefault(model_name, []).append({
+                        'n_sub': int(n_sub),
+                        'train_rows': int(_fd_train),
+                        'blueprint_budget': int(bp_fd_budget),
+                        'reason': ('the all-rows recipe asks for more features '
+                                   'than this subsample has training rows'),
+                    })
                     continue
                 # FIX 4d: cv_split RAISES (no random-split fallback) when the
                 # subsample has fewer distinct groups than the requested fold
@@ -478,6 +509,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"leave-one-fold-out delta={hd:+.4f}")
 
     # Top-3 from the last (full-data) subsample search
+    # Carry the skip record out with the numbers.
+    results['all_rows_bp_skips'] = all_rows_bp_skips
+    for _m, _sk in sorted(all_rows_bp_skips.items()):
+        print(f"  {_m}: hybrid_all_rows_bp skipped at {len(_sk)} of "
+              f"{len(sample_sizes)} sample sizes — its all-rows recipe asks "
+              f"for {_sk[0]['blueprint_budget']} features and the largest "
+              f"training partition here is "
+              f"{max(x['train_rows'] for x in _sk)}")
+
     top3_full = extract_top3_base_reps(last_search) if last_search is not None else []
 
     # Fit learning curves per model
