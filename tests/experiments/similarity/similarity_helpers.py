@@ -1597,8 +1597,8 @@ def run_all(dataset_name: str, output_dir: str,
         # output (it has no early checkpoint save; a killed run = no JSON). This
         # is gated on the smoke env var so server full runs use the defaults.
         if exp_id == 's11' and os.environ.get('KIRBY_SMOKE_N'):
-            kwargs['max_iterations'] = int(os.environ.get('KIRBY_SMOKE_S11_ITERS', '8'))
-            kwargs['n_seeds'] = int(os.environ.get('KIRBY_SMOKE_S11_SEEDS', '1'))
+            kwargs['max_iterations'] = int(os.environ.get('KIRBY_SMOKE_S11_ITERS', '').strip() or '8')
+            kwargs['n_seeds'] = int(os.environ.get('KIRBY_SMOKE_S11_SEEDS', '').strip() or '1')
         # KIRBY_S11_CONDITIONS names the arms to run, comma separated. s11's run()
         # has always taken a `conditions` list; nothing exposed it.
         #

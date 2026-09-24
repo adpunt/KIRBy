@@ -102,8 +102,8 @@ _FOLD_SEARCH_SEED = 42
 # How many restarts the clusterer gets. k-means has used 10 since the file was
 # written; the coefficient-matched clusterer below is given the same number so
 # the two differ in the distance and in nothing else.
-_N_INIT = int(os.environ.get('KIRBY_S13_N_INIT', '10'))
-_MAX_ITER = int(os.environ.get('KIRBY_S13_MAX_ITER', '25'))
+_N_INIT = int(os.environ.get('KIRBY_S13_N_INIT', '').strip() or '10')
+_MAX_ITER = int(os.environ.get('KIRBY_S13_MAX_ITER', '').strip() or '25')
 
 # Cluster counts. 3, 5 and 10 were written into the signature and never swept;
 # KIRBY_S13_CLUSTERS sweeps them without editing the file. Coherence is a mean
@@ -364,7 +364,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # reproduces.
     k_retrieval = kwargs.get('k_retrieval')
     if k_retrieval is None:
-        k_retrieval = int(os.environ.get('KIRBY_S13_K_RETRIEVAL', '5'))
+        # .strip() before int(): an exported-but-empty KIRBY_S13_K_RETRIEVAL is
+        # a set variable whose value is '', and int('') raises.
+        _kr = os.environ.get('KIRBY_S13_K_RETRIEVAL', '').strip()
+        k_retrieval = int(_kr) if _kr else 5
     n_clusters_list = kwargs.get('n_clusters_list') or DEFAULT_N_CLUSTERS
     augmentations = data.get('augmentations')
     # The coefficient the retrieval half reads, and the clusterer that would

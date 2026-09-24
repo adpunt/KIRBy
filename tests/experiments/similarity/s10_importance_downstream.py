@@ -1052,7 +1052,7 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
         # moves; KIRBY_S10_GP_NORMALIZE_Y=1 fits the other one.
         return GaussianProcessRegressor(
             kernel=kernel,
-            n_restarts_optimizer=int(os.environ.get('KIRBY_S10_GP_RESTARTS', '0')),
+            n_restarts_optimizer=int(os.environ.get('KIRBY_S10_GP_RESTARTS', '').strip() or '0'),
             alpha=1e-6, random_state=42,
             normalize_y=_gp_normalize_y(),
         )
@@ -2389,7 +2389,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'knn_vote': _knn_vote_weights(),
         'k_values': _k_values(),
         'qrasar_neighbour_counts': _qrasar_ks(),
-        'gp_restarts': int(os.environ.get('KIRBY_S10_GP_RESTARTS', '0')),
+        'gp_restarts': int(os.environ.get('KIRBY_S10_GP_RESTARTS', '').strip() or '0'),
         'gp_kernel': _gp_kernel_in_use(),
         'gp_lengthscale_starts': _gp_lengthscale_starts(),
         'gp_normalize_y': _gp_normalize_y(),
