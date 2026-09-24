@@ -81,15 +81,23 @@ def _compute_icc_check(configs):
             bms = k * ((row_means - grand_mean) ** 2).sum() / (n - 1)
             wms = ((data - row_means.reshape(-1, 1)) ** 2).sum() / (n * (k - 1))
 
+            # ⛔ ZERO VARIANCE ON BOTH SIDES IS NO INFORMATION, NOT AGREEMENT.
+            # bms + (k-1)*wms == 0 means every score in the block is identical:
+            # nothing varies between the two members and nothing varies within
+            # them. Returning 1.0 put that pair straight into the redundant
+            # list, and "these two agree perfectly" is exactly the wrong
+            # reading of "neither of these moved at all".
             if (bms + (k - 1) * wms) == 0:
-                icc = 1.0
+                icc = float('nan')
             else:
                 icc = (bms - wms) / (bms + (k - 1) * wms)
 
             pair_key = f"{m1}_vs_{m2}"
             result['model_pairs'][pair_key] = float(icc)
 
-            flag = " ** REDUNDANT" if icc > 0.9 else ""
+            flag = (" ** DEGENERATE (no variance either way)"
+                    if not np.isfinite(icc)
+                    else " ** REDUNDANT" if icc > 0.9 else "")
             print(f"      {m1} vs {m2}: ICC={icc:.4f}{flag}")
 
             if icc > 0.9:
@@ -116,15 +124,23 @@ def _compute_icc_check(configs):
             bms = k * ((row_means - grand_mean) ** 2).sum() / (n - 1)
             wms = ((data - row_means.reshape(-1, 1)) ** 2).sum() / (n * (k - 1))
 
+            # ⛔ ZERO VARIANCE ON BOTH SIDES IS NO INFORMATION, NOT AGREEMENT.
+            # bms + (k-1)*wms == 0 means every score in the block is identical:
+            # nothing varies between the two members and nothing varies within
+            # them. Returning 1.0 put that pair straight into the redundant
+            # list, and "these two agree perfectly" is exactly the wrong
+            # reading of "neither of these moved at all".
             if (bms + (k - 1) * wms) == 0:
-                icc = 1.0
+                icc = float('nan')
             else:
                 icc = (bms - wms) / (bms + (k - 1) * wms)
 
             pair_key = f"b{b1}_vs_b{b2}"
             result['budget_pairs'][pair_key] = float(icc)
 
-            flag = " ** REDUNDANT" if icc > 0.9 else ""
+            flag = (" ** DEGENERATE (no variance either way)"
+                    if not np.isfinite(icc)
+                    else " ** REDUNDANT" if icc > 0.9 else "")
             print(f"      b={b1} vs b={b2}: ICC={icc:.4f}{flag}")
 
             if icc > 0.9:
@@ -168,6 +184,31 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
     # Build data: each config is an observation with factors (model, budget) -> R²
     models_set = sorted(set(c['model'] for c in configs))
     budgets_set = sorted(set(c['budget'] for c in configs))
+
+    # ⛔ THE BUDGET FACTOR IS THE BUDGET ASKED FOR, AND c02 ALREADY STORES THE
+    # WIDTH BUILT. Every configuration c02 writes carries 'n_features', the
+    # mean of X_train.shape[1] over folds (c02:260, from
+    # find_best_hybrid.py:5374). create_hybrid stops each representation at its
+    # last feature scoring above zero, so two budget LEVELS can build the same
+    # width and are counted below as two levels of the budget factor -- which
+    # is the one thing an ANOVA on that factor cannot survive. The number
+    # needed to see it is already in the file this was handed.
+    _widths_by_budget = {}
+    for _c in configs:
+        _w = _c.get('n_features')
+        if _w is not None and np.isfinite(_w):
+            _widths_by_budget.setdefault(_c['budget'], []).append(float(_w))
+    _collapsed = []
+    _bl = sorted(_widths_by_budget)
+    for _i in range(len(_bl) - 1):
+        _b1, _b2 = _bl[_i], _bl[_i + 1]
+        _m1, _m2 = np.mean(_widths_by_budget[_b1]), np.mean(_widths_by_budget[_b2])
+        if abs(_m1 - _m2) < 1.0:
+            _collapsed.append((_b1, _b2, round(float(_m1), 1)))
+    if _collapsed:
+        print(f"    budget levels that build the SAME width "
+              f"(budget, next budget, features built): {_collapsed}. The "
+              f"ANOVA below counts them as separate levels.")
 
     if len(models_set) < 2 or len(budgets_set) < 2:
         print("    Need at least 2 models and 2 budgets for ANOVA")
