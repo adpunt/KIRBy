@@ -132,6 +132,30 @@ against itself without the change:
       344). So the variance is divided by the training labels' variance before
       it is passed in.
 
+  xgboost_aft_point / xgboost_interval_aft
+      Added 2026-09-24 from a second research report (its section J): train on
+      the RANGE of a molecule's measurements instead of one number. Both are
+      XGBoost with objective survival:aft and a normal error, with n30's
+      settings and n30's label map (time = exp(label - centre), centre the
+      median label, predictions mapped back with log; n30_censored_likelihood.
+      fit_aft_predict). The error scale is the SD of the training labels minus
+      the fold's out-of-fold LightGBM prediction, so the arm is absent where
+      that prediction failed.
+        xgboost_aft_point     every label is a zero-width interval at the
+                              training label. The plain version of the same
+                              learner: it differs from xgboost_interval_aft in
+                              the label bounds and nothing else. It is the arm
+                              the interval arm is paired against, rather than
+                              the downstream xgboost, whose loss and starting
+                              value are not the AFT's.
+        xgboost_interval_aft  the interval [min, max] of the measurements the
+                              training label rests on. Under `averaged` that is
+                              all of a molecule's measurements. Under `single` a
+                              gradeable molecule's label rests on ONE
+                              measurement, so its interval has zero width; the
+                              others rest on all of theirs. A molecule measured
+                              once has zero width either way.
+
 WHERE THE HYBRID COMES IN, AND THE LIMIT ON IT. Every condition runs in one base
 representation and in one hybrid per family of stored search, each recipe coming
 from the precomputed pool and each rebuilt per fold through `build_fold_hybrid`,
@@ -230,9 +254,11 @@ POOLED_SPREAD_PRIOR = 3
 # Learners fitted beside the downstream models. Each is paired against its own
 # plain arm, never against a downstream model.
 MODEL_ARMS = ('ngboost_plain', 'ngboost_count_feature',
-              'gp_plain', 'gp_per_molecule_noise')
+              'gp_plain', 'gp_per_molecule_noise',
+              'xgboost_aft_point', 'xgboost_interval_aft')
 MODEL_ARM_PAIRS = {'ngboost_count_feature': 'ngboost_plain',
-                   'gp_per_molecule_noise': 'gp_plain'}
+                   'gp_per_molecule_noise': 'gp_plain',
+                   'xgboost_interval_aft': 'xgboost_aft_point'}
 
 # The `gp` entry refuses more than 1,000 training molecules
 # (find_best_hybrid.py:2781). Both GP arms fit the same draw of this many.
@@ -289,6 +315,9 @@ def measurement_stats(labels, replicate_groups):
       n_measurements  how many times it was measured
       mean_all        the mean of ALL its measurements
       var_all         the variance of its measurements, ddof=1, NaN below two
+      min_all         the lowest of its measurements (added 2026-09-24, for the
+                      interval arm)
+      max_all         the highest
 
     ddof=1, for the reason n17 records at :176-184: with ddof=0 the measured
     spread grows with how many times a molecule was measured whatever its real
@@ -315,6 +344,8 @@ def measurement_stats(labels, replicate_groups):
         'n_measurements': np.zeros(n, dtype=np.int64),
         'mean_all': np.zeros(n, dtype=np.float64),
         'var_all': np.full(n, np.nan, dtype=np.float64),
+        'min_all': np.zeros(n, dtype=np.float64),
+        'max_all': np.zeros(n, dtype=np.float64),
     }
     for j, g in enumerate(gids):
         rows = np.asarray(order[g], dtype=np.int64)
@@ -322,6 +353,8 @@ def measurement_stats(labels, replicate_groups):
         out['row_index'][j] = rows[0]
         out['n_measurements'][j] = len(rows)
         out['mean_all'][j] = float(np.mean(vals))
+        out['min_all'][j] = float(np.min(vals))
+        out['max_all'][j] = float(np.max(vals))
         if len(rows) >= 2:
             out['var_all'][j] = float(np.var(vals, ddof=1))
     return out
@@ -358,6 +391,50 @@ def training_labels(ent, stats, build):
         return (stats['mean_all'].copy(),
                 stats['n_measurements'].astype(np.float64))
     raise ValueError(f"unknown label build {build!r}")
+
+
+def interval_bounds(ent, stats, build, y_train):
+    """Lower and upper label bound per molecule, for xgboost_interval_aft.
+
+    The range of the measurements the training label rests on (see
+    `training_labels`): all of them under `averaged`; under `single`, one for a
+    gradeable molecule (zero width, at its label) and all of them otherwise.
+    Every interval contains the training label.
+    """
+    y_train = np.asarray(y_train, dtype=np.float64)
+    lo = np.asarray(stats['min_all'], dtype=np.float64).copy()
+    hi = np.asarray(stats['max_all'], dtype=np.float64).copy()
+    if build == 'single':
+        one = np.asarray(ent['gradeable'], dtype=bool)
+        lo[one] = y_train[one]
+        hi[one] = y_train[one]
+    elif build != 'averaged':
+        raise ValueError(f"unknown label build {build!r}")
+    return lo, hi
+
+
+def fit_interval_aft_predict(X_tr, lower, upper, X_va, sd):
+    """XGBoost survival:aft on [lower, upper] labels; predictions in label units.
+
+    n30's map and settings (n30_censored_likelihood.fit_aft_predict,
+    AFT_PARAMS, AFT_ROUNDS): time = exp(label - centre), centre the median of
+    the interval midpoints, prediction = log(predicted time) + centre.
+    """
+    import xgboost as xgb
+    from experiments.noise.n30_censored_likelihood import AFT_PARAMS, AFT_ROUNDS
+    lower = np.asarray(lower, dtype=float)
+    upper = np.asarray(upper, dtype=float)
+    centre = float(np.median((lower + upper) / 2.0))
+    dtr = xgb.DMatrix(np.asarray(X_tr, dtype=float))
+    dtr.set_float_info('label_lower_bound', np.exp(lower - centre))
+    dtr.set_float_info('label_upper_bound', np.exp(upper - centre))
+    p = dict(AFT_PARAMS)
+    p.update({'objective': 'survival:aft',
+              'aft_loss_distribution': 'normal',
+              'aft_loss_distribution_scale': float(max(sd, 1e-3))})
+    booster = xgb.train(p, dtr, int(AFT_ROUNDS))
+    t = booster.predict(xgb.DMatrix(np.asarray(X_va, dtype=float)))
+    return np.log(np.clip(t, 1e-300, None)) + centre
 
 
 def label_variance(stats, n_behind, floor_share=VARIANCE_FLOOR_SHARE):
@@ -742,6 +819,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # above 1,000 molecules, and both GP arms fit a 1,000-molecule draw.
         from kirby.find_best_hybrid import _get_gp_regressor
         arm_factories['gp'] = _get_gp_regressor
+    if any(a.startswith('xgboost') for a in model_arms):
+        try:
+            import xgboost  # noqa: F401
+            arm_factories['xgboost'] = fit_interval_aft_predict
+        except ImportError:
+            pass
     missing = sorted({a.split('_')[0] for a in model_arms} - set(arm_factories))
     if missing:
         raise RuntimeError(f"n19: model arm learner(s) {missing} could not be "
@@ -1030,6 +1113,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for build in label_builds:
             y_train_all, n_behind = training_labels(ent, stats, build)
+            aft_lo_all, aft_hi_all = interval_bounds(ent, stats, build,
+                                                     y_train_all)
             var_own, n_filled, var_floor = label_variance(stats, n_behind)
             var_cal, noise_fit, n_trusted = calibrated_variance(stats, n_behind)
 
@@ -1037,6 +1122,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'n_molecules_with_no_variance_of_their_own': n_filled,
                 'variance_floor_label_units_squared': var_floor,
                 'n_molecules_in_trusted_subset': n_trusted,
+                # How many molecules give xgboost_interval_aft an interval of
+                # non-zero width. The rest enter it exactly as they enter
+                # xgboost_aft_point.
+                'n_molecules_with_interval_width_above_zero': int(
+                    (aft_hi_all > aft_lo_all).sum()),
                 # The noise function itself: measurement count -> the mean
                 # variance of the molecules measured that many times. A reader
                 # should be able to see whether it falls with the count.
@@ -1234,6 +1324,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 m = arm_factories['gp']()
                                 m.fit(X_tr_s[gp_rows], y_tr[gp_rows])
                                 pred = m.predict(X_va_s)
+                            elif arm in ('xgboost_aft_point',
+                                         'xgboost_interval_aft'):
+                                if oof is None:
+                                    continue
+                                sd = float(np.std(y_tr - oof))
+                                if arm == 'xgboost_aft_point':
+                                    lo_b = hi_b = y_tr
+                                else:
+                                    lo_b, hi_b = aft_lo_all[tr], aft_hi_all[tr]
+                                pred = fit_interval_aft_predict(
+                                    X_tr_s, lo_b, hi_b, X_va_s, sd)
                             else:  # gp_per_molecule_noise
                                 if s2e is None:
                                     continue

@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Smoke for n34: scaffold-group offsets -- group mean or random intercept.
+
+What has to be true before any number n34 writes can be read:
+
+  1. KNOWN OFFSETS ARE RECOVERED. On toy labels built as a group offset plus
+     noise, the random intercept's per-group offsets correlate with the true
+     ones on the groups large enough to carry evidence.
+  2. A GROUP OF ONE IS SHRUNK TOWARD ZERO. Its fitted offset is smaller in size
+     than its mean residual, which is what group_center subtracts in full.
+  3. WITH NO GROUP EFFECT, tau^2 falls toward its floor and a group of one keeps
+     almost nothing.
+  4. group_center_3plus LEAVES SMALL GROUPS ALONE.
+  5. THE RECOVERY SHARE IS SIGNED BY THE METRIC AND REFUSED UNDER THE 2% FLOOR.
+  6. A NON-GROUPED CONDITION, A CLASSIFICATION LABEL AND A DATASET WITHOUT
+     SCAFFOLD GROUPS ARE SKIPPED WITH A REASON.
+  7. A FULL RUN, base only and with a hybrid recipe, writes every arm for every
+     model, a tail record per score, the `none` pass once, and offset recovery
+     under grouped_shifted only. Under spearman the direction flips.
+  8. The parser lists every flag.
+"""
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
+
+os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+
+import tempfile
+
+import numpy as np
+
+import experiments.noise.n34_group_random_effects as n34
+from kirby.find_best_hybrid import Blueprint
+
+OUT = tempfile.mkdtemp(prefix='n34_smoke_')
+FAIL = []
+
+
+def check(name, ok, detail=''):
+    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ''))
+    if not ok:
+        FAIL.append(name)
+
+
+def toy_groups(n, seed=0):
+    """Mixed sizes: many groups of one, some of 2-3, a few of 10+."""
+    rng = np.random.default_rng(seed)
+    sizes = []
+    while sum(sizes) < n:
+        sizes.append(int(rng.choice([1, 1, 1, 2, 3, 12])))
+    g = np.repeat(np.arange(len(sizes)), sizes)[:n]
+    return g[rng.permutation(n)]
+
+
+def make_data(n=180, n_feat=4, seed=0, domain='molecular'):
+    rng = np.random.default_rng(seed)
+    X = rng.normal(size=(n, n_feat))
+    y = X @ rng.normal(size=n_feat) + 5.0 + rng.normal(0, 0.3, n)
+    X2 = X[:, ::-1] + rng.normal(0, 0.5, size=X.shape)
+    return {'labels': y, 'reps': {'toy': X, 'second': X2},
+            'groups': np.arange(n), 'task_type': 'regression',
+            'domain': domain, 'smiles': ['C'] * n}
+
+
+def fake_recipe(rep_names, budget=4):
+    bp = Blueprint(reps=list(rep_names), allocation_method='fixed',
+                   importance_method='lightgbm_gain', budget=budget,
+                   internal_evaluator='lightgbm', metric='rmse',
+                   lower_is_better=True, task_type='regression',
+                   augmentation_strategy='none')
+    meta = {'best_config': {'blueprint': bp},
+            'objective': 'predictive', 'objective_choice': 'smoke_fixed_recipe',
+            'pool_subset': 'predictive_and_similarity', 'tier': 'general',
+            'aug_condition': 'none', 'by_objective': {}}
+    return lambda *a, **k: (None, meta)
+
+
+def no_recipe(*a, **k):
+    return None, None
+
+
+def run_it(data, name, recipe=no_recipe, groups=None, **kw):
+    real_r = n34.get_best_search_for_downstream
+    real_g = n34.noise_groups_for
+    n34.get_best_search_for_downstream = recipe
+    g = toy_groups(len(data['labels'])) if groups is None else groups
+    n34.noise_groups_for = lambda d: (g, int(len(np.unique(g))), 0.1)
+    try:
+        kw.setdefault('base_rep', 'toy')
+        return n34.run(data, {'n_splits': 3}, OUT, name, **kw)
+    finally:
+        n34.get_best_search_for_downstream = real_r
+        n34.noise_groups_for = real_g
+
+
+def test_offsets():
+    print("the offset estimators, no model fitted:")
+    rng = np.random.default_rng(3)
+    n = 900
+    g = toy_groups(n, seed=3)
+    uniq, inv, counts = n34._group_index(g)
+    b_true = rng.normal(0, 1.0, uniq.size)
+    y = b_true[inv] + rng.normal(0, 1.0, n)
+    # The model part is zero here, so the out-of-fold prediction is the mean.
+    oof = lambda X, yy: np.full(len(yy), float(np.mean(yy)))
+    off, info = n34.random_intercept_offsets(None, y, g, oof)
+    per_group = np.bincount(inv, weights=off) / counts
+    big = counts >= 3
+    corr = float(np.corrcoef(per_group[big], b_true[big])[0, 1])
+    check('1. known offsets recovered on groups of 3+', corr > 0.8,
+          f'corr {corr:.3f} over {int(big.sum())} groups; tau2 '
+          f'{info["tau2_between_group"]:.3f} (true 1.0), sigma2 '
+          f'{info["sigma2_within_group"]:.3f} (true 1.0)')
+    r = y - np.mean(y)
+    gc = n34.group_center_offsets(r, g)
+    one = counts[inv] == 1
+    keep = info['share_a_group_of_one_keeps']
+    ratio = float(np.mean(np.abs(off[one])) / np.mean(np.abs(gc[one])))
+    check('2. a group of one keeps less than its full mean residual',
+          0.2 < keep < 0.8 and ratio < 0.8,
+          f'keeps {keep:.3f} by formula; mean |offset| is {ratio:.3f} of '
+          f"group_center's on {int(one.sum())} molecules in groups of one")
+
+    y_flat = rng.normal(0, 1.0, n)
+    _, info0 = n34.random_intercept_offsets(None, y_flat, g, oof)
+    check('3. no group effect: a group of one keeps almost nothing',
+          info0['share_a_group_of_one_keeps'] < 0.15,
+          f'keeps {info0["share_a_group_of_one_keeps"]:.3f}, tau2 '
+          f'{info0["tau2_between_group"]:.4f}')
+
+    c3 = n34.group_center_offsets(r, g, min_size=3)
+    small = counts[inv] < 3
+    check('4. group_center_3plus leaves groups under 3 at zero offset',
+          np.all(c3[small] == 0) and np.allclose(c3[~small], gc[~small]))
+
+
+def test_share():
+    print("\nthe recovery share:")
+    s, _ = n34.recovery_share(0.5, 0.6, 0.55, True)
+    s2, _ = n34.recovery_share(0.8, 0.7, 0.75, False)
+    s3, why = n34.recovery_share(0.5, 0.501, 0.5, True)
+    check('5. signed by the metric, refused under the floor',
+          abs(s - 0.5) < 1e-9 and abs(s2 - 0.5) < 1e-9 and s3 is None and why,
+          f'{s:.2f}, {s2:.2f}, refused: {why}')
+
+
+def test_skips():
+    print("\nthe skips:")
+    d = make_data()
+    r1 = run_it(d, 'toy', noise_condition='gaussian')
+    dc = make_data()
+    dc['task_type'] = 'classification'
+    r2 = run_it(dc, 'toy')
+    real = n34.noise_groups_for
+    n34.noise_groups_for = lambda d: (None, 0, 0.0)
+    try:
+        r3 = n34.run(make_data(), {'n_splits': 3}, OUT, 'toy', base_rep='toy')
+    finally:
+        n34.noise_groups_for = real
+    check('6. gaussian, a class label and no groups each skip with a reason',
+          r1.get('skipped') == 'condition_not_grouped'
+          and r2.get('skipped') == 'not_regression'
+          and r3.get('skipped') == 'no_scaffold_groups')
+
+
+def test_full(recipe, label, domain='molecular'):
+    print(f"\na full run, {label}:")
+    d = make_data(domain=domain)
+    models = ['rf', 'lightgbm', 'svm']
+    res = run_it(d, 'toy', recipe=recipe, models=models,
+                 levels=[0.0, 0.5], draws=[0, 1])
+    pc = res.get('per_condition', {})
+    errs = res.get('_errors', {})
+    check(f'7. [{label}] no errors', not errs, str(list(errs.items())[:3]))
+    check(f'7. [{label}] level 0 ran once, under none',
+          set(pc) == {'none', 'grouped_shifted', 'grouped_wider'}
+          and list(pc['none']) == ['0']
+          and '0' not in pc['grouped_shifted'],
+          f'{ {c: list(v) for c, v in pc.items()} }')
+    spaces = res['spaces_run']
+    ok = True
+    for cond, lv in (('grouped_shifted', '0.5'), ('grouped_wider', '0.5')):
+        for sp in spaces:
+            for arm in n34.ARMS:
+                for m in models:
+                    got = pc.get(cond, {}).get(lv, {}).get(sp, {}).get(arm, {}).get(m, {})
+                    if len(got) != 6:
+                        ok = False
+    check(f'7. [{label}] every arm x model x space has 6 passes '
+          f'(2 draws x 3 folds)', ok, f'spaces {spaces}')
+    tails = res['tail_per_condition']['grouped_shifted']['0.5']['base']['none']['rf']
+    check(f'7. [{label}] a tail record per score',
+          len(tails) == 6 and all('tail_rmse_top' in t for t in tails.values()))
+    gp = res['groups_per_pass']
+    has_rec = all('offset_recovery' in sp
+                  for r in gp['grouped_shifted']['0.5'] for sp in r['per_space'].values())
+    no_rec = all('offset_recovery' not in sp
+                 for c in ('grouped_wider', 'none') for lv in gp[c].values()
+                 for r in lv for sp in r['per_space'].values())
+    check(f'7. [{label}] offset recovery under grouped_shifted only',
+          has_rec and no_rec)
+    sh_rec = gp['grouped_shifted']['0.5'][0]['per_space']['base']
+    print(f"      grouped_shifted fold 0 base: random intercept "
+          f"{sh_rec['random_intercept']['em_rounds']} rounds, group of one keeps "
+          f"{sh_rec['random_intercept']['share_a_group_of_one_keeps']:.3f}; "
+          f"recovery corr (all groups) group_center "
+          f"{sh_rec['offset_recovery']['group_center']['corr_all_groups']}, "
+          f"random_intercept "
+          f"{sh_rec['offset_recovery']['random_intercept']['corr_all_groups']}")
+    if recipe is not no_recipe:
+        check(f'7. [{label}] a hybrid space ran', 'hybrid' in spaces, str(spaces))
+    return res
+
+
+def test_direction():
+    print("\nthe direction under spearman:")
+    d = make_data(domain='antibody')
+    res = run_it(d, 'toy', models=['rf'], levels=[0.5], draws=[0],
+                 noise_condition='grouped_shifted')
+    s = res['summary']
+    e = s['per_condition']['grouped_shifted']['0.5']['base']['rf']['per_arm']['clean']['vs_none']
+    raw = res['per_condition']['grouped_shifted']['0.5']['base']
+    gains = [raw['clean']['rf'][k] - raw['none']['rf'][k] for k in raw['none']['rf']]
+    check('7. under spearman a higher score counts as a gain',
+          res['lower_is_better'] is False
+          and np.allclose(sorted(e['pass_gains']), sorted(gains)),
+          f"metric {res['metric']}")
+
+
+def test_parser():
+    print("\nthe parser:")
+    import subprocess
+    out = subprocess.run([sys.executable, n34.__file__, '--help'],
+                         capture_output=True, text=True).stdout
+    flags = ['--noise-condition', '--levels', '--draws', '--em-max-rounds',
+             '--exp-folds', '--base-rep', '--tag']
+    missing = [f for f in flags if f not in out]
+    check('8. the parser lists every flag', not missing, f'missing {missing}')
+
+
+if __name__ == '__main__':
+    test_offsets()
+    test_share()
+    test_skips()
+    test_full(no_recipe, 'base only')
+    test_full(fake_recipe(['toy', 'second']), 'with a hybrid recipe')
+    test_direction()
+    test_parser()
+    print("\n" + ("ALL GREEN" if not FAIL else f"FAILED: {FAIL}"))
+    sys.exit(1 if FAIL else 0)

@@ -1,0 +1,952 @@
+#!/usr/bin/env python3
+"""N33: does a robust loss, a target transform, a weight or an augmentation undo injected label noise without finding the noisy molecules?
+
+Paper: Noise.
+
+THE QUESTION. Every cleaning method in n07, n11, n24 and n32 first decides WHICH
+training molecules are wrong. This file tries the other road: leave every label
+where it is, and change how the model reads them. The second research report
+(2026-09-24, `compass_artifact_wf-d7ecc1f8-…`) lists these as the levers that do
+not depend on the model being accurate enough to find the bad rows: its A4 (log
+or Box-Cox target), A6 (robust losses with a tuned scale), A10 (weights from a
+predicted spread), D (Tukey biweight, Student-t likelihood), F and H (C-Mixup,
+target-noise bagging) and G (fit toward a robust teacher). It ties the gain from
+a robust loss to how heavy-tailed the residuals are, so the residual kurtosis is
+written beside every pass.
+
+THE CONDITIONS. Every regression condition in the registry, one at a time,
+through noise_helpers.sweep_conditions, so a job can name one with
+--noise-condition and an interrupted sweep resumes. That includes `laplace` and
+the `student_t_*` shapes, where the report expects a robust loss to help, and
+`gaussian`, where it expects nothing to.
+
+THE SCALE EVERY ROBUST LOSS IS SET FROM. In each fold and feature space, p is a
+group-aware out-of-fold LightGBM prediction on the NOISY training labels
+(`kirby.utils.noisy_labels.oof_predict`, the same p n30 uses), and
+
+    s = 1.4826 * median |y - p|
+
+which is the residual SD a normal would have if the residuals were normal. The
+Huber thresholds are c * s for c in HUBER_C. A Huber threshold in raw label units
+would mean a different thing on pKi and on logD; this makes it the same share of
+the model's own error everywhere.
+
+THE ARMS. Every arm is scored on the same held-out molecules against their
+untouched labels, and paired against `noisy`: the same model on the same
+features fitted on the noisy labels as they are.
+
+  clean                   the same model on the labels before injection. The
+                          most any arm can recover.
+  noisy                   the arm to beat.
+
+  Label and weight arms, every downstream model:
+  yeo_johnson             the training labels put through a Yeo-Johnson power
+                          transform (sklearn PowerTransformer, fitted on this
+                          fold's noisy training labels), the model fitted on
+                          that, its predictions transformed back. The report
+                          asked for log or Box-Cox; both are undefined on
+                          negative labels, and logd's are negative.
+  invvar_ngboost          weight 1 / sigma(x)^2, sigma from an out-of-fold
+                          NGBoost (Normal) on the noisy labels, normalised to
+                          average one. A molecule NGBoost thinks sits in a noisy
+                          region counts for less.
+  c_mixup                 C-Mixup (Yao et al., NeurIPS 2022). Every training
+                          molecule gets one partner, drawn with probability
+                          proportional to exp(-(y_i - y_j)^2 / (2 bw^2)), and
+                          one new molecule is made from the pair,
+                          lam * (x_i, y_i) + (1 - lam) * (x_j, y_j) with
+                          lam ~ Beta(2, 2). The training set doubles. bw is
+                          CMIXUP_BW_SD label SDs, a stated default, not tuned.
+  target_noise_bagging    TNB_BAGS fits, each on the labels plus fresh
+                          N(0, (TNB_SCALE * sd(y - p))^2), predictions averaged.
+                          No row is resampled; only the labels are perturbed.
+  huber_teacher_blend     fitted to 0.5 * y + 0.5 * q, q an out-of-fold LightGBM
+                          Huber prediction at c = 1. The report's G: a student
+                          fitted toward a robust teacher.
+
+  Loss changes (the "swaps"), each paired against the model it replaces, on
+  the noisy labels, in that model's feature matrix:
+  lightgbm_huber_c<c>     LightGBM objective huber, alpha = c * s
+  lightgbm_fair           LightGBM objective fair, fair_c = s
+  lightgbm_quantile_median  LightGBM objective quantile, alpha 0.5 (least
+                          absolute error)
+  lightgbm_tukey          Tukey's biweight as a LightGBM custom objective, with
+                          threshold TUKEY_K * s. See tukey_objective for why its
+                          second derivative is floored.
+  xgboost_pseudohuber_c<c>  XGBoost reg:pseudohubererror, huber_slope = c * s
+  xgboost_absolute        XGBoost reg:absoluteerror
+  rf_l1                   a random forest with absolute-error splits
+  dnn_huber_c<c>          the DNN under a Huber loss with delta = c * s
+                          (`DNNRegressor(loss='huber')`, added 2026-09-24)
+  ngboost_t               NGBoost with a Student-t likelihood (3 degrees of
+                          freedom, fixed; see make_ngboost), paired against
+                          ngboost_normal, NGBoost with its default normal. Both
+                          are fitted in lightgbm's feature matrix: NGBoost is not
+                          a downstream model and has no recipe of its own.
+
+The swaps other than rf_l1 have no entry in `find_best_hybrid.DEFAULT_MODELS`.
+Each is built here from the settings of the model it replaces
+(`_get_lgbm_regressor`, `_get_xgb_regressor`, `_get_dnn_regressor`), changing
+only the loss, so the pair differs in the loss and in nothing else. KIRBy changes
+the input, not the model, so every swap is a comparator for the label arms, not
+a proposal.
+
+THE RECOVERY SHARE. Per (level, space, model), over the passes all three scored,
+(noisy - arm) / (noisy - clean) where lower wins, the sign flipped where higher
+wins. Refused, with its reason, when the clean-to-noisy gap is under 2% of the
+clean score (n30's floor, from n07 and n11). For a swap the denominator is the
+replaced model's own gap.
+
+TAIL ERROR. Every score is written with `noise_helpers.tail_scores`: the rmse on
+the held-out molecules whose clean label is in the top and the bottom tenth, and
+the calibration slope. A robust loss that wins overall by pulling the extremes
+inward shows up there.
+
+WHERE THE FEATURES COME FROM. As n30: the recipe per downstream model is read
+from the precomputed pool, searched on clean labels. Each fold rebuilds the
+hybrid from that fold's NOISY training labels, once, and every arm shares it.
+
+Usage:
+    python n33_robust_training.py --dataset herg_ki --mode full
+    python n33_robust_training.py --dataset logd --noise-condition student_t_nu3
+"""
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
+
+import functools
+import time
+
+import numpy as np
+from scipy.stats import kurtosis
+from sklearn.preprocessing import StandardScaler, PowerTransformer
+
+from experiments._shared import (
+    load_data, get_config, create_experiment_parser,
+    save_experiment_results, convert_numpy,
+    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
+    get_best_search_for_downstream, pick_noise_base_rep,
+    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
+)
+from experiments.dataset_policy import (
+    noise_levels, noise_groups_for, noise_dose_units,
+)
+from experiments.noise.noise_helpers import (
+    noise_spec_for, inject_train_labels, hybrid_for_fold,
+    pool_recipe_per_downstream_model, group_models_by_recipe,
+    sweep_conditions, conditions_for_task, tail_scores,
+)
+from experiments.noise.n07_remediation import _predict_for_metric
+from experiments.noise.n30_censored_likelihood import (
+    _paired, _mean_on, recovery_share,
+)
+from kirby.noise_spec import GROUPED_STRATEGIES
+from kirby.utils.noisy_labels import oof_predict
+
+EXP_ID = 'n33_robust_training'
+
+# One condition when a caller asks for one run without a sweep.
+DEFAULT_NOISE_CONDITION = 'gaussian'
+
+# The replicate index of the injection. n07, n11, n13 and n24 sweep the same three.
+NOISE_DRAWS = (0, 1, 2)
+
+# Robust-loss thresholds, in units of s = 1.4826 * median |y - p|. The report's
+# A6 asks for "a grid of multiples of MAD(residual)".
+HUBER_C = (0.5, 1.0, 1.5, 2.0)
+
+# Tukey's biweight threshold, in units of s. 4.685 is the textbook constant that
+# gives 95% efficiency at the normal (Beaton & Tukey 1974).
+TUKEY_K = 4.685
+
+# Tukey's second derivative, (1 - u^2)(1 - 5u^2) with u = r / threshold, is
+# NEGATIVE for |u| between 1/sqrt(5) and 1 and zero beyond 1. A gradient booster
+# divides the gradient by the summed second derivative, so a leaf whose rows all
+# sit out there gets a negative or zero denominator. It is floored at this, which
+# makes the step for those leaves a small gradient step instead. Stated because it
+# is a choice: the loss being minimised is still Tukey's; only the step size is not
+# Newton's in those leaves.
+TUKEY_HESS_FLOOR = 1e-2
+
+# C-Mixup kernel bandwidth, in SDs of this fold's noisy training labels. Yao et al.
+# tune it per dataset; this is a fixed default, stated as one.
+CMIXUP_BW_SD = 0.2
+CMIXUP_BETA = 2.0
+
+# Target-noise bagging: how many fits, and the added noise as a share of the SD of
+# the out-of-fold residual y - p.
+TNB_BAGS = 5
+TNB_SCALE = 0.5
+
+# The weight of the teacher in huber_teacher_blend, and which Huber threshold (in
+# units of s) the teacher uses.
+TEACHER_WEIGHT = 0.5
+TEACHER_HUBER_C = 1.0
+
+# Inner folds for p, the teacher and NGBoost's spread. Same as n19 and n30.
+OOF_SPLITS = 5
+
+# Floor under the NGBoost spread before 1 / sigma^2, in units of s, so one molecule
+# with a near-zero predicted spread cannot take the whole weight.
+SIGMA_FLOOR_S = 0.05
+
+GAP_MIN_FRAC = 0.02
+
+POOL_SUBSET = 'predictive_and_similarity'
+SPACE_FOR_FAMILY = {
+    'predictive': 'hybrid',
+    'similarity': 'hybrid_similarity',
+}
+
+LABEL_ARMS = ('yeo_johnson', 'invvar_ngboost', 'c_mixup',
+              'target_noise_bagging', 'huber_teacher_blend')
+
+# NGBoost is fitted in this model's feature matrix.
+NGBOOST_HOST = 'lightgbm'
+
+# NGBoost stages, the registry's 500 (find_best_hybrid.DEFAULT_MODELS['ngboost']).
+# NGBoost's own TFixedDf fixes the degrees of freedom at 3.
+NGB_ESTIMATORS = 500
+NGB_T_DF = 3
+
+
+def build_swaps(huber_c):
+    """{swap name: the downstream model it replaces}."""
+    out = {}
+    for c in huber_c:
+        out[f'lightgbm_huber_c{c:g}'] = 'lightgbm'
+    out['lightgbm_fair'] = 'lightgbm'
+    out['lightgbm_quantile_median'] = 'lightgbm'
+    out['lightgbm_tukey'] = 'lightgbm'
+    for c in huber_c:
+        out[f'xgboost_pseudohuber_c{c:g}'] = 'xgboost'
+    out['xgboost_absolute'] = 'xgboost'
+    out['rf_l1'] = 'rf'
+    for c in huber_c:
+        out[f'dnn_huber_c{c:g}'] = 'dnn'
+    return out
+
+
+def robust_scale(y, p):
+    """s = 1.4826 * median |y - p|: the residual SD if the residuals were normal."""
+    r = np.asarray(y, dtype=float) - np.asarray(p, dtype=float)
+    return float(1.4826 * np.median(np.abs(r)))
+
+
+def residual_kurtosis(y, p):
+    """Pearson kurtosis of y - p. 3.0 for normal residuals; above 3, heavier tails."""
+    r = np.asarray(y, dtype=float) - np.asarray(p, dtype=float)
+    if r.size < 4 or np.std(r) == 0:
+        return float('nan')
+    return float(kurtosis(r, fisher=False))
+
+
+def tukey_objective(threshold, hess_floor=TUKEY_HESS_FLOOR):
+    """LightGBM custom objective for Tukey's biweight at `threshold` label units.
+
+    With r = prediction - label and u = r / threshold, for |u| < 1:
+        gradient  = r (1 - u^2)^2
+        hessian   = (1 - u^2)(1 - 5 u^2), floored at hess_floor
+    and both are zero for |u| >= 1 (the hessian then takes the floor). A row whose
+    residual is past the threshold stops pulling the fit at all -- that is what a
+    redescending loss does, and why it has to start from a sensible prediction:
+    see fit_tukey, which fits around the median.
+    """
+    c = float(threshold)
+
+    def _obj(y_true, y_pred):
+        r = np.asarray(y_pred, dtype=float) - np.asarray(y_true, dtype=float)
+        u = r / c
+        inside = np.abs(u) < 1.0
+        one_m = 1.0 - u * u
+        grad = np.where(inside, r * one_m * one_m, 0.0)
+        hess = np.where(inside, one_m * (1.0 - 5.0 * u * u), 0.0)
+        return grad, np.maximum(hess, hess_floor)
+    return _obj
+
+
+class _Centred:
+    """A regressor fitted to y - centre, predicting prediction + centre.
+
+    LightGBM does not boost from the average under a custom objective, so Tukey's
+    loss would start every row at 0, where on pKi every residual is past the
+    threshold and every gradient is zero. Centring at the median fixes the start.
+    """
+
+    def __init__(self, model):
+        self.model = model
+        self.centre_ = 0.0
+
+    def fit(self, X, y, sample_weight=None):
+        y = np.asarray(y, dtype=float)
+        self.centre_ = float(np.median(y))
+        self.model.fit(X, y - self.centre_, sample_weight=sample_weight)
+        return self
+
+    def predict(self, X):
+        return np.asarray(self.model.predict(X), dtype=float) + self.centre_
+
+
+def make_swap(name, s, huber_c):
+    """A fresh instance of one loss-changed model, built from its parent's settings.
+
+    `s` is the robust residual scale in label units for this fold and space.
+    Raises for an unknown name.
+    """
+    from kirby.find_best_hybrid import (
+        _get_lgbm_regressor, _get_xgb_regressor, get_model)
+    s = max(float(s), 1e-6)
+    if name.startswith('lightgbm_huber_c'):
+        c = float(name[len('lightgbm_huber_c'):])
+        return _get_lgbm_regressor().set_params(objective='huber', alpha=c * s)
+    if name == 'lightgbm_fair':
+        return _get_lgbm_regressor().set_params(objective='fair', fair_c=s)
+    if name == 'lightgbm_quantile_median':
+        return _get_lgbm_regressor().set_params(objective='quantile', alpha=0.5)
+    if name == 'lightgbm_tukey':
+        return _Centred(_get_lgbm_regressor().set_params(
+            objective=tukey_objective(TUKEY_K * s)))
+    if name.startswith('xgboost_pseudohuber_c'):
+        c = float(name[len('xgboost_pseudohuber_c'):])
+        return _Centred(_get_xgb_regressor().set_params(
+            objective='reg:pseudohubererror', huber_slope=c * s, base_score=0.0))
+    if name == 'xgboost_absolute':
+        return _Centred(_get_xgb_regressor().set_params(
+            objective='reg:absoluteerror', base_score=0.0))
+    if name == 'rf_l1':
+        return get_model('rf_l1', 'regression')
+    if name.startswith('dnn_huber_c'):
+        c = float(name[len('dnn_huber_c'):])
+        from kirby.models.dnn import DNNRegressor
+        return DNNRegressor(loss='huber', huber_delta=c * s)
+    raise ValueError(f'n33: unknown swap {name!r}')
+
+
+def make_ngboost(dist_name):
+    """NGBoost at the registry's settings, with a Normal or a Student-t likelihood.
+
+    The Student-t is ngboost's TFixedDf, degrees of freedom fixed at NGB_T_DF.
+    Its free-df `T` was tried first and MEASURED 2026-09-24 on 100 toy molecules:
+    the df parameter diverged and the fit raised "Input y contains NaN" inside
+    the base learner.
+    """
+    from ngboost import NGBRegressor
+    from ngboost.distns import Normal, TFixedDf
+    dist = {'normal': Normal, 't': TFixedDf}[dist_name]
+    return NGBRegressor(Dist=dist, n_estimators=NGB_ESTIMATORS,
+                        learning_rate=0.05, random_state=42, verbose=False)
+
+
+def oof_ngboost_sigma(X, y, groups, n_splits, seed=0):
+    """Out-of-fold NGBoost (Normal) predicted spread for every training row."""
+    from kirby.utils.noisy_labels.core import group_kfold_splitter, _safe_n_splits
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float)
+    k = _safe_n_splits(groups, n_splits)
+    sig = np.full(len(y), np.nan)
+    for tr, te in group_kfold_splitter(groups, k, X, y, seed=seed):
+        m = make_ngboost('normal').fit(X[tr], y[tr])
+        sig[te] = np.asarray(m.pred_dist(X[te]).params['scale'], dtype=float)
+    return sig
+
+
+def invvar_weights(sigma, s):
+    """1 / sigma^2, sigma floored at SIGMA_FLOOR_S * s, normalised to average one."""
+    sig = np.maximum(np.asarray(sigma, dtype=float), SIGMA_FLOOR_S * max(s, 1e-9))
+    w = 1.0 / sig ** 2
+    return w / float(np.mean(w))
+
+
+def c_mixup(X, y, bw, rng, beta=CMIXUP_BETA, chunk=1000):
+    """One C-Mixup partner per row; returns (X_aug, y_aug) with 2n rows.
+
+    Partner j of row i is drawn with probability proportional to
+    exp(-(y_i - y_j)^2 / (2 bw^2)), j != i. Computed in chunks of rows so the
+    n x n kernel is never held at once.
+    """
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    bw = max(float(bw), 1e-9)
+    partners = np.empty(n, dtype=int)
+    for a in range(0, n, chunk):
+        b = min(n, a + chunk)
+        d = y[a:b, None] - y[None, :]
+        k = np.exp(-(d * d) / (2.0 * bw * bw))
+        k[np.arange(b - a), np.arange(a, b)] = 0.0
+        tot = k.sum(axis=1)
+        # A row with no partner inside the kernel's reach (all weights underflow)
+        # draws uniformly among the others.
+        bad = tot <= 0
+        k[bad] = 1.0
+        k[bad, np.arange(a, b)[bad]] = 0.0
+        k /= k.sum(axis=1, keepdims=True)
+        cum = np.cumsum(k, axis=1)
+        u = rng.random(b - a)[:, None]
+        partners[a:b] = np.minimum((cum < u).sum(axis=1), n - 1)
+    lam = rng.beta(beta, beta, size=n)
+    X_new = lam[:, None] * X + (1.0 - lam[:, None]) * X[partners]
+    y_new = lam * y + (1.0 - lam) * y[partners]
+    return np.vstack([X, X_new]), np.concatenate([y, y_new])
+
+
+def _fit_predict(model, X_tr, y_tr, X_va, metric_name, sample_weight=None):
+    if sample_weight is None:
+        model.fit(X_tr, y_tr)
+    else:
+        model.fit(X_tr, y_tr, sample_weight=sample_weight)
+    return np.asarray(_predict_for_metric(model, X_va, metric_name), dtype=float)
+
+
+def label_arm_predict(arm, factory, X_tr, y0, X_va, metric_name, ctx, rng):
+    """Held-out predictions for one label/weight arm with one downstream model."""
+    if arm == 'yeo_johnson':
+        pt = PowerTransformer(method='yeo-johnson', standardize=True)
+        yt = pt.fit_transform(np.asarray(y0, dtype=float).reshape(-1, 1)).ravel()
+        pred = _fit_predict(factory(), X_tr, yt, X_va, metric_name)
+        return pt.inverse_transform(pred.reshape(-1, 1)).ravel()
+    if arm == 'invvar_ngboost':
+        return _fit_predict(factory(), X_tr, y0, X_va, metric_name,
+                            sample_weight=ctx['invvar_w'])
+    if arm == 'c_mixup':
+        Xa, ya = c_mixup(X_tr, y0, CMIXUP_BW_SD * float(np.std(y0)), rng)
+        return _fit_predict(factory(), Xa, ya, X_va, metric_name)
+    if arm == 'target_noise_bagging':
+        sd = TNB_SCALE * ctx['resid_sd']
+        preds = [_fit_predict(factory(), X_tr,
+                              y0 + rng.normal(0.0, sd, size=len(y0)),
+                              X_va, metric_name)
+                 for _ in range(TNB_BAGS)]
+        return np.mean(preds, axis=0)
+    if arm == 'huber_teacher_blend':
+        y_bl = (1.0 - TEACHER_WEIGHT) * y0 + TEACHER_WEIGHT * ctx['teacher']
+        return _fit_predict(factory(), X_tr, y_bl, X_va, metric_name)
+    raise ValueError(f'n33: unknown arm {arm!r}')
+
+
+def _levels_and_draws(dataset_name, condition, levels=None, draws=None):
+    """(level, draw) pairs. At level 0.0 the draw delivers zero, so one draw."""
+    levels = (noise_levels(dataset_name, strategy=condition, is_clf=False)
+              if levels is None else levels)
+    draws = tuple(NOISE_DRAWS if draws is None else draws)
+    out = []
+    for lvl in levels:
+        for d in (draws if float(lvl) > 0 else draws[:1]):
+            out.append((float(lvl), int(d)))
+    return out
+
+
+def run(data, config, output_dir, dataset_name, **kwargs):
+    """N33 across every regression condition, one file per condition."""
+    if data['task_type'] != 'regression':
+        print(f"  SKIPPED: {dataset_name} is {data['task_type']}. Every arm here "
+              f"changes a loss on a number or the number itself, so n33 is "
+              f"regression only.")
+        return {'skipped': 'not_regression', 'task_type': data['task_type']}
+    return sweep_conditions(
+        _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
+        default_conditions=conditions_for_task(data), kwargs=kwargs,
+        groups_needed=GROUPED_STRATEGIES)
+
+
+def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
+    """N33 under ONE injected condition."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT N33: ROBUST LOSSES, TARGET TRANSFORMS, WEIGHTS, MIXUP")
+    print("=" * 70)
+
+    condition = kwargs.get('noise_condition') or DEFAULT_NOISE_CONDITION
+    labels = np.asarray(data['labels'], dtype=float)
+    reps = data['reps']
+    groups = data.get('groups')
+    task_type = data['task_type']
+    if task_type != 'regression':
+        return {'skipped': 'not_regression', 'task_type': task_type}
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    n_folds = config['n_splits']
+    mode = 'intermediary' if n_folds == 1 else 'full'
+
+    huber_c = [float(c) for c in (kwargs.get('huber_c') or HUBER_C)]
+    oof_splits = int(kwargs.get('oof_splits', OOF_SPLITS))
+    label_arms = [a for a in (kwargs.get('label_arms') or LABEL_ARMS)]
+    run_ngboost = not kwargs.get('skip_ngboost', False)
+    if not run_ngboost:
+        label_arms = [a for a in label_arms if a != 'invvar_ngboost']
+
+    downstream_models = list(
+        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    model_factories = get_model_factories(
+        downstream_models, task_type=task_type, n_samples=len(labels))
+    downstream_models = [m for m in downstream_models if m in model_factories]
+    if not downstream_models:
+        raise RuntimeError(
+            f"n33: no downstream model could be built. Asked for "
+            f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}.")
+
+    all_swaps = build_swaps(huber_c)
+    wanted = kwargs.get('swaps')
+    swaps = {k: v for k, v in all_swaps.items()
+             if v in downstream_models and (wanted is None or k in wanted)}
+    swaps_not_run = {}
+    if 'rf_l1' in swaps and not get_model_factories(
+            ['rf_l1'], task_type=task_type, n_samples=len(labels)):
+        swaps_not_run['rf_l1'] = (
+            f'rf_l1 is capped at 5,000 molecules in DEFAULT_MODELS and this '
+            f'dataset has {len(labels)}')
+        swaps.pop('rf_l1')
+    ngb_pair = run_ngboost and NGBOOST_HOST in downstream_models
+
+    base_rep_name = (kwargs.get('base_rep')
+                     or pick_noise_base_rep(reps, dataset_name))
+    noise_groups = noise_groups_for(data)[0]
+
+    arm_names = ['clean', 'noisy'] + label_arms
+    results = {
+        'metric': metric_name,
+        'lower_is_better': lower_is_better,
+        'noise_condition': condition,
+        'dose_units': noise_dose_units(dataset_name),
+        'models': downstream_models,
+        'base_rep': base_rep_name,
+        'arms': arm_names,
+        'arm_to_beat': 'noisy',
+        'model_swaps': swaps,
+        'model_swaps_not_run': swaps_not_run,
+        'ngboost_pair': (['ngboost_normal', 'ngboost_t'] if ngb_pair else []),
+        'ngboost_pair_note': (
+            f'ngboost_t (Student-t, df fixed at {NGB_T_DF}) is paired against '
+            'ngboost_normal, both at the registry '
+            'settings (500 stages, rate 0.05), in the feature matrix built for '
+            f'{NGBOOST_HOST}. NGBoost is not a downstream model.'),
+        'huber_c': huber_c,
+        'scale_note': ('s = 1.4826 * median |y - p|, p an out-of-fold LightGBM '
+                       'on the noisy labels, per (fold, space). Every robust '
+                       'threshold is a multiple of s.'),
+        'settings': {
+            'tukey_k': TUKEY_K, 'tukey_hess_floor': TUKEY_HESS_FLOOR,
+            'cmixup_bw_label_sd': CMIXUP_BW_SD, 'cmixup_beta': CMIXUP_BETA,
+            'tnb_bags': TNB_BAGS, 'tnb_scale_of_residual_sd': TNB_SCALE,
+            'teacher_weight': TEACHER_WEIGHT,
+            'teacher_huber_c': TEACHER_HUBER_C,
+            'sigma_floor_in_s': SIGMA_FLOOR_S, 'oof_splits': oof_splits,
+        },
+        'settings_note': (
+            'bw, the bag count, the bag noise and the teacher weight are fixed '
+            'defaults, not tuned. The Tukey hessian is floored where it is '
+            'negative or zero; see tukey_objective.'),
+        'gap_min_frac': GAP_MIN_FRAC,
+        'features_are_fixed_note': (
+            'Each feature space is built once per (level, draw, fold) from the '
+            'NOISY training labels and shared by every arm, clean included. The '
+            'recipe was searched on clean labels.'),
+        'claim_scope': (
+            'The noise is injected, so every number is confined to this '
+            'condition on this dataset. Held-out molecules are graded against '
+            'untouched labels in every arm.'),
+    }
+
+    sample_X = reps[base_rep_name]
+    splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+
+    # ── The recipe per downstream model, n30's pattern ──
+    by_model, no_recipe = pool_recipe_per_downstream_model(
+        functools.partial(
+            get_best_search_for_downstream, reps, labels, groups,
+            budget=None, augmentations=data.get('augmentations'),
+            dataset_name=dataset_name, task_type=task_type, data=data,
+            pool_subset=POOL_SUBSET),
+        downstream_models)
+    _raised = [d['lookup_error'] for d in no_recipe.values()
+               if d['lookup_error']]
+    results['hybrid_lookup_error'] = _raised[0] if _raised else None
+    results['hybrid_unavailable_by_model'] = {
+        m: d['why'] for m, d in no_recipe.items()}
+
+    recipes_by_model, recipe_for_space_by_model = {}, {}
+    hybrid_unavailable = {}
+    for _m in downstream_models:
+        _m_recipes, _m_unavail = pool_recipes_by_family(
+            by_model[_m]['meta'] if _m in by_model else None,
+            SPACE_FOR_FAMILY,
+            eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+        recipes_by_model[_m] = _m_recipes
+        recipe_for_space_by_model[_m] = {r['space']: r['blueprint']
+                                         for r in _m_recipes}
+        for _sp, _why in _m_unavail.items():
+            hybrid_unavailable.setdefault(_sp, {})[_m] = _why
+    results['hybrid_spaces_unavailable'] = hybrid_unavailable
+
+    _ordered = []
+    for _m in downstream_models:
+        for r in recipes_by_model.get(_m, ()):
+            if r['space'] not in _ordered:
+                _ordered.append(r['space'])
+    spaces = ('base',) + tuple(_ordered)
+    results['hybrid_available'] = bool(_ordered)
+    if _ordered:
+        results['hybrid_recipe_by_model'] = convert_numpy({
+            m: {r['space']: {
+                'built_under_objective': r['objective'],
+                'features_chosen_by': describe_pool_family(r['objective']),
+                'budget': r['budget'],
+                'allocation_method': r['allocation_method'],
+                'importance_method': r['importance_method'],
+                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
+                'search_score_mean': r['search_score_mean'],
+                'search_metric_name': r['search_metric_name'],
+            } for r in rs}
+            for m, rs in recipes_by_model.items() if rs})
+    else:
+        results['hybrid_unavailable_reason'] = (
+            (f"the pool lookup RAISED {results['hybrid_lookup_error']}; the "
+             f"pool was never read. Every arm ran in the base representation.")
+            if results['hybrid_lookup_error'] else
+            (f'no recipe came back from pool subset {POOL_SUBSET!r} for any '
+             f'downstream model. Every arm ran in the base representation.'))
+        print("  no hybrid recipe; base representation only")
+    results['spaces_run'] = list(spaces)
+
+    passes = _levels_and_draws(dataset_name, condition,
+                               levels=kwargs.get('levels'),
+                               draws=kwargs.get('draws'))
+    results['noise_levels'] = sorted({l for l, _ in passes})
+    results['noise_draws'] = sorted({d for _, d in passes})
+    print(f"  {condition}: {len(labels)} molecules, {len(splits)} folds, "
+          f"models {downstream_models}")
+    print(f"  {len(passes)} (level, draw) passes, {len(arm_names)} label arms, "
+          f"{len(swaps)} loss swaps{', plus the NGBoost pair' if ngb_pair else ''}")
+
+    # acc[level][space][arm][model][pass] = score; tails the same shape.
+    acc, tails, pass_recs, errors = {}, {}, {}, {}
+    t0 = time.time()
+
+    def _store(lvl_key, space, arm, mname, pass_key, pred, y_val):
+        s = float(metric_fn(y_val, pred))
+        (acc.setdefault(lvl_key, {}).setdefault(space, {}).setdefault(arm, {})
+         .setdefault(mname, {}))[pass_key] = s
+        (tails.setdefault(lvl_key, {}).setdefault(space, {}).setdefault(arm, {})
+         .setdefault(mname, {}))[pass_key] = tail_scores(y_val, pred)
+
+    for level, draw in passes:
+        lvl_key = f'{level:g}'
+        spec = noise_spec_for(dataset_name, condition, level,
+                              noise_seed=draw, is_clf=False)
+        print(f"\n  --- {condition} / level {lvl_key} / draw {draw} ---")
+        for fold_i, (train_idx, val_idx) in enumerate(splits):
+            pass_key = f'l{lvl_key}d{draw}f{fold_i}'
+            y_val = labels[val_idx]
+            y_clean_tr = labels[train_idx]
+            g_tr = groups[train_idx] if groups is not None else None
+            try:
+                y0, cmask, prov = inject_train_labels(
+                    labels, spec, train_idx=train_idx, is_clf=False,
+                    groups=noise_groups, dataset_name=dataset_name)
+            except Exception as exc:
+                errors[f'{lvl_key}|d{draw}|f{fold_i}|inject'] = (
+                    f'{type(exc).__name__}: {exc}')
+                continue
+            y0 = np.asarray(y0, dtype=float)
+            rec = {'pass': pass_key, 'training_molecules': int(len(y0)),
+                   'labels_moved': int(np.sum(np.abs(y0 - y_clean_tr) > 1e-12)),
+                   'injected_rms_label_units': float(
+                       np.sqrt(np.mean((y0 - y_clean_tr) ** 2))),
+                   'per_space': {}}
+
+            train_reps = {k: np.asarray(v[train_idx], dtype=np.float64)
+                          for k, v in reps.items()}
+            val_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
+                        for k, v in reps.items()}
+            fold_spaces = {}
+            sc = StandardScaler()
+            fold_spaces['base'] = [(
+                sc.fit_transform(train_reps[base_rep_name]),
+                sc.transform(val_reps[base_rep_name]),
+                list(downstream_models))]
+            for _sp in spaces:
+                if _sp == 'base':
+                    continue
+                _cells = []
+                for _bp_m, _mnames, _shareable in group_models_by_recipe(
+                        {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
+                         for _m in downstream_models}, downstream_models):
+                    X_tr_h, X_va_h = hybrid_for_fold(
+                        train_reps, val_reps, y0, _bp_m, g_tr,
+                        None if _shareable
+                        else model_factories[_mnames[0]](),
+                        metric_fn, lower_is_better)
+                    if X_tr_h is None:
+                        errors[f'{lvl_key}|{_sp}/{_mnames[0]}|d{draw}|'
+                               f'f{fold_i}|build'] = 'the hybrid could not be built'
+                        continue
+                    sh = StandardScaler()
+                    _cells.append((sh.fit_transform(X_tr_h),
+                                   sh.transform(X_va_h), list(_mnames)))
+                if _cells:
+                    fold_spaces[_sp] = _cells
+
+            for space in spaces:
+                for X_tr_s, X_va_s, cell_models in fold_spaces.get(space, ()):
+                    _ekey = (space if cell_models == list(downstream_models)
+                             else f'{space}/{cell_models[0]}')
+                    ekey = f'{lvl_key}|{_ekey}|d{draw}|f{fold_i}'
+                    ctx = {}
+                    try:
+                        p = oof_predict(X_tr_s, y0, g_tr, n_splits=oof_splits)
+                    except Exception as exc:
+                        errors[f'{ekey}|oof'] = f'{type(exc).__name__}: {exc}'
+                        p = None
+                    sp_rec = {}
+                    if p is not None:
+                        s = robust_scale(y0, p)
+                        ctx['resid_sd'] = float(np.std(y0 - p))
+                        sp_rec.update({
+                            'robust_scale_s_label_units': s,
+                            'residual_sd_label_units': ctx['resid_sd'],
+                            'residual_kurtosis': residual_kurtosis(y0, p),
+                            'huber_thresholds_label_units': {
+                                f'c{c:g}': c * s for c in huber_c}})
+                    else:
+                        s = float('nan')
+                    have_s = np.isfinite(s) and s > 0
+
+                    if have_s and 'huber_teacher_blend' in label_arms:
+                        try:
+                            ctx['teacher'] = oof_predict(
+                                X_tr_s, y0, g_tr, n_splits=oof_splits,
+                                params={'objective': 'huber',
+                                        'alpha': TEACHER_HUBER_C * s})
+                        except Exception as exc:
+                            errors[f'{ekey}|teacher'] = (
+                                f'{type(exc).__name__}: {exc}')
+                    if have_s and 'invvar_ngboost' in label_arms:
+                        try:
+                            sig = oof_ngboost_sigma(X_tr_s, y0, g_tr, oof_splits)
+                            ctx['invvar_w'] = invvar_weights(sig, s)
+                            sp_rec['ngboost_sigma_median_label_units'] = float(
+                                np.median(sig))
+                            sp_rec['invvar_weight_max'] = float(
+                                np.max(ctx['invvar_w']))
+                        except Exception as exc:
+                            errors[f'{ekey}|ngboost_sigma'] = (
+                                f'{type(exc).__name__}: {exc}')
+                    rec['per_space'][_ekey] = sp_rec
+
+                    needs = {'huber_teacher_blend': 'teacher',
+                             'invvar_ngboost': 'invvar_w',
+                             'target_noise_bagging': 'resid_sd'}
+                    for mname in cell_models:
+                        fac = model_factories[mname]
+                        for arm in arm_names:
+                            if arm in needs and needs[arm] not in ctx:
+                                continue
+                            rng = np.random.default_rng(
+                                [fold_i, draw, int(round(level * 1000)),
+                                 arm_names.index(arm)])
+                            try:
+                                if arm == 'clean':
+                                    pred = _fit_predict(fac(), X_tr_s, y_clean_tr,
+                                                        X_va_s, metric_name)
+                                elif arm == 'noisy':
+                                    pred = _fit_predict(fac(), X_tr_s, y0,
+                                                        X_va_s, metric_name)
+                                else:
+                                    pred = label_arm_predict(
+                                        arm, fac, X_tr_s, y0, X_va_s,
+                                        metric_name, ctx, rng)
+                                _store(lvl_key, space, arm, mname, pass_key,
+                                       pred, y_val)
+                            except Exception as exc:
+                                errors[f'{ekey}|{arm}|{mname}'] = (
+                                    f'{type(exc).__name__}: {exc}')
+
+                    # ── Loss swaps, on the noisy labels, paired with the parent ──
+                    for swap, parent in swaps.items():
+                        if parent not in cell_models:
+                            continue
+                        if not have_s and swap != 'rf_l1':
+                            continue
+                        try:
+                            pred = _fit_predict(make_swap(swap, s, huber_c),
+                                                X_tr_s, y0, X_va_s, metric_name)
+                            _store(lvl_key, space, 'noisy', swap, pass_key,
+                                   pred, y_val)
+                        except Exception as exc:
+                            errors[f'{ekey}|{swap}'] = (
+                                f'{type(exc).__name__}: {exc}')
+                    if ngb_pair and NGBOOST_HOST in cell_models:
+                        for dist in ('normal', 't'):
+                            try:
+                                m = make_ngboost(dist).fit(X_tr_s, y0)
+                                pred = np.asarray(m.predict(X_va_s), dtype=float)
+                                _store(lvl_key, space, 'noisy', f'ngboost_{dist}',
+                                       pass_key, pred, y_val)
+                            except Exception as exc:
+                                errors[f'{ekey}|ngboost_{dist}'] = (
+                                    f'{type(exc).__name__}: {exc}')
+
+            pass_recs.setdefault(lvl_key, []).append(rec)
+            print(f"    level {lvl_key} draw {draw} fold {fold_i}: "
+                  f"{rec['labels_moved']} of {rec['training_molecules']} labels "
+                  f"moved [{time.time() - t0:.0f}s]")
+
+    swap_parents = dict(swaps)
+    if ngb_pair:
+        swap_parents['ngboost_t'] = 'ngboost_normal'
+    results['per_level'] = convert_numpy(acc)
+    results['tails_per_level'] = convert_numpy(tails)
+    results['per_pass'] = convert_numpy(pass_recs)
+    if errors:
+        results['_errors'] = errors
+    results['summary'] = convert_numpy(_summarise(
+        acc, arm_names, downstream_models, swap_parents, pass_recs,
+        metric_name, lower_is_better))
+    _print_summary(results, metric_name)
+    return results
+
+
+def _share(clean_d, noisy_d, arm_d, lower_is_better):
+    keys = sorted(set(clean_d) & set(noisy_d) & set(arm_d))
+    if not keys:
+        return {'recovery_share': None,
+                'recovery_share_refused_because': 'no pass scored all three',
+                'n_passes': 0}
+    c, k, a = (_mean_on(clean_d, keys), _mean_on(noisy_d, keys),
+               _mean_on(arm_d, keys))
+    share, why = recovery_share(c, k, a, lower_is_better)
+    return {'recovery_share': share, 'recovery_share_refused_because': why,
+            'clean_mean': c, 'noisy_mean': k, 'arm_mean': a,
+            'n_passes': len(keys)}
+
+
+def _summarise(acc, arm_names, models, swap_parents, pass_recs, metric_name,
+               lower_is_better):
+    """Every arm against noisy, every swap against its parent, per level and space."""
+    out = {'metric': metric_name, 'lower_is_better': bool(lower_is_better),
+           'headline': ('passes won against the noisy labels, paired per pass; '
+                        'a pass is one (draw, fold)'),
+           'per_level': {}}
+    for lvl, by_space in acc.items():
+        kurt = {}
+        for rec in pass_recs.get(lvl, ()):
+            for sp, r in rec['per_space'].items():
+                if np.isfinite(r.get('residual_kurtosis', np.nan)):
+                    kurt.setdefault(sp, []).append(r['residual_kurtosis'])
+        lrow = {'residual_kurtosis_per_pass': kurt}
+        for space, by_arm in by_space.items():
+            noisy = by_arm.get('noisy') or {}
+            clean = by_arm.get('clean') or {}
+            srow = {'per_model': {}, 'model_swaps': {}}
+            for m in models:
+                b = noisy.get(m) or {}
+                if not b:
+                    continue
+                row = {'noisy_mean': _mean_on(b, list(b)), 'per_arm': {}}
+                for arm in arm_names:
+                    if arm == 'noisy':
+                        continue
+                    g = (by_arm.get(arm) or {}).get(m) or {}
+                    if not g:
+                        continue
+                    e = {'vs_noisy': _paired(b, g, lower_is_better)}
+                    if arm != 'clean':
+                        e.update(_share(clean.get(m) or {}, b, g,
+                                        lower_is_better))
+                    row['per_arm'][arm] = e
+                srow['per_model'][m] = row
+            for swap, parent in swap_parents.items():
+                g = noisy.get(swap) or {}
+                b = noisy.get(parent) or {}
+                if not g or not b:
+                    continue
+                e = {'replaces': parent,
+                     'vs_parent_on_noisy': _paired(b, g, lower_is_better)}
+                if parent in models:
+                    e.update(_share(clean.get(parent) or {}, b, g,
+                                    lower_is_better))
+                srow['model_swaps'][swap] = e
+            lrow[space] = srow
+        out['per_level'][lvl] = lrow
+    return out
+
+
+def _print_summary(results, metric_name):
+    s = results['summary']
+    print("\n" + "=" * 70)
+    print(f"SUMMARY ({metric_name}; {results['noise_condition']}; paired per pass "
+          f"against the noisy labels)")
+    for lvl, lrow in s['per_level'].items():
+        print(f"\n  level {lvl}:")
+        for sp, ks in lrow['residual_kurtosis_per_pass'].items():
+            print(f"    residual kurtosis in {sp}: "
+                  f"{', '.join(f'{k:.2f}' for k in ks)} (3.0 is normal)")
+        for space, srow in lrow.items():
+            if space == 'residual_kurtosis_per_pass':
+                continue
+            for m, row in srow['per_model'].items():
+                print(f"    {space}/{m}: noisy {row['noisy_mean']:.4f}")
+                for arm, e in row['per_arm'].items():
+                    v = e['vs_noisy']
+                    sh = e.get('recovery_share')
+                    tail = (f", recovers {sh:.2f} of the clean-to-noisy gap"
+                            if sh is not None else '')
+                    print(f"      {arm:24s} won {v['passes_won']} of "
+                          f"{v['n_passes_paired']} passes, mean "
+                          f"{v['mean_gain']:+.4f} (spread "
+                          f"{v['spread_over_pass_gains']:.4f}){tail}")
+            for swap, e in srow['model_swaps'].items():
+                v = e['vs_parent_on_noisy']
+                print(f"    {space}/{swap} vs {e['replaces']}: won "
+                      f"{v['passes_won']} of {v['n_passes_paired']} passes, "
+                      f"mean {v['mean_gain']:+.4f}")
+    print("\n  The count of passes won is the headline. A mean gain no larger "
+          "than the spread of the per-pass gains behind it is not a gain.")
+
+
+def main():
+    parser = create_experiment_parser(
+        'N33: robust losses, target transforms, weights and mixup under label noise')
+    parser.add_argument('--noise-condition', type=str, default=None,
+                        help='One regression condition. Default: sweep every '
+                             'regression condition, one file each')
+    parser.add_argument('--levels', type=str, default=None,
+                        help='Comma-separated noise levels. Default: the '
+                             "condition's shared grid")
+    parser.add_argument('--draws', type=str, default=None,
+                        help='Comma-separated injection replicates (default 0,1,2)')
+    parser.add_argument('--huber-c', type=str, default=None,
+                        help='Comma-separated Huber thresholds in units of '
+                             f's (default {",".join(f"{c:g}" for c in HUBER_C)})')
+    parser.add_argument('--skip-ngboost', action='store_true',
+                        help='Leave out invvar_ngboost and the NGBoost pair')
+    parser.add_argument('--exp-folds', type=int, default=None,
+                        help='Outer folds. Overrides the 1 or 5 --mode gives')
+    parser.add_argument('--base-rep', type=str, default=None,
+                        help="Base representation. Default: pick_noise_base_rep's")
+    args = parser.parse_args()
+    config = get_config(args)
+    if args.exp_folds:
+        config['n_splits'] = int(args.exp_folds)
+    data = load_data(args.dataset, rep_preset=args.reps)
+
+    kw = {}
+    if args.noise_condition:
+        kw['noise_condition'] = args.noise_condition
+    if args.levels:
+        kw['levels'] = [float(x) for x in args.levels.split(',')]
+    if args.draws:
+        kw['draws'] = [int(x) for x in args.draws.split(',')]
+    if args.huber_c:
+        kw['huber_c'] = [float(x) for x in args.huber_c.split(',')]
+    if args.skip_ngboost:
+        kw['skip_ngboost'] = True
+    if args.base_rep:
+        kw['base_rep'] = args.base_rep
+
+    res = run(data, config, args.output, args.dataset, **kw)
+    save_experiment_results(res, args.output, EXP_ID, args.dataset)
+
+
+if __name__ == '__main__':
+    main()

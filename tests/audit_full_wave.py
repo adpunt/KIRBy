@@ -54,7 +54,8 @@ EXPECTED = {
     # run. n06 and n14 through n20 were never added.
     'noise': ['c10', 'n01', 'n02', 'n06', 'n07', 'n09', 'n11', 'n12', 'n13',
               'n14', 'n15', 'n16', 'n17', 'n18', 'n19', 'n20', 'n21', 'n22',
-              'n23', 'n26', 'n27', 'n29', 'n30'],
+              'n23', 'n26', 'n27', 'n29', 'n30', 'n31', 'n32', 'n33', 'n34',
+              'n35', 'n36'],
     'federated': ['fed01', 'fed02', 'fed03', 'fed04', 'fed05'],
 }
 
@@ -119,6 +120,12 @@ DIR_MAP = {
         'n27': 'n27_removal_cost_and_propagation',
         'n29': 'n29_document_bias',
         'n30': 'n30_censored_likelihood',
+        'n31': 'n31_regime_and_breakeven',
+        'n32': 'n32_iterative_and_dual_selection',
+        'n33': 'n33_robust_training',
+        'n34': 'n34_group_random_effects',
+        'n35': 'n35_near_duplicate_disagreement',
+        'n36': 'n36_remeasure_priority',
     },
     'federated': {
         'fed01': 'fed01_noise_heterogeneity',

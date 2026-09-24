@@ -89,6 +89,12 @@ KIND = {
     'n27': ('investigation', 'what training on fewer molecules costs, and how much training-label error reaches the held-out error'),
     'n29': ('method', 'fits one offset per ChEMBL document and removes it from the training labels'),
     'n30': ('method', 'clipped labels: lift, drop, winsorise, or a censored likelihood'),
+    'n31': ('investigation', 'the detector quality the model error predicts, beside what it reaches, and the flag precision where cleaning breaks even'),
+    'n32': ('method', 'trimmed refits, two learners picking for each other, shrinking flagged labels only, and four more detectors'),
+    'n33': ('method', 'robust losses, a transformed target, uncertainty weights, mixup and target-noise bagging'),
+    'n34': ('method', 'a shrunk random offset per scaffold group, against subtracting each group mean'),
+    'n35': ('investigation', 'how far apart the labels of near-identical molecules are, and downweighting pairs that disagree'),
+    'n36': ('method', 'which molecules to give a second measurement, by five rules'),
 }
 
 

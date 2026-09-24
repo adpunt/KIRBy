@@ -476,6 +476,10 @@ def test_new_conditions_end_to_end():
               str(arms.get(arm, {}).get('n_folds_paired')))
     check('nothing in the model arms is paired against a downstream model',
           all(v['against'] in n19.MODEL_ARMS for v in arms.values()))
+    bb = r['per_draw']['0']['per_label_build']['averaged']
+    nz = bb.get('n_molecules_with_interval_width_above_zero')
+    check('the interval arm says how many molecules have a real interval',
+          isinstance(nz, int) and 0 < nz <= 240, str(nz))
 
     try:
         n19.run(data, {'n_splits': 3}, OUT, 'toy_bad_arm', models=['rf'],
@@ -485,7 +489,41 @@ def test_new_conditions_end_to_end():
         check('an unknown model arm is refused', True)
 
 
+def test_interval_aft():
+    print("\ninterval AFT (2026-09-24):")
+    labels = np.array([1.0, 3.0, 2.0, 5.0, 5.0, 4.0])
+    groups = np.array(['a', 'a', 'b', 'c', 'c', 'c'])
+    st = n19.measurement_stats(labels, groups)
+    check('min and max per molecule, in entity order',
+          np.allclose(st['min_all'], [1, 2, 4]) and np.allclose(st['max_all'], [3, 2, 5]))
+    ent = {'gradeable': np.array([False, False, True])}
+    y_single = np.array([2.0, 2.0, 5.0])
+    lo, hi = n19.interval_bounds(ent, st, 'single', y_single)
+    check('single: a gradeable molecule rests on one measurement, zero width',
+          lo[2] == hi[2] == 5.0)
+    check('single: the others span all their measurements',
+          lo[0] == 1.0 and hi[0] == 3.0)
+    lo_a, hi_a = n19.interval_bounds(ent, st, 'averaged', st['mean_all'])
+    check('averaged: every interval contains the training label',
+          np.all(lo_a <= st['mean_all']) and np.all(st['mean_all'] <= hi_a))
+
+    rng = np.random.default_rng(3)
+    X = rng.normal(size=(300, 4))
+    y = 2 * X[:, 0] + rng.normal(0, 0.3, 300)
+    pred = n19.fit_interval_aft_predict(X[:200], y[:200], y[:200], X[200:], 0.3)
+    r = float(np.corrcoef(pred, y[200:])[0, 1])
+    check('point-interval AFT predicts on the label scale',
+          r > 0.8 and abs(pred.mean() - y[200:].mean()) < 0.5,
+          f'pearson {r:.3f}, mean {pred.mean():.3f} vs {y[200:].mean():.3f}')
+    pw = n19.fit_interval_aft_predict(X[:200], y[:200] - 1, y[:200] + 1,
+                                      X[200:], 0.3)
+    check('a symmetric interval keeps predictions near the centre',
+          abs(pw.mean() - pred.mean()) < 0.5,
+          f'{pw.mean():.3f} vs {pred.mean():.3f}')
+
+
 if __name__ == '__main__':
+    test_interval_aft()
     test_fit_noise_variance()
     test_new_conditions_end_to_end()
     test_stats_line_up_with_n17()

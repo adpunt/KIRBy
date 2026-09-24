@@ -16,11 +16,14 @@ This file measures both on the same outer folds. It cleans nothing.
 THREE PARTS, ALL PAIRED ON THE SAME OUTER FOLDS.
 
   removal_cost   train on a random share of the training molecules, at shares
-                 0.7, 0.8 and 0.9, 20 random draws of the molecules at each
-                 share, every label correct. Each is paired against training on
-                 all of them. A removal cleanup that drops a tenth of the
-                 training molecules pays at least the 0.9 row, before any
-                 benefit from which molecules it dropped.
+                 0.25, 0.5, 0.7, 0.8 and 0.9, 20 random draws of the molecules
+                 at each share, every label correct. Each is paired against
+                 training on all of them. A removal cleanup that drops a tenth
+                 of the training molecules pays at least the 0.9 row, before
+                 any benefit from which molecules it dropped. 0.25 and 0.5 were
+                 added 2026-09-24 from a second research report (its D3): a
+                 steep curve down to a quarter says the dataset is short of
+                 molecules or features, and cleaning comes second.
 
   injected       gaussian noise at the dataset's level grid, put into the
                  training labels only. The injected variance is MEASURED on
@@ -106,7 +109,7 @@ from kirby.utils.noisy_labels import oof_predict
 
 # Shares of the training molecules kept in the removal part. 1.0 is the
 # reference every other share is paired against.
-SHARES = (0.7, 0.8, 0.9, 1.0)
+SHARES = (0.25, 0.5, 0.7, 0.8, 0.9, 1.0)
 
 # Random draws of which molecules are kept, per share below 1.0.
 REPEATS = 20

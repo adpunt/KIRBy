@@ -108,6 +108,17 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n27',   # what fewer training molecules costs; how label error reaches test
     'n29',   # one offset per ChEMBL document, fitted and removed
     'n30',   # clipped labels: lift, drop, winsorise, or censored likelihood
+    # n31-n36 added 2026-09-24 from a second outside report, on whether cleaning
+    # pays at higher R². n32, n33 and n34 take a condition. n31 names its own
+    # five conditions, two of them the shift_only_* ones outside the NoiseInject
+    # registry, so it runs only in the job with no condition. n35 injects
+    # gaussian by construction, like n27. n36 needs repeat measurements, like n19.
+    'n31',   # predicted vs measured detector quality; where flagging breaks even
+    'n32',   # trimmed refits, two learners, and four more detectors
+    'n33',   # robust losses, target transform, variance weights, mixup
+    'n34',   # a random offset per scaffold group instead of subtracting its mean
+    'n35',   # label disagreement between near-identical molecules
+    'n36',   # which molecules to measure a second time
     # n06 runs LAST, and that is load-bearing: its headline is the rank
     # correlation between its own ordering of the noise estimators and the
     # ordering n11 and n13 measured under injected noise, and it reads those
@@ -507,10 +518,21 @@ def _already_there(dataset_name, y_clean, spec):
 # `censoring` is the newest member and the only one whose corrupted set is chosen by
 # the label's own value: every label above a cut-point is replaced by that cut-point.
 # Owner's decision 2026-09-12 added it to n09, n11 and n12.
+# ADDED 2026-09-24 for n31 and n32 only, from the second research report.
+# A random share of the TRAINING molecules has its label moved UP by delta label
+# SDs; every other label is untouched. None of the registry's conditions is a
+# one-direction shift on a subset: outlier_only_* widens the error on a subset
+# (zero mean), grouped_shifted moves every molecule. Kept out of the NoiseInject
+# registry on purpose, so the nine files that loop over the registry's conditions
+# do not gain a job per dataset. Level = delta in label SDs.
+SHIFT_ONLY_CONDITIONS = {'shift_only_p05': 0.05, 'shift_only_p10': 0.10}
+SHIFT_ONLY_DELTAS_SD = (0.5, 1.0, 2.0)
+
 DETECTION_IS_DEFINED = ('outlier_p01', 'outlier_p05', 'outlier_p10',
                         'outlier_only_p01', 'outlier_only_p05',
                         'outlier_only_p10',
-                        'grouped_wider', 'censoring')
+                        'grouped_wider', 'censoring',
+                        'shift_only_p05', 'shift_only_p10')
 
 # ADDED 2026-09-23. The three `outlier_only_*` conditions leave the unselected
 # molecules' labels bit-identical, where the three `outlier_*` conditions widen
@@ -534,6 +556,41 @@ DETECTION_IS_DEFINED = ('outlier_p01', 'outlier_p05', 'outlier_p10',
 #                  IC50 records carry one, counted 2026-09-17 under
 #                  ChEMBL_37.
 DETECTION_DEFINED_WITHOUT_INJECTION = ('curator_flag',)
+
+
+def inject_shift_train_labels(y_all, *, train_idx, condition, delta_sd, seed):
+    """Move a random share of one fold's training labels up by delta_sd label SDs.
+
+    y_all      the FULL clean label column
+    train_idx  this fold's training rows
+    condition  a key of SHIFT_ONLY_CONDITIONS; it sets the share moved
+    delta_sd   the shift, in SDs of the full clean label column
+    seed       the draw; the same seed picks the same molecules in every arm
+
+    Returns (y_noisy_train, moved_mask_train, provenance), the same shape as
+    inject_train_labels, so detection_scores grades it the same way.
+    """
+    import numpy as np
+    if condition not in SHIFT_ONLY_CONDITIONS:
+        raise ValueError(f'inject_shift_train_labels: unknown condition {condition!r}')
+    y_all = np.asarray(y_all, dtype=float).ravel()
+    train_idx = np.asarray(train_idx)
+    share = SHIFT_ONLY_CONDITIONS[condition]
+    n_train = len(train_idx)
+    n_move = int(round(share * n_train))
+    rng = np.random.RandomState(int(seed))
+    moved = np.zeros(n_train, dtype=bool)
+    if n_move > 0 and float(delta_sd) != 0.0:
+        moved[rng.choice(n_train, size=n_move, replace=False)] = True
+    label_sd = float(np.std(y_all))
+    shift = float(delta_sd) * label_sd
+    y_train = y_all[train_idx].copy()
+    y_train[moved] += shift
+    return y_train, moved, {
+        'condition': condition, 'share': share, 'delta_sd': float(delta_sd),
+        'shift_label_units': shift, 'label_sd': label_sd,
+        'n_moved': int(moved.sum()), 'n_training': int(n_train), 'seed': int(seed),
+    }
 
 
 def detection_is_defined(condition) -> bool:
@@ -580,6 +637,12 @@ def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicio
                                    that same top k. At this k it equals the precision;
                                    both are written because a reader who sees one
                                    number alone cannot tell which one it is.
+      detection_auroc              the chance a randomly chosen moved molecule
+                                   scores above a randomly chosen untouched one.
+                                   Added 2026-09-24 so the suite's numbers can sit
+                                   beside the predicted-ceiling formulas in n31,
+                                   which are written as AUROC. 0.5 is a coin flip
+                                   whatever the corrupted share.
     Plus the two counts they are fractions of, so no bare ratio is ever written:
       detection_n_corrupted        molecules whose label moved
       detection_n_training         molecules in the training fold
@@ -604,6 +667,11 @@ def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicio
         ap = float(average_precision_score(mask, sus))
     except Exception:
         ap = float('nan')
+    try:
+        from sklearn.metrics import roc_auc_score
+        auroc = float(roc_auc_score(mask, sus))
+    except Exception:
+        auroc = float('nan')
     order = np.argsort(-sus, kind='stable')
     top = order[:n_corrupt]
     hits = int(mask[top].sum())
@@ -611,9 +679,48 @@ def detection_scores(corrupted_mask, suspicion, condition, *, higher_is_suspicio
         'detection_average_precision': ap,
         'detection_precision_at_k': hits / float(n_corrupt),
         'detection_recall_at_k': hits / float(n_corrupt),
+        'detection_auroc': auroc,
         'detection_n_corrupted': n_corrupt,
         'detection_n_training': int(mask.size),
         'detection_condition': str(condition),
+    }
+
+
+def tail_scores(y_clean_test, pred, share=0.1):
+    """Error on the extremes of the clean held-out labels, and calibration slope.
+
+    Added 2026-09-24 for n31-n36. Cleaning that rewrites labels toward a model's
+    prediction pulls extreme labels inward, and the overall rmse can hide that.
+
+    y_clean_test  the CLEAN held-out labels
+    pred          the model's predictions for the same molecules
+    share         the fraction of held-out molecules counted as each tail
+
+    Returns:
+      tail_rmse_top           rmse over the held-out molecules whose clean label
+                              is in the top `share`
+      tail_rmse_bottom        the same for the bottom `share`
+      tail_n_each             molecules in each tail
+      calibration_slope       slope of clean label regressed on prediction. 1 is
+                              calibrated; below 1 the predictions are spread too
+                              wide, above 1 too narrow
+    None when fewer than 20 held-out molecules, since a tenth is then 1 molecule.
+    """
+    import numpy as np
+    y = np.asarray(y_clean_test, dtype=float).ravel()
+    p = np.asarray(pred, dtype=float).ravel()
+    if y.size != p.size or y.size < 20:
+        return None
+    k = max(1, int(round(share * y.size)))
+    order = np.argsort(y, kind='stable')
+    lo, hi = order[:k], order[-k:]
+    var_p = float(np.var(p))
+    slope = (float(np.cov(p, y, bias=True)[0, 1]) / var_p) if var_p > 0 else float('nan')
+    return {
+        'tail_rmse_top': float(np.sqrt(np.mean((y[hi] - p[hi]) ** 2))),
+        'tail_rmse_bottom': float(np.sqrt(np.mean((y[lo] - p[lo]) ** 2))),
+        'tail_n_each': int(k),
+        'calibration_slope': slope,
     }
 
 
@@ -1094,6 +1201,12 @@ def _import_experiment(exp_id: str):
         'n27': 'n27_removal_cost_and_propagation',
         'n29': 'n29_document_bias',
         'n30': 'n30_censored_likelihood',
+        'n31': 'n31_regime_and_breakeven',
+        'n32': 'n32_iterative_and_dual_selection',
+        'n33': 'n33_robust_training',
+        'n34': 'n34_group_random_effects',
+        'n35': 'n35_near_duplicate_disagreement',
+        'n36': 'n36_remeasure_priority',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -1129,6 +1242,12 @@ def _experiment_full_name(exp_id: str) -> str:
         'n27': 'n27_removal_cost_and_propagation',
         'n29': 'n29_document_bias',
         'n30': 'n30_censored_likelihood',
+        'n31': 'n31_regime_and_breakeven',
+        'n32': 'n32_iterative_and_dual_selection',
+        'n33': 'n33_robust_training',
+        'n34': 'n34_group_random_effects',
+        'n35': 'n35_near_duplicate_disagreement',
+        'n36': 'n36_remeasure_priority',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -1153,7 +1272,12 @@ def _experiment_full_name(exp_id: str) -> str:
 # n26, n27, n29 and n30 are not here either. n26 and n29 inject nothing. n27
 # injects gaussian by construction, like n15. n30 runs censoring only, named in
 # its own file, so a job asking for any other condition must not reach it.
-HONOURS_NOISE_CONDITION = {'n07', 'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23'}
+# n32, n33 and n34 joined 2026-09-24. n32 writes a skip under a condition where
+# every label moves; n34 writes a skip under any condition but the two grouped
+# ones. n31, n35 and n36 are left out for the reasons given at their entries in
+# SINGLE_DATASET_EXPERIMENTS.
+HONOURS_NOISE_CONDITION = {'n07', 'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23',
+                           'n32', 'n33', 'n34'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
 
 

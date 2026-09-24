@@ -35,6 +35,48 @@ feature space, on the same folds.
                              its measurements of (label minus its document's
                              offset). The offsets are per_record_bias's.
 
+THREE MORE ARMS, added 2026-09-24 from a second research report (its sections
+A3, A8 and L). Each is paired against mean_label like the four above.
+
+  per_record_random_effect   one row per measurement, the label minus a
+                             document offset fitted as a random effect. The
+                             same alternating fit as per_record_bias, except
+                             the ridge penalty is not fixed: on every pass the
+                             within-document variance of the residuals (sigma2)
+                             and the variance of the document offsets (tau2)
+                             are estimated by method of moments, and the
+                             penalty is sigma2 / tau2. A document then keeps
+                             n / (n + sigma2/tau2) of its mean residual, which
+                             is what a random-intercept model (MERF, GPBoost)
+                             gives. Both variances are written per pass.
+  within_document_rank       XGBoost with objective rank:pairwise, one row per
+                             measurement, the document as the query group, so
+                             the model only learns which of a document's
+                             measurements is higher, never a document's level.
+                             Checked 2026-09-24 on xgboost 2.1.4: rank:pairwise
+                             takes float labels (on 200 toy rows its scores
+                             correlated 0.97 with the label). Its scores are put
+                             back on the label scale by a straight-line fit of
+                             label on an out-of-fold score within the training
+                             fold (grouped by scaffold, OOF_SPLITS folds). A
+                             measurement from a document with one measurement
+                             forms no pair and teaches it nothing. XGBOOST ONLY:
+                             it is written under the model key 'xgboost' and
+                             paired against mean_label's xgboost. With xgboost
+                             absent from the model list it does not run.
+  document_quantile_map      one row per molecule; the label is the mean of its
+                             measurements after each document with at least
+                             QUANTILE_MAP_MIN_MEASUREMENTS training
+                             measurements has its labels mapped by rank onto
+                             the quantiles of all training measurements. Other
+                             documents are untouched. This assumes documents
+                             differ by a monotone distortion of one common
+                             distribution; a document that tested a stronger
+                             series is flattened too. How many documents and
+                             measurements qualify is written per fold. The map
+                             reads labels only, so it is the same in every
+                             feature space.
+
 HOW AN OFFSET IS FITTED. Two fits, alternated N_ITER times on the training
 measurements of one fold, in one feature space:
 
@@ -124,8 +166,11 @@ from experiments.noise.noise_helpers import (
 )
 from kirby.utils.noisy_labels import oof_predict
 
-ARMS = ('mean_label', 'per_record', 'per_record_bias',
-        'mean_label_bias_corrected')
+# The four arms the check with known biases re-runs.
+CORE_ARMS = ('mean_label', 'per_record', 'per_record_bias',
+             'mean_label_bias_corrected')
+ARMS = CORE_ARMS + ('per_record_random_effect', 'within_document_rank',
+                    'document_quantile_map')
 ARM_TO_BEAT = 'mean_label'
 
 # How many times the two fits alternate. Written onto the result file with the
@@ -145,6 +190,19 @@ OOF_SPLITS = 5
 # Resamples of the training molecules for the sign-flip count.
 N_BOOTSTRAP = 200
 FLIP_SHARE_REPORTED = 0.2
+
+# A document needs this many training measurements before document_quantile_map
+# maps its labels. Below it the document's quantiles are a handful of points.
+QUANTILE_MAP_MIN_MEASUREMENTS = 20
+
+# The ranking model of within_document_rank. The settings of the downstream
+# xgboost (find_best_hybrid.py, XGBRegressor), with the ranking objective.
+RANKER_PARAMS = dict(objective='rank:pairwise', n_estimators=100,
+                     colsample_bytree=0.5, random_state=42, n_jobs=-1,
+                     verbosity=0)
+
+# Stands in for an infinite ridge penalty when the offsets' variance is 0.
+_NO_OFFSET_PENALTY = 1e12
 
 # Only a document in a group of this many documents or more gets an offset.
 MIN_DOCUMENTS_IN_GROUP = 2
@@ -266,14 +324,46 @@ def offsets_per_record(offsets, rec_doc):
         offsets.get(int(d), np.nan)) else 0.0 for d in rec_doc], dtype=float)
 
 
+def moment_variances(residual, rec_doc, eligible):
+    """Method-of-moments sigma2 and tau2 over the eligible documents.
+
+    sigma2  pooled variance of the residuals around their own document's mean,
+            over documents with 2+ measurements (N - D degrees of freedom).
+    tau2    variance of the document mean residuals minus the part sigma2 / n_d
+            puts there, floored at 0.
+    Returns (sigma2, tau2), NaN when fewer than two documents are eligible.
+    """
+    residual = np.asarray(residual, dtype=float)
+    rec_doc = np.asarray(rec_doc)
+    elig = np.isin(rec_doc, np.asarray(list(eligible), dtype=rec_doc.dtype))
+    if elig.sum() < 3:
+        return float('nan'), float('nan')
+    r, d = residual[elig], rec_doc[elig]
+    docs, inv, n_d = np.unique(d, return_inverse=True, return_counts=True)
+    if len(docs) < 2:
+        return float('nan'), float('nan')
+    means = np.bincount(inv, weights=r) / n_d
+    ss_within = float(((r - means[inv]) ** 2).sum())
+    dof = int(len(r) - len(docs))
+    sigma2 = ss_within / dof if dof > 0 else float('nan')
+    if not np.isfinite(sigma2):
+        return sigma2, float('nan')
+    tau2 = max(0.0, float(np.var(means, ddof=1)) - float(np.mean(sigma2 / n_d)))
+    return sigma2, tau2
+
+
 def fit_document_offsets(X_rec, y_rec, rec_doc, g_rec, eligible, component,
                          n_iter=N_ITER, alpha=RIDGE_ALPHA,
-                         oof_splits=OOF_SPLITS):
+                         oof_splits=OOF_SPLITS, variance_trace=None):
     """The alternating fit. Returns (offsets, final residuals, trace).
 
     `trace` is the largest change in any offset on each pass, in label units.
     The residual is the RAW label minus the out-of-fold prediction of a model
     trained on the corrected labels, so it is what the offsets must explain.
+
+    alpha='fitted' is the random-effect version: the penalty is re-estimated
+    as sigma2 / tau2 on each pass (`moment_variances`), and each pass's
+    (sigma2, tau2, penalty) is appended to `variance_trace` when one is given.
     """
     y_rec = np.asarray(y_rec, dtype=float)
     offsets = {int(d): 0.0 for d in eligible}
@@ -283,7 +373,18 @@ def fit_document_offsets(X_rec, y_rec, rec_doc, g_rec, eligible, component,
         b = offsets_per_record(offsets, rec_doc)
         oof = oof_predict(X_rec, y_rec - b, g_rec, n_splits=oof_splits)
         residual = y_rec - oof
-        new = ridge_offsets(residual, rec_doc, eligible, component, alpha)
+        if alpha == 'fitted':
+            s2, t2 = moment_variances(residual, rec_doc, eligible)
+            if not (np.isfinite(s2) and np.isfinite(t2)) or t2 <= 0:
+                pass_alpha = _NO_OFFSET_PENALTY
+            else:
+                pass_alpha = s2 / t2
+            if variance_trace is not None:
+                variance_trace.append({'sigma2': s2, 'tau2': t2,
+                                       'penalty_in_measurements': pass_alpha})
+        else:
+            pass_alpha = alpha
+        new = ridge_offsets(residual, rec_doc, eligible, component, pass_alpha)
         moved = [abs(new[d] - offsets.get(d, 0.0)) for d in new
                  if np.isfinite(new[d])]
         trace.append(float(max(moved)) if moved else 0.0)
@@ -328,14 +429,87 @@ def _fit_score(factory, X_tr, y_tr, X_va, y_va, metric_fn):
         return None, f'{type(exc).__name__}: {exc}'
 
 
+def quantile_map_labels(y_rec, rec_doc, min_measurements=QUANTILE_MAP_MIN_MEASUREMENTS):
+    """Map each large document's labels onto the pooled label quantiles.
+
+    A document with at least `min_measurements` measurements has measurement
+    i (rank r_i of n, ties averaged) replaced by the pooled quantile at
+    (r_i - 0.5) / n. Returns (mapped labels, documents mapped, measurements
+    mapped).
+    """
+    from scipy.stats import rankdata
+    y_rec = np.asarray(y_rec, dtype=float)
+    rec_doc = np.asarray(rec_doc)
+    out = y_rec.copy()
+    n_docs = n_meas = 0
+    for d in np.unique(rec_doc):
+        on = np.where(rec_doc == d)[0]
+        if len(on) < int(min_measurements):
+            continue
+        q = (rankdata(y_rec[on]) - 0.5) / len(on)
+        out[on] = np.quantile(y_rec, q)
+        n_docs += 1
+        n_meas += len(on)
+    return out, n_docs, n_meas
+
+
+def rank_within_documents(X_rec_tr, y_rec_tr, rec_doc_tr, g_rec_tr, X_va,
+                          oof_splits=OOF_SPLITS, params=None):
+    """within_document_rank's held-out predictions, on the label scale.
+
+    The ranker is fitted with the document as query group (rows sorted by it,
+    as xgboost requires). A straight line of label on an out-of-fold ranker
+    score, over the training measurements, maps its scores to label units.
+    Returns (predictions, {'slope', 'intercept', 'oof_pearson'}).
+    """
+    import xgboost as xgb
+    from sklearn.model_selection import GroupKFold
+    params = dict(RANKER_PARAMS if params is None else params)
+    rec_doc_tr = np.asarray(rec_doc_tr)
+    y_rec_tr = np.asarray(y_rec_tr, dtype=float)
+
+    def _fit(idx):
+        o = idx[np.argsort(rec_doc_tr[idx], kind='stable')]
+        return xgb.XGBRanker(**params).fit(X_rec_tr[o], y_rec_tr[o],
+                                           qid=rec_doc_tr[o])
+
+    oof = np.full(len(y_rec_tr), np.nan)
+    n_split = min(int(oof_splits), len(np.unique(g_rec_tr)))
+    for a, b in GroupKFold(n_splits=n_split).split(X_rec_tr, y_rec_tr,
+                                                   g_rec_tr):
+        oof[b] = _fit(a).predict(X_rec_tr[b])
+    slope, intercept = np.polyfit(oof, y_rec_tr, 1)
+    full = _fit(np.arange(len(y_rec_tr)))
+    pred = slope * full.predict(X_va) + intercept
+    return pred, {'slope': float(slope), 'intercept': float(intercept),
+                  'oof_pearson': float(np.corrcoef(oof, y_rec_tr)[0, 1])}
+
+
+def _molecule_means(values, rec_mol_local, n_mol):
+    sums = np.bincount(rec_mol_local, weights=values, minlength=n_mol)
+    cnts = np.bincount(rec_mol_local, minlength=n_mol)
+    return sums / np.maximum(cnts, 1)
+
+
 def arm_training_sets(X_ent_tr, y_ent_mean_tr, X_rec_tr, y_rec_tr, rec_mol_local,
-                      b_rec):
-    """The four arms' (X, y), all over the same training molecules."""
+                      b_rec, b_rec_re=None, y_rec_qmap=None):
+    """The arms' (X, y), all over the same training molecules.
+
+    The four core arms always; per_record_random_effect when its offsets are
+    given; document_quantile_map when its mapped labels are given.
+    within_document_rank is not a label change and is fitted apart.
+    """
     n_mol = X_ent_tr.shape[0]
     corrected = y_rec_tr - b_rec
     sums = np.bincount(rec_mol_local, weights=corrected, minlength=n_mol)
     cnts = np.bincount(rec_mol_local, minlength=n_mol)
-    return {
+    extra = {}
+    if b_rec_re is not None:
+        extra['per_record_random_effect'] = (X_rec_tr, y_rec_tr - b_rec_re)
+    if y_rec_qmap is not None:
+        extra['document_quantile_map'] = (
+            X_ent_tr, _molecule_means(y_rec_qmap, rec_mol_local, n_mol))
+    return {**extra,
         'mean_label': (X_ent_tr, y_ent_mean_tr),
         'per_record': (X_rec_tr, y_rec_tr),
         'per_record_bias': (X_rec_tr, corrected),
@@ -415,7 +589,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
-        'noise_injection': 'none in the four main arms',
+        'noise_injection': 'none in the main arms',
         'models': downstream_models,
         'base_rep': base_rep_name,
         'arms': list(ARMS),
@@ -428,6 +602,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'oof_splits': oof_splits,
         'n_bootstrap': n_boot,
         'min_documents_in_group': MIN_DOCUMENTS_IN_GROUP,
+        'random_effect_penalty': ('sigma2 / tau2, re-estimated by method of '
+                                  'moments on every pass; written per pass '
+                                  'under per_fold/.../random_effect_variances'),
+        'within_document_rank_model': dict(
+            RANKER_PARAMS, note=('xgboost only, written under the model key '
+                                 'xgboost; scores mapped to label units by a '
+                                 'straight line fitted on out-of-fold scores '
+                                 'within the training fold')),
+        'quantile_map_min_measurements': QUANTILE_MAP_MIN_MEASUREMENTS,
         'dataset_counts': {'measurements': int(len(labels)),
                            'molecules': int(n_mol),
                            'documents': int(len(doc_names))},
@@ -523,6 +706,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'documents_given_an_offset': len(eligible),
             'per_space': {},
         }
+        y_rec_qmap, q_docs, q_meas = quantile_map_labels(y_rec_tr, rec_doc_tr)
+        fold_block['document_quantile_map'] = {
+            'documents_mapped': int(q_docs),
+            'measurements_mapped': int(q_meas),
+            'of_training_measurements': int(len(rec_tr)),
+        }
         print(f"\n  fold {fold_i}: {len(tr)} training molecules, "
               f"{len(rec_tr)} measurements, {len(eligible)} of "
               f"{len(train_docs)} documents can carry an offset; "
@@ -587,10 +776,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'documents_with_a_flip_share': int(fl.size),
             }
             b_rec = offsets_per_record(offsets, rec_doc_tr)
+            var_trace = []
+            b_rec_re = None
+            try:
+                off_re, _r, trace_re = fit_document_offsets(
+                    X_rec_tr, y_rec_tr, rec_doc_tr, g_rec_tr, eligible,
+                    component, n_iter=n_iter, alpha='fitted',
+                    oof_splits=oof_splits, variance_trace=var_trace)
+                b_rec_re = offsets_per_record(off_re, rec_doc_tr)
+                vre = np.array([off_re[d] for d in eligible], dtype=float)
+                fold_block['per_space'][ckey]['random_effect'] = {
+                    'variances_per_pass': var_trace,
+                    'largest_offset_change_per_pass': trace_re,
+                    'offset_spread_sd': (float(vre.std()) if vre.size
+                                         else float('nan')),
+                }
+            except Exception as exc:
+                errors[f'{fk}|{ckey}|random_effect_offsets'] = (
+                    f'{type(exc).__name__}: {exc}')
+            if 'xgboost' in cell_models:
+                try:
+                    pred_rank, cal = rank_within_documents(
+                        X_rec_tr, y_rec_tr, rec_doc_tr, g_rec_tr, X_va_e,
+                        oof_splits=oof_splits)
+                    fold_block['per_space'][ckey]['within_document_rank'] = cal
+                    (acc['all'].setdefault(space, {})
+                     .setdefault('within_document_rank', {})
+                     .setdefault('xgboost', {}))[fk] = float(
+                         metric_fn(y_va_all, pred_rank))
+                    if isolated.sum() >= 5:
+                        (acc['isolated'].setdefault(space, {})
+                         .setdefault('within_document_rank', {})
+                         .setdefault('xgboost', {}))[fk] = float(
+                             metric_fn(y_va_all[isolated], pred_rank[isolated]))
+                except Exception as exc:
+                    errors[f'{fk}|{ckey}|within_document_rank|xgboost'] = (
+                        f'{type(exc).__name__}: {exc}')
             sets = arm_training_sets(X_tr_e, y_mean[tr], X_rec_tr, y_rec_tr,
-                                     rec_mol_local, b_rec)
+                                     rec_mol_local, b_rec, b_rec_re=b_rec_re,
+                                     y_rec_qmap=y_rec_qmap)
             for m in cell_models:
                 for arm in ARMS:
+                    if arm not in sets:
+                        continue
                     Xa, ya = sets[arm]
                     # One fit, graded two ways: every held-out molecule, and
                     # only the isolated ones.
@@ -667,7 +895,7 @@ def _known_bias_check(labels, rec_mol, rec_doc, doc_names, tr, va, rec_tr,
                              X_tr_e[rec_mol_local], y_rec_tr, rec_mol_local,
                              offsets_per_record(off, rec_doc_tr))
     scores = {}
-    for arm in ARMS:
+    for arm in CORE_ARMS:
         Xa, ya = sets[arm]
         s, err = _fit_score(factory, Xa, ya, X_va_e, y_mean[va], metric_fn)
         scores[arm] = s if s is not None else err
