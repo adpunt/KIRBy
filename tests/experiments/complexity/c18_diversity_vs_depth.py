@@ -23,6 +23,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+# Ranking metrics need graded scores: an AUROC read off hard 0/1 labels
+# collapses to the mean of sensitivity and specificity (hybrid.py:2661).
+from kirby.find_best_hybrid import _predict_for_metric
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -146,7 +149,7 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
                 return metric_fn(y_val, probs[:, 1])
         except Exception:
             pass
-    return metric_fn(y_val, model.predict(X_val))
+    return metric_fn(y_val, _predict_for_metric(model, X_val, metric_fn))
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):

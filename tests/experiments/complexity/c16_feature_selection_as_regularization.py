@@ -48,7 +48,7 @@ from experiments._shared import (
     # everywhere else; c16 is one of the approved exceptions.
     RIDGE_MODELS,
 )
-from kirby.find_best_hybrid import _resolve_models, DEFAULT_MODELS
+from kirby.find_best_hybrid import _predict_for_metric, _resolve_models, DEFAULT_MODELS
 
 
 # =========================================================================
@@ -163,7 +163,7 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
                 return metric_fn(y_val, probs[:, 1])
         except Exception:
             pass
-    return metric_fn(y_val, model.predict(X_val))
+    return metric_fn(y_val, _predict_for_metric(model, X_val, metric_fn))
 
 
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
