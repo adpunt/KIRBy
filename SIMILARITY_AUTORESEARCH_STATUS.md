@@ -954,6 +954,38 @@ the correlation s06 reports, which also makes both sides of the comparison
 importance-weighted rather than one of each. Not changed — it is the owner's
 call and it moves which arm the headline names on all three datasets.
 
+## s10: importance weighting helps only at LARGE neighbour counts
+
+Read from the two completed s10 herg_ki runs, 2026-09-24. rmse in pKi, so a
+positive delta means weighting made it WORSE.
+
+    run                       k      unweighted   weighted     delta
+    corrected (0.25/dist)      5        0.6299     0.6341     +0.0041
+                               7        0.6257     0.6267     +0.0010
+                              10        0.6297     0.6340     +0.0043
+                              15        0.6424     0.6413     -0.0011
+                              25        0.6634     0.6594     -0.0041
+    base (0.5/uniform)         5        0.6301     0.6393     +0.0092
+                              10        0.6359     0.6489     +0.0130
+                              20        0.6700     0.6653     -0.0047
+
+The sign flips between 10 and 15 neighbours in the corrected run and between 10
+and 20 in the base run. Both runs show the same shape: weighting hurts at small
+neighbour counts and helps at large ones.
+
+⛔ This was invisible while the neighbour axis was pinned at 5 and 10, because
+both of those sit on the side where weighting hurts. The axis was unpinned on
+2026-09-24.
+
+**k=7 gives the best unweighted score of any count, 0.6257**, beating 5 and 10.
+The s05 sweep finds the same thing independently — k=7 wins all four of its
+completed caco2 cells. That count did not exist in this suite before 2026-09-24.
+
+⛔ The two runs differ in THREE ways at once — exponent 0.5 against 0.25,
+uniform against distance voting, and the neighbour list — so nothing here can be
+attributed to the exponent. The within-run pattern across k is clean, because
+inside one run only k varies.
+
 ## The exponent axis, first four cells: 0.5 wins on caco2
 
 s05 sweep, caco2, uniform voting, neighbour counts 5/7/10/15/25 inside each
