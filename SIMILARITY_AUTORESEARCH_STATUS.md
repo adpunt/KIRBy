@@ -260,7 +260,7 @@ queued — the owner capped local compute and the current queue is still drainin
 | s02 | method | yes, 3/3 | yes | **yes** — 20 cells per dataset, all three complete |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
 | s04 | method | yes, 3/3 twice | yes | **re-opened 2026-09-24** — ran on 4 representations, not 7; re-runs queued |
-| s05 | method | yes, 3/3 | yes | **yes, 2026-09-23** — tuned run finished on all three |
+| s05 | method | yes, 3/3 | yes | **SWEPT 2026-09-24** — 24 cells: 2 voting x 4 exponents x 3 datasets, k swept within |
 | s06 | method | yes, 3/3 twice | yes | **yes** — four levers, 2,628 cells per dataset, all three complete |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
@@ -1070,38 +1070,36 @@ uniform against distance voting, and the neighbour list — so nothing here can 
 attributed to the exponent. The within-run pattern across k is clean, because
 inside one run only k varies.
 
-## The s05 sweep, three datasets: distance voting is the only lever that holds
+## The s05 sweep, COMPLETE: 24 of 24 cells
 
-23 of 24 cells. Best weighted hybrid arm, rmse lower better, neighbour counts
-5/7/10/15/25 swept inside every cell.
+Two voting schemes x four importance exponents x three datasets, with neighbour
+counts 5/7/10/15/25 swept inside every cell. Best weighted hybrid arm, rmse.
 
-    caco2                      herg_ki                    adme_mdr1
-    distance 0.5  k=7  0.3231  distance 0.25 k=7  0.6082  distance 0.5  k=25 0.4952
-    distance 0.25 k=7  0.3249  distance 0.0  k=7  0.6093  distance 0.25 k=15 0.4979
-    distance 0.0  k=7  0.3277  distance 0.5  k=5  0.6120  uniform  0.5  k=25 0.4983
-    uniform  0.5  k=7  0.3281  uniform  0.25 k=7  0.6172  uniform  0.25 k=25 0.5010
-    distance 1.0  k=7  0.3303  uniform  0.0  k=7  0.6175  uniform  1.0  k=25 0.5062
-    uniform  0.25 k=7  0.3303  uniform  0.5  k=5  0.6183  distance 0.0  k=10 0.5066
-    uniform  0.0  k=7  0.3325  distance 1.0  k=5  0.6194  uniform  0.0  k=25 0.5103
-    uniform  1.0  k=7  0.3348  uniform  1.0  k=5  0.6264
+**Distance voting wins all twelve matched pairs.** Distance minus uniform at
+each exponent, negative means distance is better:
 
-**Distance voting beats uniform at every matched exponent on every dataset —
-11 of 11 pairs.** With s10's independent 20 of 21 (representation, dataset)
-pairs, this is the one lever that holds everywhere. It is worth about 0.005 to
-0.009 rmse.
+    dataset      exp 0.0   exp 0.25   exp 0.5   exp 1.0
+    caco2        -0.0048    -0.0055   -0.0050   -0.0045
+    herg_ki      -0.0082    -0.0091   -0.0063   -0.0070
+    adme_mdr1    -0.0037    -0.0031   -0.0031   -0.0034
 
-**The best exponent is dataset-dependent: 0.5, 0.25, 0.5.** There is no single
-value to hardcode. The shipped 0.5 is right for caco2 and adme_mdr1 and wrong
-for herg_ki; the 0.25 the s10 re-runs use is right only for herg_ki.
+Twelve of twelve, and the size is stable within each dataset whatever the
+exponent — so voting is an independent lever, not an interaction with weighting.
+With s10's 20 of 21 (representation, dataset) pairs, this is the most solid
+result in the suite.
 
-**The best neighbour count is dataset-dependent too: 7, 7, 25.** An earlier note
-here said k=7 wins; that held on two datasets and fails on adme_mdr1, where the
-winners are 25, 15 and 10 and k=7 wins nothing. The shipped pairing of 5 and 10
-contains the winner on no dataset.
+**Best cell per dataset:**
 
-adme_mdr1 preferring large neighbour counts agrees with two other experiments on
-the same dataset: s06's sweep chose 15 neighbours for it, and s10 found weighting
-helps only at large counts. Three experiments, three statistics, same direction.
+    caco2       distance  exp 0.5   k=7   0.3231
+    herg_ki     distance  exp 0.25  k=7   0.6082
+    adme_mdr1   distance  exp 0.5   k=25  0.4952
+
+Distance voting on all three. Exponent and neighbour count both
+dataset-dependent, so neither has a value worth hardcoding.
+
+⛔ The shipped configuration is uniform voting, exponent 0.5, neighbours 5 and
+10. It gets the voting scheme wrong on all three datasets and the neighbour
+count wrong on all three. The exponent it gets right on two.
 
 ## s05's headline number cannot see the lever s05 was tuned for
 
