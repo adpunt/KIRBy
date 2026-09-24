@@ -519,6 +519,12 @@ def load_herg_ic50_measurements(min_records=1):
     written before 2026-09-17, which did not request the column;
     `curator_flag_available` says which of the two this is.
 
+    Also `document_chembl_id` and `assay_chembl_id`, one entry per row: which
+    ChEMBL document (a paper) and which assay each measurement came from. n29
+    fits a bias per document from these. Both are None on a pull that lacks the
+    column, and `record_ids_available` says so, rather than filling in a
+    placeholder that would look like a document.
+
     Raises if the per-record file is absent rather than quietly falling back to
     an averaged file, because the averaged file is what this exists to avoid.
     """
@@ -542,6 +548,10 @@ def load_herg_ic50_measurements(min_records=1):
     # requested has no flag at all, and that is said rather than filled in
     # with False and left to look like a measurement.
     has_flag_column = 'data_validity_comment' in df.columns
+    # The same rule for the two provenance ids: carried on this frame through
+    # every filter, so each id stays on the row of the measurement it names.
+    has_doc_column = 'document_chembl_id' in df.columns
+    has_assay_column = 'assay_chembl_id' in df.columns
     df['standard_value'] = pd.to_numeric(df['standard_value'], errors='coerce')
     df = df[df['standard_value'] > 0]
     df = df.dropna(subset=[smiles_col, 'standard_value']).copy()
@@ -565,6 +575,11 @@ def load_herg_ic50_measurements(min_records=1):
     else:
         curator_flag = np.zeros(len(df), dtype=bool)
         flag_text = [''] * len(df)
+
+    document_ids = (df['document_chembl_id'].astype(str).to_numpy()
+                    if has_doc_column else None)
+    assay_ids = (df['assay_chembl_id'].astype(str).to_numpy()
+                 if has_assay_column else None)
 
     smiles = df[smiles_col].tolist()
     labels = df['pActivity'].to_numpy(dtype=float)
@@ -593,6 +608,9 @@ def load_herg_ic50_measurements(min_records=1):
         'curator_flag': curator_flag,
         'curator_flag_text': flag_text,
         'curator_flag_available': bool(has_flag_column),
+        'document_chembl_id': document_ids,
+        'assay_chembl_id': assay_ids,
+        'record_ids_available': bool(has_doc_column and has_assay_column),
         'task_type': 'regression',
         'source': str(path),
     }

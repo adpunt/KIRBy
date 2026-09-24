@@ -85,6 +85,10 @@ KIND = {
     'n21': ('method', 'which distance the nearest neighbours are found in'),
     'n22': ('investigation', 'whether detectors find the records a human marked wrong'),
     'n23': ('method', "cleaning from a model's own per-molecule uncertainty"),
+    'n26': ('investigation', 'how large the label noise is, measured from repeat measurements, beside the model\'s own error'),
+    'n27': ('investigation', 'what training on fewer molecules costs, and how much training-label error reaches the held-out error'),
+    'n29': ('method', 'fits one offset per ChEMBL document and removes it from the training labels'),
+    'n30': ('method', 'clipped labels: lift, drop, winsorise, or a censored likelihood'),
 }
 
 

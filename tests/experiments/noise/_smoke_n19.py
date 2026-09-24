@@ -293,7 +293,8 @@ def test_end_to_end():
     print("\nend to end — the count carries the precision:")
     data, ks, sigma = count_carries_precision(n_ent=400, seed=3)
     r = n19.run(data, {'n_splits': 4}, OUT, 'toy_count',
-                models=['rf'], n_draws=2, oof_splits=3)
+                models=['rf'], base_rep='toy', n_draws=2, oof_splits=3,
+                model_arms=[])
     check('it ran', 'summary' in r, str(r.get('skipped', ''))[:60])
     if 'summary' not in r:
         return
@@ -325,7 +326,8 @@ def test_end_to_end():
     print("\nend to end — the spread carries the precision:")
     data2, ks2, sigma2 = spread_carries_precision(n_ent=400, seed=4)
     r2 = n19.run(data2, {'n_splits': 4}, OUT, 'toy_spread',
-                 models=['rf'], n_draws=2, oof_splits=3)
+                 models=['rf'], base_rep='toy', n_draws=2, oof_splits=3,
+                model_arms=[])
     check('it ran', 'summary' in r2, str(r2.get('skipped', ''))[:60])
     if 'summary' not in r2:
         return
@@ -375,12 +377,117 @@ def test_end_to_end():
     check('the noise function is flat in the count when the scatter is flat',
           max(fitc.values()) < 2.0 * min(fitc.values()),
           str({k: round(v, 2) for k, v in fitc.items()}))
-    check('every condition carries the spread of its own per-fold gains',
+    # Every molecule here was measured the same number of times, so every
+    # single label rests on one measurement and 1/count does not vary. The
+    # three conditions that need the slope have nothing to read it from.
+    check('every condition that needs no fitted slope carries the spread of '
+          'its own per-fold gains',
           all(np.isfinite(_cell(r2, 'single', c)['spread_over_fold_gains'])
-              for c in n19.CONDITIONS))
+              for c in n19.CONDITIONS
+              if c not in n19.FITTED_VARIANCE_CONDITIONS))
+    for c in n19.FITTED_VARIANCE_CONDITIONS:
+        check(f'{c} is absent, not faked, when 1/count does not vary',
+              _cell(r2, 'single', c)['n_folds'] == 0,
+              f"{_cell(r2, 'single', c)['n_folds']} folds")
+    errs = r2['per_draw']['0']['per_label_build']['single'].get('_errors', {})
+    check('and the reason is written down',
+          any(k.endswith('noise_variance') for k in errs), str(list(errs))[:120])
+
+
+def test_fit_noise_variance():
+    print("\nsigma_u^2 and sigma_e^2 from squared error against 1/count:")
+    rng = np.random.default_rng(7)
+    n = 20000
+    k = rng.integers(1, 11, size=n).astype(float)
+    truth = rng.normal(size=n)
+    # sigma_u^2 = 0.5, sigma_e^2 = 2.0 by construction.
+    y = truth + rng.normal(0, np.sqrt(0.5), n) + rng.normal(0, np.sqrt(2.0 / k))
+    s2u, s2e, info = n19.fit_noise_variance(y, truth, k)
+    check('the slope recovers the variance of one measurement',
+          abs(s2e - 2.0) < 0.2, f'{s2e:.3f} against 2.0')
+    check('the intercept recovers the error left at infinite count',
+          abs(s2u - 0.5) < 0.1, f'{s2u:.3f} against 0.5')
+    none_u, none_e, info2 = n19.fit_noise_variance(y, truth, np.ones(n))
+    check('one count everywhere gives no slope, and says why',
+          none_u is None and none_e is None and 'reason' in info2)
+    # Error that GROWS with the count: the slope is negative and is floored.
+    y_bad = truth + rng.normal(0, np.sqrt(0.2 * k))
+    u3, e3, info3 = n19.fit_noise_variance(y_bad, truth, k)
+    check('a negative slope is floored to zero and the floor is recorded',
+          e3 == 0.0 and info3['slope_floored_to_zero'] is True,
+          f"fitted slope {info3['slope_fitted']:.3f}")
+
+    w = n19.inverse_variance_weights(0.5, 2.0 / k)
+    check('the inverse-variance weights average one',
+          abs(w.mean() - 1.0) < 1e-12)
+    ratio = w[k == 10].mean() / w[k == 1].mean()
+    check('ten measurements weigh (0.5 + 2) / (0.5 + 0.2) times one, not ten',
+          abs(ratio - 2.5 / 0.7) < 1e-9, f'{ratio:.4f}')
+
+    var = np.array([1.0, 4.0, np.nan, 0.25])
+    cnt = np.array([2, 11, 1, 5])
+    pulled, pooled = n19.pooled_spread_variance(var, cnt, prior=3)
+    want_pooled = (1 * 1.0 + 10 * 4.0 + 4 * 0.25) / 15
+    check('the pooled variance weights each molecule by count - 1',
+          abs(pooled - want_pooled) < 1e-12, f'{pooled:.4f}')
+    check('a molecule measured once gets the pooled variance',
+          abs(pulled[2] - pooled) < 1e-12)
+    check('ten degrees of freedom sit closer to their own variance than one',
+          abs(pulled[1] - 4.0) / abs(pooled - 4.0)
+          < abs(pulled[0] - 1.0) / abs(pooled - 1.0))
+
+    X = rng.normal(size=(50, 3))
+    a, b = n19.with_count_feature(X[:40], X[40:], rng.integers(1, 6, 40),
+                                  rng.integers(1, 6, 10))
+    check('the count feature adds exactly one feature to each side',
+          a.shape == (40, 4) and b.shape == (10, 4))
+    check('and is standardised on the training molecules',
+          abs(a[:, -1].mean()) < 1e-9)
+
+
+def test_new_conditions_end_to_end():
+    print("\nend to end — the four added conditions and the model arms:")
+    data, ks, sigma = count_carries_precision(n_ent=240, seed=5)
+    r = n19.run(data, {'n_splits': 3}, OUT, 'toy_new_arms',
+                models=['rf'], base_rep='toy', n_draws=1, oof_splits=3,
+                label_builds=['averaged'])
+    check('it ran', 'summary' in r, str(r.get('skipped', ''))[:60])
+    if 'summary' not in r:
+        return
+    for cond in ('invvar_weighted', 'count_feature',
+                 'invvar_and_count_feature', 'spread_pooled_weighted'):
+        c = _cell(r, 'averaged', cond)
+        check(f'{cond} scored every fold untouched scored',
+              c['n_folds_paired'] == 3, f"{c['n_folds_paired']} of 3")
+    fits = (r['per_draw']['0']['per_label_build']['averaged']['per_space']
+            ['base']['fitted_noise_variance'])
+    slopes = [f['slope_fitted'] for f in fits]
+    # Every measurement scatters by 4, so one measurement carries variance 16
+    # and the slope should sit near it. Out-of-fold error from 160 molecules is
+    # rough, so the check is the order of magnitude, not the digits.
+    check('one fit per fold is written out', len(fits) == 3)
+    check('the fitted slope sits near the variance the data was built with',
+          all(4.0 < s < 64.0 for s in slopes),
+          f"{[round(s, 1) for s in slopes]} against 16")
+    arms = r['summary']['model_arms']['per_label_build']['averaged']['base']
+    for arm, plain in n19.MODEL_ARM_PAIRS.items():
+        check(f'{arm} is paired against {plain} on every fold',
+              arms.get(arm, {}).get('n_folds_paired') == 3,
+              str(arms.get(arm, {}).get('n_folds_paired')))
+    check('nothing in the model arms is paired against a downstream model',
+          all(v['against'] in n19.MODEL_ARMS for v in arms.values()))
+
+    try:
+        n19.run(data, {'n_splits': 3}, OUT, 'toy_bad_arm', models=['rf'],
+                n_draws=1, model_arms=['svm_plain'])
+        check('an unknown model arm is refused', False)
+    except ValueError:
+        check('an unknown model arm is refused', True)
 
 
 if __name__ == '__main__':
+    test_fit_noise_variance()
+    test_new_conditions_end_to_end()
     test_stats_line_up_with_n17()
     test_label_builds()
     test_variance_fill_and_calibration()

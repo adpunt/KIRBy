@@ -277,6 +277,39 @@ def sweep_cuts(exp_ids):
         notes['n23'] = ('3 draws -> 1, 3 drop shares -> 1, 3 strengths -> 1, '
                         '2 movers -> 1')
 
+    if 'n26' in exp_ids:
+        m = mod('n26_noise_variance_from_repeats')
+        m.N_SPLIT_HALF_REPEATS = 5
+        m.INJECTED_VARIANCES = (0.25,)
+        notes['n26'] = ('20 split-half draws -> 5, 3 injected variances in the '
+                        'estimator check -> 1')
+
+    if 'n27' in exp_ids:
+        m = mod('n27_removal_cost_and_propagation')
+        m.REPEATS = 3
+        # 0.9 kept beside 1.0: removing a tenth is the operation the
+        # 2026-09-23 headroom probe priced.
+        m.SHARES = (0.9, 1.0)
+        m.NOISE_DRAWS = (0,)
+        m.ALPHAS = (0.5, 1.0)
+        m.OOF_SPLITS = 3
+        notes['n27'] = ('20 repeats -> 3, 4 shares -> 2 (0.9 and 1.0), 3 draws '
+                        '-> 1, 3 relabelling fractions -> 2, 5 inner folds -> 3')
+
+    if 'n29' in exp_ids:
+        m = mod('n29_document_bias')
+        m.N_BOOTSTRAP = 50
+        m.OOF_SPLITS = 3
+        notes['n29'] = '200 bootstrap resamples -> 50, 5 inner folds -> 3'
+
+    if 'n30' in exp_ids:
+        m = mod('n30_censored_likelihood')
+        m.WINSOR_C = (1.0,)
+        m.SHUFFLE_SEEDS = (0,)
+        m.OOF_SPLITS = 3
+        notes['n30'] = ('3 winsorising thresholds -> 1, 3 shuffle seeds -> 1, '
+                        '5 inner folds -> 3')
+
     return notes
 
 

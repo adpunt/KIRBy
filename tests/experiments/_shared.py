@@ -4491,6 +4491,18 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
         import find_best_hybrid_molecular as _fbhm
         _rep_groups = getattr(_fbhm, '_LAST_REPLICATE_GROUPS', None)
         _fbhm._LAST_REPLICATE_GROUPS = None   # never leak into the next load
+        # Which ChEMBL document and assay each row came from (herg_ic50 only).
+        # Same stash, same reset, same length check as the replicate groups.
+        _rec_docs = getattr(_fbhm, '_LAST_RECORD_DOCUMENTS', None)
+        _rec_assays = getattr(_fbhm, '_LAST_RECORD_ASSAYS', None)
+        _fbhm._LAST_RECORD_DOCUMENTS = None
+        _fbhm._LAST_RECORD_ASSAYS = None
+        for _nm, _arr in (('document', _rec_docs), ('assay', _rec_assays)):
+            if _arr is not None and len(_arr) != len(labels):
+                raise RuntimeError(
+                    f"{dataset_name}: the loader returned {len(_arr)} {_nm} ids "
+                    f"for {len(labels)} labels, so the ids are not on the rows "
+                    f"of the measurements they name.")
         if _rep_groups is not None and len(_rep_groups) != len(labels):
             raise RuntimeError(
                 f"{dataset_name}: the loader returned {len(_rep_groups)} replicate "
@@ -4593,6 +4605,11 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             # `groups` above is, and it is the scaffold one. n17 and n19 read
             # this to collapse the measurement rows into one row per molecule.
             result['replicate_groups'] = np.asarray(_rep_groups)
+        if _rec_docs is not None:
+            # Which ChEMBL document each measurement row came from. n29 reads it.
+            result['record_documents'] = np.asarray(_rec_docs)
+        if _rec_assays is not None:
+            result['record_assays'] = np.asarray(_rec_assays)
         result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
         _clash = sorted(set(fold_factories) & set(result['rep_factories']))
         if _clash:

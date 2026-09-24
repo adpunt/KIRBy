@@ -13,8 +13,9 @@ run_all then runs only the experiments that take a condition -- n07, n09, n11,
 n12, n13, n16, n20, n21, n23 -- and each writes
 <experiment>/<dataset>__<condition>.json. n21 raises on the conditions outside
 DETECTION_IS_DEFINED; the job logs that and moves on. The experiments that take
-no condition (c10, n01, n02, n06, n14, n15, n17, n18, n19, n22) stay in the
-x_noise_<dataset> job.
+no condition (c10, n01, n02, n06, n14, n15, n17, n18, n19, n22, n26, n27,
+n29, n30) stay in the x_noise_<dataset> job. n30 does inject, but only
+censoring, which it names in its own file.
 
 ORDER. Condition-major: every dataset's first condition is submitted before any
 dataset's second, in SWEEP_ORDER (noise_helpers.py) for regression and
