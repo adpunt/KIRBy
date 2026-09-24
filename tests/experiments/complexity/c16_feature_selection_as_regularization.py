@@ -187,6 +187,9 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
     # already treats as bad (_shared.py:1515).
     val_by_fold = [None] * int(n_folds)
     train_by_fold = [None] * int(n_folds)
+    # (row budget, the blueprint's own budget) for every cell where the pool
+    # returned a recipe filed under a different budget than the one asked for.
+    blueprint_budget_mismatch = set()
 
     for _fold_i, (train_idx, val_idx) in enumerate(
             cv_split(groups, n_folds, sample_X, labels, mode=mode)):
@@ -208,12 +211,25 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         if budget is None or budget >= sum(v.shape[1] for v in reps.values()):
             continue
         try:
+            # ⛔ budget_override, OR THE ROW IS NOT THE BUDGET IT IS LABELLED.
+            # get_best_for_downstream returns the exact-budget entry when there
+            # is one and otherwise the best entry across ALL budgets for that
+            # model (_shared.py:7105), and further fallbacks after that. Without
+            # an override build_fold_hybrid builds at blueprint.budget
+            # (_shared.py:5127), so a heatmap row labelled 250 could be built at
+            # 1000 -- and this file's x-axis IS the budget. Same defect as c15's
+            # sweep, which is the case build_fold_hybrid's docstring names as
+            # the reason budget_override exists.
             X_train, X_val, fi = build_fold_hybrid(
                 train_reps, val_reps, y_train, blueprint,
                 augmentations_train=train_augs, augmentations_val=val_augs,
                 groups=(groups[train_idx] if groups is not None else None),
+                budget_override=budget,
                 model=model_factory(),
                 metric_fn=metric_fn)
+            _bp_budget = getattr(blueprint, 'budget', None)
+            if _bp_budget is not None and int(_bp_budget) != int(budget):
+                blueprint_budget_mismatch.add((int(budget), int(_bp_budget)))
         except Exception:
             continue
 
@@ -231,6 +247,10 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
 
     val_scores = [v for v in val_by_fold if v is not None]
     train_scores = [v for v in train_by_fold if v is not None]
+    if blueprint_budget_mismatch:
+        print(f"      budget {budget}: the pool's recipe was filed under a "
+              f"different budget {sorted(blueprint_budget_mismatch)}; built at "
+              f"{budget} via budget_override")
     if not val_scores:
         return float('nan'), float('nan'), [None] * int(n_folds)
     return (float(np.mean(val_scores)), float(np.mean(train_scores)),
