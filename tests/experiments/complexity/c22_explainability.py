@@ -144,7 +144,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     allocation_by_fold = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(
-        cv_split(groups, n_folds, next(iter(reps.values())), labels, mode=mode)
+        cv_split(groups, n_folds, next(iter(reps.values())), labels, mode=mode,
+                 task_type=task_type)
     ):
         y_train, y_val = labels[train_idx], labels[val_idx]
         train_reps = {k: v[train_idx] for k, v in reps.items()}

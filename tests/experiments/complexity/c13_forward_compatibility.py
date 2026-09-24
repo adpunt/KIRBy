@@ -421,10 +421,18 @@ def _subsample(reps, idx):
 # =============================================================================
 
 def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
-                               metric_fn):
-    """Evaluate a single rep with a single model, returning per-fold scores."""
+                               metric_fn, task_type=None):
+    """Evaluate a single rep with a single model, returning per-fold scores.
+
+    task_type: passed to cv_split. Without it _should_stratify falls back to the
+    integer-dtype heuristic, which its own docstring calls a poor proxy -- a
+    classification target stored as 0.0/1.0 gets plain GroupKFold and a fold
+    can come out single-class, which is a different split from the one the
+    hybrid arm beside it uses.
+    """
     scores = []
-    for train_idx, val_idx in cv_split(groups, n_folds, X, labels, mode=mode):
+    for train_idx, val_idx in cv_split(groups, n_folds, X, labels, mode=mode,
+                                       task_type=task_type):
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X[train_idx])
         X_val = scaler.transform(X[val_idx])
@@ -458,7 +466,8 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         rep_name = list(reps.keys())[0]
         X = reps[rep_name]
         scores = _eval_single_rep_per_fold(
-            X, labels, groups, model_factory, n_folds, mode, metric_fn)
+            X, labels, groups, model_factory, n_folds, mode, metric_fn,
+            task_type=task_type)
         return scores, {
             'best_result': {'score_mean': float(np.mean(scores)) if scores else float('nan')},
             'baselines': {},
@@ -575,7 +584,8 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     last_feature_info = None
     sample_X = next(iter(reps.values()))
 
-    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels,
+                                       mode=mode, task_type=task_type):
         train_reps = {k: v[train_idx] for k, v in reps.items()}
         val_reps = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -931,7 +941,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
               f"{'' if probe_model == 'ridge' else '  (ridge not in this model set)'}")
 
         a_scores = _eval_single_rep_per_fold(
-            X_new, labels, groups, ridge_factory, n_folds, mode, metric_fn)
+            X_new, labels, groups, ridge_factory, n_folds, mode, metric_fn,
+                task_type=data['task_type'])
         a_mean = float(np.mean(a_scores)) if a_scores else float('nan')
         a_std = float(np.std(a_scores)) if a_scores else float('nan')
         rep_result['conditions']['A'] = {
@@ -954,7 +965,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
 
         for model_name, model_factory in models.items():
             b_scores = _eval_single_rep_per_fold(
-                X_new, labels, groups, model_factory, n_folds, mode, metric_fn)
+                X_new, labels, groups, model_factory, n_folds, mode, metric_fn,
+                    task_type=data['task_type'])
             b_mean = float(np.mean(b_scores)) if b_scores else float('nan')
 
             if np.isnan(b_mean):
@@ -1229,7 +1241,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         # Random Gaussian (same dims)
         X_random = _make_random_gaussian(X_new)
         ctrl_random_scores = _eval_single_rep_per_fold(
-            X_random, labels, groups, ridge_factory, n_folds, mode, metric_fn)
+            X_random, labels, groups, ridge_factory, n_folds, mode, metric_fn,
+                task_type=data['task_type'])
         ctrl_random_mean = float(np.mean(ctrl_random_scores)) if ctrl_random_scores else float('nan')
         rep_result['controls']['random_gaussian'] = {
             'description': f'random Gaussian ({X_new.shape[1]}D)',
@@ -1242,7 +1255,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         # Row-shuffled
         X_shuffled = _make_row_shuffled(X_new)
         ctrl_shuffled_scores = _eval_single_rep_per_fold(
-            X_shuffled, labels, groups, ridge_factory, n_folds, mode, metric_fn)
+            X_shuffled, labels, groups, ridge_factory, n_folds, mode, metric_fn,
+                task_type=data['task_type'])
         ctrl_shuffled_mean = float(np.mean(ctrl_shuffled_scores)) if ctrl_shuffled_scores else float('nan')
         rep_result['controls']['row_shuffled'] = {
             'description': f'row-shuffled {rep_name}',
