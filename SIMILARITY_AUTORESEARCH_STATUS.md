@@ -499,89 +499,36 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
-## s11 length scale, second pair: caco2 gains on all eleven arms
+## RETRACTED: the s11 fixed-vs-median AUC comparison is confounded
 
-caco2, both halves under the same code. AUC at 100 picks is NEGATIVE on this
-dataset, so more negative is better and a positive gain means the median start
-won. Row-order picks out of 300:
+Both pairs were reported on 2026-09-24 as differing in one thing, the RBF
+length-scale start. They differ in two. Read from the run logs:
 
-    condition          fixed   median    gain   fixed ro   med ro
-    pca_50d            -29.9    -31.4    +1.4        58        0
-    best_single        -30.2    -31.1    +0.9       100        0
-    ecfp4_raw          -30.7    -31.5    +0.8       100        0
-    hybrid_50d_refit   -31.2    -31.4    +0.3         0        0
-    hybrid_gauche_gp   -31.5    -31.6    +0.2         0        0
-    hybrid_50d         -31.3    -31.4    +0.1         0        0
-    hybrid_ngboost     -31.0    -31.1    +0.1         0        0
-    random_50d         -28.6    -28.7    +0.1       300        0
-    random_acq         -30.7    -30.7    +0.0         0        0
-    tanimoto_ecfp4     -31.3    -31.3    +0.0         0        0
-    hybrid_bnn         -31.5    -31.5    -0.0        27       38
+    run                    started    search             allocation methods
+    s11_median_herg_ki     06:56:15   12 configurations  performance_weighted, power_2
+    s11_fixed_herg_ki      17:39:32    1 configuration   performance_weighted
+    s11_median_caco2       03:09:46   12 configurations  performance_weighted, power_2
+    s11_fixed_caco2        16:36:58    1 configuration   performance_weighted
 
-The median start wins all eleven arms, and the three that gain most are exactly
-the three that had been picking by row order: `pca_50d` +1.4 with 58 picks
-eliminated, `best_single` +0.9 with 100, `ecfp4_raw` +0.8 with 100.
+The `median` runs went out before the search space was cut and the `fixed` runs
+after. Different searches choose different recipes — `power_2` against
+`performance_weighted` — so every hybrid arm was built from a DIFFERENT FEATURE
+SET in the two halves.
 
-Across the two completed pairs the fix reliably removes the defect and its
-effect on the OUTCOME is dataset-dependent: negligible on herg_ki, uniformly
-positive on caco2. The hybrid arms move least on both, because they never had
-the problem.
+⛔ **Retracted:** every AUC number from those two comparisons, and both
+conclusions drawn from them — that the median start wins all eleven arms on
+caco2, and that it wins 3 of 11 on herg_ki. Neither is attributable to the
+length scale.
 
-⛔ **`hybrid_bnn`'s flat acquisition is NOT the sigma floor.** `expected_improvement`
-sets EI to exactly 0 wherever sigma < 1e-8, which would tie every such molecule.
-Tested 2026-09-24 on a 50-dimensional space of the size s11's hybrid arms use,
-140 training and 300 pool molecules:
+**Still standing:** the row-order counts. `ecfp4_raw` 295 to 0 on herg_ki and
+100 to 0 on caco2, `pca_50d` 224 to 0 and 58 to 0, `random_50d` 300 to 0 on
+both. Those arms are base representations and PCA controls; their features come
+from no recipe, so the search change does not touch them. The median start
+removes row-order picking, and that claim is clean.
 
-    surrogate   min sigma   median sigma   below 1e-8   tied at the max
-    BNN          6.42e-02      1.58e-01      0 of 300       1 of 300
-    GP           1.04e+00      1.04e+00      0 of 300       5 of 300
-
-The BNN's MC-dropout spread is nowhere near the floor and the rule never fires,
-so that is not the cause. The cause is not identified. What is odd about it: the
-arm worsens under the median length-scale start on both datasets, and the length
-scale belongs to the GP — the BNN uses no RBF kernel — which points at the
-hybrid space the BNN is fitted on rather than at the surrogate.
-
-Its number should not be read while a third of its herg_ki picks come from file
-order.
-
-## s11 length scale: the process is fixed, the outcome barely moves
-
-First matched pair, herg_ki, both halves computed under the same code on
-2026-09-24. The recorded `fixed` numbers could not serve as the other half
-because they came off the 530 stored search configurations moved aside on
-2026-09-21. AUC at 100 picks, lower better; row-order picks out of 300:
-
-    condition          fixed AUC  median AUC    gain   fixed ro  median ro
-    best_single            419.2      424.8    -5.6          0          0
-    ecfp4_raw              429.3      429.0    +0.3        295          0
-    hybrid_50d             415.2      415.3    -0.0          0          0
-    hybrid_50d_refit       413.7      414.5    -0.8          0          0
-    hybrid_bnn             416.2      416.4    -0.2        158        217
-    hybrid_gauche_gp       425.9      416.1    +9.8          0          0
-    hybrid_ngboost         416.9      421.8    -5.0          7         27
-    pca_50d                425.4      430.0    -4.6        224          0
-    random_50d             429.0      423.7    +5.3        300          0
-    random_acq             434.0      434.0    +0.0          0          0
-    tanimoto_ecfp4         430.9      430.9    +0.0          0          0
-
-**The median start eliminates row-order picking.** `ecfp4_raw` 295 to 0,
-`pca_50d` 224 to 0, `random_50d` 300 to 0. Those arms were choosing molecules by
-file order rather than by their surrogate; now they consult it on all 300 picks.
-
-**The AUC barely moves, and mostly the wrong way.** The median start wins 3 arms
-of 11 and loses 2 by more than it wins 2 of those 3. The hybrid arms, which never
-had the row-order problem, are unchanged to within 0.8.
-
-So the collapsed kernel was a defect in the PROCESS, not the reason the hybrid
-led. `random_50d` picking blind scored 429.0 and picking properly scores 423.7 —
-better, and still far behind the hybrid at 415. The comparison arms were not
-beating the hybrid by accident of row order, and correcting them does not change
-who wins.
-
-⛔ `hybrid_bnn`'s row-order picks go UP, 158 to 217. Its flat acquisition has a
-different cause than the length scale and that arm's number is still not
-readable.
+Cause was mine: the search was cut mid-queue and the half that had already
+finished was not re-run. Three re-runs of the `median` arm on the
+1-configuration search would make the pair matched.
 
 **s11 — FIXED 2026-09-23. It was torch taking every core, not the model.**
 `hybrid_bnn` fits a PyTorch MC-dropout network, and torch opens a full-core
