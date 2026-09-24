@@ -394,11 +394,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Blueprint: {bp.allocation_method} / {bp.importance_method} / "
           f"{bp.internal_evaluator} / budget={bp.budget}")
 
-    # Per-representation budget split. The count is the LAST fold's; the
+    # Per-representation budget split. The count is the paired fold's; the
     # spread across folds is printed beside it when it moves.
+    #
+    # ⛔ 'allocation' MEANS TWO DIFFERENT THINGS DEPENDING ON THE RECIPE.
+    # performance_weighted, power_2, softmax_T1 and rank_exp_d0.3 all resolve
+    # to the per-representation quota path, where hybrid.py:6150 stores what
+    # the allocator ASKED FOR, while concatenate_features independently cuts
+    # each representation at its last feature scoring above zero and records
+    # the shortfall as n_unfilled. wglobal_* resolves to
+    # allocate_weighted_global, which builds the same dict from the counts
+    # actually SELECTED (hybrid.py:2457). So under four of the five the
+    # printed split can sum to more than the hybrid is wide, and under the
+    # fifth it cannot -- and the SHAP share printed on the same line is always
+    # built-based. Both numbers are now shown when they differ.
     allocation = feature_info.get('allocation', {})
+    built = {r: int(v.get('n_features', 0))
+             for r, v in feature_info.items()
+             if isinstance(v, dict) and 'n_features' in v}
+    _asked_total = sum(allocation.values()) if allocation else 0
+    _built_total = sum(built.values()) if built else 0
     print(f"\n  Per-representation split (budget={bp.budget}, "
-          f"counts from the last fold):")
+          f"counts from fold {top_feature_fold}):")
+    if built and _built_total != _asked_total:
+        print(f"    the allocator asked for {_asked_total} features and "
+              f"{_built_total} were built; 'asked' below is the quota, "
+              f"'built' is what the importance ranking could fill")
     for rep_name, n_feat in sorted(allocation.items(),
                                     key=lambda x: x[1], reverse=True):
         shap_pct = ''
@@ -409,7 +430,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             counts = [a.get(rep_name, 0) for a in allocation_by_fold]
             if len(set(counts)) > 1:
                 spread = f"  (per fold {counts})"
-        print(f"    {rep_name:30s} {n_feat:4d} features{shap_pct}{spread}")
+        _b = built.get(rep_name)
+        _bs = (f" asked, {_b:4d} built" if _b is not None and _b != n_feat
+               else " features")
+        print(f"    {rep_name:30s} {n_feat:4d}{_bs}{shap_pct}{spread}")
 
     # Augmentation info
     aug_info = feature_info.get('augmentation_info', {})
@@ -444,7 +468,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # selection score of the recipe, measured over every row.
         'recipe_selection_score': recipe_selection_score,
         'recipe_selected_on': 'all rows',
+        # Both meanings, side by side, so a reader never has to know which
+        # allocation method wrote which. 'allocation' is the quota under the
+        # per-representation methods and the built count under wglobal_*;
+        # 'allocation_built' is always the built count.
         'allocation': allocation,
+        'allocation_built': built,
+        'allocation_asked_total': _asked_total,
+        'allocation_built_total': _built_total,
         'augmentation_info': {k: {'n_features': v.get('n_features', 0)}
                               for k, v in aug_info.items()} if aug_info else {},
         'rep_breakdown': {k: {'n_features': v.get('n_features', 0)}
