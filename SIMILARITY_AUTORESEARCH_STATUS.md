@@ -497,6 +497,43 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
+## s11 length scale, MATCHED at last: herg_ki
+
+Both halves at 1 configuration, so the recipes are identical and the length
+scale is the only difference. This replaces the confounded comparison retracted
+below. AUC at 100 picks, lower better; row-order picks out of 300:
+
+    condition          fixed   median    gain   fix ro   med ro
+    random_50d         429.0    423.7    +5.3      300        0
+    ecfp4_raw          429.3    429.0    +0.3      295        0
+    hybrid_50d_refit   413.7    413.5    +0.2        0        0
+    hybrid_50d         415.2    415.2    +0.0        0        0
+    hybrid_gauche_gp   425.9    425.9    +0.0        0        0
+    hybrid_bnn         416.2    416.2    +0.0      158      158
+    random_acq         434.0    434.0    +0.0        0        0
+    tanimoto_ecfp4     430.9    430.9    +0.0        0        0
+    hybrid_ngboost     416.9    417.2    -0.3        7       10
+    pca_50d            425.4    430.0    -4.6      224        0
+    best_single        419.2    424.8    -5.6        0        0
+
+**Row-order picking is eliminated on all three arms that had it**: `random_50d`
+300 to 0, `ecfp4_raw` 295 to 0, `pca_50d` 224 to 0.
+
+**Six of eleven arms are unchanged to within 0.3.** With the recipes matched,
+the arms that never had row-order picking barely move — which is the
+confirmation neither confounded version could give.
+
+**The two arms that move most move in opposite directions.** `random_50d` gains
+5.3 with 300 row-order picks removed; `pca_50d` loses 4.6 with 224 removed. So
+removing the defect does not reliably improve an arm. It makes each arm's number
+mean what it claims, which is the point of fixing it.
+
+**`best_single` loses 5.6 with zero row-order picks on either side**, so the
+length-scale start reaches its GP directly rather than through the acquisition.
+
+**`hybrid_bnn` is identical at 158 picks on both sides.** Its flat acquisition
+is independent of the length scale — established here rather than guessed.
+
 ## RETRACTED: the s11 fixed-vs-median AUC comparison is confounded
 
 Both pairs were reported on 2026-09-24 as differing in one thing, the RBF
