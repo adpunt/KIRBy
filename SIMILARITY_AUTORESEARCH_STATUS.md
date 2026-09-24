@@ -215,35 +215,35 @@ results rather than failing loudly:
 65 jobs are queued, roughly 24 hours of wall clock at four at a time, ordered so
 the s05 grid and the s04/s12 re-runs land first and s10's 5-to-8-hour cells last.
 
-## The coefficient cross, matched: minkowski wins, cosine loses, margins tiny
+## The coefficient cross, COMPLETE: cosine loses everywhere, the rest is a wash
 
-s13's space comparison under all four coefficients defined on a hybrid space.
-Every row at 1 configuration, so the hybrid spaces are built the same way and
-the rows are comparable. Best space by the mean activity gap to the k nearest
-molecules, lower better:
+s13's space comparison under all four coefficients defined on a hybrid space,
+all three datasets, every cell at 1 configuration so the hybrid spaces are built
+the same way. Best space by the mean activity gap to the k nearest molecules,
+lower better:
 
-    dataset     manhattan   euclidean   cosine     minkowski
-    herg_ki        0.5575      0.5646    0.5739*      0.5555
-    caco2          0.2947      0.3010    0.3006       0.2930
-    adme_mdr1     (running)    0.4993    0.5071       0.4962
-                                       * the only cell where a base
-                                         representation wins: rep_atom_pair
+    dataset       manhattan   euclidean   cosine    minkowski   best
+    herg_ki          0.5575      0.5646   0.5739       0.5555   minkowski
+    caco2            0.2947      0.3010   0.3006       0.2930   minkowski
+    adme_mdr1        0.4954      0.4993   0.5071       0.4962   manhattan
 
-**minkowski p=0.5 wins all three datasets**, by 0.0020, 0.0017 and at least
-0.0031. **cosine is worst on all three** and is the only coefficient under which
-a base representation beats every hybrid.
+**cosine is worst on all three** and is the only coefficient under which a base
+representation beats every hybrid — `rep_atom_pair` on herg_ki, the one cell in
+this entire suite where a hybrid does not rank first.
 
-⛔ **This contradicts s06 on the same coefficient.** s06 measured minkowski
-WORSE than manhattan on its distance-error correlation — 0.2144 against 0.2423
-on caco2 — and here it is better on the retrieval statistic. Same coefficient,
-same datasets, opposite verdicts from two statistics. Whichever statistic is
-used to choose a coefficient decides the answer, and nothing here says which
-statistic should decide.
+**manhattan and minkowski are within 0.002 everywhere** and split two-one.
+minkowski costs 25 to 50 times manhattan, so manhattan remains the right default
+on cost. A hybrid wins 11 of the 12 cells.
 
-The margins between manhattan and minkowski are 0.002 to 0.003. minkowski costs
-25 to 50 times manhattan, measured at 1,471 seconds a fold against 414 for
-manhattan, euclidean and cosine together. On cost alone manhattan remains the
-sensible default; the finding is that cosine is the one to avoid.
+⛔ The two statistics disagree about minkowski. s06 measured it WORSE than
+manhattan on distance-error correlation, 0.2144 against 0.2423 on caco2; here it
+is better on retrieval on two datasets of three. Whichever statistic is used to
+choose a coefficient decides the answer, and nothing in the suite says which
+should decide.
+
+This closes the gap identified on 2026-09-24: before these runs, every stored
+result in the suite used manhattan and the hybrid spaces had never been compared
+under any other coefficient.
 
 ## What the suite sweeps, and what it cannot: coefficients vs spaces
 
