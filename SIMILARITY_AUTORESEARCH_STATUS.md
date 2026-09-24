@@ -241,11 +241,20 @@ not arbitrary; it is the best of the three tested here.
 manhattan on herg_ki and predictive under euclidean; the reverse on caco2. Which
 family is worth building depends on the distance it will be used with.
 
-⛔ The stored manhattan runs rank 20 spaces and the new ones 12, because the
-stored ones used the 12-configuration search. The winner comparison holds; the
-rank denominators do not.
+⛔ CONFOUNDED IN THE SAME WAY AS s11. The stored manhattan runs used the
+12-configuration search and the euclidean/cosine/minkowski runs use 1. Different
+searches choose different recipes, so the hybrid spaces themselves differ
+between the manhattan row and the others — not just the coefficient.
 
-Six of the nine jobs are still running.
+**Does not survive:** manhattan giving the best absolute gap. That number comes
+from a 12-configuration run and the others from 1-configuration runs.
+
+**Survives:** the within-coefficient statement. Under cosine on herg_ki,
+`rep_atom_pair` beats every hybrid — both arms come from the same run under the
+same search, so nothing differs but the space.
+
+Three manhattan runs on the 1-configuration search are queued to give all four
+coefficients a matched baseline.
 
 ## What the suite sweeps, and what it cannot: coefficients vs spaces
 
