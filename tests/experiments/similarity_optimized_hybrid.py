@@ -105,7 +105,9 @@ DEFAULT_DATASETS = ['caco2', 'adme_hlm', 'adme_rlm', 'adme_mdr1', 'herg_ki',
                     'logd', 'herg', 'qm9']
 
 # Budgets kept < 300 (project constraint); aggressive pruning below.
-SIM_BUDGETS = [10, 25, 50, 100, 200]
+SIM_BUDGETS = [int(v) for v in
+               os.environ.get('KIRBY_SIMOPT_BUDGETS', '').replace(' ', '').split(',')
+               if v] or [10, 25, 50, 100, 200]
 # The five allocation methods the search sweeps, as set on 2026-09-01 from the
 # c32 cross sweep (find_best_hybrid.DEFAULT_ALLOCATION_METHODS). All five route
 # through _evaluate_allocation, so all five see the objective.
@@ -114,8 +116,16 @@ SIM_BUDGETS = [10, 25, 50, 100, 200]
 # greedy and dominant_greedy are cut (hybrid.py, "THE GREEDY FAMILY IS CUT").
 # top_2/top_3 weld a representation count into the weighting slot; the number of
 # representations is a separate axis and is not encoded here.
-SIM_ALLOCATIONS = ['performance_weighted', 'power_2', 'softmax_T1',
-                   'rank_exp_d0.3', 'wglobal_power2']
+# This file carries its own search space and does NOT read the local grid, so
+# the KIRBY_LOCAL_* cut that shrinks every other similarity run never reached it:
+# measured 2026-09-24, simopt on caco2 took 749 minutes at 5 budgets x 5
+# allocation methods. These two env vars cut it; unset reproduces every stored
+# number.
+SIM_ALLOCATIONS = ([v for v in
+                    os.environ.get('KIRBY_SIMOPT_ALLOCATIONS', '').replace(' ', '').split(',')
+                    if v] or
+                   ['performance_weighted', 'power_2', 'softmax_T1',
+                    'rank_exp_d0.3', 'wglobal_power2'])
 ADAPTIVE_PRUNING = 0.35   # aggressive: prune strategies >35% below the running best
 N_FOLDS = 3
 # Payoff 2 varies the noise CONDITION at a single moderate level. Every condition
