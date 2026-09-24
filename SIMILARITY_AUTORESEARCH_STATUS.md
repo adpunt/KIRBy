@@ -527,9 +527,23 @@ effect on the OUTCOME is dataset-dependent: negligible on herg_ki, uniformly
 positive on caco2. The hybrid arms move least on both, because they never had
 the problem.
 
-⛔ `hybrid_bnn` goes the wrong way on both datasets — 27 to 38 here, 158 to 217
-on herg_ki. Its flat acquisition has a cause other than the length scale and its
-number should not be read on either dataset.
+⛔ **`hybrid_bnn`'s flat acquisition is NOT the sigma floor.** `expected_improvement`
+sets EI to exactly 0 wherever sigma < 1e-8, which would tie every such molecule.
+Tested 2026-09-24 on a 50-dimensional space of the size s11's hybrid arms use,
+140 training and 300 pool molecules:
+
+    surrogate   min sigma   median sigma   below 1e-8   tied at the max
+    BNN          6.42e-02      1.58e-01      0 of 300       1 of 300
+    GP           1.04e+00      1.04e+00      0 of 300       5 of 300
+
+The BNN's MC-dropout spread is nowhere near the floor and the rule never fires,
+so that is not the cause. The cause is not identified. What is odd about it: the
+arm worsens under the median length-scale start on both datasets, and the length
+scale belongs to the GP — the BNN uses no RBF kernel — which points at the
+hybrid space the BNN is fitted on rather than at the surrogate.
+
+Its number should not be read while a third of its herg_ki picks come from file
+order.
 
 ## s11 length scale: the process is fixed, the outcome barely moves
 
