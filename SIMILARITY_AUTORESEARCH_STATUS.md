@@ -215,46 +215,35 @@ results rather than failing loudly:
 65 jobs are queued, roughly 24 hours of wall clock at four at a time, ordered so
 the s05 grid and the s04/s12 re-runs land first and s10's 5-to-8-hour cells last.
 
-## The coefficient cross, first results: a base representation wins under cosine
+## The coefficient cross: a hybrid wins 7 of 8, one base representation does not
 
-s13 run under euclidean, cosine and minkowski p=0.5 — the three coefficients
-defined on a hybrid space that had never been run on one. Best space by the mean
-activity gap to the k nearest molecules, lower better:
+s13's space comparison run under euclidean, cosine and minkowski p=0.5 — the
+three coefficients defined on a hybrid space that had never been run on one. All
+at 1 configuration, so these rows are matched among themselves. Best space by
+the mean activity gap to the k nearest molecules, lower better:
 
-    coefficient   dataset    best space                   gap     hybrid rank
-    manhattan     herg_ki    hybrid_similarity_r3      0.5525     1 of 20
-    euclidean     herg_ki    hybrid_predictive_r1      0.5646     1 of 12
-    cosine        herg_ki    rep_atom_pair             0.5739     2 of 12
-    manhattan     caco2      hybrid_predictive_r1      0.2913     1 of 20
-    euclidean     caco2      hybrid_similarity_r1      0.3010     1 of 12
+    dataset     euclidean              cosine                 minkowski
+    herg_ki     hybrid_pred  0.5646    rep_atom_pair 0.5739   hybrid_pred  0.5555
+    caco2       hybrid_sim   0.3010    hybrid_sim    0.3006   hybrid_sim   0.2930
+    adme_mdr1   hybrid_pred  0.4993    hybrid_pred   0.5071   (running)
 
-⛔ **Under cosine on herg_ki a base representation beats every hybrid.**
-`rep_atom_pair` takes first and the best hybrid drops to second. That is the
-first cell anywhere in this suite where a hybrid does not rank first on this
-statistic, and it exists only because the coefficient axis was opened.
+**A hybrid wins 7 of 8 cells.** ⛔ The cosine/herg_ki cell is the only place in
+this suite where a base representation takes first — `rep_atom_pair`, with the
+best hybrid second. Both arms come from the same run, so nothing differs there
+but the space.
 
-**Manhattan gives the best absolute gap on both datasets so far**, 0.5525
-against euclidean 0.5646 and cosine 0.5739 on herg_ki. The suite's default is
-not arbitrary; it is the best of the three tested here.
+**minkowski p=0.5 gives the best gap wherever it has run**, 0.5555 on herg_ki
+against euclidean's 0.5646 and 0.2930 on caco2 against 0.3006. s06 found
+minkowski WORSE than manhattan on its distance-error statistic. Two statistics,
+opposite verdicts on the same coefficient — worth knowing before either is used
+to choose one.
 
-**The winning hybrid family flips with the coefficient.** Similarity wins under
-manhattan on herg_ki and predictive under euclidean; the reverse on caco2. Which
-family is worth building depends on the distance it will be used with.
+**The winning family is decided by the dataset, not the coefficient.**
+Predictive on herg_ki and adme_mdr1 under every coefficient; similarity on caco2
+under every coefficient. An earlier note here said the family flips with the
+coefficient; that was read from two cells and eight cells contradict it.
 
-⛔ CONFOUNDED IN THE SAME WAY AS s11. The stored manhattan runs used the
-12-configuration search and the euclidean/cosine/minkowski runs use 1. Different
-searches choose different recipes, so the hybrid spaces themselves differ
-between the manhattan row and the others — not just the coefficient.
-
-**Does not survive:** manhattan giving the best absolute gap. That number comes
-from a 12-configuration run and the others from 1-configuration runs.
-
-**Survives:** the within-coefficient statement. Under cosine on herg_ki,
-`rep_atom_pair` beats every hybrid — both arms come from the same run under the
-same search, so nothing differs but the space.
-
-Three manhattan runs on the 1-configuration search are queued to give all four
-coefficients a matched baseline.
+Three manhattan runs at 1 configuration are queued to complete the matched set.
 
 ## What the suite sweeps, and what it cannot: coefficients vs spaces
 
