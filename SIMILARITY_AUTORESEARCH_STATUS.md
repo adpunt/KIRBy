@@ -1032,32 +1032,39 @@ uniform against distance voting, and the neighbour list — so nothing here can 
 attributed to the exponent. The within-run pattern across k is clean, because
 inside one run only k varies.
 
-## The s05 sweep: exponent 0.25 best on both datasets, k=7 conditional
+## The s05 sweep: distance voting wins 8 of 8 pairs; no single best exponent
 
-Ten of 24 cells. Best weighted hybrid arm, rmse lower better. Neighbour counts
-5/7/10/15/25 swept inside every cell.
+Two datasets complete at 8 of 8 cells each. Best weighted hybrid arm, rmse lower
+better, neighbour counts 5/7/10/15/25 swept inside every cell.
 
-    caco2 (6 of 8)                      herg_ki (4 of 8)
-    distance 0.25  k=7   0.3249         uniform 0.25  k=7   0.6172
-    distance 0.0   k=7   0.3277         uniform 0.0   k=7   0.6175
-    uniform  0.5   k=7   0.3281         uniform 0.5   k=5   0.6183
-    uniform  0.25  k=7   0.3303         uniform 1.0   k=5   0.6264
-    uniform  0.0   k=7   0.3325
-    uniform  1.0   k=7   0.3348
+    caco2                          herg_ki
+    distance 0.5   k=7  0.3231     distance 0.25  k=7  0.6082
+    distance 0.25  k=7  0.3249     distance 0.0   k=7  0.6093
+    distance 0.0   k=7  0.3277     distance 0.5   k=5  0.6120
+    uniform  0.5   k=7  0.3281     uniform  0.25  k=7  0.6172
+    distance 1.0   k=7  0.3303     uniform  0.0   k=7  0.6175
+    uniform  0.25  k=7  0.3303     uniform  0.5   k=5  0.6183
+    uniform  0.0   k=7  0.3325     distance 1.0   k=5  0.6194
+    uniform  1.0   k=7  0.3348     uniform  1.0   k=5  0.6264
 
-**Exponent 0.25 is best on both datasets and 1.0 is worst on both.** The shipped
-0.5 sits in the middle, not at an end. This supports the 0.25 the s10 re-runs
-use, on a second dataset.
+**Distance voting beats uniform at every matched exponent on both datasets, 8 of
+8 pairs.** It is the largest lever here: about 0.009 rmse on herg_ki against
+0.011 for the entire exponent range. Agrees with s10's kNN task, which found the
+same in 20 of 21 (representation, dataset) pairs.
 
-**k=7 is conditional, not universal.** It wins nine of the ten cells landed, but
-k=5 wins on herg_ki at exponents 0.5 and 1.0 — the two worst exponents there. So
-k=7 wins where the exponent is well chosen. An earlier note here said k=7 wins
-every cell; that was true of the caco2-only data it was written from.
+**Exponent 1.0 is worst on both datasets in both voting schemes, 4 of 4.** The
+one unambiguous exponent result.
 
-**The voting comparison is still caco2-only.** Distance beat uniform at both
-exponents tested there, and s10 found the same across 21 (representation,
-dataset) pairs, but herg_ki's distance cells have not landed. Not yet a
-two-dataset result.
+**There is no single best exponent.** 0.5 wins caco2 at 0.3231; 0.25 wins
+herg_ki at 0.6082. The shipped 0.5 is right for one and the s10 re-runs' 0.25 is
+right for the other. That the best value is dataset-dependent is the finding,
+not a step toward picking one.
+
+**k=7 wins 11 of 16 cells**, k=5 takes the other five, all at exponent 0.5 or
+1.0 on herg_ki. Neither is universal, but both beat the shipped pairing of 5 and
+10, which contains neither of the winners on caco2.
+
+adme_mdr1's eight cells are still running.
 
 ## s05's headline number cannot see the lever s05 was tuned for
 
