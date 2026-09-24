@@ -78,6 +78,7 @@ REPO="${KIRBY_REPO:-/data/stat-ecr/scat9264/KIRBy}"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 PARTITION="${PARTITION:-short,medium,long}"
 ACCOUNT="${ACCOUNT:-}"
+CLUSTERS=""       # empty = the login node's cluster (arc); "htc" sends every job there
 WALL="12:00:00"
 LINKS=4
 SPEED=""          # empty = let run_precompute_dataset.sh choose per dataset
@@ -156,6 +157,7 @@ while [[ $# -gt 0 ]]; do
         --wall)             WALL=$2; shift 2 ;;
         --partition)        PARTITION=$2; shift 2 ;;
         --account)          ACCOUNT=$2; shift 2 ;;
+        --clusters)         CLUSTERS=$2; shift 2 ;;
         --categories)       CATEGORIES=$2; shift 2 ;;
         --begin)            BEGIN=$2; shift 2 ;;
         --precompute-only)  DO_EXP=false; shift ;;
@@ -173,10 +175,25 @@ BEGIN_FLAG=""
 [ -n "$BEGIN" ] && BEGIN_FLAG="--begin=${BEGIN}"
 
 # ── account ─────────────────────────────────────────────────────────────
-if [ -z "$ACCOUNT" ]; then
-    ACCOUNT=$(bash "$REPO/tests/slurm_scripts/where_to_submit.sh" --emit 2>/dev/null | awk '{print $1}')
+# ── cluster ─────────────────────────────────────────────────────────────
+# --clusters htc sends every job to the htc cluster. The login node picks the
+# cluster otherwise, and --partition cannot cross it. No --account is passed
+# on htc: where_to_submit.sh reads arc's associations only, and the standing
+# rule is to let SLURM resolve the default (project_arc_vs_htc_cluster).
+# SLURM dependencies cannot cross clusters, so a dataset with precompute
+# already queued on the OTHER cluster is skipped below, never double-queued.
+CL_FLAG=""; SQ_FLAG=""
+if [ -n "$CLUSTERS" ]; then
+    CL_FLAG="--clusters=${CLUSTERS}"; SQ_FLAG="-M ${CLUSTERS}"
 fi
-[ -n "$ACCOUNT" ] || { echo "Could not resolve an account. Pass --account."; exit 1; }
+ACCT_FLAG=""
+if [ -z "$CLUSTERS" ]; then
+    if [ -z "$ACCOUNT" ]; then
+        ACCOUNT=$(bash "$REPO/tests/slurm_scripts/where_to_submit.sh" --emit 2>/dev/null | awk '{print $1}')
+    fi
+    [ -n "$ACCOUNT" ] || { echo "Could not resolve an account. Pass --account."; exit 1; }
+fi
+[ -n "$ACCOUNT" ] && ACCT_FLAG="--account=${ACCOUNT}"
 
 # ── which datasets ──────────────────────────────────────────────────────
 if [ -n "$EXPLICIT" ]; then
@@ -218,7 +235,8 @@ echo " opig           $N_OPIG jobs, each after the datasets it reads"
 echo " TOTAL          $((N_PRE + N_EXP + N_FED + N_OPIG)) jobs"
 echo ""
 echo " begin          ${BEGIN:-as soon as the queue allows}"
-echo " account        $ACCOUNT"
+echo " account        ${ACCOUNT:-<SLURM default>}"
+echo " cluster        ${CLUSTERS:-login node default (arc)}"
 echo " partition      $PARTITION"
 echo " speed          ${SPEED:-per dataset class: 15 SMALL full+unpruned, 14 MEDIUM full+pruned, 12 LARGE fast}"
 echo " pruning        $PRUNING"
@@ -268,9 +286,18 @@ for DS in $DATASETS; do
     # dataset whose chain was already queued found nothing, waited for nothing,
     # and two precompute processes wrote one result_db at once. Anchored at the
     # end, so pc_herg_ still cannot match pc_herg_ki_1.
-    EXISTING=$(squeue -u "$USER" -h -o "%i %j" 2>/dev/null \
+    EXISTING=$(squeue -u "$USER" -h $SQ_FLAG -o "%i %j" 2>/dev/null \
                | awk -v d="$DS" '$2 ~ "^pc_" d "_(general_|[0-9]+$|x[0-9]+$)" {printf "%s:", $1}' \
                | sed 's/:$//')
+    # Precompute for this dataset on ANY cluster. Anything here that is not in
+    # EXISTING is on the other cluster, which a dependency cannot reach.
+    ANYWHERE=$(squeue -u "$USER" -h -M all -o "%i %j" 2>/dev/null \
+               | awk -v d="$DS" '$2 ~ "^pc_" d "_(general_|[0-9]+$|x[0-9]+$)" {print $1}' | sort -u)
+    OTHER=$(comm -23 <(printf '%s\n' $ANYWHERE | sort -u) <(printf '%s\n' $(echo "$EXISTING" | tr ':' ' ') | sort -u) | grep -v '^$')
+    if [ -n "$OTHER" ] && [ "$DO_PRE" = true ]; then
+        echo "  $DS: SKIPPED -- precompute already queued on the other cluster ($(echo $OTHER | tr '\n' ' ')). Two chains would write one database at once."
+        continue
+    fi
     if [ -n "$EXISTING" ]; then
         echo "  $DS: $(echo "$EXISTING" | tr ':' '\n' | wc -l | tr -d ' ') job(s) already queued — new links wait for them"
     fi
@@ -284,14 +311,15 @@ for DS in $DATASETS; do
             elif [ -n "$EXISTING" ]; then
                 DEP="--dependency=afterany:${EXISTING}"
             fi
-            JID=$(sbatch --parsable $BEGIN_FLAG \
-                --account="$ACCOUNT" --partition="$PARTITION" --time="$WALL" \
+            JID=$(sbatch --parsable $BEGIN_FLAG $CL_FLAG $ACCT_FLAG \
+                --partition="$PARTITION" --time="$WALL" \
                 --mem="$MEM" --cpus-per-task=8 \
                 --job-name="pc_${DS}_${L}" \
                 --mail-user="$EMAIL" --mail-type=FAIL \
                 --export="ALL${SPEED:+,KIRBY_SPEED=${SPEED}},KIRBY_PRUNING=${PRUNING}" \
                 $DEP \
                 "$REPO/tests/slurm_scripts/run_precompute_dataset.sh" "$DS" 2>/dev/null)
+            JID="${JID%%;*}"
             [ -n "$JID" ] || { echo "  FAILED pc_${DS}_${L}"; continue; }
             LAST="$JID"; N_OK=$((N_OK+1))
         done
@@ -318,8 +346,8 @@ for DS in $DATASETS; do
             # tcga_brca_pam50's conditions, damaging 17 of its 25.
             EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
             [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
-            JID=$(sbatch --parsable $BEGIN_FLAG \
-                --account="$ACCOUNT" --partition="$PARTITION" \
+            JID=$(sbatch --parsable $BEGIN_FLAG $CL_FLAG $ACCT_FLAG \
+                --partition="$PARTITION" \
                 --job-name="x_${C}_${DS}" \
                 --mail-user="$EMAIL" --mail-type=FAIL \
                 --export="$EXPORTS" \
@@ -337,8 +365,8 @@ for DS in $DATASETS; do
             elif [ -n "$EXISTING" ]; then DEP="--dependency=afterany:${EXISTING}"; fi
             EXPORTS="ALL,PRUNING_MODE=${PRUNING}"
             [ "$COLD_REFUSAL" = 1 ] && EXPORTS="${EXPORTS},KIRBY_NO_COLD_SEARCH=1"
-            JID=$(sbatch --parsable $BEGIN_FLAG \
-                --account="$ACCOUNT" --partition="$PARTITION" \
+            JID=$(sbatch --parsable $BEGIN_FLAG $CL_FLAG $ACCT_FLAG \
+                --partition="$PARTITION" \
                 --job-name="x_federated_${DS}" \
                 --mail-user="$EMAIL" --mail-type=FAIL \
                 --export="$EXPORTS" \
@@ -375,8 +403,8 @@ if [ "$DO_OPIG" = true ]; then
         # argparse error, which is why it is not appended blindly.
         CMD=${CMD/ PM/ --pruning-mode ${PRUNING}}
         WRAP="cd ${REPO} && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && python -u tests/experiments/${CMD}"
-        JID=$(sbatch --parsable $BEGIN_FLAG \
-            --account="$ACCOUNT" --partition="$PARTITION" \
+        JID=$(sbatch --parsable $BEGIN_FLAG $CL_FLAG $ACCT_FLAG \
+            --partition="$PARTITION" \
             --job-name="opig_${NAME}" \
             --nodes=1 --ntasks=1 --cpus-per-task=8 \
             --time=47:59:00 --mem="$MEM" \
