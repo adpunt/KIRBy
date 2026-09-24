@@ -954,6 +954,33 @@ the correlation s06 reports, which also makes both sides of the comparison
 importance-weighted rather than one of each. Not changed — it is the owner's
 call and it moves which arm the headline names on all three datasets.
 
+## s06's sweep winners reproduce through the real experiment, 2 of 3
+
+The 2,628-cell sweep ran in its own harness. These runs put its winning cell
+back through s06 itself. Distance-error correlation, higher better:
+
+    dataset     cell                       hybrid   hybrid_weighted
+    caco2       shipped  manhattan k=5     +0.2423     +0.2540
+                best     euclidean k=150   +0.3197     +0.3307
+    herg_ki     shipped  manhattan k=5     +0.2773     +0.2793
+                best     manhattan k=50    +0.2938     +0.2960
+    adme_mdr1   shipped  manhattan k=5     +0.1892     +0.1970
+                best     euclidean k=50    +0.1693     +0.1721
+
+caco2 gains +0.0774 and herg_ki +0.0165. adme_mdr1 loses 0.0199, and that one is
+a mistake of mine rather than the sweep's: the sweep chose euclidean at 15
+neighbours for adme_mdr1 and the queued job named 5,15,25,50, so the reported
+cell is euclidean at 50. Re-running it at 15 would test the sweep's actual
+choice.
+
+The weighted arm beats the unweighted one in all six rows.
+
+Every winning cell uses 50 or 150 neighbours against the shipped 5. That is the
+third independent place the pinned neighbour count was hiding an effect —
+s06 here, the s05 sweep's k=7, and s10's weighting sign flipping between 10 and
+15. What is new here is that it survives the round trip out of the sweep harness
+and into the experiment.
+
 ## s10: importance weighting helps only at LARGE neighbour counts
 
 Read from the two completed s10 herg_ki runs, 2026-09-24. rmse in pKi, so a
