@@ -255,6 +255,11 @@ def _load_openadmet_endpoint(df: pd.DataFrame, endpoint_col: str,
 # is a three-tuple that every other dataset in this file also returns, and
 # widening it would touch every branch to serve one.
 _LAST_REPLICATE_GROUPS = None
+# Which ChEMBL document and which assay each measurement row came from, set
+# beside _LAST_REPLICATE_GROUPS by the same branch and read by the same caller.
+# None when the pull carries no such column. Added 2026-09-24 for n29.
+_LAST_RECORD_DOCUMENTS = None
+_LAST_RECORD_ASSAYS = None
 
 
 def _fetch_chembl_herg_ki() -> Tuple[List[str], np.ndarray]:
@@ -444,6 +449,8 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         from kirby.datasets.herg import load_herg_ic50_measurements
         _d = load_herg_ic50_measurements()
         globals()['_LAST_REPLICATE_GROUPS'] = _d['replicate_groups']
+        globals()['_LAST_RECORD_DOCUMENTS'] = _d.get('document_chembl_id')
+        globals()['_LAST_RECORD_ASSAYS'] = _d.get('assay_chembl_id')
         smiles, labels, task_type = _d['smiles'], _d['labels'], 'regression'
 
     elif name_lower in ('herg_ki',):

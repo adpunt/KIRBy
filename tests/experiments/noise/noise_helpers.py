@@ -97,6 +97,17 @@ SINGLE_DATASET_EXPERIMENTS = [
     # under the five in DETECTION_IS_DEFINED; its default is outlier_p10.
     'n21',   # which distance the nearest neighbours are found in
     'n23',   # cleaning driven by a per-molecule uncertainty estimate
+    # n26-n30 added 2026-09-24 from an outside research report on why cleaning
+    # fails at this accuracy (n28's arms went into n19 instead of a new file).
+    # n26 and n29 inject nothing and need repeat measurements; every dataset
+    # without them writes a skip carrying the reason, as n17 and n19 do. n29
+    # also needs the ChEMBL document of each measurement, herg_ic50 only.
+    # n30 names its own condition, censoring, so it runs in the job with no
+    # condition and is left out of every job that names one.
+    'n26',   # label-noise variance from repeat measurements, beside model error
+    'n27',   # what fewer training molecules costs; how label error reaches test
+    'n29',   # one offset per ChEMBL document, fitted and removed
+    'n30',   # clipped labels: lift, drop, winsorise, or censored likelihood
     # n06 runs LAST, and that is load-bearing: its headline is the rank
     # correlation between its own ordering of the noise estimators and the
     # ordering n11 and n13 measured under injected noise, and it reads those
@@ -1079,6 +1090,10 @@ def _import_experiment(exp_id: str):
         'n21': 'n21_neighbour_distance',
         'n22': 'n22_curator_flag',
         'n23': 'n23_uncertainty_cleaning',
+        'n26': 'n26_noise_variance_from_repeats',
+        'n27': 'n27_removal_cost_and_propagation',
+        'n29': 'n29_document_bias',
+        'n30': 'n30_censored_likelihood',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -1110,6 +1125,10 @@ def _experiment_full_name(exp_id: str) -> str:
         'n21': 'n21_neighbour_distance',
         'n22': 'n22_curator_flag',
         'n23': 'n23_uncertainty_cleaning',
+        'n26': 'n26_noise_variance_from_repeats',
+        'n27': 'n27_removal_cost_and_propagation',
+        'n29': 'n29_document_bias',
+        'n30': 'n30_censored_likelihood',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -1131,6 +1150,9 @@ def _experiment_full_name(exp_id: str) -> str:
 # reads `noise_condition`, so it can run one condition like the others. Left
 # out, a job given a condition dropped it and n07 ran only in the no-condition
 # job, all fourteen conditions end to end.
+# n26, n27, n29 and n30 are not here either. n26 and n29 inject nothing. n27
+# injects gaussian by construction, like n15. n30 runs censoring only, named in
+# its own file, so a job asking for any other condition must not reach it.
 HONOURS_NOISE_CONDITION = {'n07', 'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
 

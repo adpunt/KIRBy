@@ -78,6 +78,60 @@ on, and n17 calls that an oracle -- but n17 uses it to REMOVE molecules and
 calls it an oracle because no detector can beat it, not because it leaks. Here
 it is used as a weight on the molecule's own row.
 
+FOUR CONDITIONS AND FOUR MODEL ARMS ADDED 2026-09-24. They come from an outside
+research report on why label cleaning fails at this dataset's accuracy. Its
+suggestions B1, B2 and C3 are these. Nothing in the six conditions above moved.
+
+  invvar_weighted           weight 1 / (sigma_u^2 + sigma_e^2 / n), n the
+                            number of measurements behind the training label.
+                            sigma_e^2 is the variance of one measurement and
+                            sigma_u^2 the error left once the label is exact.
+                            Both are read off one regression, fitted inside
+                            each outer fold's training molecules: squared
+                            out-of-fold error against 1/n. The slope is
+                            sigma_e^2, the intercept sigma_u^2.
+  count_feature             no weight. The molecule's measurement count, as
+                            log(count) standardised on the training molecules,
+                            is added as one extra input feature.
+  invvar_and_count_feature  both of the above at once.
+  spread_pooled_weighted    weight 1 / (sigma_u^2 + s^2 / n), s^2 the
+                            molecule's own measurement variance pulled toward
+                            the training molecules' pooled variance.
+                            POOLED_SPREAD_PRIOR sets how many measurements'
+                            worth the pooled value counts as. Two or three
+                            measurements give a variance too rough to divide
+                            by on its own.
+
+`count_weighted` and `precision_weighted` weight by n and by n/s^2. They carry
+no sigma_u^2 term. So they treat a label resting on six measurements as six
+times as good. That holds only when measurement noise is all of the error.
+`invvar_weighted` differs from them in that one term.
+
+⛔ THE COUNT IS A FEATURE A NEW MOLECULE DOES NOT HAVE. A held-out molecule's
+count is known here because it was measured. A molecule nobody has measured yet
+has no count. Every held-out molecule graded here was measured
+MIN_MEASUREMENTS or more times, so at prediction time the feature only takes
+values of 3 and up. `count_feature_note` on the result file says so.
+
+THE MODEL ARMS. The report's B2 asks for learners that carry a noise term per
+molecule. Two are fitted beside the five downstream models, each paired only
+against itself without the change:
+
+  ngboost_plain / ngboost_count_feature
+      NGBoost, from the `ngboost` entry of DEFAULT_MODELS
+      (find_best_hybrid.py:2813), without and with the count feature. NGBoost
+      predicts a spread per molecule, so with the count in its input the spread
+      can depend on it.
+  gp_plain / gp_per_molecule_noise
+      the `gp` entry's Gaussian process (find_best_hybrid.py:2531). The second
+      adds sigma_e^2 / n to each training molecule's diagonal through sklearn's
+      `alpha` array. Both fit the same GP_MAX_TRAIN training molecules, drawn
+      per fold, because the kernel matrix is n x n and `gp` refuses more than
+      1,000. sklearn standardises the labels under normalize_y=True and adds
+      `alpha` without rescaling it (sklearn/gaussian_process/_gpr.py:269-274,
+      344). So the variance is divided by the training labels' variance before
+      it is passed in.
+
 WHERE THE HYBRID COMES IN, AND THE LIMIT ON IT. Every condition runs in one base
 representation and in one hybrid per family of stored search, each recipe coming
 from the precomputed pool and each rebuilt per fold through `build_fold_hybrid`,
@@ -144,7 +198,10 @@ LABEL_BUILDS = ('single', 'averaged')
 
 # What is done to the training molecules before the downstream fit.
 CONDITIONS = ('untouched', 'count_weighted', 'spread_weighted',
-              'precision_weighted', 'shrunk', 'calibrated')
+              'precision_weighted', 'shrunk', 'calibrated',
+              # Added 2026-09-24. See the header's section on them.
+              'invvar_weighted', 'count_feature', 'invvar_and_count_feature',
+              'spread_pooled_weighted')
 
 # The three that set a per-molecule fit weight. A model whose fit() refuses a
 # weight is absent from these three rather than fitted unweighted and recorded
@@ -154,6 +211,32 @@ WEIGHTED_CONDITIONS = ('count_weighted', 'spread_weighted',
 
 # The two that change the training label instead.
 RELABEL_CONDITIONS = ('shrunk', 'calibrated')
+
+# The three whose weight needs sigma_u^2 and sigma_e^2 from the regression of
+# squared out-of-fold error on 1/count. That regression runs per (fold, space)
+# on the training molecules, so these are absent from a fold where it failed.
+FITTED_VARIANCE_CONDITIONS = ('invvar_weighted', 'invvar_and_count_feature',
+                              'spread_pooled_weighted')
+
+# The two that add the measurement count as an input feature.
+COUNT_FEATURE_CONDITIONS = ('count_feature', 'invvar_and_count_feature')
+
+# How many measurements' worth the pooled variance counts as when a molecule's
+# own variance is pulled toward it. One value, not swept. At 3, a molecule
+# measured twice (1 degree of freedom) sits three quarters of the way to the
+# pooled value; one measured ten times (9) sits a quarter of the way.
+POOLED_SPREAD_PRIOR = 3
+
+# Learners fitted beside the downstream models. Each is paired against its own
+# plain arm, never against a downstream model.
+MODEL_ARMS = ('ngboost_plain', 'ngboost_count_feature',
+              'gp_plain', 'gp_per_molecule_noise')
+MODEL_ARM_PAIRS = {'ngboost_count_feature': 'ngboost_plain',
+                   'gp_per_molecule_noise': 'gp_plain'}
+
+# The `gp` entry refuses more than 1,000 training molecules
+# (find_best_hybrid.py:2781). Both GP arms fit the same draw of this many.
+GP_MAX_TRAIN = 1000
 
 # Which feature space each condition is measured in. All of them, always.
 #
@@ -405,6 +488,98 @@ def shrink_toward(y, oof, variance):
     return (1.0 - s) * y + s * oof, s, tau2
 
 
+def fit_noise_variance(y, oof, n_behind, floor_share=VARIANCE_FLOOR_SHARE):
+    """sigma_u^2 and sigma_e^2 from squared out-of-fold error against 1/count.
+
+    A label resting on n measurements sits from the out-of-fold prediction by
+    squared error sigma_u^2 + sigma_e^2 / n on average. Ordinary least squares
+    of (y - oof)^2 on 1/n gives sigma_e^2 as the slope, the variance of one
+    measurement, and sigma_u^2 as the intercept, the error left at n infinite.
+
+    Both are floored. A negative slope says error does not fall with the count
+    here, and it is set to 0 so every molecule gets the same weight. A
+    non-positive intercept is set to `floor_share` of the mean squared error,
+    so no weight is infinite. Whether either floor fired is returned.
+
+    Returns (sigma_u2, sigma_e2, info), or (None, None, info) when every label
+    rests on the same count and there is no slope to fit.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    oof = np.asarray(oof, dtype=np.float64)
+    x = 1.0 / np.maximum(np.asarray(n_behind, dtype=np.float64), 1.0)
+    r2 = (y - oof) ** 2
+    info = {'n_molecules': int(r2.size),
+            'distinct_counts_behind_the_label': int(np.unique(x).size),
+            'mean_squared_error': float(np.mean(r2))}
+    if np.ptp(x) == 0:
+        info['reason'] = ('every training label rests on the same number of '
+                          'measurements, so 1/count does not vary and no '
+                          'slope exists')
+        return None, None, info
+    slope, intercept = np.polyfit(x, r2, 1)
+    floor = max(floor_share * float(np.mean(r2)), 1e-12)
+    info.update({
+        'slope_fitted': float(slope),
+        'intercept_fitted': float(intercept),
+        'slope_floored_to_zero': bool(slope < 0),
+        'intercept_floored': bool(intercept < floor),
+        'intercept_floor': float(floor),
+    })
+    return max(float(intercept), floor), max(float(slope), 0.0), info
+
+
+def pooled_spread_variance(var_all, n_measurements,
+                           prior=POOLED_SPREAD_PRIOR):
+    """Each molecule's measurement variance pulled toward the pooled variance.
+
+    The pooled variance weights every molecule's own variance by its degrees of
+    freedom, count - 1. A molecule's pulled variance is
+    ((count - 1) * own + prior * pooled) / ((count - 1) + prior). A molecule
+    measured once has no own variance and gets the pooled one.
+
+    Pass the TRAINING molecules only. The pooled value is then built from no
+    held-out molecule's measurements.
+
+    Returns (pulled variance per molecule, pooled variance).
+    """
+    var = np.asarray(var_all, dtype=np.float64)
+    df = np.asarray(n_measurements, dtype=np.float64) - 1.0
+    known = np.isfinite(var) & (df > 0)
+    if not known.any():
+        raise RuntimeError(
+            "no training molecule was measured more than once, so there is no "
+            "pooled measurement variance to pull toward.")
+    pooled = float(np.sum(df[known] * var[known]) / np.sum(df[known]))
+    pulled = np.full(var.shape, pooled, dtype=np.float64)
+    pulled[known] = ((df[known] * var[known] + prior * pooled)
+                     / (df[known] + prior))
+    return pulled, pooled
+
+
+def inverse_variance_weights(sigma_u2, label_variance):
+    """1 / (sigma_u^2 + label variance), normalised to average one."""
+    w = 1.0 / (float(sigma_u2) + np.asarray(label_variance, dtype=np.float64))
+    mean_w = float(np.mean(w))
+    if not np.isfinite(mean_w) or mean_w <= 0:
+        raise RuntimeError(f"inverse-variance weights average {mean_w}, "
+                           f"which cannot be normalised.")
+    return w / mean_w
+
+
+def with_count_feature(X_tr, X_va, count_tr, count_va):
+    """Both matrices with log(measurement count) appended as one feature.
+
+    Standardised on the training molecules, like every other feature here.
+    A count every training molecule shares gives a feature of zeros.
+    """
+    c_tr = np.log(np.asarray(count_tr, dtype=np.float64))
+    c_va = np.log(np.asarray(count_va, dtype=np.float64))
+    mu, sd = float(c_tr.mean()), float(c_tr.std())
+    sd = sd if sd > 0 else 1.0
+    return (np.hstack([X_tr, ((c_tr - mu) / sd)[:, None]]),
+            np.hstack([X_va, ((c_va - mu) / sd)[:, None]]))
+
+
 def _fit_and_score(factory, X_tr, y_tr, X_va, y_va, metric_fn, weights):
     """One fit, one held-out score, or None with the reason recorded.
 
@@ -550,6 +725,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
             f"{sorted(model_factories)}.")
 
+    # The learners fitted beside the downstream models. An empty list is
+    # allowed and fits none; an unknown name is refused rather than skipped.
+    model_arms = list(MODEL_ARMS if kwargs.get('model_arms') is None
+                      else kwargs['model_arms'])
+    unknown = [a for a in model_arms if a not in MODEL_ARMS]
+    if unknown:
+        raise ValueError(f"n19: unknown model arm(s) {unknown}; "
+                         f"choose from {list(MODEL_ARMS)}")
+    arm_factories = {}
+    if any(a.startswith('ngboost') for a in model_arms):
+        arm_factories.update(get_model_factories(
+            ['ngboost'], task_type=task_type, n_samples=n_ent))
+    if any(a.startswith('gp') for a in model_arms):
+        # Fetched directly, not through get_model_factories: that drops `gp`
+        # above 1,000 molecules, and both GP arms fit a 1,000-molecule draw.
+        from kirby.find_best_hybrid import _get_gp_regressor
+        arm_factories['gp'] = _get_gp_regressor
+    missing = sorted({a.split('_')[0] for a in model_arms} - set(arm_factories))
+    if missing:
+        raise RuntimeError(f"n19: model arm learner(s) {missing} could not be "
+                           f"built; is the package installed?")
+
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
@@ -576,6 +773,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'src/kirby/find_best_hybrid.py. The three weighted conditions '
             'weight the downstream fit only. The features were chosen without '
             'any weight, in the base space and the hybrid space alike.'),
+        'model_arms': model_arms,
+        'model_arm_pairs': dict(MODEL_ARM_PAIRS),
+        'gp_max_training_molecules': GP_MAX_TRAIN,
+        'pooled_spread_prior_measurements': POOLED_SPREAD_PRIOR,
+        'count_feature_note': (
+            "count_feature and invvar_and_count_feature add log(measurement "
+            "count) as an input feature. A held-out molecule's count is known "
+            'only because it was measured; a molecule nobody has measured has '
+            f'none. Every graded held-out molecule was measured '
+            f'{MIN_MEASUREMENTS} or more times, so at prediction time the '
+            'feature only takes those values.'),
+        'fitted_variance_note': (
+            'invvar_weighted, invvar_and_count_feature and '
+            'spread_pooled_weighted read sigma_u^2 and sigma_e^2 off a least '
+            'squares fit of squared out-of-fold error on 1/count, per (fold, '
+            'space), on the training molecules only. The out-of-fold '
+            "prediction is the LightGBM one `shrunk` already uses. Each fit's "
+            'numbers are under fitted_noise_variance.'),
         'recipe_saw_clean_labels': False,
         'recipe_saw_clean_labels_note': (
             'Nothing is injected here and there is no clean label column, so '
@@ -845,6 +1060,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             errors = {}
             tau2_seen = {s: [] for s in spaces}
             shrink_seen = {s: [] for s in spaces}
+            # {space: [one fit_noise_variance record per fold]}
+            noise_fits = {s: [] for s in spaces}
+            # {space: {model arm: {fold key: score}}}
+            arm_acc = {s: {a: {} for a in model_arms} for s in spaces}
             folds_scored = 0
 
             splits = list(cv_split(ent_groups, n_folds, X_base_all,
@@ -905,6 +1124,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # residual the shrinkage keys on
                     # (noisy_labels/core.py:3-8).
                     y_shrunk = y_calib = None
+                    oof = None
                     try:
                         oof = oof_predict(X_tr_s, y_tr, g_tr,
                                           n_splits=oof_splits)
@@ -919,7 +1139,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         print(f"      fold {fold_i} {space}: out-of-fold "
                               f"prediction failed: {type(exc).__name__}: {exc}")
 
+                    # sigma_u^2 and sigma_e^2 for this fold and space, from the
+                    # same out-of-fold prediction. None when it failed or when
+                    # 1/count does not vary; the three conditions reading them
+                    # are then absent from this fold, with the reason recorded.
+                    s2u = s2e = None
+                    w_invvar = w_pooled = None
+                    if oof is not None:
+                        s2u, s2e, nf = fit_noise_variance(y_tr, oof,
+                                                          n_behind[tr])
+                        nf['fold'] = fold_key
+                        noise_fits[space].append(nf)
+                        if s2u is None:
+                            errors[f'{space}|{fold_key}|noise_variance'] = (
+                                nf['reason'])
+                        else:
+                            w_invvar = inverse_variance_weights(
+                                s2u, s2e / np.maximum(n_behind[tr], 1.0))
+                            try:
+                                pulled, pooled = pooled_spread_variance(
+                                    stats['var_all'][tr],
+                                    stats['n_measurements'][tr])
+                                nf['pooled_measurement_variance'] = pooled
+                                w_pooled = inverse_variance_weights(
+                                    s2u, pulled / np.maximum(n_behind[tr], 1.0))
+                            except Exception as exc:
+                                errors[f'{space}|{fold_key}|pooled_spread'] = (
+                                    f'{type(exc).__name__}: {exc}')
+
+                    X_tr_c, X_va_c = with_count_feature(
+                        X_tr_s, X_va_s, stats['n_measurements'][tr],
+                        stats['n_measurements'][va_graded])
+
                     for cond in CONDITIONS:
+                        X_fit, X_score = X_tr_s, X_va_s
                         if cond in RELABEL_CONDITIONS:
                             y_use = y_shrunk if cond == 'shrunk' else y_calib
                             if y_use is None:
@@ -930,6 +1183,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             w = weights_for(cond,
                                             stats['n_measurements'][tr],
                                             var_own[tr], n_behind[tr])
+                        elif cond == 'count_feature':
+                            y_use, w = y_tr, None
+                            X_fit, X_score = X_tr_c, X_va_c
+                        elif cond in FITTED_VARIANCE_CONDITIONS:
+                            w = (w_pooled if cond == 'spread_pooled_weighted'
+                                 else w_invvar)
+                            if w is None:
+                                continue
+                            y_use = y_tr
+                            if cond in COUNT_FEATURE_CONDITIONS:
+                                X_fit, X_score = X_tr_c, X_va_c
                         else:
                             y_use, w = y_tr, None
 
@@ -937,8 +1201,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             if w is not None and mname in refuses_weight:
                                 continue
                             score, err = _fit_and_score(
-                                model_factories[mname], X_tr_s, y_use,
-                                X_va_s, y_va, metric_fn, w)
+                                model_factories[mname], X_fit, y_use,
+                                X_score, y_va, metric_fn, w)
                             if err == 'refuses_sample_weight':
                                 refuses_weight.add(mname)
                                 continue
@@ -946,6 +1210,51 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 errors[f'{space}|{cond}|{mname}|{fold_key}'] = err
                                 continue
                             acc[space][cond][mname][fold_key] = score
+
+                    # ── The model arms ──
+                    # One GP draw per (draw, fold), shared by both GP arms and
+                    # every space, so the two GP arms differ only in `alpha`.
+                    gp_rows = None
+                    if any(a.startswith('gp') for a in model_arms):
+                        rng = np.random.default_rng(1000 * draw + fold_i)
+                        gp_rows = (np.arange(len(tr)) if len(tr) <= GP_MAX_TRAIN
+                                   else np.sort(rng.choice(
+                                       len(tr), GP_MAX_TRAIN, replace=False)))
+                    for arm in model_arms:
+                        try:
+                            if arm == 'ngboost_plain':
+                                m = arm_factories['ngboost']()
+                                m.fit(X_tr_s, y_tr)
+                                pred = m.predict(X_va_s)
+                            elif arm == 'ngboost_count_feature':
+                                m = arm_factories['ngboost']()
+                                m.fit(X_tr_c, y_tr)
+                                pred = m.predict(X_va_c)
+                            elif arm == 'gp_plain':
+                                m = arm_factories['gp']()
+                                m.fit(X_tr_s[gp_rows], y_tr[gp_rows])
+                                pred = m.predict(X_va_s)
+                            else:  # gp_per_molecule_noise
+                                if s2e is None:
+                                    continue
+                                y_sub = y_tr[gp_rows]
+                                var_y = float(np.var(y_sub))
+                                if var_y <= 0:
+                                    continue
+                                m = arm_factories['gp']()
+                                # Label variance on the standardised scale
+                                # normalize_y fits in; see the header. The
+                                # 1e-6 the `gp` entry ships is kept on top.
+                                m.set_params(alpha=(
+                                    s2e / np.maximum(n_behind[tr][gp_rows], 1.0)
+                                    / var_y) + 1e-6)
+                                m.fit(X_tr_s[gp_rows], y_sub)
+                                pred = m.predict(X_va_s)
+                            arm_acc[space][arm][fold_key] = float(
+                                metric_fn(y_va, pred))
+                        except Exception as exc:
+                            errors[f'{space}|{arm}|{fold_key}'] = (
+                                f'{type(exc).__name__}: {exc}')
 
             for space in spaces:
                 build_block['per_space'][space] = {
@@ -955,6 +1264,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'mean_shrinkage_over_folds': (
                         float(np.mean(shrink_seen[space]))
                         if shrink_seen[space] else float('nan')),
+                    # One record per fold: the slope (sigma_e^2) and intercept
+                    # (sigma_u^2) the three fitted-variance conditions used.
+                    'fitted_noise_variance': noise_fits[space],
+                    'model_arms': {
+                        a: {'fold_scores': dict(v), 'n_folds': len(v)}
+                        for a, v in arm_acc[space].items()},
                     'per_condition': {
                         c: {'per_model': {
                             m: {'mean': (float(np.mean(list(v.values()))) if v
@@ -979,6 +1294,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['models_refusing_sample_weight'] = sorted(refuses_weight)
     results['summary'] = _summarise(results, downstream_models, label_builds,
                                     spaces, metric_name, lower_is_better)
+    results['summary']['model_arms'] = _summarise_model_arms(
+        results, label_builds, spaces, model_arms, lower_is_better)
     _print_summary(results, metric_name)
 
     save_experiment_results(results, output_dir, 'n19_measurement_count',
@@ -1141,6 +1458,59 @@ def _summarise(results, models, label_builds, spaces, metric_name,
     return out
 
 
+def _summarise_model_arms(results, label_builds, spaces, model_arms,
+                          lower_is_better):
+    """Each changed model arm against its own plain arm, paired per fold.
+
+    ngboost_count_feature against ngboost_plain, gp_per_molecule_noise against
+    gp_plain. Never against a downstream model: those are different learners
+    and the difference would be the learner, not the change.
+    """
+    out = {'pairs': dict(MODEL_ARM_PAIRS), 'per_label_build': {}}
+    for build in label_builds:
+        per_space = {}
+        for space in spaces:
+            scores = {}
+            for draw in results['per_draw'].values():
+                blk = draw['per_label_build'].get(build, {})
+                cells = (blk.get('per_space', {}).get(space, {})
+                         .get('model_arms', {}))
+                for a, cell in cells.items():
+                    scores.setdefault(a, {}).update(cell['fold_scores'])
+            rows = {}
+            for arm, plain in MODEL_ARM_PAIRS.items():
+                if arm not in model_arms or plain not in model_arms:
+                    continue
+                base, got = scores.get(plain, {}), scores.get(arm, {})
+                shared = sorted(set(base) & set(got))
+                gains = np.array([(base[k] - got[k]) if lower_is_better
+                                  else (got[k] - base[k]) for k in shared],
+                                 dtype=float)
+                gains = gains[np.isfinite(gains)]
+                scale = max(abs(float(np.mean(list(base.values()))))
+                            if base else 1.0, 1.0)
+                tol = 1e-9 * scale
+                rows[arm] = {
+                    'against': plain,
+                    'plain_mean': (float(np.mean(list(base.values())))
+                                   if base else float('nan')),
+                    'arm_mean': (float(np.mean(list(got.values())))
+                                 if got else float('nan')),
+                    'n_folds_paired': int(gains.size),
+                    'folds_won': int((gains > tol).sum()),
+                    'folds_lost': int((gains < -tol).sum()),
+                    'folds_tied': int((np.abs(gains) <= tol).sum()),
+                    'mean_gain': (float(gains.mean()) if gains.size
+                                  else float('nan')),
+                    'spread_over_fold_gains': (float(gains.std())
+                                               if gains.size else float('nan')),
+                    'fold_gains': [float(x) for x in gains],
+                }
+            per_space[space] = rows
+        out['per_label_build'][build] = per_space
+    return out
+
+
 def _print_summary(results, metric_name):
     s = results['summary']
     print("\n" + "=" * 70)
@@ -1175,6 +1545,19 @@ def _print_summary(results, metric_name):
                           f"{c['n_folds_paired']} folds, "
                           f"mean {c['mean_gain']:+.4f} "
                           f"(spread {c['spread_over_fold_gains']:.4f}){mark}")
+    ma = s.get('model_arms') or {}
+    for build, by_space in (ma.get('per_label_build') or {}).items():
+        for space, rows in by_space.items():
+            for arm, r in rows.items():
+                if not r['n_folds_paired']:
+                    print(f"  {build}/{space} {arm}: no fold scored both it "
+                          f"and {r['against']}")
+                    continue
+                print(f"  {build}/{space} {arm} against {r['against']}: "
+                      f"{r['arm_mean']:.4f} against {r['plain_mean']:.4f}, "
+                      f"won {r['folds_won']} of {r['n_folds_paired']} folds, "
+                      f"mean {r['mean_gain']:+.4f} "
+                      f"(spread {r['spread_over_fold_gains']:.4f})")
     print("\n  The count of folds won is the headline. A mean gain no larger "
           "than the")
     print("  spread of the per-fold gains behind it is not a gain.")
@@ -1190,12 +1573,18 @@ def main():
                         help='How many times the training measurement is re-drawn')
     parser.add_argument('--label-builds', type=str, default=None,
                         help="Comma-separated: single, averaged")
+    parser.add_argument('--model-arms', type=str, default=None,
+                        help=f"Comma-separated, from {','.join(MODEL_ARMS)}; "
+                             f"'none' fits none. Default: all four")
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)
     kw = {'n_draws': args.n_draws}
     if args.label_builds:
         kw['label_builds'] = [x.strip() for x in args.label_builds.split(',')]
+    if args.model_arms:
+        kw['model_arms'] = ([] if args.model_arms.strip() == 'none' else
+                            [x.strip() for x in args.model_arms.split(',')])
     run(data, config, args.output, args.dataset, **kw)
 
 
