@@ -467,6 +467,44 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
+## s11 length scale: the process is fixed, the outcome barely moves
+
+First matched pair, herg_ki, both halves computed under the same code on
+2026-09-24. The recorded `fixed` numbers could not serve as the other half
+because they came off the 530 stored search configurations moved aside on
+2026-09-21. AUC at 100 picks, lower better; row-order picks out of 300:
+
+    condition          fixed AUC  median AUC    gain   fixed ro  median ro
+    best_single            419.2      424.8    -5.6          0          0
+    ecfp4_raw              429.3      429.0    +0.3        295          0
+    hybrid_50d             415.2      415.3    -0.0          0          0
+    hybrid_50d_refit       413.7      414.5    -0.8          0          0
+    hybrid_bnn             416.2      416.4    -0.2        158        217
+    hybrid_gauche_gp       425.9      416.1    +9.8          0          0
+    hybrid_ngboost         416.9      421.8    -5.0          7         27
+    pca_50d                425.4      430.0    -4.6        224          0
+    random_50d             429.0      423.7    +5.3        300          0
+    random_acq             434.0      434.0    +0.0          0          0
+    tanimoto_ecfp4         430.9      430.9    +0.0          0          0
+
+**The median start eliminates row-order picking.** `ecfp4_raw` 295 to 0,
+`pca_50d` 224 to 0, `random_50d` 300 to 0. Those arms were choosing molecules by
+file order rather than by their surrogate; now they consult it on all 300 picks.
+
+**The AUC barely moves, and mostly the wrong way.** The median start wins 3 arms
+of 11 and loses 2 by more than it wins 2 of those 3. The hybrid arms, which never
+had the row-order problem, are unchanged to within 0.8.
+
+So the collapsed kernel was a defect in the PROCESS, not the reason the hybrid
+led. `random_50d` picking blind scored 429.0 and picking properly scores 423.7 —
+better, and still far behind the hybrid at 415. The comparison arms were not
+beating the hybrid by accident of row order, and correcting them does not change
+who wins.
+
+⛔ `hybrid_bnn`'s row-order picks go UP, 158 to 217. Its flat acquisition has a
+different cause than the length scale and that arm's number is still not
+readable.
+
 **s11 — FIXED 2026-09-23. It was torch taking every core, not the model.**
 `hybrid_bnn` fits a PyTorch MC-dropout network, and torch opens a full-core
 thread pool by default. s11's loop refits the surrogate once per BO iteration,
