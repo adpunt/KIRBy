@@ -51,6 +51,32 @@ on all three. s10's kNN task found distance-weighted voting lowered held-out
 error in 20 of 21 representation-dataset pairs; this says that gain does not
 survive into the hybrid-minus-reference difference, because it lifts both arms.
 
+## The four-representation restriction moved the hybrid, not the comparator
+
+s04 re-run on all seven, 2026-09-24. Both runs used the same 12-configuration
+search, so the pool is the only thing that differs. Cliff RMSE, lower better:
+
+    dataset     pool    hybrid   best single        delta
+    caco2       4 rep   0.5383   pdv 0.5429      -0.0046
+    caco2       7 rep   0.5428   pdv 0.5429      -0.0000
+    herg_ki     4 rep   0.9329   pdv 0.8863      +0.0466
+    herg_ki     7 rep   0.9069   pdv 0.8863      +0.0206
+    adme_mdr1   4 rep   0.5519   pdv 0.5806      -0.0287
+    adme_mdr1   7 rep   0.5497   pdv 0.5806      -0.0308
+
+`pdv` is the best single representation in both pools, at the same score to four
+decimals, on all three datasets. `avalon`, `ecfp4_count` and `top_torsion` never
+beat it, so the restriction cost nothing on the comparator side — the opposite
+of what was expected when this was raised.
+
+What moved is the hybrid, because the hybrid is built from the pool: three more
+representations change which features the search picks. On herg_ki that halves
+the hybrid's deficit, +0.0466 to +0.0206. On caco2 it erases a small win. On
+adme_mdr1 it slightly extends one.
+
+So the four-representation runs did not understate the comparator. They
+understated the hybrid.
+
 ## s04 and s12 were run on four representations; everything else used seven
 
 Counted from `input_fingerprint.reps` in every stored result file, 2026-09-24:
