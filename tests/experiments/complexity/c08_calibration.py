@@ -524,6 +524,23 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 print(f"    fold {fold_i}: {metric_name}={val_r2:.4f}, PICP={picp:.3f}, "
                       f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
 
+        # ⛔ A CONDITION WHOSE EVERY FOLD FAILED USED TO VANISH. `if
+        # fold_metrics:` alone skipped writing it, so the summary table printed
+        # three rows instead of four and said nothing about the fourth. It is
+        # now written with a reason.
+        if not fold_metrics:
+            results['conditions'][cond_name] = {
+                'description': desc,
+                'budget': budget,
+                'avg': {},
+                'n_folds_in_avg': {},
+                'n_folds_scored': 0,
+                'n_folds_requested': int(n_folds),
+                'folds': [],
+                'skipped_reason': 'every fold raised or produced no metrics',
+            }
+            print(f"    {cond_name}: NO FOLD PRODUCED METRICS — recorded as "
+                  f"skipped, not dropped")
         if fold_metrics:
             avg = {}
             # Union of keys across folds, missing-key-tolerant: a classification
@@ -533,14 +550,27 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             all_keys = set()
             for fm in fold_metrics:
                 all_keys.update(fm.keys())
+            # ⛔ HOW MANY FOLDS EACH AVERAGE IS OVER. avg[key] is the mean of
+            # the folds where that key was finite, so a PICP over 1 fold of 5
+            # and one over 5 of 5 were written identically and compared to each
+            # other as if they were the same measurement.
+            n_avg = {}
             for key in all_keys:
                 vals = [fm[key] for fm in fold_metrics
                         if key in fm and not np.isnan(fm[key])]
                 avg[key] = float(np.mean(vals)) if vals else float('nan')
+                n_avg[key] = len(vals)
+            _short = {k: v for k, v in n_avg.items() if v < len(fold_metrics)}
+            if _short:
+                print(f"    {cond_name}: averaged over fewer than "
+                      f"{len(fold_metrics)} folds for {_short}")
             results['conditions'][cond_name] = {
                 'description': desc,
                 'budget': budget,
                 'avg': avg,
+                'n_folds_in_avg': n_avg,
+                'n_folds_scored': len(fold_metrics),
+                'n_folds_requested': int(n_folds),
                 'folds': fold_metrics,
             }
             score_key = 'val_score' if is_classification else 'val_r2'
