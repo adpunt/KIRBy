@@ -3120,9 +3120,21 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
     X_scaled = scaler.fit_transform(X)
     n, d = X_scaled.shape
 
+    # ⛔ TWO ESTIMATORS, AND THE ROW NOW SAYS WHICH ONE. A representation of at
+    # most 2000 features gets an exact PCA over the whole standardised matrix
+    # and an MLE over that same matrix. A wider one gets TruncatedSVD capped at
+    # 500 components and an MLE over a 200-component projection. Both land in
+    # the same columns, so a table comparing representations compares two
+    # estimators wherever the pool mixes widths -- on the flab protein pool
+    # exactly one of ten (onehot, 5600 features) crosses the line. And a
+    # threshold never reached inside those 500 components was reported AS 500,
+    # which reads as a measurement.
+    results['estimator'] = 'truncated_svd_500' if d > 2000 else 'exact_pca'
+    results['n_features'] = int(d)
     if d > 2000:
         from sklearn.decomposition import TruncatedSVD
         max_comp = min(500, n - 1)
+        results['max_components'] = int(max_comp)
         svd = TruncatedSVD(n_components=max_comp, random_state=42)
         svd.fit(X_scaled)
         cumvar = np.cumsum(svd.explained_variance_ratio_)
@@ -3130,6 +3142,9 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
             key = f'pca_{int(threshold * 100)}'
             idx = np.searchsorted(cumvar, threshold)
             results[key] = int(min(idx + 1, max_comp)) if idx < len(cumvar) else max_comp
+            # True where the threshold was NOT reached inside the components
+            # computed, so the number is the ceiling, not the dimension.
+            results[f'{key}_at_ceiling'] = bool(idx >= len(cumvar))
     else:
         n_components = min(n, d)
         pca = PCA(n_components=n_components)
@@ -3141,9 +3156,12 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
             results[key] = int(min(intrinsic_dim, d))
 
     X_for_mle = X_scaled
+    results['mle_on'] = 'full matrix'
     if d > 2000:
         from sklearn.decomposition import TruncatedSVD
-        X_for_mle = TruncatedSVD(n_components=min(200, n - 1), random_state=42).fit_transform(X_scaled)
+        _mle_comp = min(200, n - 1)
+        results['mle_on'] = f'truncated_svd {_mle_comp} components'
+        X_for_mle = TruncatedSVD(n_components=_mle_comp, random_state=42).fit_transform(X_scaled)
     try:
         results['mle'] = float(estimate_intrinsic_dim_mle(X_for_mle, k=10))
     except Exception:
@@ -3546,7 +3564,12 @@ NUCLEOTIDE_SKIP_EXPERIMENTS = frozenset({
 # Rule 2 (memory): these build an UNCAPPED n x n distance matrix -> OOM at large
 # n. Skip on ANY dataset with n > LARGE_N_SKIP_THRESHOLD (covers non-nucleotide
 # big sets — DTA, graphinity — which Rule 1 does not touch).
-LARGE_N_OOM_SKIP_EXPERIMENTS = frozenset({'s02', 's08', 'n01', 'n05', 'n10', 'n14'})
+# n25 joins them because its exempt set is n01's cliff reference: one similarity
+# value for every pair of molecules in the dataset, held as a dense matrix
+# (n01._compute_ecfp4_tanimoto_sim / _compute_euclidean_sim). Same matrix, same
+# ceiling. Added 2026-09-23.
+LARGE_N_OOM_SKIP_EXPERIMENTS = frozenset({'s02', 's08', 'n01', 'n05', 'n10',
+                                          'n14', 'n25'})
 
 
 def should_skip_experiment(exp_id, data):
