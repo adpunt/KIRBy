@@ -51,6 +51,25 @@ on all three. s10's kNN task found distance-weighted voting lowered held-out
 error in 20 of 21 representation-dataset pairs; this says that gain does not
 survive into the hybrid-minus-reference difference, because it lifts both arms.
 
+## s12 on seven representations: the hybrid's margin roughly doubles
+
+All three datasets, same 12-configuration search on both sides, so the pool is
+the only difference. Cliff delta, hybrid minus comparator, negative means the
+hybrid wins:
+
+    dataset      4 reps      7 reps     change
+    caco2       -0.0044     -0.0154     2.5x
+    herg_ki     -0.0065     -0.0179     2.7x
+    adme_mdr1   -0.0154     -0.0286     1.9x
+
+The hybrid wins on all three in both pools. Giving the search `avalon`,
+`ecfp4_count` and `top_torsion` roughly doubles to triples its margin on every
+dataset — same sign, consistent magnitude, no exceptions.
+
+Cleaner than the same comparison in s04, where the effect was mixed: there it
+halved a deficit on herg_ki and erased a small win on caco2. In s12 the
+four-representation runs were costing about half the measured effect everywhere.
+
 ## The four-representation restriction moved the hybrid, not the comparator
 
 s04 re-run on all seven, 2026-09-24. Both runs used the same 12-configuration
