@@ -1096,19 +1096,29 @@ Worse on caco2 by 0.0279, identical on herg_ki to three decimals. At 25 to 50
 times the cost of manhattan, nothing here argues for it. The axis is measured
 rather than cut, which is what it needed.
 
-**s13's retrieval neighbour count changes nothing about who wins.** The count
-was hardcoded at 5 until 2026-09-24 and had never been swept. herg_ki, spaces
-ranked by the mean activity gap to the k nearest molecules, lower better:
+**s13 retrieval: a hybrid space ranks first in all nine cells.** The count was
+hardcoded at 5 until 2026-09-24 and had never been swept. Best space by the mean
+activity gap to the k nearest molecules, lower better:
 
-    k     best space                  gap     where the best hybrid ranks
-     5    hybrid_similarity_r3     0.5525     1 of 20
-    15    hybrid_similarity_r3     0.6270     1 of 20
-    50    hybrid_similarity_r1     0.7088     1 of 20
+    dataset      k=5                   k=15                  k=50
+    herg_ki      hybrid_similarity_r3  hybrid_similarity_r3  hybrid_similarity_r1
+    caco2        hybrid_predictive_r1  hybrid_similarity_r1  hybrid_similarity_r1
+    adme_mdr1    hybrid_similarity_r3  hybrid_similarity_r1  hybrid_similarity_r1
 
-A hybrid space is top at all three counts, and the top four are hybrid spaces at
-all three. The gap rises with k because more neighbours are less similar, so the
-numbers are not comparable across rows — the ranking is. Widening this axis does
-not change s13's conclusion, which is the useful thing to know about it.
+A hybrid is top in nine of nine, and a *similarity* hybrid in eight of nine —
+caco2 at k=5 is the only cell a predictive hybrid takes. That is the clearest
+support in this suite for building the similarity-objective hybrids separately
+from the predictive ones.
+
+⛔ The k=15 and k=50 runs rank 12 spaces where the stored k=5 runs rank 20. The
+k=5 runs used the 12-configuration search and produced three recipe ranks per
+family; the new ones use one configuration. So the candidate list is not the
+same across k, and "the ranking is stable across k" — written here earlier — is
+not supported. What holds is the within-k statement: at each neighbour count,
+the best space among those present is a hybrid.
+
+The gap rises with k because more neighbours are less similar, so the numbers
+are not comparable across rows either.
 
 **s10 at its own measured-best settings, herg_ki.** Distance voting, exponent
 0.25, neighbour counts 5 to 25. The hybrid's delta: GP -0.2938, SVR +0.0010.
