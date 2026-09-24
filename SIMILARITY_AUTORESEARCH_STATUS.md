@@ -1013,32 +1013,37 @@ uniform against distance voting, and the neighbour list — so nothing here can 
 attributed to the exponent. The within-run pattern across k is clean, because
 inside one run only k varies.
 
-## The exponent axis, first four cells: 0.5 wins on caco2
+## The s05 sweep, caco2: distance voting wins, k=7 wins, exponent 0.25
 
-s05 sweep, caco2, uniform voting, neighbour counts 5/7/10/15/25 inside each
-cell. Best weighted hybrid arm, rmse, lower better:
+Six of the eight caco2 cells. Best weighted hybrid arm, rmse, lower better.
+Neighbour counts 5/7/10/15/25 swept inside every cell.
 
-    exponent   best arm                                    rmse
-    0.0        b100_similarity_r1_hybrid_weighted_k7     0.3325
-    0.25       b100_predictive_r1_hybrid_weighted_k7     0.3303
-    0.5        b100_similarity_r1_hybrid_weighted_k7     0.3281
-    1.0        b100_predictive_r1_hybrid_weighted_k7     0.3348
+    voting     exponent   k   arm                  rmse
+    distance   0.25       7   predictive_r1      0.3249
+    distance   0.0        7   similarity_r1      0.3277
+    uniform    0.5        7   similarity_r1      0.3281
+    uniform    0.25       7   predictive_r1      0.3303
+    uniform    0.0        7   similarity_r1      0.3325
+    uniform    1.0        7   predictive_r1      0.3348
 
-⛔ 0.5 — the hardcoded default — wins here. s10's kNN task concluded the
-hardcoded 0.5 was never best and chose 0.25, and the s10 re-runs queued on
-2026-09-24 use 0.25 on that basis. On caco2, read across the whole exponent axis,
-0.5 is best and 0.25 second. The spread between best and worst is 0.0067 rmse.
+**Distance voting beats uniform at every exponent run so far** — 0.3249 against
+0.3303 at exponent 0.25, 0.3277 against 0.3325 at exponent 0. Voting is worth
+about 0.005 rmse; the exponent about 0.007 across its whole range. This agrees
+with s10's kNN task, which found distance voting better in 20 of 21
+(representation, dataset) pairs.
 
-Two things fall out of the same table. **k=7 wins every cell** — a neighbour
-count that did not exist in this suite before 2026-09-24, because the axis was
-pinned at 5 and 10. And the winning arm alternates between the `similarity` and
-`predictive` families as the exponent changes, so the exponent decides which
-hybrid family wins, not just how one arm scores.
+**The best cell is distance voting at exponent 0.25.** An earlier reading here
+said 0.5 wins on caco2; that was true only within the uniform cells, which were
+the only ones finished at the time. With the distance cells in, the winner is
+0.25 — the setting the s10 re-runs already use.
 
-This is 4 of 24 cells: one dataset, one voting scheme. s10's conclusion was
-drawn over 21 (representation, dataset) pairs and is not the same comparison, so
-it is not overturned. The direction disagrees and the rest of the sweep will
-settle it.
+**k=7 wins all six cells**, across both voting schemes and four exponents. It
+did not exist in this suite before 2026-09-24.
+
+The winning arm still alternates between the `similarity` and `predictive`
+families as the exponent changes, so the exponent decides which family wins.
+
+Two caco2 cells and both other datasets are still running.
 
 ## s05's headline number cannot see the lever s05 was tuned for
 
