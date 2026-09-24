@@ -2647,8 +2647,15 @@ def evaluate_cv_with_train(
 
         model = model_factory()
         model.fit(X_train_s, y_train)
-        val_scores.append(metric_fn(y_val, model.predict(X_val_s)))
-        train_scores.append(metric_fn(y_train, model.predict(X_train_s)))
+        # ⛔ GRADED SCORES FOR A RANKING METRIC. model.predict returns hard 0/1
+        # on a classifier, and an AUROC read off hard labels collapses to the
+        # mean of sensitivity and specificity (hybrid.py:2661). This is the
+        # same defect that was fixed in c05's all-rows arm and in c22.
+        # _predict_for_metric returns class-1 probabilities when metric_fn is
+        # the built-in auc and the model's own predictions otherwise.
+        from kirby.find_best_hybrid import _predict_for_metric as _pfm
+        val_scores.append(metric_fn(y_val, _pfm(model, X_val_s, metric_fn)))
+        train_scores.append(metric_fn(y_train, _pfm(model, X_train_s, metric_fn)))
         n_feats.append(X_train.shape[1])
 
     if not val_scores:
