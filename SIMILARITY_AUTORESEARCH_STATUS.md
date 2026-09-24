@@ -917,6 +917,39 @@ the correlation s06 reports, which also makes both sides of the comparison
 importance-weighted rather than one of each. Not changed — it is the owner's
 call and it moves which arm the headline names on all three datasets.
 
+## Three axes closed, 2026-09-24
+
+**minkowski p=0.5 does not beat manhattan.** It was cut from the s06 sweep on
+cost; now measured on its own cache, two of three datasets in. Distance-error
+correlation of the hybrid at the shipped cell, higher better:
+
+    dataset     manhattan   minkowski p=0.5
+    caco2         +0.2423        +0.2144
+    herg_ki       +0.2773        +0.2774
+    adme_mdr1     +0.1892        (running)
+
+Worse on caco2 by 0.0279, identical on herg_ki to three decimals. At 25 to 50
+times the cost of manhattan, nothing here argues for it. The axis is measured
+rather than cut, which is what it needed.
+
+**s13's retrieval neighbour count changes nothing about who wins.** The count
+was hardcoded at 5 until 2026-09-24 and had never been swept. herg_ki, spaces
+ranked by the mean activity gap to the k nearest molecules, lower better:
+
+    k     best space                  gap     where the best hybrid ranks
+     5    hybrid_similarity_r3     0.5525     1 of 20
+    15    hybrid_similarity_r3     0.6270     1 of 20
+    50    hybrid_similarity_r1     0.7088     1 of 20
+
+A hybrid space is top at all three counts, and the top four are hybrid spaces at
+all three. The gap rises with k because more neighbours are less similar, so the
+numbers are not comparable across rows — the ranking is. Widening this axis does
+not change s13's conclusion, which is the useful thing to know about it.
+
+**s10 at its own measured-best settings, herg_ki.** Distance voting, exponent
+0.25, neighbour counts 5 to 25. The hybrid's delta: GP -0.2938, SVR +0.0010.
+caco2 and adme_mdr1 still running.
+
 ## Open decisions for the owner
 
 1. **Cliff share.** `CLIFF_TARGET_PCT = 15.0`. It is the smallest share where
