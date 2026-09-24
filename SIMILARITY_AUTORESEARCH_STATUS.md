@@ -215,6 +215,38 @@ results rather than failing loudly:
 65 jobs are queued, roughly 24 hours of wall clock at four at a time, ordered so
 the s05 grid and the s04/s12 re-runs land first and s10's 5-to-8-hour cells last.
 
+## The coefficient cross, first results: a base representation wins under cosine
+
+s13 run under euclidean, cosine and minkowski p=0.5 — the three coefficients
+defined on a hybrid space that had never been run on one. Best space by the mean
+activity gap to the k nearest molecules, lower better:
+
+    coefficient   dataset    best space                   gap     hybrid rank
+    manhattan     herg_ki    hybrid_similarity_r3      0.5525     1 of 20
+    euclidean     herg_ki    hybrid_predictive_r1      0.5646     1 of 12
+    cosine        herg_ki    rep_atom_pair             0.5739     2 of 12
+    manhattan     caco2      hybrid_predictive_r1      0.2913     1 of 20
+    euclidean     caco2      hybrid_similarity_r1      0.3010     1 of 12
+
+⛔ **Under cosine on herg_ki a base representation beats every hybrid.**
+`rep_atom_pair` takes first and the best hybrid drops to second. That is the
+first cell anywhere in this suite where a hybrid does not rank first on this
+statistic, and it exists only because the coefficient axis was opened.
+
+**Manhattan gives the best absolute gap on both datasets so far**, 0.5525
+against euclidean 0.5646 and cosine 0.5739 on herg_ki. The suite's default is
+not arbitrary; it is the best of the three tested here.
+
+**The winning hybrid family flips with the coefficient.** Similarity wins under
+manhattan on herg_ki and predictive under euclidean; the reverse on caco2. Which
+family is worth building depends on the distance it will be used with.
+
+⛔ The stored manhattan runs rank 20 spaces and the new ones 12, because the
+stored ones used the 12-configuration search. The winner comparison holds; the
+rank denominators do not.
+
+Six of the nine jobs are still running.
+
 ## What the suite sweeps, and what it cannot: coefficients vs spaces
 
 Asked directly by the owner 2026-09-24. Checked in the code, not inferred.
