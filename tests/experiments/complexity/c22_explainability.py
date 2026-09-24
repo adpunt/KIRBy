@@ -369,9 +369,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Per-representation SHAP: each fold's own shares, averaged. Every fold's
     # scores were matched to that fold's own feature map before averaging, so
     # nothing sums scores from different features.
+    # ⛔ THE MODEL EXPLAINED IS CHOSEN PER FOLD, SO THIS AVERAGE CAN MIX TWO
+    # KINDS OF ATTRIBUTION. rf and xgboost are both fitted on every fold and
+    # whichever scores better on that fold's validation rows is the one SHAP
+    # explains. A per-representation share averaged over folds is then a mean
+    # of a forest's attributions and a boosted model's wherever the winner
+    # changed. fold_results carries best_model per fold, so it is recoverable —
+    # it just was not stated beside the number it affects.
     shap_by_rep = {}
     shap_share_by_rep = {}
     shap_by_rep_std = {}
+    shap_models_by_fold = [fr.get('best_model') for fr in fold_results]
+    shap_models_used = sorted({m for m in shap_models_by_fold if m})
+    if len(shap_models_used) > 1:
+        print(f"\n  ⛔ the SHAP averages below mix {len(shap_models_used)} "
+              f"models: per fold {shap_models_by_fold}. A share is a mean over "
+              f"folds explained by different estimators.")
     if shap_by_rep_folds:
         _reps_seen = sorted({r for d in shap_by_rep_folds for r in d})
         for r in _reps_seen:
@@ -475,6 +488,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # 'allocation_built' is always the built count.
         'allocation': allocation,
         'allocation_built': built,
+        # Which estimator's SHAP each fold contributed, and whether the
+        # averages below mix more than one.
+        'shap_model_by_fold': shap_models_by_fold,
+        'shap_models_mixed': bool(len(shap_models_used) > 1),
         'allocation_asked_total': _asked_total,
         'allocation_built_total': _built_total,
         'augmentation_info': {k: {'n_features': v.get('n_features', 0)}
