@@ -74,9 +74,27 @@ def _select_top_features(train_reps, val_reps, y_train, rep_subset, budget,
     X_tr = np.hstack([sub_tr[n] for n in rep_names])
     X_va = np.hstack([sub_va[n] for n in rep_names])
 
+    # ⛔ THIS ARM FILLS THE BUDGET, THE 'natural' ARM DOES NOT. Taking the top
+    # n_select by argsort keeps features whatever they scored, and
+    # lightgbm_gain writes exactly 0.0 for every feature no tree split on -- so
+    # past the count that scored above zero this arm is padded from a block of
+    # exact ties, broken by column position. The 'natural' arm goes through
+    # build_fold_hybrid -> create_hybrid, which STOPS at the last positively
+    # scored feature. On flab at budget 1,000 that is roughly 1,000 features
+    # against roughly 400.
+    #
+    # c18 already aligns the importance METHOD across the arms and warns when
+    # it cannot (see the fallback warning in run). It does not align the
+    # stopping rule. Not changed here -- which rule both arms should use is the
+    # open zero-gain decision -- but the realised width is now returned so the
+    # difference is visible instead of implied.
     n_select = min(budget, X_tr.shape[1])
     top_idx = np.argsort(imp_concat)[::-1][:n_select]
-    return X_tr[:, top_idx], X_va[:, top_idx]
+    _n_positive = int(np.sum(np.asarray(imp_concat) > 0))
+    _width_note = {'built': int(len(top_idx)),
+                   'scored_above_zero': _n_positive,
+                   'would_be_if_cut': int(min(len(top_idx), _n_positive))}
+    return X_tr[:, top_idx], X_va[:, top_idx], _width_note
 
 
 def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget,
@@ -246,6 +264,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
 
     for budget in budgets:
+        # {arm: [{built, scored_above_zero, would_be_if_cut}, per fold]}. The
+        # depth and uniform arms FILL the budget; the natural arm stops at the
+        # last positively scored feature. Recorded so the comparison is not
+        # read as width-matched when it is not.
+        _arm_widths = {}
         print(f"\n  Budget={budget}:")
         try:
             search, meta = get_best_search_for_downstream(
@@ -368,9 +391,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     continue
                 cond_name = f'depth_{n_top}'
                 top_rep_names = [name for name, _ in fold_ranked[:n_top]]
-                X_tr, X_va = _select_top_features(
+                X_tr, X_va, _wn = _select_top_features(
                     train_reps, val_reps_fold, y_train, top_rep_names, budget,
                     method=fold_imp_method)
+                if _wn:
+                    _arm_widths.setdefault(cond_name, []).append(_wn)
                 if X_tr is not None:
                     scaler = StandardScaler()
                     X_tr_s = scaler.fit_transform(X_tr)
@@ -414,6 +439,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_va_s = scaler.transform(X_va_h)
                         rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
                         rf.fit(X_tr_s, y_train)
+                        _arm_widths.setdefault('natural', []).append(
+                            {'built': int(X_tr_h.shape[1]),
+                             'scored_above_zero': None,
+                             'would_be_if_cut': int(X_tr_h.shape[1])})
                         fold_scores.setdefault('natural', []).append(
                             _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
                 except Exception as e:
@@ -423,8 +452,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         conditions = {}
         for cond_name, scores in fold_scores.items():
             score = float(np.mean(scores)) if scores else float('nan')
+            _w = _arm_widths.get(cond_name) or []
             conditions[cond_name] = {
                 'score': score,
+                # What this arm actually built, per fold, against the budget.
+                'width_built_per_fold': [x['built'] for x in _w],
+                'width_scored_above_zero_per_fold': [
+                    x['scored_above_zero'] for x in _w],
                 # OTHER-28: this is the REQUESTED budget, not the realised
                 # feature count (each arm selects min(budget, available); depth_1
                 # may select fewer than budget when the top rep is small). Label
