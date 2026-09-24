@@ -1070,39 +1070,38 @@ uniform against distance voting, and the neighbour list — so nothing here can 
 attributed to the exponent. The within-run pattern across k is clean, because
 inside one run only k varies.
 
-## The s05 sweep: distance voting wins 8 of 8 pairs; no single best exponent
+## The s05 sweep, three datasets: distance voting is the only lever that holds
 
-Two datasets complete at 8 of 8 cells each. Best weighted hybrid arm, rmse lower
-better, neighbour counts 5/7/10/15/25 swept inside every cell.
+23 of 24 cells. Best weighted hybrid arm, rmse lower better, neighbour counts
+5/7/10/15/25 swept inside every cell.
 
-    caco2                          herg_ki
-    distance 0.5   k=7  0.3231     distance 0.25  k=7  0.6082
-    distance 0.25  k=7  0.3249     distance 0.0   k=7  0.6093
-    distance 0.0   k=7  0.3277     distance 0.5   k=5  0.6120
-    uniform  0.5   k=7  0.3281     uniform  0.25  k=7  0.6172
-    distance 1.0   k=7  0.3303     uniform  0.0   k=7  0.6175
-    uniform  0.25  k=7  0.3303     uniform  0.5   k=5  0.6183
-    uniform  0.0   k=7  0.3325     distance 1.0   k=5  0.6194
-    uniform  1.0   k=7  0.3348     uniform  1.0   k=5  0.6264
+    caco2                      herg_ki                    adme_mdr1
+    distance 0.5  k=7  0.3231  distance 0.25 k=7  0.6082  distance 0.5  k=25 0.4952
+    distance 0.25 k=7  0.3249  distance 0.0  k=7  0.6093  distance 0.25 k=15 0.4979
+    distance 0.0  k=7  0.3277  distance 0.5  k=5  0.6120  uniform  0.5  k=25 0.4983
+    uniform  0.5  k=7  0.3281  uniform  0.25 k=7  0.6172  uniform  0.25 k=25 0.5010
+    distance 1.0  k=7  0.3303  uniform  0.0  k=7  0.6175  uniform  1.0  k=25 0.5062
+    uniform  0.25 k=7  0.3303  uniform  0.5  k=5  0.6183  distance 0.0  k=10 0.5066
+    uniform  0.0  k=7  0.3325  distance 1.0  k=5  0.6194  uniform  0.0  k=25 0.5103
+    uniform  1.0  k=7  0.3348  uniform  1.0  k=5  0.6264
 
-**Distance voting beats uniform at every matched exponent on both datasets, 8 of
-8 pairs.** It is the largest lever here: about 0.009 rmse on herg_ki against
-0.011 for the entire exponent range. Agrees with s10's kNN task, which found the
-same in 20 of 21 (representation, dataset) pairs.
+**Distance voting beats uniform at every matched exponent on every dataset —
+11 of 11 pairs.** With s10's independent 20 of 21 (representation, dataset)
+pairs, this is the one lever that holds everywhere. It is worth about 0.005 to
+0.009 rmse.
 
-**Exponent 1.0 is worst on both datasets in both voting schemes, 4 of 4.** The
-one unambiguous exponent result.
+**The best exponent is dataset-dependent: 0.5, 0.25, 0.5.** There is no single
+value to hardcode. The shipped 0.5 is right for caco2 and adme_mdr1 and wrong
+for herg_ki; the 0.25 the s10 re-runs use is right only for herg_ki.
 
-**There is no single best exponent.** 0.5 wins caco2 at 0.3231; 0.25 wins
-herg_ki at 0.6082. The shipped 0.5 is right for one and the s10 re-runs' 0.25 is
-right for the other. That the best value is dataset-dependent is the finding,
-not a step toward picking one.
+**The best neighbour count is dataset-dependent too: 7, 7, 25.** An earlier note
+here said k=7 wins; that held on two datasets and fails on adme_mdr1, where the
+winners are 25, 15 and 10 and k=7 wins nothing. The shipped pairing of 5 and 10
+contains the winner on no dataset.
 
-**k=7 wins 11 of 16 cells**, k=5 takes the other five, all at exponent 0.5 or
-1.0 on herg_ki. Neither is universal, but both beat the shipped pairing of 5 and
-10, which contains neither of the winners on caco2.
-
-adme_mdr1's eight cells are still running.
+adme_mdr1 preferring large neighbour counts agrees with two other experiments on
+the same dataset: s06's sweep chose 15 neighbours for it, and s10 found weighting
+helps only at large counts. Three experiments, three statistics, same direction.
 
 ## s05's headline number cannot see the lever s05 was tuned for
 
