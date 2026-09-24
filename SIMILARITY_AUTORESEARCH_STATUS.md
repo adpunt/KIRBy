@@ -917,6 +917,28 @@ the correlation s06 reports, which also makes both sides of the comparison
 importance-weighted rather than one of each. Not changed — it is the owner's
 call and it moves which arm the headline names on all three datasets.
 
+## s05's headline number cannot see the lever s05 was tuned for
+
+`summary.fixed_ref` — the arm this file leads with, and the one every
+`kNN_delta_fixed_ref` figure in s09 comes from — has `condition:
+hybrid_unweighted` on caco2. An unweighted arm multiplies no feature by its
+importance, so `KIRBY_IMPORTANCE_EXPONENT` cannot move it.
+
+Measured on the first two sweep cells, 2026-09-24, same dataset and same search:
+
+    cell             fixed-cell delta     a weighted candidate (k=10)
+    exponent 0            +0.0045                    0.335436
+    exponent 0.25         +0.0045                    0.332860
+
+The headline is identical to four decimals across the two exponents, and the
+weighted candidate moves. Both are correct: the exponent is live, and the
+headline is blind to it.
+
+So the exponent's effect has to be read off the weighted candidates in
+`fold_reselection.candidates_by_model`, not off `fixed_ref`. A sweep over the
+exponent that only reports `fixed_ref` would show a flat line and conclude the
+lever does nothing.
+
 ## Three axes closed, 2026-09-24
 
 **minkowski p=0.5 does not beat manhattan.** It was cut from the s06 sweep on
