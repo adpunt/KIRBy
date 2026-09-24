@@ -1032,37 +1032,32 @@ uniform against distance voting, and the neighbour list — so nothing here can 
 attributed to the exponent. The within-run pattern across k is clean, because
 inside one run only k varies.
 
-## The s05 sweep, caco2: distance voting wins, k=7 wins, exponent 0.25
+## The s05 sweep: exponent 0.25 best on both datasets, k=7 conditional
 
-Six of the eight caco2 cells. Best weighted hybrid arm, rmse, lower better.
-Neighbour counts 5/7/10/15/25 swept inside every cell.
+Ten of 24 cells. Best weighted hybrid arm, rmse lower better. Neighbour counts
+5/7/10/15/25 swept inside every cell.
 
-    voting     exponent   k   arm                  rmse
-    distance   0.25       7   predictive_r1      0.3249
-    distance   0.0        7   similarity_r1      0.3277
-    uniform    0.5        7   similarity_r1      0.3281
-    uniform    0.25       7   predictive_r1      0.3303
-    uniform    0.0        7   similarity_r1      0.3325
-    uniform    1.0        7   predictive_r1      0.3348
+    caco2 (6 of 8)                      herg_ki (4 of 8)
+    distance 0.25  k=7   0.3249         uniform 0.25  k=7   0.6172
+    distance 0.0   k=7   0.3277         uniform 0.0   k=7   0.6175
+    uniform  0.5   k=7   0.3281         uniform 0.5   k=5   0.6183
+    uniform  0.25  k=7   0.3303         uniform 1.0   k=5   0.6264
+    uniform  0.0   k=7   0.3325
+    uniform  1.0   k=7   0.3348
 
-**Distance voting beats uniform at every exponent run so far** — 0.3249 against
-0.3303 at exponent 0.25, 0.3277 against 0.3325 at exponent 0. Voting is worth
-about 0.005 rmse; the exponent about 0.007 across its whole range. This agrees
-with s10's kNN task, which found distance voting better in 20 of 21
-(representation, dataset) pairs.
+**Exponent 0.25 is best on both datasets and 1.0 is worst on both.** The shipped
+0.5 sits in the middle, not at an end. This supports the 0.25 the s10 re-runs
+use, on a second dataset.
 
-**The best cell is distance voting at exponent 0.25.** An earlier reading here
-said 0.5 wins on caco2; that was true only within the uniform cells, which were
-the only ones finished at the time. With the distance cells in, the winner is
-0.25 — the setting the s10 re-runs already use.
+**k=7 is conditional, not universal.** It wins nine of the ten cells landed, but
+k=5 wins on herg_ki at exponents 0.5 and 1.0 — the two worst exponents there. So
+k=7 wins where the exponent is well chosen. An earlier note here said k=7 wins
+every cell; that was true of the caco2-only data it was written from.
 
-**k=7 wins all six cells**, across both voting schemes and four exponents. It
-did not exist in this suite before 2026-09-24.
-
-The winning arm still alternates between the `similarity` and `predictive`
-families as the exponent changes, so the exponent decides which family wins.
-
-Two caco2 cells and both other datasets are still running.
+**The voting comparison is still caco2-only.** Distance beat uniform at both
+exponents tested there, and s10 found the same across 21 (representation,
+dataset) pairs, but herg_ki's distance cells have not landed. Not yet a
+two-dataset result.
 
 ## s05's headline number cannot see the lever s05 was tuned for
 
