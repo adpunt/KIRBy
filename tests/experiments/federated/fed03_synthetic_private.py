@@ -45,6 +45,7 @@ from experiments.federated.federated_helpers import (
     _resolve_match,
     smoke_n_folds, smoke_search_kwargs,
     fit_fed_classifier, fit_fed_model,
+    predict_fluid_similarity_ensemble_classification,
     fed_to_kirby_model, make_fed_classifier, make_fed_regressor,
 )
 
@@ -770,6 +771,107 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             print(f"    FAILED: {e}")
             traceback.print_exc()
 
+        # C8/C9: FEDERATED TRAINING, with and without the selection
+        #
+        # C4 above fits ONE model on every training molecule pooled together,
+        # so only the feature ranking is local -- that is federated feature
+        # selection, not federated training. These two fit one model per
+        # source on that source's OWN molecules and combine only their
+        # predictions, which is federated training. Nothing but predictions
+        # crosses a source boundary at fit time, and only feature indices,
+        # importance weights and one validation score cross at selection time.
+        #
+        # C9 minus C8 is what the selection is worth to a federated model.
+        # C4 minus C9 is what pooling the molecules is worth. C5 below is the
+        # fourth corner: pooled molecules, no selection.
+        print("  C8/C9: federated fit (one model per source)...")
+        try:
+            fed_by_budget = {'c8_fed_fit_all_features': {},
+                             'c9_fed_fit_selected': {}}
+
+            def _fed_fit_and_score(Xtr_f, Xte_f):
+                """One model per source; only predictions are combined."""
+                teachers, s_tr, s_te = [None], [None], [None]
+                n_trained = 0
+                for _s in range(1, K + 1):
+                    _idx = train_silo_indices[_s]
+                    if len(_idx) < 5 or len(np.unique(y_train[_idx])) < 2:
+                        teachers.append((None,))
+                        s_tr.append(np.empty((0, Xtr_f.shape[1])))
+                        s_te.append(Xte_f)
+                        continue
+                    _m = fit_fed_classifier(fed_model, Xtr_f[_idx],
+                                            y_train[_idx], seed=fed_seed)
+                    teachers.append((_m,))
+                    s_tr.append(Xtr_f[_idx])
+                    s_te.append(Xte_f)
+                    n_trained += 1
+                _cls, _prob, _w = \
+                    predict_fluid_similarity_ensemble_classification(
+                        teachers, s_tr, s_te, K, seed=fed_seed)
+                _m = compute_clf_metrics(y_test, _cls, _prob)
+                _m['sources_that_trained'] = int(n_trained)
+                _m['n_features'] = int(Xtr_f.shape[1])
+                return _m
+
+            # C7 needs no selection, so it is the same at every width. Record
+            # it once per budget anyway so the two tables line up.
+            c7 = _fed_fit_and_score(train_fps, test_fps)
+            print(f"    C8 all features: MCC={c7['mcc']:.3f}  "
+                  f"{c7['n_features']} features")
+
+            for _budget in PART_A_BUDGETS:
+                fed_by_budget['c8_fed_fit_all_features'][str(_budget)] = \
+                    convert_numpy(c7)
+                _entry = (results.get('c4_kirby_federated_by_budget') or {}
+                          ).get(str(_budget), {})
+                _fis = None
+                try:
+                    _, _, _, _fis = federated_feature_selection(
+                        train_reps, y_train, train_silo_indices,
+                        K, budget=_budget,
+                        allocation_method=_alloc, importance_method=_imp,
+                        internal_evaluator=_int_eval,
+                        downstream_model=fed_to_kirby_model(fed_model),
+                        groups=pooled_groups[train_idx],
+                        task_type='classification',
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+                except Exception as e:
+                    fed_by_budget['c9_fed_fit_selected'][str(_budget)] = {
+                        'error': str(e)}
+                    continue
+                tr_p, te_p = [], []
+                for _s in range(1, K + 1):
+                    f = _fis.get(_s)
+                    if f is None:
+                        continue
+                    tr_p.append(apply_feature_selection(train_reps, f))
+                    te_p.append(apply_feature_selection(test_reps, f))
+                if not tr_p:
+                    fed_by_budget['c9_fed_fit_selected'][str(_budget)] = {
+                        'error': 'no source produced a selection'}
+                    continue
+                c8 = _fed_fit_and_score(np.hstack(tr_p), np.hstack(te_p))
+                c8['budget_requested'] = int(_budget)
+                fed_by_budget['c9_fed_fit_selected'][str(_budget)] = \
+                    convert_numpy(c8)
+                print(f"    budget {_budget}: C9 MCC={c8['mcc']:.3f}  "
+                      f"{c8['n_features']} features")
+
+            results['c8_fed_fit_all_features_by_budget'] = \
+                fed_by_budget['c8_fed_fit_all_features']
+            results['c9_fed_fit_selected_by_budget'] = \
+                fed_by_budget['c9_fed_fit_selected']
+            results['c8_fed_fit_all_features'] = convert_numpy(c7)
+            results['c9_fed_fit_selected'] = \
+                fed_by_budget['c9_fed_fit_selected'].get(
+                    str(HEADLINE_BUDGET), {})
+        except Exception as e:
+            results['c9_fed_fit_selected'] = {
+                'error': str(e), 'traceback': traceback.format_exc()}
+            print(f"    FAILED: {e}")
+            traceback.print_exc()
+
         # C5: Naive pool (unrealistic baseline)
         print("  C5: Naive pool...")
         clf_pool = fit_fed_classifier(
@@ -943,6 +1045,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         'c2_fluid_similarity', 'c3_fluid_quality',
         'c4_kirby_federated', 'c5_naive_pool', 'c6_kirby_single_rep',
         'c7_fluid_multi_rep',
+        # the federated-FIT pair: one model per source, predictions combined
+        'c8_fed_fit_all_features', 'c9_fed_fit_selected',
     ]
     for ck in cond_keys:
         vals = _agg_mcc(ck, per_fold_results)
