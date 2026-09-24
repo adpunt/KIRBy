@@ -499,6 +499,38 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
+## s11 length scale, second pair: caco2 gains on all eleven arms
+
+caco2, both halves under the same code. AUC at 100 picks is NEGATIVE on this
+dataset, so more negative is better and a positive gain means the median start
+won. Row-order picks out of 300:
+
+    condition          fixed   median    gain   fixed ro   med ro
+    pca_50d            -29.9    -31.4    +1.4        58        0
+    best_single        -30.2    -31.1    +0.9       100        0
+    ecfp4_raw          -30.7    -31.5    +0.8       100        0
+    hybrid_50d_refit   -31.2    -31.4    +0.3         0        0
+    hybrid_gauche_gp   -31.5    -31.6    +0.2         0        0
+    hybrid_50d         -31.3    -31.4    +0.1         0        0
+    hybrid_ngboost     -31.0    -31.1    +0.1         0        0
+    random_50d         -28.6    -28.7    +0.1       300        0
+    random_acq         -30.7    -30.7    +0.0         0        0
+    tanimoto_ecfp4     -31.3    -31.3    +0.0         0        0
+    hybrid_bnn         -31.5    -31.5    -0.0        27       38
+
+The median start wins all eleven arms, and the three that gain most are exactly
+the three that had been picking by row order: `pca_50d` +1.4 with 58 picks
+eliminated, `best_single` +0.9 with 100, `ecfp4_raw` +0.8 with 100.
+
+Across the two completed pairs the fix reliably removes the defect and its
+effect on the OUTCOME is dataset-dependent: negligible on herg_ki, uniformly
+positive on caco2. The hybrid arms move least on both, because they never had
+the problem.
+
+⛔ `hybrid_bnn` goes the wrong way on both datasets — 27 to 38 here, 158 to 217
+on herg_ki. Its flat acquisition has a cause other than the length scale and its
+number should not be read on either dataset.
+
 ## s11 length scale: the process is fixed, the outcome barely moves
 
 First matched pair, herg_ki, both halves computed under the same code on
