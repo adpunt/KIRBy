@@ -641,7 +641,7 @@ def _run_double_descent(data, config, dataset_name=None):
     # Those three lists are in the search cache key, so a fast search files
     # separately from the full one; any c15c search already on disk is not
     # reused and is rebuilt fast.
-    from kirby.find_best_hybrid import find_best_hybrid as _fbh
+    from kirby.find_best_hybrid import _predict_for_metric, find_best_hybrid as _fbh
     from sklearn.ensemble import RandomForestRegressor as _RF15
     from sklearn.linear_model import Ridge as _Ridge15
     _augs = data.get('augmentations')
@@ -908,7 +908,7 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
 
             model = make_model()
             model.fit(X_train_s, y_train)
-            scores.append(metric_fn(y_val, model.predict(X_val_s)))
+            scores.append(metric_fn(y_val, _predict_for_metric(model, X_val_s, metric_fn)))
         except Exception:
             continue
 
@@ -953,7 +953,7 @@ def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
 
             model = make_model()
             model.fit(X_train_pca, labels[train_idx])
-            scores.append(metric_fn(labels[val_idx], model.predict(X_val_pca)))
+            scores.append(metric_fn(labels[val_idx], _predict_for_metric(model, X_val_pca, metric_fn)))
         except Exception:
             continue
 
@@ -989,7 +989,7 @@ def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
 
             model = make_model()
             model.fit(X_train_s, labels[train_idx])
-            scores.append(metric_fn(labels[val_idx], model.predict(X_val_s)))
+            scores.append(metric_fn(labels[val_idx], _predict_for_metric(model, X_val_s, metric_fn)))
         except Exception:
             continue
 

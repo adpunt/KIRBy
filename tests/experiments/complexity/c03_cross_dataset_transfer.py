@@ -39,6 +39,9 @@ from copy import deepcopy
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
+# Ranking metrics need graded scores: an AUROC read off hard 0/1 labels
+# collapses to the mean of sensitivity and specificity (hybrid.py:2661).
+from kirby.find_best_hybrid import _predict_for_metric
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -366,7 +369,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
 
                             m = deepcopy(novel_model)
                             m.fit(X_train_s, y_train)
-                            novel_scores.append(metric_fn(y_val, m.predict(X_val_s)))
+                            novel_scores.append(metric_fn(y_val, _predict_for_metric(m, X_val_s, metric_fn)))
 
                         novel_results[novel_name] = float(np.mean(novel_scores))
                         print(f"    {novel_name} on {ds_name}: {metric_name}={np.mean(novel_scores):.4f}")

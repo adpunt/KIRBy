@@ -43,7 +43,7 @@ from experiments._shared import (
     DOWNSTREAM_MODELS,
     INTERNAL_EVALUATORS,
 )
-from kirby.find_best_hybrid import nested_cv_evaluate
+from kirby.find_best_hybrid import _predict_for_metric, nested_cv_evaluate
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
 EXPERIMENT_ID = 'c14_cross_domain_summary'
@@ -150,7 +150,7 @@ def _evaluate_task(task_name, rep_preset, config):
 
                     model = factory()
                     model.fit(X_train, labels[train_idx])
-                    score = metric_fn(labels[val_idx], model.predict(X_val))
+                    score = metric_fn(labels[val_idx], _predict_for_metric(model, X_val, metric_fn))
                     fold_scores.append(float(score))
                     fold_ids.append(fold_id)
                 except Exception:

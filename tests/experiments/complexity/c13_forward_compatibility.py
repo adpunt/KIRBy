@@ -90,6 +90,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+# Ranking metrics need graded scores: an AUROC read off hard 0/1 labels
+# collapses to the mean of sensitivity and specificity (hybrid.py:2661).
+from kirby.find_best_hybrid import _predict_for_metric
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -439,7 +442,7 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
 
         model = model_factory()
         model.fit(X_train, labels[train_idx])
-        scores.append(metric_fn(labels[val_idx], model.predict(X_val)))
+        scores.append(metric_fn(labels[val_idx], _predict_for_metric(model, X_val, metric_fn)))
 
     return scores
 
@@ -613,7 +616,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
 
         model = model_factory()
         model.fit(X_train_s, y_train)
-        scores.append(metric_fn(y_val, model.predict(X_val_s)))
+        scores.append(metric_fn(y_val, _predict_for_metric(model, X_val_s, metric_fn)))
 
     # Average allocation across folds
     avg_alloc = {}
