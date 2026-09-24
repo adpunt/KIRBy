@@ -162,7 +162,10 @@ results rather than failing loudly:
 - **`KIRBY_S05_K_VALUES` was dead.** `SIMILARITY_EXTRA` carries
   `'k_values': [5, 10]` into every similarity run's config, so the env var was
   always overridden. A sweep naming five neighbour counts ran at two and said
-  nothing.
+  nothing. Fixed at that source and CONFIRMED live: a running cell scored
+  k=5, 7, 10, 15 and 25 after twelve arms. An earlier fix that guarded the
+  per-call assignment looked right and changed nothing, because the key was
+  always present in the config it guarded on.
 
 65 jobs are queued, roughly 24 hours of wall clock at four at a time, ordered so
 the s05 grid and the s04/s12 re-runs land first and s10's 5-to-8-hour cells last.
