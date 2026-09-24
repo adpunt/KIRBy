@@ -262,11 +262,14 @@ for DS in $DATASETS; do
     # them costs nothing -- the new link would have waited in the queue anyway --
     # and removes that entirely.
     #
-    # Matches the old naming, pc_<dataset>_general_..., which cannot collide
-    # with the new pc_<dataset>_<link>. The trailing _general_ also stops
-    # pc_herg_ matching pc_herg_ki_.
+    # Matches all three namings in use: the old pc_<dataset>_general_..., this
+    # script's own pc_<dataset>_<link>, and the hand-queued pc_<dataset>_x<n>.
+    # It matched only the first until 2026-09-24, so a second submission for a
+    # dataset whose chain was already queued found nothing, waited for nothing,
+    # and two precompute processes wrote one result_db at once. Anchored at the
+    # end, so pc_herg_ still cannot match pc_herg_ki_1.
     EXISTING=$(squeue -u "$USER" -h -o "%i %j" 2>/dev/null \
-               | awk -v d="$DS" '$2 ~ "^pc_" d "_general_" {printf "%s:", $1}' \
+               | awk -v d="$DS" '$2 ~ "^pc_" d "_(general_|[0-9]+$|x[0-9]+$)" {printf "%s:", $1}' \
                | sed 's/:$//')
     if [ -n "$EXISTING" ]; then
         echo "  $DS: $(echo "$EXISTING" | tr ':' '\n' | wc -l | tr -d ' ') job(s) already queued — new links wait for them"
