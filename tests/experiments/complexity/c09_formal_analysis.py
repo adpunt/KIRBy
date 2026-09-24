@@ -397,6 +397,10 @@ def _run_information_retention(data, budgets, dataset_name=None,
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     results = {'budgets': [], 'mi_xy': [], 'mi_xx_full': [], 'best_configs': [],
+               # Budgets whose recipe named internal evaluator 'match',
+               # which this path resolves to lightgbm; see the note in
+               # the loop below.
+               'match_resolved_to': {},
                # Features are selected on each fold's training rows; both
                # curves are read on that fold's held-out rows.
                'measured_on': 'held-out rows'}
@@ -405,6 +409,10 @@ def _run_information_retention(data, budgets, dataset_name=None,
     sample_X = next(iter(reps.values()))
     from sklearn.linear_model import Ridge as _Ridge
 
+    # {budget: 'lightgbm'} for budgets whose recipe said internal
+    # evaluator 'match', which this path cannot honour. See the note
+    # inside the loop.
+    _match_resolved = {}
     for budget in sorted(budgets):
         # Pool helper across (general, top) x (none, uncapped, capped) cache
         # files; pick winner across common downstream models for this budget.
@@ -448,6 +456,16 @@ def _run_information_retention(data, budgets, dataset_name=None,
         alloc = bp.allocation_method if bp else 'performance_weighted'
         imp = bp.importance_method if bp else 'lightgbm_gain'
         int_eval = bp.internal_evaluator if bp else 'rf'
+        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. create_hybrid_cached
+        # refuses any keyword it cannot hash into its fold key, and model,
+        # metric_fn and lower_is_better are not in _HYBRID_FOLD_KEY_KWARGS
+        # (_shared.py:107). With no model, create_hybrid resolves
+        # internal_evaluator='match' to 'lightgbm' (hybrid.py:5952) whatever
+        # downstream model the recipe was chosen for -- and with no metric_fn
+        # the budget split is ranked on R2 or accuracy rather than the
+        # dataset's own metric. Recorded rather than silently different.
+        if int_eval == 'match':
+            _match_resolved.setdefault(budget, 'lightgbm')
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         # from_fallback says the recipe is the engine's default, not a recipe
         # any search picked. Without it a fallback budget reads like a searched
@@ -607,6 +625,11 @@ def _run_information_retention(data, budgets, dataset_name=None,
                       "MI gain stays under 10% of the largest for the rest of "
                       "the curve")
 
+    results['match_resolved_to'] = dict(_match_resolved)
+    if _match_resolved:
+        print(f"    {len(_match_resolved)} budget(s) named internal "
+              f"evaluator 'match'; this path built them under lightgbm "
+              f"because create_hybrid_cached cannot take a model")
     return results
 
 
@@ -634,6 +657,10 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     results = {'budgets': [], 'hybrid_rank': [], 'pca_rank': [], 'random_rank': [],
+               # Budgets whose recipe named internal evaluator 'match',
+               # which this path resolves to lightgbm; see the note in
+               # the loop below.
+               'match_resolved_to': {},
                'n_feat_per_fold': [], 'pca_failures': [], 'from_fallback': []}
 
     augs = data.get('augmentations')
@@ -641,6 +668,10 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
     from experiments._shared import cv_split as _cv_split_9c
     _mode_9c = 'intermediary' if n_folds == 1 else 'full'
 
+    # {budget: 'lightgbm'} for budgets whose recipe said internal
+    # evaluator 'match', which this path cannot honour. See the note
+    # inside the loop.
+    _match_resolved = {}
     for budget in sorted(budgets):
         # The widest the PCA and random arms can be before the fold is known.
         # The row-count cut is applied per fold below, on that fold's training
@@ -691,6 +722,16 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         alloc = bp.allocation_method if bp else 'performance_weighted'
         imp = bp.importance_method if bp else 'lightgbm_gain'
         int_eval = bp.internal_evaluator if bp else 'rf'
+        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. create_hybrid_cached
+        # refuses any keyword it cannot hash into its fold key, and model,
+        # metric_fn and lower_is_better are not in _HYBRID_FOLD_KEY_KWARGS
+        # (_shared.py:107). With no model, create_hybrid resolves
+        # internal_evaluator='match' to 'lightgbm' (hybrid.py:5952) whatever
+        # downstream model the recipe was chosen for -- and with no metric_fn
+        # the budget split is ranked on R2 or accuracy rather than the
+        # dataset's own metric. Recorded rather than silently different.
+        if int_eval == 'match':
+            _match_resolved.setdefault(budget, 'lightgbm')
         aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         # Same marker as 9b: the recipe came from the engine's defaults, not a
         # search.
@@ -785,6 +826,11 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
 
         print(f"    budget={budget}: hybrid={hybrid_rank:.1f}, pca={pca_rank:.1f}, random={random_rank:.1f}")
 
+    results['match_resolved_to'] = dict(_match_resolved)
+    if _match_resolved:
+        print(f"    {len(_match_resolved)} budget(s) named internal "
+              f"evaluator 'match'; this path built them under lightgbm "
+              f"because create_hybrid_cached cannot take a model")
     return results
 
 
