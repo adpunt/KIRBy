@@ -105,6 +105,22 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     # on both paths.
     pool_lookup_errors = {}
     recipe_source = None
+    # ⛔ DEFINED ON EVERY PATH. These were set only in the pool-lookup branch
+    # below, and the c02 branch beside it does not set them -- so a run that
+    # took the c02 path raised NameError on every fold, inside the try that
+    # wraps the build, and all four conditions came back with no metrics.
+    # Caught on flab_thermo_tresanco at 07:34 on 2026-09-24, by the
+    # skipped-condition record added the same night.
+    #
+    # c02 stores model, allocation, importance and budget per model and stores
+    # no rep_count, so on that path there is nothing to cut to and the hybrid
+    # is built on the whole pool -- which is what it did before tonight.
+    optimal_rep_count = None
+    optimal_rep_scores = None
+    # {condition: ['fold N: Error: message', ...]} for every fold that raised
+    # inside the build. The print below it goes to the log and nowhere else, so
+    # a saved file could say a condition produced nothing without saying why.
+    _fold_errors = {}
 
     if exp2_results and exp2_results.get('best_by_model'):
         # Use best config from Exp 2
@@ -266,6 +282,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         # all and silently used RandomForest at budget 100 is indistinguishable
         # in the saved file from one that discovered a recipe.
         'recipe_source': recipe_source,
+        'fold_errors': _fold_errors,
         'pool_lookup_errors': pool_lookup_errors,
         'used_hardcoded_fallback': bool(used_pool_fallback),
         'conditions': {},
@@ -367,6 +384,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     if X_val_aug is not None:
                         X_val = np.hstack([X_val, X_val_aug])
             except Exception as e:
+                _fold_errors.setdefault(cond_name, []).append(
+                    f'fold {fold_i}: {type(e).__name__}: {e}')
                 print(f"    fold {fold_i}: hybrid creation failed - {e}")
                 continue
 
@@ -610,6 +629,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 'n_folds_requested': int(n_folds),
                 'folds': [],
                 'skipped_reason': 'every fold raised or produced no metrics',
+                'fold_errors': _fold_errors.get(cond_name, []),
             }
             print(f"    {cond_name}: NO FOLD PRODUCED METRICS — recorded as "
                   f"skipped, not dropped")
