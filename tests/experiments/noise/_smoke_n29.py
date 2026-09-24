@@ -14,6 +14,11 @@ What has to be true before any n29 number can be read:
   5. The run writes every arm for every model, in both views, and the counts
      are bounded by what exists. The hybrid path is reachable.
   6. The guards: no document ids, a length mismatch, a class label.
+  8. (2026-09-24) THE THREE NEWER ARMS. Method of moments recovers known
+     sigma2 and tau2; the random-effect penalty shrinks toward 0 when the
+     offsets have no variance; the quantile map leaves small documents alone
+     and puts a large one on the pooled quantiles; within_document_rank is
+     scored for xgboost only.
   7. The parser exposes its flags.
 """
 import sys
@@ -182,15 +187,74 @@ def test_order():
           and np.array_equal(np.bincount(rm), stats['n_measurements']))
 
 
+def test_new_arms_parts():
+    print("the three newer arms, piece by piece:")
+    rng = np.random.default_rng(7)
+    n_doc, per = 60, 12
+    b = rng.normal(0, 0.5, n_doc)                 # tau2 = 0.25
+    rec_doc = np.repeat(np.arange(n_doc), per)
+    resid = b[rec_doc] + rng.normal(0, 1.0, len(rec_doc))   # sigma2 = 1
+    s2, t2 = n29.moment_variances(resid, rec_doc, list(range(n_doc)))
+    check("method of moments recovers sigma2 near 1 and tau2 near 0.25",
+          abs(s2 - 1.0) < 0.15 and abs(t2 - 0.25) < 0.12,
+          f"sigma2 {s2:.3f}, tau2 {t2:.3f}")
+    s2n, t2n = n29.moment_variances(rng.normal(0, 1, len(rec_doc)), rec_doc,
+                                    list(range(n_doc)))
+    check("no offsets -> tau2 small", t2n < 0.05, f"tau2 {t2n:.4f}")
+
+    y = np.concatenate([rng.normal(0, 1, 30), rng.normal(3, 0.2, 25),
+                        rng.normal(0, 1, 5)])
+    d = np.array([0] * 30 + [1] * 25 + [2] * 5)
+    mapped, nd, nm = n29.quantile_map_labels(y, d, min_measurements=20)
+    check("quantile map: 2 documents of 20+ mapped, 55 measurements",
+          nd == 2 and nm == 55, f"{nd} documents, {nm} measurements")
+    check("quantile map leaves the 5-measurement document untouched",
+          np.array_equal(mapped[d == 2], y[d == 2]))
+    check("quantile map keeps each document's order",
+          np.array_equal(np.argsort(mapped[d == 1]), np.argsort(y[d == 1])))
+    check("a mapped document's values sit inside the pooled range",
+          mapped[d == 1].min() >= y.min() and mapped[d == 1].max() <= y.max())
+
+    data, b_true, rec_mol, rdoc = make_data(seed=5)
+    comp, info = n29.document_groups(rec_mol, rdoc)
+    elig = n29.eligible_documents(comp, info)
+    vt = []
+    off, _r, _t = n29.fit_document_offsets(
+        data['reps']['ecfp4'], data['labels'], rdoc, data['groups'], elig,
+        comp, n_iter=3, alpha='fitted', oof_splits=3, variance_trace=vt)
+    by_c = {}
+    for dd in elig:
+        by_c.setdefault(comp[dd], []).append(b_true[dd])
+    truth = np.array([b_true[dd] - np.mean(by_c[comp[dd]]) for dd in elig])
+    r = float(np.corrcoef(truth, [off[dd] for dd in elig])[0, 1])
+    check("random-effect offsets correlate with the true ones above 0.8",
+          r > 0.8, f"pearson {r:.3f}")
+    check("one variance entry per pass, each with sigma2, tau2, penalty",
+          len(vt) == 3 and all({'sigma2', 'tau2', 'penalty_in_measurements'}
+                               <= set(v) for v in vt), str(vt))
+
+
 def test_run():
     print("a whole run:")
     data, _, _, _ = make_data(seed=2)
-    res = run_it(data, 'toy_docs', models=['rf', 'lightgbm'], n_bootstrap=20,
-                 oof_splits=3)
+    res = run_it(data, 'toy_docs', models=['rf', 'lightgbm', 'xgboost'],
+                 n_bootstrap=20, oof_splits=3)
     sc = res['scores']['all']['base']
-    check("every arm scored for every model in the base space",
-          all(len(sc[a][m]) == 3 for a in n29.ARMS for m in ('rf', 'lightgbm')),
+    label_arms = [a for a in n29.ARMS if a != 'within_document_rank']
+    check("every label arm scored for every model in the base space",
+          all(len(sc[a][m]) == 3 for a in label_arms
+              for m in ('rf', 'lightgbm', 'xgboost')),
           str({a: {m: len(v) for m, v in sc[a].items()} for a in sc}))
+    check("within_document_rank scored for xgboost only",
+          set(sc['within_document_rank']) == {'xgboost'}
+          and len(sc['within_document_rank']['xgboost']) == 3,
+          str(res.get('_errors')))
+    fb0 = res['per_fold']['f0']
+    check("quantile-map counts and random-effect variances written per fold",
+          'document_quantile_map' in fb0
+          and 'random_effect' in fb0['per_space']['base']
+          and 'within_document_rank' in fb0['per_space']['base'],
+          str(list(fb0['per_space']['base'])))
     ok = all(fb['held_out_molecules_isolated'] <= fb['held_out_molecules']
              and fb['documents_given_an_offset'] <= fb['training_documents']
              for fb in res['per_fold'].values())
@@ -200,9 +264,12 @@ def test_run():
           kb.get('pearson_added_vs_fitted_minus_real', 0) > 0.5,
           f"{kb.get('pearson_added_vs_fitted_minus_real')}")
     s = res['summary']['per_view']['all']['base']['rf']['per_arm']
-    check("summary pairs three arms against mean_label",
-          set(s) == set(n29.ARMS) - {'mean_label'}
-          and all(v['n_folds_paired'] == 3 for v in s.values()))
+    check("summary pairs every label arm against mean_label for rf",
+          set(s) == set(n29.ARMS) - {'mean_label', 'within_document_rank'}
+          and all(v['n_folds_paired'] == 3 for v in s.values()), str(set(s)))
+    sx = res['summary']['per_view']['all']['base']['xgboost']['per_arm']
+    check("summary pairs within_document_rank against xgboost's mean_label",
+          sx.get('within_document_rank', {}).get('n_folds_paired') == 3)
 
     res_h = run_it(data, 'toy_docs_h', recipe=fake_recipe(['ecfp4', 'second']),
                    models=['rf'], n_bootstrap=5, oof_splits=3)
@@ -248,6 +315,7 @@ if __name__ == '__main__':
     test_ridge()
     test_recovery()
     test_order()
+    test_new_arms_parts()
     test_run()
     test_guards()
     test_help()

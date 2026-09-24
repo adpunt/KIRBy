@@ -94,7 +94,7 @@ def run_it(data, name, recipe=no_recipe, **kw):
         n27.get_best_search_for_downstream = real
 
 
-CHEAP = dict(models=['rf'], base_rep='toy', shares=[0.7, 0.9], repeats=2,
+CHEAP = dict(models=['rf'], base_rep='toy', shares=[0.25, 0.7, 0.9], repeats=2,
              levels=[0.5, 1.0], draws=[0], alphas=[0.0, 0.5, 1.0])
 
 
@@ -107,6 +107,11 @@ def test_draws():
     check('a different draw keeps different molecules', not np.array_equal(a, c))
     check('0.7 of 100 keeps 70', len(a) == 70, f'{len(a)} kept')
     check('no molecule kept twice', len(set(a.tolist())) == len(a))
+    check('the default shares reach down to a quarter and a half (D3)',
+          {0.25, 0.5} <= set(n27.SHARES) and 1.0 in n27.SHARES,
+          str(n27.SHARES))
+    q = n27.kept_rows(0.25, 3, 1, 100)
+    check('0.25 of 100 keeps 25', len(q) == 25, f'{len(q)} kept')
     code = ("import sys; sys.path.insert(0, %r); sys.path.insert(0, %r); "
             "sys.path.insert(0, %r); "
             "import experiments.noise.n27_removal_cost_and_propagation as m; "
@@ -199,6 +204,11 @@ def test_run(domain, recipe, label):
             for v in rc.values()}
     check(f'{label}: 0.7 keeps 0.7 of each fold',
           all(abs(k - 0.7) < 0.01 for k in kept), str(sorted(kept)))
+    rcq = res['per_fold']['removal_cost']['base']['0.25']['rf']['r0']
+    kq = {v['training_molecules_kept'] / v['training_molecules']
+          for v in rcq.values()}
+    check(f'{label}: 0.25 keeps a quarter of each fold',
+          all(abs(k - 0.25) < 0.01 for k in kq), str(sorted(kq)))
     row = s['removal_cost']['base']['0.7']['rf']
     check(f'{label}: one removal row per draw', row['draws_read'] == 2,
           f"{row['draws_read']} rows")

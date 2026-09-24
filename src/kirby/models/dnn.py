@@ -72,7 +72,12 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
     """
 
     def __init__(self, hidden_sizes=(256, 128, 64), dropout=0.2, lr=0.001,
-                 epochs=200, batch_size=256, patience=20, random_state=42):
+                 epochs=200, batch_size=256, patience=20, random_state=42,
+                 loss='mse', huber_delta=1.0):
+        # loss='huber' was added 2026-09-24 for n33 (robust losses under label
+        # noise). huber_delta is in LABEL units; fit() divides it by the label
+        # SD because the network trains on z-normalised labels. With the
+        # default loss='mse' the training loop is the one it always was.
         self.hidden_sizes = hidden_sizes
         self.dropout = dropout
         self.lr = lr
@@ -80,6 +85,8 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
         self.batch_size = batch_size
         self.patience = patience
         self.random_state = random_state
+        self.loss = loss
+        self.huber_delta = huber_delta
 
     def _build_net(self, input_dim):
         import torch.nn as nn
@@ -156,7 +163,17 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=5, factor=0.5)
-        criterion = nn.MSELoss()
+        if self.loss == 'mse':
+            criterion = nn.MSELoss()
+            per_row = lambda p, t: (p - t) ** 2
+        elif self.loss == 'huber':
+            criterion = nn.HuberLoss(delta=float(self.huber_delta) / self.y_std_)
+            _row_huber = nn.HuberLoss(reduction='none',
+                                      delta=float(self.huber_delta) / self.y_std_)
+            per_row = lambda p, t: _row_huber(p, t)
+        else:
+            raise ValueError(f"DNNRegressor: loss must be 'mse' or 'huber', "
+                             f"got {self.loss!r}")
 
         best_ho_loss = float('inf')
         best_state = None
@@ -182,7 +199,7 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
                     # thing. Every surviving weight is above zero, so the
                     # denominator cannot be zero.
                     wb = w_train[batch_idx].to(device)
-                    loss = (wb * (pred - yb) ** 2).sum() / wb.sum()
+                    loss = (wb * per_row(pred, yb)).sum() / wb.sum()
                 else:
                     loss = criterion(pred, yb)
                 loss.backward()
@@ -201,7 +218,7 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
                     # the holdout loss carries the same weights.
                     w_ho_d = w_ho.to(device)
                     ho_loss = float(
-                        ((w_ho_d * (ho_pred - y_ho_d) ** 2).sum()
+                        ((w_ho_d * per_row(ho_pred, y_ho_d)).sum()
                          / w_ho_d.sum()).item())
                 else:
                     ho_loss = criterion(ho_pred, y_ho_d).item()

@@ -288,12 +288,13 @@ def sweep_cuts(exp_ids):
         m = mod('n27_removal_cost_and_propagation')
         m.REPEATS = 3
         # 0.9 kept beside 1.0: removing a tenth is the operation the
-        # 2026-09-23 headroom probe priced.
-        m.SHARES = (0.9, 1.0)
+        # 2026-09-23 headroom probe priced. 0.5 kept for one point of the
+        # learning curve the second report asked for.
+        m.SHARES = (0.5, 0.9, 1.0)
         m.NOISE_DRAWS = (0,)
         m.ALPHAS = (0.5, 1.0)
         m.OOF_SPLITS = 3
-        notes['n27'] = ('20 repeats -> 3, 4 shares -> 2 (0.9 and 1.0), 3 draws '
+        notes['n27'] = ('20 repeats -> 3, 6 shares -> 3 (0.5, 0.9, 1.0), 3 draws '
                         '-> 1, 3 relabelling fractions -> 2, 5 inner folds -> 3')
 
     if 'n29' in exp_ids:
@@ -308,6 +309,48 @@ def sweep_cuts(exp_ids):
         m.SHUFFLE_SEEDS = (0,)
         m.OOF_SPLITS = 3
         notes['n30'] = ('3 winsorising thresholds -> 1, 3 shuffle seeds -> 1, '
+                        '5 inner folds -> 3')
+
+    if 'n31' in exp_ids:
+        m = mod('n31_regime_and_breakeven')
+        m.NOISE_DRAWS = (0,)
+        m.FLAG_SEEDS = (0,)
+        m.PRECISIONS = (0.0, 0.5, 1.0)
+        m.OOF_SPLITS = 3
+        notes['n31'] = ('3 draws -> 1, 2 flag seeds -> 1, 5 flag precisions -> 3 '
+                        '(0, 0.5, 1), 5 inner folds -> 3')
+
+    if 'n32' in exp_ids:
+        m = mod('n32_iterative_and_dual_selection')
+        m.NOISE_DRAWS = (0,)
+        m.ITLM_ALPHAS = (0.9,)
+        m.RANDOM_SEEDS = (0,)
+        m.OOF_SPLITS = 3
+        notes['n32'] = ('3 draws -> 1, 3 ITLM kept shares -> 1 (0.9), 3 random '
+                        'seeds -> 1, 5 inner folds -> 3')
+
+    if 'n33' in exp_ids:
+        m = mod('n33_robust_training')
+        m.NOISE_DRAWS = (0,)
+        m.HUBER_C = (0.5, 1.5)
+        m.OOF_SPLITS = 3
+        notes['n33'] = ('3 draws -> 1, 4 Huber thresholds -> 2 (0.5, 1.5), '
+                        '5 inner folds -> 3')
+
+    if 'n34' in exp_ids:
+        m = mod('n34_group_random_effects')
+        m.NOISE_DRAWS = (0,)
+        m.EM_MAX_ROUNDS = 3
+        m.OOF_SPLITS = 3
+        notes['n34'] = '3 draws -> 1, 5 EM rounds -> 3, 5 inner folds -> 3'
+
+    if 'n36' in exp_ids:
+        m = mod('n36_remeasure_priority')
+        m.BUDGET_SHARES = (0.25,)
+        m.SEEDS = (0,)
+        m.RANDOM_DRAWS = 2
+        m.OOF_SPLITS = 3
+        notes['n36'] = ('3 budgets -> 1 (0.25), 2 seeds -> 1, 3 random draws -> 2, '
                         '5 inner folds -> 3')
 
     return notes

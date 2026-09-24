@@ -21,7 +21,11 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n21 | which distance the nearest neighbours are found in | pass | 4 file(s), newest 2026-09-20 | 7 (4 kept) |
 | n23 | cleaning from a model's own per-molecule uncertainty | pass | 11 file(s), newest 2026-09-24 | 9 (7 kept) |
 | n29 | fits one offset per ChEMBL document and removes it from the training labels | pass | none | 0 |
-| n30 | clipped labels: lift, drop, winsorise, or a censored likelihood | 1 file(s), not yet run | none | 0 |
+| n30 | clipped labels: lift, drop, winsorise, or a censored likelihood | pass | none | 0 |
+| n32 | trimmed refits, two learners picking for each other, shrinking flagged labels only, and four more detectors | 1 file(s), not yet run | none | 0 |
+| n33 | robust losses, a transformed target, uncertainty weights, mixup and target-noise bagging | 1 file(s), not yet run | none | 0 |
+| n34 | a shrunk random offset per scaffold group, against subtracting each group mean | 1 file(s), not yet run | none | 0 |
+| n36 | which molecules to give a second measurement, by five rules | 1 file(s), not yet run | none | 0 |
 
 ## Investigations — these need to run and be believed
 
@@ -37,13 +41,15 @@ One row is one noise experiment. **Smoke** is whether a standalone check exists 
 | n22 | whether detectors find the records a human marked wrong | pass | none | 0 |
 | n26 | how large the label noise is, measured from repeat measurements, beside the model's own error | pass | none | 0 |
 | n27 | what training on fewer molecules costs, and how much training-label error reaches the held-out error | pass | none | 0 |
+| n31 | the detector quality the model error predicts, beside what it reaches, and the flag precision where cleaning breaks even | 1 file(s), not yet run | none | 0 |
+| n35 | how far apart the labels of near-identical molecules are, and downweighting pairs that disagree | 1 file(s), not yet run | none | 0 |
 
 ## Where it stands
 
-- 24 experiments, 12 of them methods.
+- 30 experiments, 16 of them methods.
 - 0 have no smoke file at all.
-- 16 have never written a result file.
-- 2 of the 12 methods have had no optimisation loop.
+- 22 have never written a result file.
+- 6 of the 16 methods have had no optimisation loop.
 
 ## The loops, newest first
 
