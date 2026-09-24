@@ -700,7 +700,16 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                   f"defaults {alloc}/{imp}/{int_eval}")
 
         # Per-fold hybrid creation to avoid label leakage in rank measurement
+        # ⛔ THE THREE ARMS ARE MEASURED AT DIFFERENT WIDTHS. The hybrid's width
+        # is whatever create_hybrid built -- it stops each representation at its
+        # last feature scoring above zero, so it is usually under the budget --
+        # while the PCA and random arms are cut to
+        # min(n_feat_cap, training rows - 1) below. Effective rank rises with
+        # width, so the comparison printed at the end mixes a width difference
+        # into a rank difference. Only the PCA/random width was recorded; the
+        # hybrid's is now recorded beside it so the two can be read together.
         fold_ranks = []
+        hybrid_fold_widths = []
         for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
             try:
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
@@ -715,6 +724,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                     augmentations=train_augs,
                     augmentation_strategy=aug_strat)
                 fold_ranks.append(compute_effective_rank(X_hybrid))
+                hybrid_fold_widths.append(int(X_hybrid.shape[1]))
             except Exception:
                 pass
         hybrid_rank = float(np.mean(fold_ranks)) if fold_ranks else float('nan')
@@ -755,8 +765,19 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                 pass
         random_rank = float(np.mean(random_fold_ranks)) if random_fold_ranks else float('nan')
 
+        _hw = (float(np.mean(hybrid_fold_widths)) if hybrid_fold_widths
+               else float('nan'))
+        _pw = float(np.mean(fold_widths)) if fold_widths else float('nan')
+        if hybrid_fold_widths and fold_widths and abs(_hw - _pw) >= 1.0:
+            print(f"      9c budget={budget}: hybrid built {_hw:.0f} features, "
+                  f"PCA/random cut to {_pw:.0f}. Effective rank rises with "
+                  f"width, so the ranks below are not width-matched.")
         results['budgets'].append(budget)
         results['hybrid_rank'].append(float(hybrid_rank))
+        results.setdefault('hybrid_width_per_fold', []).append(
+            list(hybrid_fold_widths))
+        results.setdefault('hybrid_width_mean', []).append(_hw)
+        results.setdefault('pca_random_width_mean', []).append(_pw)
         results['pca_rank'].append(float(pca_rank))
         results['random_rank'].append(float(random_rank))
         results['n_feat_per_fold'].append(fold_widths)
