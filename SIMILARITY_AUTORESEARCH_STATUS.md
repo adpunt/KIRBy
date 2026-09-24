@@ -289,15 +289,15 @@ queued — the owner capped local compute and the current queue is still drainin
 | s01 | investigation | yes, 3/3 datasets | no — it is the comparator s02 is measured against | n/a |
 | s02 | method | yes, 3/3 | yes | **yes** — 20 cells per dataset, all three complete |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
-| s04 | method | yes, 3/3 twice | yes | **re-opened 2026-09-24** — ran on 4 representations, not 7; re-runs queued |
+| s04 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the 4-rep pool understated the HYBRID, not the comparator |
 | s05 | method | yes, 3/3 | yes | **SWEPT 2026-09-24** — 24 cells: 2 voting x 4 exponents x 3 datasets, k swept within |
 | s06 | method | yes, 3/3 twice | yes | **yes** — four levers, 2,628 cells per dataset, all three complete |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
 | s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **yes** — kNN, GP and q-RASAR all scored; the GP's length-scale start is an arm |
-| s11 | method | yes, 3/3 at two budgets | yes | **BLOCKED** — cannot finish locally. 9 attempts, each killed at 2–5 h, no checkpoint so every kill loses the run |
-| s12 | method | yes, 3/3 twice | yes | **re-opened 2026-09-24** — ran on 4 representations, not 7; re-runs queued |
-| s13 | method | yes, 3/3 | yes | **retrieval yes; clustering CANNOT BE** — its statistic moves 6-34x the delta on a reseed |
+| s11 | method | yes, 3/3 at two budgets | yes | **UNBLOCKED 2026-09-24** — torch thread cap + per-condition checkpoint; all 11 arms complete on 2 datasets |
+| s12 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the hybrid's margin roughly doubles on all three |
+| s13 | method | yes, 3/3 | yes | **retrieval SWEPT 2026-09-24** — neighbour count (9 cells) and coefficient (12 cells); clustering still undefined on a reseed |
 
 ## minkowski p=0.5 is queued, not cut
 
