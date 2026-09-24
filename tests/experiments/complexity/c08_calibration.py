@@ -285,7 +285,13 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         sample_X = next(iter(reps.values()))
 
         fold_metrics = []
-        for fold_i, (train_idx, val_idx) in enumerate(_cv_split(groups, n_folds, sample_X, labels)):
+        # task_type: without it _should_stratify falls back to the integer-dtype
+        # heuristic, which its own docstring calls a poor proxy -- a
+        # classification target stored as 0.0/1.0 gets plain GroupKFold and a
+        # fold can come out single-class.
+        for fold_i, (train_idx, val_idx) in enumerate(
+                _cv_split(groups, n_folds, sample_X, labels,
+                          task_type=task_type)):
             train_reps = {k: v[train_idx] for k, v in reps.items()}
             val_reps = {k: v[val_idx] for k, v in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]

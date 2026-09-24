@@ -192,7 +192,8 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
     blueprint_budget_mismatch = set()
 
     for _fold_i, (train_idx, val_idx) in enumerate(
-            cv_split(groups, n_folds, sample_X, labels, mode=mode)):
+            cv_split(groups, n_folds, sample_X, labels, mode=mode,
+                     task_type=task_type)):
         train_reps = {k: v[train_idx] for k, v in reps.items()}
         val_reps = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
