@@ -256,6 +256,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     # calibrates best" result is a real finding, not a collapse. This field lets
     # the rerun confirm separation per dataset.) See
     # COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+    # {condition: [features built, per fold]}, filled in the fold loop.
+    _built_widths = {}
     _cond_budgets = {'optimal': optimal_budget, 'underfit': underfit_budget,
                      'overfit': total_dim}
     results = {
@@ -270,6 +272,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         'task_type': task_type,
         'total_dim': total_dim,
         'condition_budgets': _cond_budgets,
+        # {condition: [features built, per fold]}. Read beside
+        # condition_budgets: a condition asking for total_dim and building a
+        # third of it is not the condition its name says.
+        'condition_widths_built': _built_widths,
         'conditions_distinct': len(set(_cond_budgets.values())) == len(_cond_budgets),
     }
     if not results['conditions_distinct']:
@@ -340,6 +346,18 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     lower_is_better=lower_is_better,
                     is_clf=is_classification,
                 )
+                # ⛔ THE WIDTH BUILT, NOT THE BUDGET ASKED FOR. Two of c08's
+                # four conditions run at budget = total_dim and are read as
+                # "full dimensionality". create_hybrid stops each
+                # representation at its last feature scoring above zero, and
+                # allocate_weighted_global cuts the glued pool the same way
+                # without printing anything, so an "overfit at full dim"
+                # condition can be built on a fraction of the pool -- at which
+                # point it is not an overfit condition and the comparison it
+                # anchors cannot be read. condition_budgets stores the number
+                # asked for; this stores the number built.
+                _built_width = int(X_train.shape[1])
+                _built_widths.setdefault(cond_name, []).append(_built_width)
                 # _va_reps, not val_reps: the same representations the hybrid
                 # was built from, or the column order will not line up.
                 X_val = apply_feature_selection(_va_reps, feature_info)
