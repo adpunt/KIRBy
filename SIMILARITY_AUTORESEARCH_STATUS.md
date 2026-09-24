@@ -196,6 +196,43 @@ results rather than failing loudly:
 65 jobs are queued, roughly 24 hours of wall clock at four at a time, ordered so
 the s05 grid and the s04/s12 re-runs land first and s10's 5-to-8-hour cells last.
 
+## What the suite sweeps, and what it cannot: coefficients vs spaces
+
+Asked directly by the owner 2026-09-24. Checked in the code, not inferred.
+
+**Representation type is swept, as intended.** s13 compares 7 base
+representations, 3 predictive hybrids, 3 similarity hybrids and PCA controls.
+s06 compares 7 base representations and their weighted twins against `hybrid`,
+`hybrid_weighted`, `hybrid_similarity` and `hybrid_similarity_weighted`. That
+axis works.
+
+**The similarity formula is not swept, and most formulas cannot be.**
+`distance_config.DISTANCE_METRICS` is exactly four: manhattan, euclidean,
+cosine, minkowski p=0.5. There is no tanimoto, dice, jaccard, tversky or
+soergel in the hybrid engine.
+
+That is a definition problem, not an omission. `hybrid.py:383` standardises every
+representation block before the hybrid is assembled, and the importance weights
+then multiply those z-scored columns. Measured on caco2 ecfp4: raw is binary,
+0 to 1; standardised it runs -0.67 to 17.29. Tanimoto, Dice, Tversky and Soergel
+are set-overlap ratios needing |A∩B| / |A∪B|, which needs set membership. A
+z-scored column has none and its negative values make the denominator
+meaningless. `simeval.py` already encodes the same constraint, splitting its
+coefficients into BIT_COEFFS, COUNT_COEFFS and CONT_COEFFS with only cosine and
+euclidean in the continuous set.
+
+**Where each cross does and does not exist:**
+
+    formula x base representation   EXISTS, in similarity_metrics/, six formulas
+    space type x one formula        EXISTS, in s01-s13, all at manhattan
+    formula x hybrid space          bit coefficients: undefined
+                                    continuous four: NEVER RUN
+
+⛔ The real gap: every one of the 36 stored result files records `manhattan`.
+The hybrid spaces have never been compared under euclidean, cosine or
+minkowski. That is 3 coefficients x 3 datasets and it is computable today. Not
+queued — the owner capped local compute and the current queue is still draining.
+
 ## s01–s13
 
 | exp | kind | smoke tested / debugged | methods to optimise | optimisation done |
