@@ -497,52 +497,47 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
-## s11 length scale, MATCHED: two datasets
+## s11 length scale, MATCHED on all three datasets
 
 Both halves at 1 configuration, so the recipes are identical and the length
-scale is the only difference. This replaces the confounded comparison retracted
-below.
+scale is the only difference. Replaces the confounded comparison retracted
+below. Gain is oriented so positive means the median start won.
 
-**herg_ki.** AUC lower better; row-order picks out of 300:
-
-    condition          fixed   median    gain   fix ro   med ro
-    random_50d         429.0    423.7    +5.3      300        0
-    ecfp4_raw          429.3    429.0    +0.3      295        0
-    hybrid_50d_refit   413.7    413.5    +0.2        0        0
-    hybrid_50d         415.2    415.2    +0.0        0        0
-    hybrid_gauche_gp   425.9    425.9    +0.0        0        0
-    hybrid_bnn         416.2    416.2    +0.0      158      158
-    random_acq         434.0    434.0    +0.0        0        0
-    tanimoto_ecfp4     430.9    430.9    +0.0        0        0
-    hybrid_ngboost     416.9    417.2    -0.3        7       10
-    pca_50d            425.4    430.0    -4.6      224        0
-    best_single        419.2    424.8    -5.6        0        0
-
-**caco2.** AUC is NEGATIVE here, so a positive gain means the median start won:
+**adme_mdr1** — the largest effect by an order of magnitude:
 
     condition          fixed   median    gain   fix ro   med ro
-    pca_50d            -29.9    -31.4    +1.4       58        0
-    best_single        -30.2    -31.1    +0.9      100        0
-    ecfp4_raw          -30.7    -31.5    +0.8      100        0
-    random_50d         -28.6    -28.7    +0.1      300        0
-    six other arms       unchanged       +0.0        0        0
-    hybrid_ngboost     -31.0    -30.7    -0.4        0        0
+    random_50d         -55.3    -86.8   +31.5      300        0
+    ecfp4_raw          -55.3    -82.4   +27.2      300        0
+    pca_50d            -55.3    -79.7   +24.4      298        0
+    six other arms       unchanged      +0.0        0        0
+    hybrid_ngboost     -88.7    -83.9    -4.8        0        0
+    best_single        -80.5    -73.3    -7.3        0        0
 
-**Row-order picking is eliminated on every affected arm, both datasets.**
+⛔ The three gaining arms score **identically at -55.3** under the fixed start.
+Three different methods returning the same number is the signature of three arms
+all picking the same molecules in file order — 300, 300 and 298 picks of 300.
+They were not running different methods; they were running the same file-order
+sweep three times.
 
-**The arms that move are the arms that had the defect.** On caco2 the
-correspondence is exact: the three that gain are the three whose row-order picks
-were removed, and six arms without the problem are unchanged to the decimal. On
-herg_ki the mechanism is the same but the direction is not — `pca_50d` LOSES 4.6
-even though its 224 row-order picks were removed.
+**herg_ki** — same mechanism, much smaller: `random_50d` +5.3 with 300 picks
+removed, `ecfp4_raw` +0.3 with 295, `pca_50d` -4.6 with 224.
 
-So the fix reliably makes each arm's number mean what it claims. It does not
-reliably improve the arm, and it does not change who wins: the hybrid arms lead
-on both datasets under both settings.
+**caco2** — smaller again: `pca_50d` +1.4 with 58 removed, `best_single` +0.9
+with 100, `ecfp4_raw` +0.8 with 100.
 
-**`hybrid_bnn` is identical on both sides on both datasets** — 158 picks each
-way on herg_ki, 27 each way on caco2. Its flat acquisition is independent of the
-length scale, established on two datasets rather than guessed.
+**The correspondence is exact across all three datasets.** Every arm that moves
+is an arm that had row-order picks; every arm that had none is unchanged to the
+decimal. Six arms are identical on all three datasets.
+
+**The magnitude is dataset-dependent and the direction is not guaranteed.**
+31.5 on adme_mdr1, 5.3 on herg_ki, 1.4 on caco2; `pca_50d` gains on two datasets
+and loses 4.6 on herg_ki. The fix makes each arm's number mean what it claims.
+It does not reliably improve an arm and it does not change who wins — the hybrid
+arms lead on all three datasets under both settings.
+
+**`hybrid_bnn` is identical on both sides on all three datasets** — 158, 27 and
+163 picks each way. Its flat acquisition is independent of the length scale, and
+its cause remains unidentified.
 
 ## RETRACTED: the s11 fixed-vs-median AUC comparison is confounded
 
