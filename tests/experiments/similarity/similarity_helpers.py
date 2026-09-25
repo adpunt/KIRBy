@@ -623,7 +623,23 @@ def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
 # The share of the dataset's molecules the cliff stratum is calibrated to.
 # Chosen from the sweep in the calibration run of 2026-09-20: see the block
 # comment above for what the uncalibrated rule gave.
-CLIFF_TARGET_PCT = 15.0
+#
+# 15.0 sits between two constraints measured on these three datasets:
+#   below it   at 10% the thinnest held-out fold carries 19 cliff molecules on
+#              herg_ki and 23 on caco2, under the 30 a fold needs to give a
+#              stable cliff score.
+#   above it   at 20% adme_mdr1's activity gap falls to 0.21x its median
+#              absolute deviation, which is too small a difference to call a
+#              cliff.
+# Even at 15% adme_mdr1 needs 0.50x MAD, which is weak — it has 2,318 scaffolds
+# among 2,641 molecules, so genuinely similar pairs are scarce.
+#
+# KIRBY_CLIFF_TARGET_PCT sweeps it. Unset gives 15.0, so every stored number
+# reproduces. s04 and s12 record the achieved share and the gap in MAD units
+# per run, so the two constraints above are checkable from any result file
+# rather than only from this comment.
+CLIFF_TARGET_PCT = float(
+    os.environ.get('KIRBY_CLIFF_TARGET_PCT', '').strip() or 15.0)
 
 # The structural cutoff of Stumpfe & Bajorath 2019 for ECFP4, unchanged.
 CLIFF_TANIMOTO_CUTOFF = 0.55
