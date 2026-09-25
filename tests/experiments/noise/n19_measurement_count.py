@@ -1230,10 +1230,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             acc = {s: {c: {m: {} for m in downstream_models}
                        for c in CONDITIONS} for s in spaces}
             errors = {}
-            # {space: {representation or None: [one value per fold]}}. A
-            # single-representation space can hold more than one feature
-            # matrix, one per distinct representation at that rank, so these
-            # are kept per matrix; a hybrid space has one, under None.
+            # {space: {feature matrix: [one value per fold]}}. A space can hold
+            # more than one feature matrix -- one per distinct representation
+            # in base_1 / base_2, one per distinct recipe in a hybrid space --
+            # so these are kept per matrix.
             tau2_seen = {s: {} for s in spaces}
             shrink_seen = {s: {} for s in spaces}
             # {space: [one fit_noise_variance record per (fold, matrix)]}
