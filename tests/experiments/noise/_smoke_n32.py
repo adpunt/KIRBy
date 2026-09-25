@@ -181,18 +181,36 @@ def test_itlm_and_shrink():
           f"w = {rec['one_weight']:.3f}, {int(flag.sum())} moved")
 
 
+def test_cleanlab():
+    print("\ncleanlab:")
+    rng = np.random.default_rng(3)
+    X = rng.normal(size=(120, 4))
+    y = X[:, 0] + rng.normal(0, 0.1, 120)
+    moved = np.zeros(120, dtype=bool)
+    moved[:12] = True
+    y[moved] += 2.0
+    sc = n32.detector_scores('cleanlab', X, y, None, None, 3)
+    from sklearn.metrics import roc_auc_score
+    auc = float(roc_auc_score(moved, sc))
+    check('12. the cleanlab detector gives one score per molecule and finds a '
+          '2-unit shift above chance', sc.shape == (120,) and auc > 0.7,
+          f'AUROC {auc:.2f}')
+
+
 def test_full_runs():
     print("\nfull runs:")
     models = ['rf', 'lightgbm']
+    # cleanlab is left out of the full run for time; test_cleanlab covers it.
     res = run_it(make_data(), 'toy', models=models,
                  noise_condition='shift_only_p10', levels=[0.0, 2.0],
-                 draws=[0], alphas=[0.9], random_seeds=[0, 1])
+                 draws=[0], alphas=[0.9], random_seeds=[0, 1],
+                 detectors=[d for d in n32.DETECTORS if d != 'cleanlab'])
     lv = res['per_level']['2']['base']
     missing = [a for a in res['arms'] if a not in lv]
     check('6. every arm is scored at level 2', not missing,
           f'missing {missing}' if missing else f"{len(res['arms'])} arms")
     det = res['detection']['2']['base']
-    no_auroc = [d for d in n32.DETECTORS
+    no_auroc = [d for d in n32.DETECTORS if d != 'cleanlab'
                 if d not in det or not np.isfinite(det[d]['detection_auroc'])]
     check('6b. every detector is graded, with an AUROC', not no_auroc,
           ', '.join(f"{d} {det[d]['detection_auroc']:.2f}" for d in det))
@@ -279,6 +297,7 @@ def test_the_command_line():
 
 if __name__ == '__main__':
     test_knn_shapley()
+    test_cleanlab()
     test_shift_and_counts()
     test_itlm_and_shrink()
     test_guards()

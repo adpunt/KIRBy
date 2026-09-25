@@ -133,7 +133,12 @@ def sweep_cuts(exp_ids):
     # at the end of a run still has a curve to fit.
     DP._DEFAULT_NOISE_LEVELS = (0.0, 0.15, 0.3, 0.75)
     DP.CENSORING_LEVELS_DETECT = (0.0, 0.10, 0.25)
-    notes['levels'] = '6 injected levels -> 4'
+    # The full censored-fraction grid too: n13, n30, n33 and every file that
+    # does not pass detect_grid=True read this one, and until 2026-09-25 it was
+    # left at all 6 fractions locally. Still a superset of the detect grid.
+    DP.CENSORING_LEVELS = (0.0, 0.10, 0.25, 0.40)
+    notes['levels'] = ('6 injected levels -> 4; 6 censored fractions -> 4 '
+                       '(0, 0.10, 0.25, 0.40), detect grid -> 3')
 
     def mod(name):
         return importlib.import_module(f'experiments.noise.{name}')
@@ -352,6 +357,46 @@ def sweep_cuts(exp_ids):
         m.OOF_SPLITS = 3
         notes['n36'] = ('3 budgets -> 1 (0.25), 2 seeds -> 1, 3 random draws -> 2, '
                         '5 inner folds -> 3')
+
+    if 'n37' in exp_ids:
+        m = mod('n37_noise_budget')
+        m.SIMEX_DRAWS = (0,)
+        notes['n37'] = '3 extra-noise draws -> 1; all three multipliers kept'
+
+    if 'n38' in exp_ids:
+        m = mod('n38_noise_relative_to_model_error')
+        m.NOISE_DRAWS = (0,)
+        m.RANDOM_SEEDS = (0,)
+        m.OOF_SPLITS = 3
+        m.ITLM_ROUNDS = 2
+        notes['n38'] = ('3 draws -> 1, 3 random seeds -> 1, 5 inner folds -> 3, '
+                        '4 ITLM rounds -> 2')
+
+    if 'n39' in exp_ids:
+        m = mod('n39_correlated_sources')
+        m.NOISE_DRAWS = (0,)
+        m.OOF_SPLITS = 3
+        notes['n39'] = '3 draws -> 1, 5 inner folds -> 3'
+
+    if 'n40' in exp_ids:
+        m = mod('n40_model_side_regularisation')
+        m.NOISE_DRAWS = (0,)
+        m.TUNE_N_ITER = 8
+        m.SEED_AVG_N = 5
+        m.OOF_SPLITS = 3
+        notes['n40'] = ('3 draws -> 1, 20 tuning settings -> 8, 10 averaged seeds '
+                        '-> 5, 5 inner folds -> 3')
+
+    if 'n41' in exp_ids:
+        m = mod('n41_conformal_fdr_detection')
+        m.NOISE_DRAWS = (0,)
+        m.RANDOM_SEEDS = (0,)
+        m.OOF_SPLITS = 3
+        m.DISAGREEMENT_SEEDS = (0, 1, 2)
+        m.DETECTORS = tuple(d for d in m.DETECTORS if d != 'cleanlab')
+        notes['n41'] = ('3 draws -> 1, 3 random seeds -> 1, 5 inner folds -> 3, '
+                        '5 disagreement seeds -> 3, cleanlab left out locally '
+                        '(its own bootstrap refits)')
 
     return notes
 

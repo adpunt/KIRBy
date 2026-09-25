@@ -73,6 +73,14 @@ features fitted on the noisy labels as they are.
   lightgbm_tukey          Tukey's biweight as a LightGBM custom objective, with
                           threshold TUKEY_K * s. See tukey_objective for why its
                           second derivative is floored.
+  lightgbm_expectile_t<t> an asymmetric squared loss (expectile regression) as a
+                          LightGBM custom objective, at t in EXPECTILE_TAUS. Added
+                          2026-09-25 from the third research report (its B3),
+                          which names it for errors in one direction. Of the
+                          conditions n33 sweeps, censoring is the one-direction
+                          case: it moves labels down, so t = 0.6 leans toward the
+                          molecules above the prediction. Both sides are run
+                          because a real dataset does not say which way it errs.
   xgboost_pseudohuber_c<c>  XGBoost reg:pseudohubererror, huber_slope = c * s
   xgboost_absolute        XGBoost reg:absoluteerror
   rf_l1                   a random forest with absolute-error splits
@@ -206,6 +214,9 @@ LABEL_ARMS = ('yeo_johnson', 'invvar_ngboost', 'c_mixup',
 # NGBoost is fitted in this model's feature matrix.
 NGBOOST_HOST = 'lightgbm'
 
+# Expectile levels. 0.5 is the plain squared loss, so it is not repeated here.
+EXPECTILE_TAUS = (0.4, 0.6)
+
 # NGBoost stages, the registry's 500 (find_best_hybrid.DEFAULT_MODELS['ngboost']).
 # NGBoost's own TFixedDf fixes the degrees of freedom at 3.
 NGB_ESTIMATORS = 500
@@ -220,6 +231,8 @@ def build_swaps(huber_c):
     out['lightgbm_fair'] = 'lightgbm'
     out['lightgbm_quantile_median'] = 'lightgbm'
     out['lightgbm_tukey'] = 'lightgbm'
+    for t in EXPECTILE_TAUS:
+        out[f'lightgbm_expectile_t{t:g}'] = 'lightgbm'
     for c in huber_c:
         out[f'xgboost_pseudohuber_c{c:g}'] = 'xgboost'
     out['xgboost_absolute'] = 'xgboost'
@@ -267,6 +280,21 @@ def tukey_objective(threshold, hess_floor=TUKEY_HESS_FLOOR):
     return _obj
 
 
+def expectile_objective(tau):
+    """LightGBM custom objective for the expectile loss at level tau.
+
+    loss = w * (y - f)^2 with w = tau where the label is above the prediction and
+    1 - tau where it is below. With r = f - y: gradient 2 w r, hessian 2 w.
+    """
+    t = float(tau)
+
+    def _obj(y_true, y_pred):
+        r = np.asarray(y_pred, dtype=float) - np.asarray(y_true, dtype=float)
+        w = np.where(r <= 0.0, t, 1.0 - t)
+        return 2.0 * w * r, 2.0 * w
+    return _obj
+
+
 class _Centred:
     """A regressor fitted to y - centre, predicting prediction + centre.
 
@@ -308,6 +336,10 @@ def make_swap(name, s, huber_c):
     if name == 'lightgbm_tukey':
         return _Centred(_get_lgbm_regressor().set_params(
             objective=tukey_objective(TUKEY_K * s)))
+    if name.startswith('lightgbm_expectile_t'):
+        t = float(name[len('lightgbm_expectile_t'):])
+        return _Centred(_get_lgbm_regressor().set_params(
+            objective=expectile_objective(t)))
     if name.startswith('xgboost_pseudohuber_c'):
         c = float(name[len('xgboost_pseudohuber_c'):])
         return _Centred(_get_xgb_regressor().set_params(

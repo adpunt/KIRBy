@@ -55,7 +55,7 @@ EXPECTED = {
     'noise': ['c10', 'n01', 'n02', 'n06', 'n07', 'n09', 'n11', 'n12', 'n13',
               'n14', 'n15', 'n16', 'n17', 'n18', 'n19', 'n20', 'n21', 'n22',
               'n23', 'n26', 'n27', 'n29', 'n30', 'n31', 'n32', 'n33', 'n34',
-              'n35', 'n36'],
+              'n35', 'n36', 'n37', 'n38', 'n39', 'n40', 'n41'],
     'federated': ['fed01', 'fed02', 'fed03', 'fed04', 'fed05'],
 }
 
@@ -126,6 +126,11 @@ DIR_MAP = {
         'n34': 'n34_group_random_effects',
         'n35': 'n35_near_duplicate_disagreement',
         'n36': 'n36_remeasure_priority',
+        'n37': 'n37_noise_budget',
+        'n38': 'n38_noise_relative_to_model_error',
+        'n39': 'n39_correlated_sources',
+        'n40': 'n40_model_side_regularisation',
+        'n41': 'n41_conformal_fdr_detection',
     },
     'federated': {
         'fed01': 'fed01_noise_heterogeneity',

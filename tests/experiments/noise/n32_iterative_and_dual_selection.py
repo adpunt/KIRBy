@@ -52,6 +52,12 @@ average precision, precision at the true count). No detector reads the mask.
   knn_shapley               minus each molecule's Shapley value to a 5-nearest-
                             neighbour predictor, summed with every other training
                             molecule as the test point. See knn_shapley_values.
+  cleanlab                  1 - cleanlab's regression label quality
+                            (noise_helpers.cleanlab_suspicion, lightgbm inside).
+                            Added 2026-09-25 from the third research report: the
+                            rescaled detectors above are cleanlab-STYLE scores;
+                            this is cleanlab's own, with its bootstrap estimate
+                            of the model's uncertainty.
 
 THE METHODS. Every downstream model is fitted on what each method leaves, in
 every feature space, and scored on held-out molecules against their UNTOUCHED
@@ -178,7 +184,7 @@ RANDOM_SEEDS = (0, 1, 2)
 OOF_SPLITS = 5
 KNN_SHAPLEY_K = 5
 DETECTORS = ('oof_residual', 'ngboost_rescaled', 'quantile_forest_rescaled',
-             'conformal', 'knn_shapley')
+             'conformal', 'knn_shapley', 'cleanlab')
 GAP_MIN_FRAC = 0.02
 
 POOL_SUBSET = 'predictive_and_similarity'
@@ -282,6 +288,9 @@ def detector_scores(name, X, y, groups, p_oof, oof_splits):
         return _rescaled(y, est.predictions_, est.uncertainties_)
     if name == 'knn_shapley':
         return -knn_shapley_values(X, y, groups=groups)
+    if name == 'cleanlab':
+        from experiments.noise.noise_helpers import cleanlab_suspicion
+        return cleanlab_suspicion(X, y, cv_n_folds=oof_splits)
     raise ValueError(f'n32: unknown detector {name!r}')
 
 
