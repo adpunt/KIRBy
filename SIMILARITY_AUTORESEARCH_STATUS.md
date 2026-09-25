@@ -287,15 +287,15 @@ queued — the owner capped local compute and the current queue is still drainin
 | exp | kind | smoke tested / debugged | methods to optimise | optimisation done |
 |---|---|---|---|---|
 | s01 | investigation | yes, 3/3 datasets | no — it is the comparator s02 is measured against | n/a |
-| s02 | method | yes, 3/3 | yes | **NO — 6 cells, not the 20 claimed.** 1 weight method x 2 lineages x 3 budgets; `weight_methods` has one value |
+| s02 | method | yes, 3/3 | yes | **still NO, but the blocker is gone.** `weight_methods` was stuck on lightgbm_gain because SIMILARITY_EXTRA always supplied it; `KIRBY_S02_WEIGHT_METHODS` fixes that (2026-09-25) and 3 jobs are queued, 0 landed. Separately, a build-importance sweep is 5 of 9 cells in |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
 | s04 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the 4-rep pool understated the HYBRID, not the comparator |
 | s05 | method | yes, 3/3 | yes | **SWEPT 2026-09-24** — 24 cells: 2 voting x 4 exponents x 3 datasets, k swept within |
 | s06 | method | yes, 3/3 twice | yes | **yes** — 4 levers, 2,628 cells; comparator re-pointed 2026-09-25 to the quantity s06 measures |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
-| s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **partial** — 3 levers swept (k, q-RASAR k, length-scale start); exponent, voting, weight convention, normalize_y each at ONE value. Headline no longer reports the collapsed arm (2026-09-25) |
-| s11 | method | yes, 3/3 at two budgets | yes | **UNBLOCKED 2026-09-24** — all 11 arms, 3 datasets, matched pairs. Length-scale start swept; label direction fixed 2026-09-25 (caco2 was hunting the WRONG end) |
+| s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **partial, sweep in flight** — 3 levers swept (k, q-RASAR k, length-scale start); weight convention and normalize_y still at ONE value. 24 cells queued for exponent x voting x dataset, 0 landed; the 3 uniform-exponent-0 cells are degenerate by construction (every weight is 1 and voting is uniform, so both arms are identical) |
+| s11 | method | yes, 3/3 at two budgets | yes | **UNBLOCKED 2026-09-24** — all 11 arms, 3 datasets, matched pairs. Length-scale start swept; label direction fixed 2026-09-25 (caco2 was hunting the WRONG end). ⛔ on caco2 two of the three seeds return one area shared by all 11 conditions, so its ranking rests on one seed — see the section above |
 | s12 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the hybrid's margin roughly doubles on all three |
 | s13 | method | yes, 3/3 | yes | **retrieval SWEPT** — neighbour count (9 cells) + coefficient (12 cells). Clustering undefined on a reseed |
 
