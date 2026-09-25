@@ -231,6 +231,23 @@ from experiments.noise.n07_remediation import (
     cleaned_training_set, _compute_noise_scores, _predict_for_metric,
     correction_targets, targets_needed, REGRESSION_ONLY_CLEANUPS,
 )
+# The similarity axis, the D-versus-D' rows, the controls, the caches and the
+# per-fold checkpoint, added 2026-09-25 (plan sections 1-3), for n20's
+# CLEANUPS ONLY. The recipe searches are untouched: owner's instruction
+# 2026-09-25, n20's search waits for a discussion (plan section 8).
+from experiments.noise import noise_cache as nc
+from experiments.noise import _sim_axis_n15_n22 as sx
+from experiments.noise.similarity_space import SWEPT_KS
+
+# The name the rows file and the checkpoint are filed under.
+EXP_FULL_NAME = 'n20_clean_before_search'
+
+# What a default-path row's similarity_setting says when the cleanup read a
+# neighbour list. label_smooth / knn_smooth read the single representation the
+# cleaning is decided in, under the process-wide distance (sx.TODAY);
+# prox_smooth reads a forest fitted on that same matrix (n07:904-913).
+_DEFAULT_SIM = {'label_smooth': sx.TODAY, 'knn_smooth': sx.TODAY,
+                'prox_smooth': 'forest_proximity|none|forest|k=default'}
 
 # Which cleanup is applied to the training rows. 'no_cleaning' is not a cleanup:
 # its cleaned column is the uncleaned one, so it is the control that checks the
@@ -1114,12 +1131,183 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # configurations selected it.
     per_feature = {}
     refuses_weight = set()
+
+    # ── The main measurement, the similarity axis and the checkpoint ──
+    # Added 2026-09-25 (plan sections 1-3), for the cleanups only.
+    #
+    # ROWS. D is `search_asis__fit_asis`; D' is each of the other three arms,
+    # one d_vs_dprime row per (regime, level, draw, fold, single
+    # representation, cleanup, flag rate, arm, model), built from the scores
+    # the loop already computes -- no refit. score_clean, under the injected
+    # regime, is the model fitted on the CLEAN training labels in the
+    # searched-on-as-it-is features, one extra fit per (fold, model).
+    #
+    # THE SIMILARITY SWEEP, FIT SIDE ONLY. label_smooth and knn_smooth, and
+    # prox_smooth under forest_proximity, re-find their neighbours in every
+    # setting of sx.sweep_settings() at every k in SWEPT_KS -- BASE_RANK_MODEL's
+    # top-2 single representations of this fold, each plus augmented features,
+    # its searched-on-as-it-is hybrid, ECFP4 Tanimoto, forest proximity -- and
+    # only the `search_asis__fit_cleaned` arm is refitted with the result.
+    # TODO(similarity-sweep 2026-09-25): the two searched-on-cleaned arms are
+    # NOT swept. Each cleaned label column needs its own recipe search, and a
+    # similarity setting gives each smoother a new column per (setting, k), so
+    # the search count multiplies by the number of settings (plan section 8).
+    # That waits for the owner. hybrid_similarity is unavailable here: the
+    # fold's own search is run under the predictive objective only.
+    #
+    # CHECKPOINT. Every accumulator is pickled after every (regime, level,
+    # draw, fold), so a killed run resumes at the next one; the recipe
+    # searches themselves are already on disk under their namespaces.
+    metric = (metric_name, metric_fn, lower_is_better)
+    rows = sx.Rows(output_dir, EXP_FULL_NAME, dataset_name,
+                   condition=condition if 'injected' in regimes else None)
+    sweep = sx.sweep_settings()
+    results['rows'] = rows.summary()
+    results['similarity_settings_swept'] = [s_.name for s_ in sweep]
+    results['similarity_ks_swept'] = list(SWEPT_KS) if sweep else []
+    # Which neighbours every number OUTSIDE the rows and the similarity axis was
+    # computed with, so each result record names its similarity setting.
+    results['similarity_setting_of_the_default_path'] = dict(_DEFAULT_SIM)
+    results['similarity_arms_swept'] = ['search_asis__fit_cleaned']
+    sim_unavailable = {}
+    augmentations_all = data.get('augmentations') or None
+    _rank_factory = (model_factories.get(BASE_RANK_MODEL) or get_model_factories(
+        [BASE_RANK_MODEL], task_type=task_type,
+        n_samples=len(labels)).get(BASE_RANK_MODEL))
+    ck = sx.FoldCheckpoint(
+        output_dir, EXP_FULL_NAME, dataset_name,
+        sx.run_signature(data, config, {
+            'models': downstream_models, 'cleanups': run_cleanups,
+            'flag_rates': flag_rates, 'regimes': regimes,
+            'condition': condition, 'passes': passes, 'budgets': budgets,
+            'search_n_folds': search_n_folds, 'settings': settings,
+            'search_scores_on': search_scores_on,
+            'per_feature_top_n': per_feature_top_n}),
+        condition=condition if 'injected' in regimes else None)
+    if ck.state is not None:
+        (acc, errors, detection_acc, identity_probe, recipe_probe,
+         per_feature, _rw, base_reps_by_fold, sim_unavailable) = ck.state
+        refuses_weight = set(_rw)
+
+    def _on_hybrid(cleaned, X_tr_a, y0):
+        # The cleaning decided in the single representation, applied to the
+        # rows of the searched-on-as-it-is hybrid -- what the
+        # search_asis__fit_cleaned arm fits (the loop below, 'the two arms
+        # whose features came from the labels as they are').
+        if cleaned is None:
+            return None
+        keep, col = cleaned['keep'], cleaned['label_column']
+        if keep is not None:
+            return {'X': X_tr_a[keep], 'y': y0[keep], 'sample_weight': None,
+                    'keep': keep, 'label_column': None}
+        return {'X': X_tr_a, 'y': y0 if col is None else col,
+                'sample_weight': cleaned['sample_weight'], 'keep': None,
+                'label_column': col}
+
+    def _ident(regime, level, draw, fold_i, cleanup, rate, base_sp, base_rn,
+               arm, mname_input, sim):
+        return sx.identity(
+            dataset=dataset_name, experiment=EXP_FULL_NAME, method=cleanup,
+            method_setting=(f'arm={arm}|flag_rate={rate:g}|'
+                            f'cleaned_in={base_sp}:{base_rn}|'
+                            f'detector={DETECTOR}|'
+                            f'search_scores_on={search_scores_on}'),
+            similarity_setting=sim, model_input=mname_input,
+            noise_condition=(condition if regime == 'injected'
+                             else 'as_they_come'),
+            level=None if level is None else float(level),
+            draw=int(draw) if regime == 'injected' else None,
+            fold=int(fold_i))
+
+    def _sweep_base(regime, level, draw, fold_i, X_base_tr, y0, suspicion,
+                    targets, g_tr, train_idx, val_idx, train_reps, val_reps,
+                    fold_base, base_sp, base_rn, space_asis, D_by_model,
+                    clean_by_model, y_val, search_asis):
+        """The fit-side arm under every similarity setting and k."""
+        best_rf = get_best_for_downstream(search_asis, BASE_RANK_MODEL,
+                                          budget=None)
+        recipes = {'hybrid': best_rf['blueprint']} if best_rf else {}
+        aug_tr = aug_va = None
+        if augmentations_all:
+            aug_tr = {a: np.asarray(m_[train_idx], dtype=np.float64)
+                      for a, m_ in augmentations_all.items()}
+            aug_va = {a: np.asarray(m_[val_idx], dtype=np.float64)
+                      for a, m_ in augmentations_all.items()}
+        sp_tr, _sp_va, unav = sx.build_spaces(
+            dataset_name, sweep, X_model_tr=X_base_tr, train_reps=train_reps,
+            val_reps=val_reps, train_idx=train_idx,
+            base_names=list(fold_base.values()), recipes=recipes, y_train=y0,
+            groups_train=g_tr, model_name=BASE_RANK_MODEL,
+            model_factory=_rank_factory, metric=metric, task_type=task_type,
+            augmentations_train=aug_tr, augmentations_val=aug_va)
+        smiles_tr = sx.smiles_for(data, train_idx)
+        for setting in sweep:
+            if setting.space in unav:
+                sim_unavailable.setdefault(setting.name, unav[setting.space])
+                continue
+            nb, why = sx.neighbour_lists(dataset_name, setting, sp_tr, y0,
+                                         smiles_train=smiles_tr, is_clf=is_clf)
+            if nb is None:
+                sim_unavailable.setdefault(setting.name, why)
+                continue
+            for k in sx.ks_held(nb):
+                sim = sx.sim_name(setting, k)
+                for cleanup in run_cleanups:
+                    if (cleanup == IDENTITY_CONTROL
+                            or cleanup in RANDOM_FLAG_CLEANUPS
+                            or not sx.strategy_reads_setting(cleanup, setting)):
+                        continue
+                    for rate in flag_rates:
+                        def _clean(sc_, rate_, _c=cleanup, _k=k):
+                            return cleaned_training_set(
+                                _c, X_base_tr, y0, sc_, rate_, is_clf=is_clf,
+                                groups=g_tr, targets=targets,
+                                similarity_neighbours=nb, similarity_k=_k)
+                        try:
+                            cleaned = _clean(suspicion, rate)
+                        except Exception as exc:
+                            print(f"      {cleanup} under {sim} failed: "
+                                  f"{type(exc).__name__}: {exc}")
+                            cleaned = None
+                        for mname, (X_tr_a, X_va_a) in space_asis.items():
+                            ident = _ident(regime, level, draw, fold_i,
+                                           cleanup, rate, base_sp, base_rn,
+                                           ARM_TODAY, f'hybrid_asis:{mname}',
+                                           sim)
+                            if rows.is_done(ident, [mname]) and not \
+                                    sx.controls_enabled():
+                                continue
+                            _kw = dict(
+                                X_tr=X_tr_a, y_D=y0, X_va=X_va_a, y_va=y_val,
+                                metric=metric,
+                                factories={mname: model_factories[mname]},
+                                score_D=({mname: D_by_model[mname]}
+                                         if mname in D_by_model else None),
+                                score_clean=({mname: clean_by_model[mname]}
+                                             if mname in clean_by_model
+                                             else None))
+                            sx.dprime_rows(rows, dataset_name, ident,
+                                           _on_hybrid(cleaned, X_tr_a, y0),
+                                           **_kw)
+                            sx.control_rows(
+                                rows, dataset_name, ident,
+                                _on_hybrid(cleaned, X_tr_a, y0),
+                                seed=sx.seed_of(regime, level, draw, fold_i,
+                                                base_sp, cleanup, rate, mname,
+                                                sim),
+                                is_clf=is_clf,
+                                rerun=(lambda sc_, r_, _X=X_tr_a:
+                                       _on_hybrid(_clean(sc_, r_), _X, y0)),
+                                **_kw)
+
     t0 = time.time()
 
     for regime in regimes:
         if regime not in passes:
             raise ValueError(f"n20: unknown regime {regime!r}")
-        acc[regime] = {}
+        # setdefault, not a fresh dict, since 2026-09-25: a resumed run
+        # restores acc from the checkpoint and must not wipe it here.
+        acc.setdefault(regime, {})
         for level, draw in passes[regime]:
             lvl_key = 'none' if level is None else f'{level:g}'
             tag = (f'{regime}' if level is None
@@ -1133,6 +1321,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                       noise_seed=draw, is_clf=is_clf)
 
             for fold_i, (train_idx, val_idx) in enumerate(splits):
+                _unit = f'{regime}|{lvl_key}|d{draw}|f{fold_i}'
+                if ck.is_done(_unit):
+                    print(f"    fold {fold_i}: already in the checkpoint, "
+                          f"skipped")
+                    continue
+                fold_rows = []
                 fold_key = f'l{lvl_key}d{draw}f{fold_i}'
                 y_val = labels[val_idx]
                 g_tr = groups[train_idx] if groups is not None else None
@@ -1185,14 +1379,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                    budget=None)
                     if not best:
                         continue
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, y0, best['blueprint'], g_tr,
-                        model_factories[mname](), metric_fn, lower_is_better)
+                    # Through noise_cache since 2026-09-25 (plan section
+                    # 3): the same hybrid_for_fold call, stored under its
+                    # inputs, so the similarity sweep's 'hybrid' space for
+                    # BASE_RANK_MODEL reads this build back.
+                    X_tr_h, X_va_h = nc.cached_hybrid_for_fold(
+                        dataset_name, train_reps, val_reps, y0,
+                        best['blueprint'], g_tr, model_factories[mname](),
+                        metric_fn, lower_is_better, model_name=mname,
+                        metric_name=metric_name, train_idx=train_idx)
                     if X_tr_h is None:
                         continue
                     s = StandardScaler()
                     space_asis[mname] = (s.fit_transform(X_tr_h),
                                          s.transform(X_va_h))
+
+                # The model fitted on the CLEAN training labels in those same
+                # features, the row's score_clean. Injected regime only: under
+                # the other there is no clean column. Added 2026-09-25.
+                clean_by_model = {}
+                if spec is not None:
+                    for mname, (X_tr_a, X_va_a) in space_asis.items():
+                        clean_by_model[mname] = sx.fit_score(
+                            dataset_name, mname, model_factories[mname],
+                            X_tr_a, np.asarray(labels[train_idx]), X_va_a,
+                            y_val, metric)
 
                 # ── THE SINGLE REPRESENTATIONS, FROM THIS FOLD'S OWN SEARCH ──
                 # Owner's decision 2026-09-25: BASE_RANK_MODEL's top
@@ -1640,6 +1851,89 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         continue
                                     arm_cell.setdefault(arm, {})[fold_key] = s
 
+                            # ── This (cleanup, rate)'s rows ──
+                            # Against search_asis__fit_asis on the same fold.
+                            # An arm that is undefined for this cleanup (the
+                            # searched-on-cleaned pair of downweight) writes
+                            # no row; one that declined writes a nan.
+                            if cleanup == IDENTITY_CONTROL:
+                                continue
+                            _strat = RANDOM_FLAG_CLEANUPS.get(cleanup, cleanup)
+                            _sim = _DEFAULT_SIM.get(_strat, sx.NO_SIMILARITY)
+                            for mname in downstream_models:
+                                _arms = rate_cell.get(mname, {})
+                                _D = _arms.get('search_asis__fit_asis',
+                                               {}).get(fold_key)
+                                if _D is None:
+                                    continue
+                                for arm in ARMS[1:]:
+                                    _P = _arms.get(arm, {}).get(fold_key)
+                                    if _P is None and arm != ARM_TODAY:
+                                        continue
+                                    _mi = (f'hybrid_asis:{mname}'
+                                           if arm.startswith('search_asis')
+                                           else f'hybrid_searched_on_cleaned:'
+                                                f'{mname}')
+                                    fold_rows.append(sx.row(
+                                        _ident(regime, level, draw, fold_i,
+                                               cleanup, rate, base_sp, base_rn,
+                                               arm, _mi, _sim),
+                                        model=mname, metric=metric,
+                                        score_D=_D, score_Dprime=_P,
+                                        score_clean=clean_by_model.get(mname)))
+                                # The shared twins of the fit-side arm, under
+                                # KIRBY_NOISE_CONTROLS=1. n20's own
+                                # random-flag control (a permuted suspicion
+                                # score fed to BOTH searches) is a different
+                                # control and stays.
+                                if (sx.controls_enabled()
+                                        and cleanup not in RANDOM_FLAG_CLEANUPS
+                                        and mname in space_asis):
+                                    _Xa, _Xva = space_asis[mname]
+                                    sx.control_rows(
+                                        rows, dataset_name,
+                                        _ident(regime, level, draw, fold_i,
+                                               cleanup, rate, base_sp,
+                                               base_rn, ARM_TODAY,
+                                               f'hybrid_asis:{mname}', _sim),
+                                        _on_hybrid(cleaned, _Xa, y0),
+                                        X_tr=_Xa, y_D=y0, X_va=_Xva,
+                                        y_va=y_val, metric=metric,
+                                        factories={mname:
+                                                   model_factories[mname]},
+                                        seed=sx.seed_of(regime, level, draw,
+                                                        fold_i, base_sp,
+                                                        cleanup, rate, mname),
+                                        is_clf=is_clf,
+                                        score_D={mname: _D},
+                                        score_clean=(
+                                            {mname: clean_by_model[mname]}
+                                            if mname in clean_by_model
+                                            else None))
+
+                    # ── The similarity sweep, fit side, in this single
+                    #    representation ──
+                    if sweep and space_asis:
+                        _D_by_model = {}
+                        for mname in space_asis:
+                            for _c in acc[regime][lvl_key].get(base_sp, {}).values():
+                                for _r in _c.values():
+                                    _v = (_r.get(mname, {})
+                                          .get('search_asis__fit_asis', {})
+                                          .get(fold_key))
+                                    if _v is not None:
+                                        _D_by_model.setdefault(mname, _v)
+                        _sweep_base(regime, level, draw, fold_i, X_base_tr, y0,
+                                    suspicion, _targets, g_tr, train_idx,
+                                    val_idx, train_reps, val_reps, fold_base,
+                                    base_sp, base_rn, space_asis, _D_by_model,
+                                    clean_by_model, y_val, search_asis)
+
+                rows.write(fold_rows)
+                ck.save(_unit, (acc, errors, detection_acc, identity_probe,
+                                recipe_probe, per_feature,
+                                sorted(refuses_weight), base_reps_by_fold,
+                                sim_unavailable))
                 print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
 
     results['per_regime'] = convert_numpy(acc)
@@ -1677,7 +1971,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _summarise(acc, downstream_models, run_cleanups, flag_rates,
                    metric_name, lower_is_better, identity_probe,
                    recipe_probe))
+    results['rows'] = rows.summary()
+    if sim_unavailable:
+        results['similarity_settings_unavailable'] = sim_unavailable
     _print_summary(results, metric_name)
+    # n20's result file is written by its caller (run_all or main), not here.
+    # The snapshot is cleared on return: a kill between this return and that
+    # write costs a re-run of the folds, never a stale resume.
+    ck.clear()
     return results
 
 

@@ -25,7 +25,12 @@
 #
 # HTC, from https://arc-user-guide.readthedocs.io/en/latest/job-scheduling.html
 # and .../slurm-reference.html:
-#   --clusters=htc selects htc. NEVER pass --account.
+#   --clusters=htc selects htc. No --account in the header: SLURM bills the
+#   default association unless the sbatch line adds one (2026-09-25: the
+#   account with the best fair share on htc is printed by
+#   where_to_submit.sh --best-cluster-account htc).
+#   SUPERSEDED for sweeps by ../runbook/stage1_prelim_noise.py, which runs the
+#   full folds and levels through submit_dataset.sh, one process per task.
 #   short: 12 h maximum, 1 h default. medium: 48 h maximum. long: 30 days.
 #   Default memory 8000 MB per CPU. htc nodes "typically have 16, 20 or 48 cores".
 #   --array and SLURM_ARRAY_TASK_ID as below. The ARC pages state no limit on
@@ -43,6 +48,9 @@
 set -uo pipefail
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
+# Skip mode (2026-09-25): full-mode setup.sh re-runs `pip install -e .` on the
+# shared venv and on htc builds HMMER into it (setup.sh:138, :212-240).
+export KIRBY_SKIP_INSTALLS="${KIRBY_SKIP_INSTALLS:-1}"
 . setup.sh
 
 TASKS="${TASKS:-tests/slurm_scripts/noise_prelim/prelim_tasks.example.txt}"

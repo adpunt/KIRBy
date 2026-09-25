@@ -59,6 +59,13 @@ import experiments.noise.n23_uncertainty_cleaning as n23
 OUT = tempfile.mkdtemp(prefix='n23_smoke_')
 FAIL = []
 
+# 2026-09-25: n23 now caches through noise_cache under KIRBY_CACHE_DIR, so the
+# toy entries go to a temporary directory, as
+# tests/smoke/smoke_noise_similarity_foundation.py does. Every test but
+# test_similarity_sweep runs today's path only; that one names its settings.
+os.environ['KIRBY_CACHE_DIR'] = tempfile.mkdtemp(prefix='n23_smoke_cache_')
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+
 
 def check(name, ok, detail=''):
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ''))
@@ -457,6 +464,53 @@ def _refuses_without_an_output_dir(fake_one):
         return 'resumable' in str(exc) or 'output directory' in str(exc)
 
 
+# ── the similarity sweep and the D-versus-D' rows (2026-09-25) ──────────────
+
+SWEEP_SETTINGS = ('base_2|none|manhattan', 'forest_proximity|none|forest')
+
+
+def test_similarity_sweep():
+    """Plan sections 1 and 2 on n23: activity_cliff_aware is swept over the
+    named settings x every k, today's rows carry TODAY_SIMILARITY, a source
+    whose score reads no neighbours and has its own target is not swept, and
+    the sweep writes a detection reading per setting."""
+    import json
+    from experiments.noise import similarity_space as ss
+    from experiments.noise.n23_uncertainty_cleaning import (
+        TODAY_SIMILARITY, NO_NEIGHBOURS)
+    print("\nthe similarity sweep and the D-versus-D' rows:")
+    prev = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+    os.environ['KIRBY_SIMILARITY_SETTINGS'] = ','.join(SWEEP_SETTINGS)
+    try:
+        r = run_it(make_data(seed=4), 'toy_sweep', regimes=['injected'],
+                   levels=[0.5], draws=[0],
+                   sources=['activity_cliff_aware', 'ngboost'])
+    finally:
+        if prev is None:
+            os.environ.pop('KIRBY_SIMILARITY_SETTINGS', None)
+        else:
+            os.environ['KIRBY_SIMILARITY_SETTINGS'] = prev
+    path = r['rows']['rows_file']
+    rows = [json.loads(l) for l in open(path)] if path and os.path.exists(path) else []
+    check('rows were written to the rows file', len(rows) > 0, str(path))
+    labels = {f'{s}|k={k}' for s in SWEEP_SETTINGS for k in ss.SWEPT_KS}
+    acl = {x['similarity_setting'] for x in rows
+           if x['method'] == 'activity_cliff_aware'}
+    check('activity_cliff_aware has rows under every setting x k and today\'s',
+          labels | {TODAY_SIMILARITY} <= acl,
+          f'missing {sorted((labels | {TODAY_SIMILARITY}) - acl)}')
+    ng = {x['similarity_setting'] for x in rows if x['method'] == 'ngboost'}
+    check('ngboost reads no neighbours and has its own target: not swept',
+          ng == {NO_NEIGHBOURS}, str(sorted(ng)))
+    det = (r['similarity_sweep'].get('detection') or {}).get('0.5', {})
+    got = {lab for sp in det.values() for m in sp.values()
+           for src in m.values() for lab in src}
+    check('a detection reading per swept setting', labels <= got,
+          f'missing {sorted(labels - got)}')
+    check('the rows carry the metric direction', all(
+        x['lower_is_better'] is True for x in rows), 'rmse: lower wins')
+
+
 if __name__ == '__main__':
     res = test_detection_before_cleaning()
     test_zero_noise_control(res)
@@ -465,6 +519,7 @@ if __name__ == '__main__':
     test_the_other_sources_run()
     test_the_sweep_checkpoints_and_resumes()
     test_every_converted_experiment_has_the_same_shape()
+    test_similarity_sweep()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")

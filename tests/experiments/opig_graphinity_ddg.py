@@ -833,6 +833,11 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Discard what an earlier attempt finished '
+             '(<output>.partial.jsonl) and recompute every item.')
+
     parser = add_distance_metric_arg(parser)
 
     args = parser.parse_args()
@@ -855,6 +860,22 @@ def main():
     print(f"  Max samples (FoldX): {max_foldx}")
     print("=" * 70)
 
+    output_path = (args.output or
+                   'tests/results/comparisons/opig_graphinity_ddg.json')
+
+    # Each condition is written to <output>.partial.jsonl as soon as it finishes
+    # and read back on the next attempt (2026-09-25;
+    # experiments/_checkpoint.py). Before, a failure or a kill lost every
+    # condition, because the one JSON below was written after the last. A condition
+    # that raised or returned {'error'} is not stored, is retried next time,
+    # and makes the script exit 1 after the JSON is written.
+    from experiments._checkpoint import (
+        script_checkpoint, is_failed_item, exit_if_failed)
+    _ck = script_checkpoint('opig_graphinity_ddg', output_path, args,
+                            exclude=('conditions', 'output'),
+                            rep_names=rep_names, max_foldx=max_foldx)
+    _failed = []
+
     all_results = {}
     for cond in conditions:
         if cond not in CONDITION_DATASETS:
@@ -866,16 +887,24 @@ def main():
             print(f"WARNING: Dataset '{ds_name}' not in registry, skipping")
             continue
         try:
-            cond_results = evaluate_condition(
-                cond, rep_names, args.n_folds,
-                max_foldx=max_foldx,
-                pruning_mode=args.pruning_mode)
+            if _ck.done(condition=cond):
+                cond_results = _ck.get(condition=cond)
+                print(f"  {cond}: finished in an earlier attempt, read back")
+            else:
+                cond_results = evaluate_condition(
+                    cond, rep_names, args.n_folds,
+                    max_foldx=max_foldx,
+                    pruning_mode=args.pruning_mode)
+                _ck.put(cond_results, condition=cond)
+            if is_failed_item(cond_results):
+                _failed.append(cond)
             if cond_results is not None:
                 all_results[cond] = cond_results
         except Exception as e:
             print(f"  FAILED: {e}")
             import traceback
             traceback.print_exc()
+            _failed.append(cond)
 
     # Cross-condition analysis
     if all_results:
@@ -885,14 +914,13 @@ def main():
         print_reselection_analysis(all_results)
 
     # Save results
-    output_path = (args.output or
-                   'tests/results/comparisons/opig_graphinity_ddg.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
     with open(p, 'w') as f:
         json.dump(convert_numpy(all_results), f, indent=2)
     print(f"\nResults saved: {p}")
+    exit_if_failed(_failed, 'condition')
 
 
 if __name__ == '__main__':

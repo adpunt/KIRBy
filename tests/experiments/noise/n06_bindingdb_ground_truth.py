@@ -376,6 +376,10 @@ def n11_ranking(path):
     per_space = {}
     dropped = {'sigma_whose_noise_did_not_hurt_the_model': 0,
                'cells_with_no_finite_recovery': 0}
+    # How each level's "did the noise hurt" was read; see below.
+    gap_read_from = {'clean_and_noisy_scores': 0,
+                     'stored_gap_as_signed': 0,
+                     'stored_gap_disagreed_with_scores': 0}
     for sigma, sigma_data in (doc.get('per_sigma') or {}).items():
         if str(sigma) == '0.0':
             continue  # no noise was injected, so there is nothing to recover
@@ -384,9 +388,38 @@ def n11_ranking(path):
         # model worse, that gap runs the wrong way and the share reads
         # backwards — a cleanup that did nothing scores well. Whole sigma
         # dropped, and counted.
-        gap = sigma_data.get('gap')
-        if gap is None or not np.isfinite(gap) or (
-                (gap > 0) if lower_is_better else (gap < 0)):
+        #
+        # ⛔ FIXED 2026-09-25 (METRIC_DIRECTION_AUDIT.md, n06:388-389). This
+        # check was written on 2026-09-11 (22067eb) for n11's old unsigned
+        # `gap = clean - noisy`, and dropped a level when gap > 0 on an rmse
+        # dataset. n11 has written `gap` SIGNED since df7c7fe/1d9487b
+        # (2026-09-12/13, n11:1277): `(noisy - clean) if lower_is_better else
+        # (clean - noisy)`, positive = the noise hurt, on every metric. Read
+        # under the old rule, every rmse level where the noise raised rmse was
+        # dropped and only the levels where it lowered rmse were kept.
+        #
+        # The n11 file does not record which convention wrote its `gap`. It
+        # does store the reference model's `clean_score` and `noisy_score`
+        # beside it, in files from both before and after the change (22067eb
+        # n11:657-659; n11:1299-1301 today). So the signed gap is recomputed
+        # from those two and the dataset's own lower_is_better, which reads a
+        # file of either age the same way. Only a file missing either score
+        # falls back to the stored gap, read as signed (positive = hurt).
+        _c, _nz = sigma_data.get('clean_score'), sigma_data.get('noisy_score')
+        _stored = sigma_data.get('gap')
+        if (_c is not None and _nz is not None
+                and np.isfinite(_c) and np.isfinite(_nz)):
+            gap = (float(_nz) - float(_c)) if lower_is_better \
+                else (float(_c) - float(_nz))
+            gap_read_from['clean_and_noisy_scores'] += 1
+            if (_stored is not None and np.isfinite(_stored)
+                    and np.sign(_stored) != np.sign(gap)):
+                # An unsigned file on an rmse dataset, most likely.
+                gap_read_from['stored_gap_disagreed_with_scores'] += 1
+        else:
+            gap = _stored
+            gap_read_from['stored_gap_as_signed'] += 1
+        if gap is None or not np.isfinite(gap) or gap <= 0:
             dropped['sigma_whose_noise_did_not_hurt_the_model'] += 1
             continue
         for space, space_data in (sigma_data.get('per_space') or {}).items():
@@ -410,6 +443,7 @@ def n11_ranking(path):
                 sp: {k: float(np.median(v)) for k, v in d.items()}
                 for sp, d in per_space.items()},
              'dropped': dropped,
+             'noise_gap_read_from': gap_read_from,
              'n_feature_spaces_pooled': len(per_space)})
 
 

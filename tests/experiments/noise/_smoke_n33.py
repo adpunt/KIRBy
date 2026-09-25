@@ -26,6 +26,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
+# 2026-09-25: today's similarity (model_input) unless a check sets its own
+# list, and the noise cache in a temporary directory, never the real one.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+import tempfile as _tf
+os.environ['KIRBY_CACHE_DIR'] = _tf.mkdtemp(prefix='n33_smoke_cache_')
+
 os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
@@ -301,11 +307,58 @@ def test_the_command_line():
     check('11b. --base-rep is gone', '--base-rep' not in out.stdout)
 
 
+
+def _rows_of(res):
+    """The D-versus-D' rows a run wrote (2026-09-25)."""
+    import json
+    p = (res.get('d_vs_dprime') or {}).get('rows_file')
+    if not p or not os.path.exists(p):
+        return []
+    return [json.loads(l) for l in open(p) if l.strip()]
+
+
+def _with_settings(names, fn):
+    """Run fn() under KIRBY_SIMILARITY_SETTINGS=names, then restore it."""
+    old = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+    os.environ['KIRBY_SIMILARITY_SETTINGS'] = names
+    try:
+        return fn()
+    finally:
+        if old is None:
+            os.environ.pop('KIRBY_SIMILARITY_SETTINGS', None)
+        else:
+            os.environ['KIRBY_SIMILARITY_SETTINGS'] = old
+
+
+def test_rows_and_resume():
+    """2026-09-25: the D-versus-D' rows (or, for a measurement-only experiment,
+    the per-pass checkpoint), a rerun that resumes every pass, and -- where
+    the experiment finds neighbours -- the similarity sweep."""
+    print("\nrows, resume and the similarity sweep:")
+    from experiments.noise.d_vs_dprime import ROW_FIELDS
+    kw = dict(models=['rf', 'svm'], levels=[0.5], draws=[0], skip_ngboost=True, label_arms=['huber_teacher_blend', 'yeo_johnson'], swaps=[], noise_condition='gaussian')
+    res = run_one(make_data(), 'toy_rows', **dict(kw))
+    rows = _rows_of(res)
+    check('R1. D-vs-D\' rows are written, each with exactly the d_vs_dprime '
+          'columns, D and D\' both scored', bool(rows) and all(
+              set(r) == set(ROW_FIELDS) and r['score_D'] is not None
+              for r in rows) and {'rf', 'svm'} <= {r['model'] for r in rows},
+          f'{len(rows)} rows, methods {sorted({r["method"] for r in rows})[:4]}')
+    again = run_one(make_data(), 'toy_rows', **dict(kw))
+    got = again['d_vs_dprime']
+    check('R2. a rerun resumes every pass from the checkpoint and returns the '
+          'same scores', got['passes_resumed_from_checkpoint'] > 0
+          and got['rows_written_this_run'] == 0
+          and again['per_level'] == res['per_level'],
+          f"{got['passes_resumed_from_checkpoint']} passes resumed")
+
+
 if __name__ == '__main__':
     test_pieces()
     test_swaps()
     test_full_runs()
     test_sweep()
+    test_rows_and_resume()
     test_the_command_line()
     print()
     if FAIL:

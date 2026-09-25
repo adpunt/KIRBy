@@ -132,6 +132,12 @@ rebuilds the hybrid from that fold's CLIPPED training labels, once, and every ar
 shares it. So `clean` is the clean labels in clipped-label features, and no label
 treatment reaches the feature choice.
 
+ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 2-3). Every label arm
+writes one D-versus-D' row per pass against `clipped`, with `clean` as
+score_clean; the model swaps change the model, not the data, and write none.
+The accumulators are checkpointed per pass; the caches of plan section 3 are
+used. controls.py's twins run with KIRBY_NOISE_CONTROLS=1.
+
 Usage:
     python n30_censored_likelihood.py --dataset herg_ki --mode full
     python n30_censored_likelihood.py --dataset caco2 --mode full --levels 0.1,0.25
@@ -144,6 +150,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 
 import functools
 import time
+import zlib
 
 import numpy as np
 from scipy.stats import norm
@@ -166,6 +173,16 @@ from experiments.noise.noise_helpers import (
 )
 from experiments.noise.n07_remediation import _predict_for_metric
 from kirby.utils.noisy_labels import oof_predict
+# The D-versus-D' rows, the per-pass checkpoint, the caches and the controls
+# (2026-09-25, plan sections 2-3). They live in n23 for the reason given at
+# the top of its shared block.
+from experiments.noise import noise_cache as nc
+from experiments.noise.controls import controls_enabled
+from experiments.noise.n23_uncertainty_cleaning import (
+    RowSink, PassCheckpoint, ensure_dprime_models, fit_score_cached,
+    control_twins, as_cleanup_dict, fit_cleaned, cached_base_cell,
+    cached_hybrid_cell, NO_NEIGHBOURS,
+)
 
 # The only condition this file is defined for. Every arm reads the limit.
 CENSORING_CONDITION = 'censoring'
@@ -410,7 +427,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ⛔ config FIRST, then the kwarg. run_all passes the model list in
     # config['models']; see n24:418-422.
-    downstream_models = list(
+    # rf and svm are added when the caller left them out: every D-versus-D'
+    # row needs them (ensure_dprime_models, owner decision 2026-09-25).
+    downstream_models = ensure_dprime_models(
         kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
@@ -588,6 +607,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     clip_acc = {}
     t0 = time.time()
 
+    # ── Rows and the per-pass checkpoint (2026-09-25) ──
+    # D is `clipped`, the labels as recorded; every label arm but `clean` is
+    # a D'; `clean` is score_clean. The model swaps change the model, not the
+    # training data, so they write no row. The per_molecule_lift_shuffled
+    # arms are this file's own control and are written as D' rows like the
+    # others.
+    _metric = (metric_name, metric_fn, lower_is_better)
+    rows = RowSink(output_dir, 'n30_censored_likelihood', dataset_name,
+                   experiment='n30', metric=_metric,
+                   condition=kwargs.get('noise_condition'), data=data,
+                   config=config)
+    ckpt = PassCheckpoint(
+        output_dir, 'n30_censored_likelihood', dataset_name,
+        condition=kwargs.get('noise_condition'), data=data, config=config,
+        source_file=__file__,
+        key={'condition': condition, 'winsor_c': winsor_c,
+             'shuffle_seeds': shuffle_seeds, 'oof_splits': oof_splits,
+             'passes': passes, 'models': list(downstream_models),
+             'swaps': swaps, 'base_reps': base_by_model,
+             'n_splits': n_folds})
+    done_passes = set()
+    _state = ckpt.load()
+    if _state:
+        acc, errors, clip_acc = (_state['acc'], _state['errors'],
+                                 _state['clip_acc'])
+        done_passes = set(_state['done'])
+        print(f"  resumed from {ckpt.path}: {len(done_passes)} (level, draw, "
+              f"fold) passes already done")
+
     for level, draw in passes:
         lvl_key = f'{level:g}'
         spec = noise_spec_for(dataset_name, condition, level,
@@ -597,6 +645,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for fold_i, (train_idx, val_idx) in enumerate(splits):
             pass_key = f'l{lvl_key}d{draw}f{fold_i}'
+            if pass_key in done_passes:
+                print(f"    {pass_key}: on disk in the checkpoint")
+                continue
             y_val = labels[val_idx]
             y_clean_tr = labels[train_idx]
             g_tr = groups[train_idx] if groups is not None else None
@@ -641,9 +692,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _bcells = []
                 for _rn, _ms in base_rank_groups(base_by_model, _k,
                                                  downstream_models).items():
-                    sc = StandardScaler()
-                    _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                    sc.transform(val_reps[_rn]), list(_ms)))
+                    # noise_cache.cached_scaled since 2026-09-25.
+                    _Xt, _Xv = cached_base_cell(dataset_name, reps[_rn],
+                                                train_idx, val_idx)
+                    _bcells.append((_Xt, _Xv, list(_ms)))
                 fold_spaces[_bsp] = _bcells
             for _sp in spaces:
                 if _sp.startswith('base_'):
@@ -652,11 +704,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, y0, _bp_m, g_tr,
+                    # noise_cache.cached_hybrid_for_fold since 2026-09-25:
+                    # the same build for the same draw is shared with n23,
+                    # n24, n25, n31-n35, n38, n40 and n41 (plan section 3).
+                    X_tr_h, X_va_h = cached_hybrid_cell(
+                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        None if _shareable else _mnames[0],
                         None if _shareable
                         else model_factories[_mnames[0]](),
-                        metric_fn, lower_is_better)
+                        _metric, train_idx)
                     if X_tr_h is None:
                         errors[f'{lvl_key}|{_sp}/{_mnames[0]}|f{fold_i}|'
                                f'build'] = 'the hybrid could not be built'
@@ -676,7 +732,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # p, the out-of-fold prediction every lift and winsor arm
                     # reads, on this matrix and these clipped labels.
                     try:
-                        p = oof_predict(X_tr_s, y0, g_tr, n_splits=oof_splits)
+                        # noise_cache.cached_oof_predict since 2026-09-25:
+                        # the same call (seed 0), stored.
+                        p = nc.cached_oof_predict(dataset_name, X_tr_s, y0,
+                                                  g_tr, n_splits=oof_splits)
                     except Exception as exc:
                         errors[f'{lvl_key}|{_ekey}|f{fold_i}|oof'] = (
                             f'{type(exc).__name__}: {exc}')
@@ -711,16 +770,88 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             continue
                         y_use, keep = cols[arm]
                         for mname in cell_models:
-                            s, err = _fit_score(
-                                model_factories[mname], X_tr_s, y_use,
-                                X_va_s, y_val, metric_fn, metric_name,
-                                keep=keep)
+                            if arm in ('clean', 'clipped'):
+                                # The clean-label fit and the no-cleaning fit
+                                # on D, through noise_cache for a seeded model
+                                # (plan section 3). keep is None for both.
+                                s, err = fit_score_cached(
+                                    dataset_name, mname,
+                                    model_factories[mname], X_tr_s, y_use,
+                                    X_va_s, y_val, metric_fn, metric_name)
+                            else:
+                                s, err = _fit_score(
+                                    model_factories[mname], X_tr_s, y_use,
+                                    X_va_s, y_val, metric_fn, metric_name,
+                                    keep=keep)
                             if s is None:
                                 errors[f'{lvl_key}|{_ekey}|{arm}|{mname}|'
                                        f'f{fold_i}'] = err
                                 continue
                             (space_cell.setdefault(arm, {})
                              .setdefault(mname, {})[pass_key]) = s
+
+                    # ── The D-versus-D' rows and the controls (2026-09-25) ──
+                    for mname in cell_models:
+                        sD = (space_cell.get('clipped') or {}).get(
+                            mname, {}).get(pass_key)
+                        sC = (space_cell.get('clean') or {}).get(
+                            mname, {}).get(pass_key)
+                        for arm in arm_names:
+                            if arm in ('clean', 'clipped') or arm not in cols:
+                                continue
+                            sP = (space_cell.get(arm) or {}).get(
+                                mname, {}).get(pass_key)
+                            if sP is None:
+                                continue
+                            rows.add(method=arm.split('/')[0],
+                                     method_setting=arm,
+                                     similarity_setting=NO_NEIGHBOURS,
+                                     model_input=space, model=mname,
+                                     noise_condition=condition,
+                                     level=float(level), draw=int(draw),
+                                     fold=fold_i, score_D=sD, score_Dprime=sP,
+                                     score_clean=sC)
+                    # controls.py's twins of every label arm but the shuffled
+                    # lifts, which are this file's own control, when
+                    # KIRBY_NOISE_CONTROLS=1.
+                    if controls_enabled():
+                        for arm in arm_names:
+                            if (arm in ('clean', 'clipped') or arm not in cols
+                                    or arm.startswith(
+                                        'per_molecule_lift_shuffled')):
+                                continue
+                            y_use, keep = cols[arm]
+                            _cd = (as_cleanup_dict(X_tr_s, y0, keep=keep)
+                                   if keep is not None else
+                                   as_cleanup_dict(X_tr_s, y0, labels=y_use))
+                            _seed = (int(draw), int(fold_i), int(zlib.crc32(
+                                f'{lvl_key}|{_ekey}|{arm}'.encode())
+                                & 0x7FFFFFFF))
+                            for cname, tw, why in control_twins(
+                                    _cd, X_tr_s, y0, _seed):
+                                if tw is None:
+                                    errors[f'{lvl_key}|{_ekey}|{arm}|{cname}|'
+                                           f'f{fold_i}'] = why
+                                    continue
+                                for mname in cell_models:
+                                    sP, err = fit_cleaned(
+                                        model_factories[mname], tw, X_va_s,
+                                        y_val, metric_fn, metric_name)
+                                    rows.add(
+                                        method=arm.split('/')[0],
+                                        method_setting=f'{arm}|control={cname}',
+                                        similarity_setting=NO_NEIGHBOURS,
+                                        model_input=space, model=mname,
+                                        noise_condition=condition,
+                                        level=float(level), draw=int(draw),
+                                        fold=fold_i,
+                                        score_D=(space_cell.get('clipped')
+                                                 or {}).get(mname, {}).get(
+                                                     pass_key),
+                                        score_Dprime=sP,
+                                        score_clean=(space_cell.get('clean')
+                                                     or {}).get(mname, {}).get(
+                                                         pass_key))
 
                     # ── The model swaps, on the clipped labels ──
                     for swap, parent in swaps.items():
@@ -751,6 +882,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                          .setdefault(swap, {})[pass_key]) = s
 
             clip_acc.setdefault(lvl_key, []).append(clip_rec)
+            # The pass is finished: its rows to disk, then the accumulators.
+            rows.flush()
+            done_passes.add(pass_key)
+            ckpt.save({'acc': acc, 'errors': errors, 'clip_acc': clip_acc,
+                       'done': sorted(done_passes)})
             print(f"    fraction {lvl_key} fold {fold_i}: "
                   f"{clip_rec['molecules_at_the_limit']} of {n_tr} training "
                   f"molecules at the limit {limit} "
@@ -763,7 +899,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['summary'] = convert_numpy(_summarise(
         acc, arm_names, downstream_models, swaps, metric_name,
         lower_is_better))
+    results['rows'] = rows.summary()
+    results['controls_run'] = bool(controls_enabled())
     _print_summary(results, metric_name)
+    print(f"  D-versus-D' rows: {rows.n_written} written this run to "
+          f"{rows.path or 'memory'}")
+    ckpt.clear()
     return results
 
 

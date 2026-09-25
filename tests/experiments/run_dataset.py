@@ -171,8 +171,9 @@ def main():
         print(f"WARNING: --pruning-mode={args.pruning_mode} ignored: "
               f"{args.category} run_all does not yet accept pruning_mode.")
     # Resume is the default; --force-rerun disables it. Only pass to helpers
-    # whose run_all has adopted the param (complexity today; others inherit
-    # their own behaviour until they add it).
+    # whose run_all has adopted the param. All four do as of 2026-09-25
+    # (federated was the last); in noise it also reaches the per-condition
+    # files a sweep writes (noise_helpers.sweep_conditions).
     if 'force_rerun' in run_all_params:
         extra_kwargs['force_rerun'] = args.force_rerun
     elif args.force_rerun:
@@ -189,12 +190,114 @@ def main():
         print(f"WARNING: --noise-condition={args.noise_condition} ignored: "
               f"{args.category} run_all does not accept noise_condition.")
 
-    helpers.run_all(
-        dataset_name=args.dataset,
-        output_dir=output_dir,
-        experiments=args.experiments,
-        **extra_kwargs,
-    )
+    # ⛔ FAILURES MUST BE VISIBLE (2026-09-25). Every category's run_all
+    # catches a failed experiment, records {'error': ...} for it and carries on,
+    # so one broken experiment does not end the others. But this runner then
+    # exited 0 whatever happened, so a SLURM job with every experiment failed
+    # read as COMPLETED and the only record was a traceback in the log. Now:
+    # all experiments still run; afterwards each failed one is written to
+    # <output>/_errors/<dataset>[__<condition>].json with its traceback text,
+    # and the process exits 1. A run_all that raises (for example federated's
+    # sys.exit(1) when FLuID is missing) is recorded the same way.
+    results, run_all_error = None, None
+    try:
+        results = helpers.run_all(
+            dataset_name=args.dataset,
+            output_dir=output_dir,
+            experiments=args.experiments,
+            **extra_kwargs,
+        )
+    except KeyboardInterrupt:
+        raise
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            import traceback
+            run_all_error = {'error': f'run_all called sys.exit({exc.code})',
+                             'error_kind': 'SystemExit',
+                             'traceback': traceback.format_exc()}
+    except Exception as exc:
+        import traceback
+        run_all_error = {'error': str(exc) or type(exc).__name__,
+                         'error_kind': type(exc).__name__,
+                         'traceback': traceback.format_exc()}
+
+    cond = args.noise_condition if 'noise_condition' in extra_kwargs else None
+    n_failed = write_error_report(output_dir, args.category, args.dataset,
+                                  cond, results, run_all_error)
+    if n_failed:
+        sys.exit(1)
+
+
+def failed_experiments(results):
+    """{exp_id: record} for every experiment run_all recorded an 'error' for.
+
+    Keys starting with '_' are run_all's own records (_precompute_errors,
+    _rep_pool_audit), not experiments, and are not read."""
+    out = {}
+    for exp_id, rec in (results or {}).items():
+        if str(exp_id).startswith('_'):
+            continue
+        if isinstance(rec, dict) and rec.get('error') is not None:
+            out[str(exp_id)] = rec
+    return out
+
+
+def write_error_report(output_dir, category, dataset, condition, results,
+                       run_all_error=None):
+    """Write <output_dir>/_errors/<dataset>[__<condition>].json listing each
+    failed experiment and its traceback; return how many failures there are.
+
+    With no failure, a report left by an earlier run of the same dataset and
+    condition is removed, so the directory only ever lists what is broken now.
+    A run_all that raised counts as one failure under the key '_run_all'.
+
+    A record with no 'traceback' key is one of two things, and the report
+    says so rather than guessing: an experiment that RETURNED an error record
+    instead of raising (n02/n09/n12/n13 return {'error': 'no_blueprint'} when
+    the precompute holds no recipe, s11 {'error': 'dataset_too_small'}), or an
+    exception caught by complexity_helpers.run_all, which stores no traceback
+    (that file is not edited here). Both count as failures: neither wrote a
+    measurement.
+    """
+    import json
+    import time
+    failed = failed_experiments(results)
+    if run_all_error is not None:
+        failed['_run_all'] = run_all_error
+    name = f"{dataset}__{condition}.json" if condition else f"{dataset}.json"
+    path = os.path.join(output_dir, '_errors', name)
+    if not failed:
+        if os.path.exists(path):
+            os.remove(path)
+            print(f"  no failures; removed the earlier error report {path}")
+        return 0
+    report = {
+        'category': category, 'dataset': dataset, 'noise_condition': condition,
+        'written': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'n_failed': len(failed),
+        'failed': {
+            exp_id: {
+                'error': str(rec.get('error')),
+                'error_kind': rec.get('error_kind'),
+                'traceback': rec.get('traceback') or (
+                    'none recorded: either the experiment returned this '
+                    'error record itself without raising, or '
+                    'complexity_helpers.run_all caught an exception and kept '
+                    'no traceback; see the job log'),
+            } for exp_id, rec in failed.items()},
+    }
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as fh:
+        json.dump(report, fh, indent=1, default=str)
+    os.replace(tmp, path)
+    print(f"\n{'=' * 70}")
+    print(f"FAILED: {len(failed)} experiment(s) on {dataset}"
+          f"{' under ' + condition if condition else ''}: "
+          f"{', '.join(sorted(failed))}")
+    print(f"  tracebacks written to {path}")
+    print(f"{'=' * 70}")
+    return len(failed)
 
 
 if __name__ == '__main__':

@@ -142,6 +142,17 @@ from experiments.noise.n07_remediation import (
     _predict_for_metric, PROX_SMOOTH_MAX_ROWS,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
+# The D-versus-D' rows, per-pass checkpoint, cached builds, controls and the
+# similarity axis shared by n32-n41 (n32's shared block, 2026-09-25).
+from experiments.noise.n32_iterative_and_dual_selection import (
+    method_setting, downstream_model_list, fit_predict_cached, cached_hybrid,
+    ledger_signature, PassLedger, restart_flag, arm_rows, arm_result,
+    control_twins, twin_scores, controls_enabled, replicate_seed,
+    sweep_settings, is_model_input, fold_similarity, setting_models, _nc,
+    _ss,
+)
+
+EXP_ID = 'n35_near_duplicate_disagreement'
 
 # The only injected condition. The check needs noise whose variance is the
 # same on every molecule, so that the increase of the estimate is one number.
@@ -379,15 +390,15 @@ def count_cliff_pairs(fi, fj, dy_flagged, y_seen, fps_train=None,
 # ---------------------------------------------------------------------------
 
 def _fit_score(factory, X_tr, y_tr, X_va, y_va, metric_fn, metric_name,
-               weights=None):
-    """One fit, one held-out score and its tail scores, or (None, None, why)."""
+               weights=None, dataset_name=None, model_name=None):
+    """One fit, one held-out score and its tail scores, or (None, None, why).
+
+    dataset_name / model_name, added 2026-09-25, route a seeded model through
+    noise_cache (n32.fit_predict_cached); the prediction is the same."""
     try:
-        m = factory()
-        if weights is None:
-            m.fit(X_tr, y_tr)
-        else:
-            m.fit(X_tr, y_tr, sample_weight=weights)
-        pred = _predict_for_metric(m, X_va, metric_name)
+        pred = fit_predict_cached(dataset_name, model_name, factory, X_tr,
+                                  y_tr, X_va, metric_name,
+                                  sample_weight=weights)
         return float(metric_fn(y_va, pred)), tail_scores(y_va, pred), None
     except Exception as exc:
         return None, None, f'{type(exc).__name__}: {exc}'
@@ -400,8 +411,23 @@ def _levels_and_draws(dataset_name, levels=None, draws=None):
     return [(float(l), int(d)) for l in levels for d in draws]
 
 
-def run(data, config, output_dir, dataset_name, **kwargs):
-    """N35: label disagreement of near-duplicate pairs, and downweighting them."""
+def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
+    """N35: label disagreement of near-duplicate pairs, and downweighting them.
+
+    force_rerun (run_dataset.py --force-rerun, via run_all) sets aside the
+    rows file and the per-pass checkpoint and recomputes every pass.
+
+    THE SIMILARITY AXIS, added 2026-09-25 (plan section 1). The close pairs of
+    today's two arms are found in the model's own matrix (this space's
+    distance) and in a forest fitted on it: that is the model_input setting,
+    unchanged. Every other similarity setting the run sweeps
+    (KIRBY_SIMILARITY_SETTINGS, n32.sweep_settings) finds the close pairs in
+    ITS distance instead -- the full training-by-training matrix, the same 1st
+    percentile, the same flag rule -- and adds one arm,
+    downweight_pairs@<setting>, fitted on the cell's own matrix. A per-model
+    space (base_*, *_aug_*, hybrid*) is built for each model of the cell and
+    that model is fitted on its own pairs. The rule reads no k, so k is not
+    swept here."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N35: NEAR-DUPLICATE LABEL DISAGREEMENT")
     print("=" * 70)
@@ -420,8 +446,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     run_proximity = not kwargs.get('skip_proximity', False)
     count_cliffs = not kwargs.get('skip_cliffs', False)
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     downstream_models = [m for m in downstream_models if m in model_factories]
@@ -477,6 +502,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'is rebuilt from the noisy labels and each forest is refitted on '
             'them, so their pair sets move with the level.'),
         'cliff_note': cliff_note,
+        'similarity_settings': [st.name for st in sweep_settings()],
+        'similarity_note': (
+            'downweight_pairs_this_space and downweight_pairs_forest_proximity '
+            'are the model_input setting, unchanged. downweight_pairs@<setting> '
+            'finds the close pairs in that setting\'s distance; its pair record '
+            'is written under <space key>@<setting>[|<model>].'),
+        'controls_run': controls_enabled(),
+        'rows_note': ('D is untouched; score_clean is the same model fitted on '
+                      'the clean training labels, fitted for the rows only and '
+                      'not an arm of the summary.'),
         'per_level': {},
         'pairs_per_pass': {},
     }
@@ -576,6 +611,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     acc, tails, errors, pair_acc = {}, {}, {}, {}
     t0 = time.time()
+    metric = (metric_name, metric_fn, lower_is_better)
+    sim_settings = [st for st in sweep_settings() if not is_model_input(st)]
+    # Rows and the per-pass checkpoint, 2026-09-25 (n32's PassLedger). The
+    # file stem is the check condition, main()'s result suffix.
+    ledger = PassLedger(output_dir, EXP_ID, dataset_name, CHECK_CONDITION,
+                        signature=ledger_signature(data, config, results,
+                                                   splits),
+                        restart=bool(force_rerun) or restart_flag(kwargs))
+    if ledger.restored():
+        st_ = ledger.restored()
+        acc, tails, errors, pair_acc = (st_['acc'], st_['tails'],
+                                        st_['errors'], st_['pair_acc'])
+        print(f"  resumed {len(ledger.passes_done)} finished passes")
 
     for level, draw in passes:
         lvl_key = f'{level:g}'
@@ -587,6 +635,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for fold_i, (train_idx, val_idx) in enumerate(splits):
             pass_key = f'l{lvl_key}d{draw}f{fold_i}'
+            if ledger.pass_done(pass_key):
+                continue
+            pass_rows = []
             y_val = labels[val_idx]
             y_clean_tr = labels[train_idx]
             g_tr = groups[train_idx] if groups is not None else None
@@ -619,6 +670,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     f'{MAX_PAIR_ROWS}; the pairwise distances were not '
                     f'computed and no arm ran')
                 pair_acc.setdefault(lvl_key, []).append(prec)
+                # Recorded as finished, so a resumed run does not append this
+                # refusal to pair_acc a second time.
+                ledger.finish_pass(pass_key, {'acc': acc, 'tails': tails,
+                                              'errors': errors,
+                                              'pair_acc': pair_acc})
                 print(f"    fold {fold_i}: {prec['refused']}")
                 continue
 
@@ -677,9 +733,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     return None
                 try:
                     from kirby.utils.noise_estimation import (
-                        forest_leaf_ids, forest_proximity_distance)
-                    Dp = forest_proximity_distance(
-                        forest_leaf_ids(X_tr_cell, y0, False))
+                        forest_proximity_distance)
+                    # The forest's leaf ids through noise_cache (2026-09-25):
+                    # the same forest forest_leaf_ids fits, field for field
+                    # (similarity_space._forest_leaves), fitted once per
+                    # (matrix, labels).
+                    Dp = forest_proximity_distance(_nc.cached_forest_leaf_ids(
+                        dataset_name, X_tr_cell, y0, False)[0])
                     w = _describe(pkey, Dp)
                     del Dp
                     return w
@@ -700,9 +760,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _bcells = []
                 for _rn, _ms in base_rank_groups(base_by_model, _k,
                                                  downstream_models).items():
-                    sc = StandardScaler()
-                    Xb_tr = sc.fit_transform(train_reps[_rn])
-                    Xb_va = sc.transform(val_reps[_rn])
+                    # Standardised once per fold through noise_cache
+                    # (2026-09-25); the same float64 values.
+                    Xb_tr, Xb_va = _nc.cached_scaled(
+                        dataset_name, reps[_rn], train_idx, val_idx,
+                        dtype=np.float64)
                     _key = (_bsp if list(_ms) == list(downstream_models)
                             else f'{_bsp}/{_ms[0]}')
                     Db = (tanimoto_distance_matrix(train_reps[_rn])
@@ -721,11 +783,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, y0, _bp_m, g_tr,
-                        None if _shareable
-                        else model_factories[_mnames[0]](),
-                        metric_fn, lower_is_better)
+                    # Cached per (fold, recipe, labels), 2026-09-25.
+                    X_tr_h, X_va_h = cached_hybrid(
+                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        _mnames[0], model_factories, metric, train_idx,
+                        _shareable)
                     if X_tr_h is None:
                         errors[f'{lvl_key}|{_sp}/{_mnames[0]}|f{fold_i}|'
                                f'build'] = 'the hybrid could not be built'
@@ -741,6 +803,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if _cells:
                     fold_spaces[_sp] = _cells
 
+            # The similarity spaces of this fold, from the labels as seen
+            # (plan section 1, 2026-09-25).
+            fsim = fold_similarity(
+                dataset_name, data, reps=reps, train_idx=train_idx,
+                val_idx=val_idx, y_train=y0, groups_train=g_tr,
+                base_by_model=base_by_model,
+                recipe_for_space_by_model=recipe_for_space_by_model,
+                model_factories=model_factories, metric=metric,
+                task_type=task_type)
+
             for space in spaces:
                 for (X_tr_s, X_va_s, cell_models, w_self,
                      w_prox) in fold_spaces.get(space, ()):
@@ -748,21 +820,59 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              else f'{space}/{cell_models[0]}')
                     space_cell = cell.setdefault(space, {})
                     tspace = tcell.setdefault(space, {})
-                    arm_w = {'untouched': None,
-                             'downweight_pairs_this_space': w_self}
+                    # {arm: {model: weights}}: today's arms hold one weight
+                    # vector for every model of the cell.
+                    arm_w = {'untouched': {m: None for m in cell_models},
+                             'downweight_pairs_this_space':
+                                 {m: w_self for m in cell_models}}
                     if w_prox is not None:
-                        arm_w['downweight_pairs_forest_proximity'] = w_prox
-                    for arm, w in arm_w.items():
-                        if arm != 'untouched' and w is not None \
-                                and np.all(w == 1.0):
-                            # Nothing flagged: the arm IS the untouched fit.
-                            # Scored anyway so the pairing has every pass, and
-                            # the count of flagged molecules says why it tied.
-                            w = None
-                        for mname in cell_models:
+                        arm_w['downweight_pairs_forest_proximity'] = {
+                            m: w_prox for m in cell_models}
+                    # Every other similarity setting: its own close pairs.
+                    for setting in sim_settings:
+                        if setting.space == _ss.FOREST_SPACE and run_proximity:
+                            # downweight_pairs_forest_proximity above IS this
+                            # setting: the same forest on the same matrix and
+                            # labels. Not computed twice.
+                            continue
+                        for model in setting_models(setting, cell_models):
+                            skey = (f'{_ekey}@{setting.name}'
+                                    + (f'|{model}' if len(cell_models) > 1
+                                       and setting.space in _ss.FEATURE_SPACES
+                                       else ''))
+                            try:
+                                D, why = fsim.full_distance(
+                                    setting, model, X_tr_s, dtype=np.float32)
+                                if D is None:
+                                    prec['per_space'][skey] = {
+                                        'unavailable': why}
+                                    continue
+                                w_s = _describe(skey, D)
+                                del D
+                            except Exception as exc:
+                                errors[f'{lvl_key}|{skey}|f{fold_i}'] = (
+                                    f'{type(exc).__name__}: {exc}')
+                                continue
+                            fit_for = (cell_models if setting.space
+                                       not in _ss.FEATURE_SPACES else [model])
+                            for m in fit_for:
+                                arm_w.setdefault(
+                                    f'downweight_pairs@{setting.name}',
+                                    {})[m] = w_s
+                    pass_scores = {}
+                    for arm, w_by_m in arm_w.items():
+                        for mname, w in w_by_m.items():
+                            if arm != 'untouched' and w is not None \
+                                    and np.all(w == 1.0):
+                                # Nothing flagged: the arm IS the untouched
+                                # fit. Scored anyway so the pairing has every
+                                # pass, and the count of flagged molecules
+                                # says why it tied.
+                                w = None
                             s, tl, err = _fit_score(
                                 model_factories[mname], X_tr_s, y0, X_va_s,
-                                y_val, metric_fn, metric_name, weights=w)
+                                y_val, metric_fn, metric_name, weights=w,
+                                dataset_name=dataset_name, model_name=mname)
                             if s is None:
                                 errors[f'{lvl_key}|{_ekey}|{arm}|{mname}|'
                                        f'f{fold_i}'] = err
@@ -771,8 +881,45 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              .setdefault(mname, {})[pass_key]) = s
                             (tspace.setdefault(arm, {})
                              .setdefault(mname, {})[pass_key]) = tl
+                            pass_scores.setdefault(arm, {})[mname] = s
+                    # score_clean for the rows: the same model on the clean
+                    # training labels. Not an arm; not in the summary.
+                    for mname in cell_models:
+                        s, _tl, _err = _fit_score(
+                            model_factories[mname], X_tr_s, y_clean_tr, X_va_s,
+                            y_val, metric_fn, metric_name,
+                            dataset_name=dataset_name, model_name=mname)
+                        if s is not None:
+                            pass_scores.setdefault('clean', {})[mname] = s
+                    # ── Controls (KIRBY_NOISE_CONTROLS=1): every downweight
+                    # arm is a weighting, twinned by controls.py. ──
+                    for arm, w_by_m in arm_w.items():
+                        if arm == 'untouched':
+                            continue
+                        for mname, w in w_by_m.items():
+                            if w is None or np.all(w == 1.0):
+                                continue
+                            twins = control_twins(
+                                arm_result(y0, weight=w), X_tr_s, y0,
+                                (replicate_seed(arm, mname), draw, fold_i,
+                                 int(round(level * 1000))))
+                            for tw, by_m in twin_scores(
+                                    dataset_name, twins, model_factories,
+                                    [mname], X_va_s, y_val, metric).items():
+                                pass_scores.setdefault(f'{arm}|{tw}',
+                                                       {}).update(by_m)
+                    pass_rows += arm_rows(
+                        dataset_name=dataset_name, exp_id=EXP_ID,
+                        metric=metric, condition=CHECK_CONDITION, level=level,
+                        draw=draw, fold=fold_i, model_input=_ekey,
+                        scores_by_arm=pass_scores, reference='untouched',
+                        setting_of=_n35_row_setting)
 
             pair_acc.setdefault(lvl_key, []).append(prec)
+            ledger.add_rows(pass_rows)
+            ledger.finish_pass(pass_key, {'acc': acc, 'tails': tails,
+                                          'errors': errors,
+                                          'pair_acc': pair_acc})
             _b1 = next((k for k in prec['per_space']
                         if k == 'base_1' or k.startswith('base_1/')), None)
             b = prec['per_space'].get(_b1, {}) if _b1 else {}
@@ -786,6 +933,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['per_level'] = convert_numpy(acc)
     results['tails_per_level'] = convert_numpy(tails)
     results['pairs_per_pass'] = convert_numpy(pair_acc)
+    results['d_vs_dprime'] = ledger.describe()
     if errors:
         results['_errors'] = errors
     results['check'] = convert_numpy(_check(pair_acc))
@@ -793,6 +941,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         acc, tails, downstream_models, metric_name, lower_is_better))
     _print_summary(results, metric_name)
     return results
+
+
+def _n35_row_setting(arm):
+    """(method, method_setting, similarity_setting) of an n35 arm for its row.
+    Today's two arms are the model_input setting; downweight_pairs@<setting>
+    is the same rule in that setting's distance."""
+    base, _, twin = arm.partition('|')
+    tail = f'|{twin}' if twin else ''
+    rule = method_setting(close_percentile=CLOSE_PERCENTILE,
+                          weight=DOWNWEIGHT)
+    if base == 'downweight_pairs_this_space':
+        return (f'downweight_pairs{tail}', rule, _ss.MODEL_INPUT.name)
+    if base == 'downweight_pairs_forest_proximity':
+        # A forest fitted on the model-input matrix and the labels as seen:
+        # exactly the forest_proximity setting (similarity_space.py:531-541).
+        return (f'downweight_pairs{tail}', rule, 'forest_proximity|none|forest')
+    if base.startswith('downweight_pairs@'):
+        return (f'downweight_pairs{tail}', rule, base.split('@', 1)[1])
+    return (arm, 'default', _ss.MODEL_INPUT.name)
 
 
 def _check(pair_acc):
@@ -884,7 +1051,10 @@ def _summarise(acc, tails, models, metric_name, lower_is_better):
                        'untouched_tails': _tail_means(
                            tails[lvl][space]['untouched'][m]),
                        'per_arm': {}}
-                for arm in ARMS[1:]:
+                # Today's arms first, then every downweight_pairs@<setting>
+                # (2026-09-25), in the order they were scored.
+                for arm in list(ARMS[1:]) + [a for a in by_arm
+                                             if a not in ARMS]:
                     g = (by_arm.get(arm) or {}).get(m) or {}
                     if not g:
                         continue
@@ -958,8 +1128,7 @@ def main():
 
     res = run(data, config, args.output, args.dataset, **kw)
     suffix = CHECK_CONDITION if not args.tag else f'{CHECK_CONDITION}_{args.tag}'
-    save_experiment_results(res, args.output,
-                            'n35_near_duplicate_disagreement', args.dataset,
+    save_experiment_results(res, args.output, EXP_ID, args.dataset,
                             filename_suffix=suffix)
 
 

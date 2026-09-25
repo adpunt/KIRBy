@@ -173,7 +173,7 @@ def _get_silo_reps(dataset_name, available_reps):
     return resolved
 
 
-def run(data, config, output_dir, dataset_name, **kwargs):
+def _run_one(data, config, output_dir, dataset_name, **kwargs):
     """Fed02: Representation diversity as federated silos."""
     print("\n" + "=" * 70)
     print("EXPERIMENT FED02: REPRESENTATION DIVERSITY AS FEDERATED SILOS")
@@ -1008,6 +1008,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"  {name:<35} {rmse:>8.4f} {rho:>10.4f} {r2:>8.4f}")
 
     return results
+
+
+# ── One (FLuID model, seed) call saved as it finishes (2026-09-25) ──────────
+# federated_helpers.run_all calls run() once per (fed_model, fed_seed) -- nine
+# calls -- and wrote fed02_rep_diversity_silos/<dataset>.json only after the ninth. A kill or
+# an exception in any call lost every call before it. Each call's return value
+# is now written to fed02_rep_diversity_silos/<dataset>.partial.jsonl the moment it returns
+# and read back on the next attempt (_checkpoint.resumable_run), keyed on the
+# model, the seed and any keyword argument, under an identity that includes the
+# input fingerprint, the plain config and the KIRBY_* settings. The returned
+# dict is decoded to the same objects, so aggregate_seed_runs and the final
+# JSON are unchanged. --force-rerun / KIRBY_FORCE_RERUN=1 discards the file.
+def run(data, config, output_dir, dataset_name, **kwargs):
+    from experiments._checkpoint import resumable_run
+    _key = {'fed_model': str(config.get('fed_model', 'rf')),
+            'fed_seed': int(config.get('fed_seed', 0)),
+            **{k: v for k, v in kwargs.items()}}
+    return resumable_run(
+        'fed02_rep_diversity_silos',
+        lambda: _run_one(data, config, output_dir, dataset_name, **kwargs),
+        data, config, output_dir, dataset_name, key=_key)
+
 
 
 if __name__ == '__main__':

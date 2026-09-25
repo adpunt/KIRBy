@@ -158,6 +158,14 @@ from experiments.noise.n07_remediation import _predict_for_metric
 from experiments.noise.n30_censored_likelihood import (
     _paired, _mean_on, recovery_share,
 )
+# The D-versus-D' rows, per-pass checkpoint, cached builds and controls shared
+# by n32-n41 (n32's shared block, 2026-09-25).
+from experiments.noise.n32_iterative_and_dual_selection import (
+    downstream_model_list, fit_predict_cached, scaled_base_cells,
+    cached_hybrid, ledger_signature, PassLedger, restart_flag, arm_rows,
+    arm_result, control_twins, twin_scores, controls_enabled, replicate_seed,
+    _nc,
+)
 from kirby.noise_spec import GROUPED_STRATEGIES
 from kirby.utils.noisy_labels import oof_predict
 
@@ -488,6 +496,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"changes a loss on a number or the number itself, so n33 is "
               f"regression only.")
         return {'skipped': 'not_regression', 'task_type': data['task_type']}
+    # sweep_conditions pops force_rerun; PassLedger reads restart_passes.
+    kwargs['restart_passes'] = bool(kwargs.get('force_rerun'))
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
         default_conditions=conditions_for_task(data), kwargs=kwargs,
@@ -518,8 +528,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     if not run_ngboost:
         label_arms = [a for a in label_arms if a != 'invvar_ngboost']
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     downstream_models = [m for m in downstream_models if m in model_factories]
@@ -588,6 +597,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'The noise is injected, so every number is confined to this '
             'condition on this dataset. Held-out molecules are graded against '
             'untouched labels in every arm.'),
+        'similarity_note': ('n33 finds no neighbours, so it has no similarity '
+                            'axis; its rows carry model_input|none|process.'),
+        'controls_run': controls_enabled(),
+        'controls_note': (
+            'With KIRBY_NOISE_CONTROLS=1, invvar_ngboost (a weighting) and '
+            'huber_teacher_blend (a label move) are twinned by controls.py. '
+            'yeo_johnson, c_mixup and target_noise_bagging have no twin: see '
+            'the TODO at their rows.'),
     }
 
     splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
@@ -682,6 +699,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # acc[level][space][arm][model][pass] = score; tails the same shape.
     acc, tails, pass_recs, errors = {}, {}, {}, {}
     t0 = time.time()
+    metric = (metric_name, metric_fn, lower_is_better)
+    # Rows and the per-pass checkpoint, 2026-09-25 (n32's PassLedger).
+    ledger = PassLedger(output_dir, EXP_ID, dataset_name, condition,
+                        signature=ledger_signature(data, config, results,
+                                                   splits),
+                        restart=restart_flag(kwargs))
+    if ledger.restored():
+        st = ledger.restored()
+        acc, tails, pass_recs, errors = (st['acc'], st['tails'],
+                                         st['pass_recs'], st['errors'])
+        print(f"  resumed {len(ledger.passes_done)} finished passes")
 
     def _store(lvl_key, space, arm, mname, pass_key, pred, y_val):
         s = float(metric_fn(y_val, pred))
@@ -697,6 +725,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  --- {condition} / level {lvl_key} / draw {draw} ---")
         for fold_i, (train_idx, val_idx) in enumerate(splits):
             pass_key = f'l{lvl_key}d{draw}f{fold_i}'
+            if ledger.pass_done(pass_key):
+                continue
+            pass_rows = []
             y_val = labels[val_idx]
             y_clean_tr = labels[train_idx]
             g_tr = groups[train_idx] if groups is not None else None
@@ -722,17 +753,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             fold_spaces = {}
             # Each single-representation space holds one matrix per distinct
             # representation at that rank, shared by the models that rank it
-            # there.
+            # there. Standardised once per fold through noise_cache
+            # (2026-09-25).
             for _k, _bsp in enumerate(BASE_SPACES, start=1):
                 if _bsp not in spaces:
                     continue
-                _bcells = []
-                for _rn, _ms in base_rank_groups(base_by_model, _k,
-                                                 downstream_models).items():
-                    sc = StandardScaler()
-                    _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                    sc.transform(val_reps[_rn]), list(_ms)))
-                fold_spaces[_bsp] = _bcells
+                fold_spaces[_bsp] = scaled_base_cells(
+                    dataset_name, reps, train_idx, val_idx, base_by_model, _k,
+                    downstream_models)
             for _sp in spaces:
                 if _sp in BASE_SPACES:
                     continue
@@ -740,11 +768,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, y0, _bp_m, g_tr,
-                        None if _shareable
-                        else model_factories[_mnames[0]](),
-                        metric_fn, lower_is_better)
+                    # Cached per (fold, recipe, labels), 2026-09-25.
+                    X_tr_h, X_va_h = cached_hybrid(
+                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        _mnames[0], model_factories, metric, train_idx,
+                        _shareable)
                     if X_tr_h is None:
                         errors[f'{lvl_key}|{_sp}/{_mnames[0]}|d{draw}|'
                                f'f{fold_i}|build'] = 'the hybrid could not be built'
@@ -762,7 +790,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     ekey = f'{lvl_key}|{_ekey}|d{draw}|f{fold_i}'
                     ctx = {}
                     try:
-                        p = oof_predict(X_tr_s, y0, g_tr, n_splits=oof_splits)
+                        # Cached on the label hash (2026-09-25): the same p
+                        # n30, n32, n34, n38, n40 and n41 compute for the draw.
+                        p = _nc.cached_oof_predict(dataset_name, X_tr_s, y0,
+                                                   g_tr, n_splits=oof_splits)
                     except Exception as exc:
                         errors[f'{ekey}|oof'] = f'{type(exc).__name__}: {exc}'
                         p = None
@@ -782,8 +813,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
                     if have_s and 'huber_teacher_blend' in label_arms:
                         try:
-                            ctx['teacher'] = oof_predict(
-                                X_tr_s, y0, g_tr, n_splits=oof_splits,
+                            ctx['teacher'] = _nc.cached_oof_predict(
+                                dataset_name, X_tr_s, y0, g_tr,
+                                n_splits=oof_splits,
                                 params={'objective': 'huber',
                                         'alpha': TEACHER_HUBER_C * s})
                         except Exception as exc:
@@ -805,6 +837,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     needs = {'huber_teacher_blend': 'teacher',
                              'invvar_ngboost': 'invvar_w',
                              'target_noise_bagging': 'resid_sd'}
+                    pass_scores = {}
                     for mname in cell_models:
                         fac = model_factories[mname]
                         for arm in arm_names:
@@ -814,18 +847,26 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 [fold_i, draw, int(round(level * 1000)),
                                  arm_names.index(arm)])
                             try:
+                                # clean and noisy through noise_cache for a
+                                # seeded model (2026-09-25): the clean fit in a
+                                # base space is the same every (level, draw).
                                 if arm == 'clean':
-                                    pred = _fit_predict(fac(), X_tr_s, y_clean_tr,
-                                                        X_va_s, metric_name)
+                                    pred = fit_predict_cached(
+                                        dataset_name, mname, fac, X_tr_s,
+                                        y_clean_tr, X_va_s, metric_name)
                                 elif arm == 'noisy':
-                                    pred = _fit_predict(fac(), X_tr_s, y0,
-                                                        X_va_s, metric_name)
+                                    pred = fit_predict_cached(
+                                        dataset_name, mname, fac, X_tr_s, y0,
+                                        X_va_s, metric_name)
                                 else:
                                     pred = label_arm_predict(
                                         arm, fac, X_tr_s, y0, X_va_s,
                                         metric_name, ctx, rng)
+                                pred = np.asarray(pred, dtype=float)
                                 _store(lvl_key, space, arm, mname, pass_key,
                                        pred, y_val)
+                                pass_scores.setdefault(arm, {})[mname] = \
+                                    acc[lvl_key][space][arm][mname][pass_key]
                             except Exception as exc:
                                 errors[f'{ekey}|{arm}|{mname}'] = (
                                     f'{type(exc).__name__}: {exc}')
@@ -855,10 +896,52 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 errors[f'{ekey}|ngboost_{dist}'] = (
                                     f'{type(exc).__name__}: {exc}')
 
+                    # ── Controls (KIRBY_NOISE_CONTROLS=1), 2026-09-25 ──
+                    # invvar_ngboost is a weighting and huber_teacher_blend a
+                    # label move, so controls.py twins them.
+                    # TODO(similarity-sweep 2026-09-25): yeo_johnson,
+                    # c_mixup and target_noise_bagging get no twin. Each
+                    # changes EVERY label or adds rows by construction, so
+                    # "the same number of molecules at random" is the method
+                    # itself; what a control for them should hold fixed is a
+                    # design decision for the owner.
+                    twin_src = {}
+                    if 'invvar_w' in ctx:
+                        twin_src['invvar_ngboost'] = arm_result(
+                            y0, weight=ctx['invvar_w'])
+                    if 'teacher' in ctx:
+                        twin_src['huber_teacher_blend'] = arm_result(
+                            y0, y=(1.0 - TEACHER_WEIGHT) * y0
+                            + TEACHER_WEIGHT * ctx['teacher'])
+                    for arm, res_ in twin_src.items():
+                        if arm not in label_arms:
+                            continue
+                        twins = control_twins(res_, X_tr_s, y0, (
+                            replicate_seed(arm), draw, fold_i,
+                            int(round(level * 1000))))
+                        for tw, by_m in twin_scores(
+                                dataset_name, twins, model_factories,
+                                cell_models, X_va_s, y_val, metric).items():
+                            pass_scores[f'{arm}|{tw}'] = by_m
+
+                    # ── D against D': noisy is D, every label arm a D'.
+                    # The loss swaps change the model, not the data, and are
+                    # read against their parent in the summary, not here. ──
+                    pass_rows += arm_rows(
+                        dataset_name=dataset_name, exp_id=EXP_ID,
+                        metric=metric, condition=condition, level=level,
+                        draw=draw, fold=fold_i, model_input=_ekey,
+                        scores_by_arm=pass_scores, reference='noisy')
+
             pass_recs.setdefault(lvl_key, []).append(rec)
+            ledger.add_rows(pass_rows)
+            ledger.finish_pass(pass_key, {'acc': acc, 'tails': tails,
+                                          'pass_recs': pass_recs,
+                                          'errors': errors})
             print(f"    level {lvl_key} draw {draw} fold {fold_i}: "
                   f"{rec['labels_moved']} of {rec['training_molecules']} labels "
-                  f"moved [{time.time() - t0:.0f}s]")
+                  f"moved, {len(pass_rows)} D-vs-D' rows "
+                  f"[{time.time() - t0:.0f}s]")
 
     swap_parents = dict(swaps)
     if ngb_pair:
@@ -866,6 +949,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['per_level'] = convert_numpy(acc)
     results['tails_per_level'] = convert_numpy(tails)
     results['per_pass'] = convert_numpy(pass_recs)
+    results['d_vs_dprime'] = ledger.describe()
     if errors:
         results['_errors'] = errors
     results['summary'] = convert_numpy(_summarise(

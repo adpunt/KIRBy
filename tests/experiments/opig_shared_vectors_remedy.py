@@ -640,6 +640,9 @@ def main():
     ap.add_argument('--smoke', action='store_true',
                     help='one sweep point per strategy, 2 outer folds, budget 25')
     ap.add_argument('--output-dir', default=DEFAULT_OUTPUT)
+    ap.add_argument('--force-rerun', action='store_true',
+                    help='Recompute what an earlier attempt finished '
+                         '(<output>.partial.jsonl).')
     ap = add_distance_metric_arg(ap)
     args = ap.parse_args()
     apply_distance_metric_arg(args)
@@ -659,6 +662,26 @@ def main():
     class _Cfg:
         mode = 'full'
     config = get_config(_Cfg())
+
+    # Each (dataset, comparison, sweep point) is written to
+    # <output>.partial.jsonl when it finishes and read back on the next
+    # attempt (2026-09-25; experiments/_checkpoint.py). What is stored is the
+    # rows summarise_comparison produced for it, which is what goes into the
+    # JSON. The sidecar is named after the output file, so each --sweep-slice
+    # keeps its own. A sweep point that raised is still recorded as an error
+    # row, is not stored, is retried next time, and makes the script exit 1
+    # after the JSON is written. The C comparisons are not stored per unit.
+    _tag = ''
+    if args.sweep_slice:
+        _k, _n = (int(x) for x in args.sweep_slice.split('/'))
+        _tag = f'_slice{_k}of{_n}'
+    from experiments._checkpoint import script_checkpoint, exit_if_failed
+    _ck = script_checkpoint(
+        'opig_shared_vectors_remedy',
+        os.path.join(args.output_dir,
+                     f'opig_shared_vectors_remedy{_tag}.json'),
+        args, exclude=('datasets', 'output_dir'))
+    _failed = []
 
     all_rows, all_meta = [], []
     t0 = time.time()
@@ -819,6 +842,14 @@ def main():
             for i, point in enumerate(points):
                 print(f'  {which} point {i + 1}/{len(points)}: '
                       f'{point_slug(point)} ({time.time() - t0:.0f}s)', flush=True)
+                _pkey = dict(dataset=ds, comparison=which,
+                             point=point_slug(point),
+                             reps=sorted(which_reps))
+                if _ck.done(**_pkey):
+                    all_rows.extend(_ck.get(**_pkey))
+                    print('    finished in an earlier attempt, read back',
+                          flush=True)
+                    continue
                 try:
                     res, folds = run_comparison(which, data, ds, which_reps,
                                                 donor_reps, config, args,
@@ -828,10 +859,13 @@ def main():
                     all_rows.append({'comparison': which, 'dataset': ds,
                                      'sweep_point': point,
                                      'error': f'{type(exc).__name__}: {exc}'})
+                    _failed.append(f'{ds}/{which}/{point_slug(point)}')
                     continue
-                all_rows.extend(summarise_comparison(
+                _new_rows = summarise_comparison(
                     which, point, res, folds, data, which_reps, donor_reps,
-                    target, args))
+                    target, args)
+                _ck.put(_new_rows, **_pkey)
+                all_rows.extend(_new_rows)
 
         for r in all_rows:
             r.setdefault('dataset', ds)
@@ -858,6 +892,7 @@ def main():
                          'models_left_out': sorted(dropped)})
 
     if args.count_only:
+        exit_if_failed(_failed, 'sweep point')
         return
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -871,6 +906,7 @@ def main():
         json.dump(convert_numpy({'rows': all_rows, 'per_dataset': all_meta}),
                   f, indent=1)
     print(f'\nwrote {path}')
+    exit_if_failed(_failed, 'sweep point')
 
 
 if __name__ == '__main__':

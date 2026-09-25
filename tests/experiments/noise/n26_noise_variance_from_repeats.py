@@ -95,6 +95,11 @@ fitted slopes move between spaces is written as a spread.
 THE HEADLINE IS NOT A MEAN. Every (space, model) pair writes its own three
 fitted slopes. Nothing is averaged across models or across spaces.
 
+CHECKPOINT AND CACHES (2026-09-25, plan section 3). n26 changes no training
+data, so it writes no D-versus-D' rows. Its out-of-fold predictions are
+checkpointed per fold, and the scaled representations and hybrid builds go
+through noise_cache.
+
 Usage:
     python n26_noise_variance_from_repeats.py --dataset herg_ic50 --mode full
     python n26_noise_variance_from_repeats.py --dataset bindingdb_kd --mode full
@@ -124,6 +129,11 @@ from experiments.noise.n17_replicate_removal import build_entities
 from experiments.noise.n19_measurement_count import measurement_stats
 from experiments.noise.noise_helpers import (
     hybrid_for_fold, pool_recipe_per_downstream_model, group_models_by_recipe,
+)
+# The per-fold checkpoint and the caches (2026-09-25, plan section 3). They
+# live in n23 for the reason given at the top of its shared block.
+from experiments.noise.n23_uncertainty_cleaning import (
+    PassCheckpoint, cached_base_cell, cached_hybrid_cell,
 )
 
 # Which searches the recipe may come from. Same as n19, n23 and n24.
@@ -559,8 +569,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     errors = {}
     t0 = time.time()
 
+    # ── Per-fold checkpoint (2026-09-25) ──
+    # n26 changes no training data, so it writes no D-versus-D' rows; it
+    # measures. What it lost on a kill was every fold: the out-of-fold
+    # predictions are now checkpointed after each fold and a rerun skips the
+    # folds already done (PassCheckpoint, n23's shared block).
+    ckpt = PassCheckpoint(
+        output_dir, 'n26_noise_variance_from_repeats', dataset_name,
+        condition=kwargs.get('tag'), data=data, config=config,
+        source_file=__file__,
+        key={'models': list(downstream_models), 'base_reps': base_by_model,
+             'spaces': list(spaces), 'n_splits': n_folds})
+    done_folds = set()
+    _state = ckpt.load()
+    if _state:
+        oof, fold_scores, errors = (_state['oof'], _state['fold_scores'],
+                                    _state['errors'])
+        done_folds = set(_state['done'])
+        print(f"  resumed from {ckpt.path}: {len(done_folds)} folds already "
+              f"done")
+    _metric = (metric_name, metric_fn, lower_is_better)
+
     for fold_i, (tr, va) in enumerate(splits):
         fold_key = f'f{fold_i}'
+        if fold_key in done_folds:
+            print(f"    fold {fold_i}: on disk in the checkpoint")
+            continue
         g_tr = ent_groups[tr]
         train_reps = {n: v[tr] for n, v in ent_reps.items()}
         val_reps = {n: v[va] for n, v in ent_reps.items()}
@@ -574,9 +608,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _bcells = []
             for _rn, _ms in base_rank_groups(base_by_model, _k,
                                              downstream_models).items():
-                sc = StandardScaler()
-                _bcells.append((sc.fit_transform(ent_reps[_rn][tr]),
-                                sc.transform(ent_reps[_rn][va]), list(_ms)))
+                # noise_cache.cached_scaled since 2026-09-25 (plan section 3).
+                _Xt, _Xv = cached_base_cell(dataset_name, ent_reps[_rn], tr, va)
+                _bcells.append((_Xt, _Xv, list(_ms)))
             fold_spaces[_bsp] = _bcells
         for _sp in spaces:
             if _sp.startswith('base_'):
@@ -585,10 +619,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for _bp, _mnames, _shareable in group_models_by_recipe(
                     {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                      for _m in downstream_models}, downstream_models):
-                X_tr_h, X_va_h = hybrid_for_fold(
-                    train_reps, val_reps, y[tr], _bp, g_tr,
+                # noise_cache.cached_hybrid_for_fold since 2026-09-25.
+                X_tr_h, X_va_h = cached_hybrid_cell(
+                    dataset_name, train_reps, val_reps, y[tr], _bp, g_tr,
+                    None if _shareable else _mnames[0],
                     None if _shareable else model_factories[_mnames[0]](),
-                    metric_fn, lower_is_better)
+                    _metric, tr)
                 if X_tr_h is None:
                     errors[f'{_sp}/{_mnames[0]}|{fold_key}|build'] = (
                         'the hybrid could not be built on this fold')
@@ -612,6 +648,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     oof[space][mname][va] = pred
                     fold_scores[space][mname][fold_key] = float(
                         metric_fn(y[va], pred))
+        done_folds.add(fold_key)
+        ckpt.save({'oof': oof, 'fold_scores': fold_scores, 'errors': errors,
+                   'done': sorted(done_folds)})
         print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
 
     # ── The three measurements, per (space, model) ──
@@ -713,6 +752,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     save_experiment_results(results, output_dir,
                             'n26_noise_variance_from_repeats', dataset_name,
                             filename_suffix=kwargs.get('tag'))
+    ckpt.clear()
     return results
 
 

@@ -41,6 +41,12 @@ from kirby.find_best_hybrid import Blueprint
 OUT = tempfile.mkdtemp(prefix='n26_smoke_')
 FAIL = []
 
+# 2026-09-25: n26 now caches through noise_cache under KIRBY_CACHE_DIR and
+# checkpoints under the output directory, so the toy entries go to a
+# temporary directory, as tests/smoke/smoke_noise_similarity_foundation.py
+# does.
+os.environ['KIRBY_CACHE_DIR'] = tempfile.mkdtemp(prefix='n26_smoke_cache_')
+
 TRUE_S2E = 0.30
 
 
@@ -229,11 +235,27 @@ def test_help():
     check('--base-rep is gone', '--base-rep' not in p.stdout)
 
 
+# ── the per-fold checkpoint (2026-09-25) ────────────────────────────────────
+
+def test_checkpoint():
+    """n26 changes no training data, so it writes no D-versus-D' rows; it
+    checkpoints its out-of-fold predictions per fold and removes the
+    checkpoint once the result is written."""
+    print("\nthe per-fold checkpoint:")
+    res = run_it(make_data(seed=2), 'toy_ckpt', models=['rf'],
+                 injected_variances=[0.2], n_split_half_repeats=2)
+    check('the run finished', 'per_space' in res)
+    ck = os.path.join(OUT, 'n26_noise_variance_from_repeats', '_checkpoints')
+    check('no checkpoint is left once the result is complete',
+          not (os.path.isdir(ck) and os.listdir(ck)), ck)
+
+
 if __name__ == '__main__':
     test_fits()
     test_direct_icc_split()
     test_run()
     test_help()
+    test_checkpoint()
     print()
     if FAIL:
         print(f"FAILED: {len(FAIL)} — {', '.join(FAIL)}")

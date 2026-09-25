@@ -397,14 +397,91 @@ def cached_oof_predict(dataset, X, y, groups, n_splits=5, seed=0,
     return cached(dataset, 'oof_predict', key, _compute)
 
 
+def _neighbour_lists_hash(nbrs):
+    """Content hash of every neighbour array in a neighbour_lists dict: the
+    exact per-k lists MODEL_INPUT carries, and idx_train / dist_train."""
+    exact = nbrs.get('exact_by_k')
+    return {'setting': nbrs.get('setting_name'),
+            'train': array_hash(nbrs.get('idx_train'), nbrs.get('dist_train')),
+            'exact_by_k': (None if exact is None else
+                           [[int(k), array_hash(exact[k][0], exact[k][1])]
+                            for k in sorted(exact)])}
+
+
+# The four estimators that take precomputed_neighbors
+# (src/kirby/utils/noise_estimation.py, _neighbours_for, added 2026-09-25).
+NEIGHBOUR_DETECTORS = ('neighbor_residual', 'local_variance_ratio',
+                       'distance_weighted', 'distance_weighted_residual',
+                       'activity_cliff_aware')
+
+
+def _detector_scores_from_lists(X_tr_s, y_tr, is_clf, name, groups, nbrs, k):
+    """One neighbour detector's scores with its neighbours read from `nbrs`.
+
+    Builds the estimator with the arguments n07._compute_noise_scores offers
+    it (n07:452-453: k=10, metric=None, is_clf, exclude_groups=groups) plus
+    precomputed_neighbors=nbrs. With k=None the estimator's own count is used:
+    min(10, n-1) (noise_estimation.py, every neighbour estimator's
+    estimate()). A failed fit prints and returns None, as n07 does
+    (n07:476-481).
+    """
+    import inspect
+    from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
+    cls = ESTIMATOR_REGISTRY[name]
+    offered = {'k': 10 if k is None else int(k), 'metric': None,
+               'is_clf': is_clf, 'exclude_groups': groups,
+               'precomputed_neighbors': nbrs}
+    accepts = set(inspect.signature(cls.__init__).parameters)
+    # A k the MODEL_INPUT lists do not hold is a configuration error, not a
+    # failed fit: raised here, outside the try, so it is not turned into None.
+    exact = nbrs.get('exact_by_k')
+    k_use = int(min(offered['k'], len(y_tr) - 1))
+    if exact is not None and k_use not in exact:
+        raise KeyError(f"MODEL_INPUT lists hold k in {sorted(exact)}, the "
+                       f"estimator asks for {k_use}")
+    try:
+        est = cls(**{a: v for a, v in offered.items() if a in accepts})
+        est.fit(X_tr_s, y_tr)
+        return est.noise_scores_
+    except Exception as exc:
+        print(f"      noise_scores estimator failed: "
+              f"{type(exc).__name__}: {exc}")
+        return None
+
+
 def cached_detector_scores(dataset, X_tr_s, y_tr, is_clf=False, detector=None,
-                           groups=None):
+                           groups=None, similarity_neighbours=None,
+                           similarity_k=None):
     """n07._compute_noise_scores (n07:399-480): one detector's suspicion
     scores on (X_tr_s, y_tr).
 
     Deterministic: every estimator it builds is seeded (random_state=42) and
     takes k=10 and the process-wide metric, which is in the key. A None
     (failed fit) is returned and not stored.
+
+    similarity_neighbours, added 2026-09-25 (plan section 1). None, the
+    default, is n07._compute_noise_scores unchanged. Given the dict
+    similarity_space.neighbour_lists (or noise_cache.cached_neighbours)
+    returns, the estimator is built HERE, not through n07, with
+    precomputed_neighbors set to it, so the detector judges each molecule
+    against its neighbours in the similarity setting's features while
+    anything else it computes still reads X_tr_s. similarity_k is how many
+    neighbours; None keeps the estimator's own min(10, n-1).
+
+    Rules, each checked:
+      - Only the four neighbour estimators (NEIGHBOUR_DETECTORS) read a
+        neighbour list. Any other detector -- cross_val, n07's default --
+        would ignore it and write today's numbers under the setting's name, so
+        it is refused with ValueError, the same rule n07.cleaned_training_set
+        applies (n07:703-722).
+      - The lists are taken as given: exclude_groups is NOT reapplied to them
+        (noise_estimation._neighbours_for). So when `groups` is given, a list
+        in which any molecule has a neighbour sharing its group is refused;
+        build the lists with exclude_groups=groups.
+      - The MODEL_INPUT setting's lists, built with exclude_groups=groups,
+        give the same scores as similarity_neighbours=None bit for bit
+        (tests/smoke/smoke_noise_similarity_foundation.py, check b).
+    The key adds the content hash of every neighbour array and similarity_k.
     """
     from experiments.noise import n07_remediation as n07
     name = n07.DETECTOR if detector is None else str(detector)
@@ -412,9 +489,40 @@ def cached_detector_scores(dataset, X_tr_s, y_tr, is_clf=False, detector=None,
            'is_clf': bool(is_clf), 'detector': name,
            'groups': array_hash(groups)}
 
-    def _compute():
-        return n07._compute_noise_scores(X_tr_s, y_tr, is_clf=is_clf,
-                                         detector=name, groups=groups)
+    if similarity_neighbours is None:
+        def _compute():
+            return n07._compute_noise_scores(X_tr_s, y_tr, is_clf=is_clf,
+                                             detector=name, groups=groups)
+    else:
+        if name not in NEIGHBOUR_DETECTORS:
+            raise ValueError(
+                f"cached_detector_scores: detector {name!r} does not read a "
+                f"neighbour list, so similarity setting "
+                f"{similarity_neighbours.get('setting_name')!r} would be "
+                f"ignored. Neighbour detectors: {NEIGHBOUR_DETECTORS}.")
+        if not similarity_neighbours.get('available', False):
+            raise ValueError(f"similarity_neighbours is unavailable: "
+                             f"{similarity_neighbours.get('reason')}")
+        if groups is not None:
+            g = np.asarray(groups)
+            lists = [similarity_neighbours.get('idx_train')]
+            lists += [v[0] for v in (similarity_neighbours.get('exact_by_k')
+                                     or {}).values()]
+            for idx in lists:
+                if idx is not None and np.any(g[np.asarray(idx)] == g[:, None]):
+                    raise ValueError(
+                        "similarity_neighbours gives a molecule a neighbour "
+                        "in its own group; build it with "
+                        "exclude_groups=groups, since the estimator does not "
+                        "reapply them to a given list.")
+        key['similarity_neighbours'] = _neighbour_lists_hash(
+            similarity_neighbours)
+        key['similarity_k'] = None if similarity_k is None else int(similarity_k)
+
+        def _compute():
+            return _detector_scores_from_lists(X_tr_s, y_tr, is_clf, name,
+                                               groups, similarity_neighbours,
+                                               similarity_k)
     out = cached(dataset, 'detector_scores', key, _compute,
                  store_if=lambda v: v is not None)
     return None if out is None else np.asarray(out)

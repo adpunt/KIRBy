@@ -27,6 +27,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
+# 2026-09-25: today's similarity (model_input) unless a check sets its own
+# list, and the noise cache in a temporary directory, never the real one.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+import tempfile as _tf
+os.environ['KIRBY_CACHE_DIR'] = _tf.mkdtemp(prefix='n37_smoke_cache_')
+
 os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
@@ -235,9 +241,81 @@ def test_parser():
     check('8b. --base-rep is gone', out and '--base-rep' not in out)
 
 
+
+def _rows_of(res):
+    """The D-versus-D' rows a run wrote (2026-09-25)."""
+    import json
+    p = (res.get('d_vs_dprime') or {}).get('rows_file')
+    if not p or not os.path.exists(p):
+        return []
+    return [json.loads(l) for l in open(p) if l.strip()]
+
+
+def _with_settings(names, fn):
+    """Run fn() under KIRBY_SIMILARITY_SETTINGS=names, then restore it."""
+    old = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+    os.environ['KIRBY_SIMILARITY_SETTINGS'] = names
+    try:
+        return fn()
+    finally:
+        if old is None:
+            os.environ.pop('KIRBY_SIMILARITY_SETTINGS', None)
+        else:
+            os.environ['KIRBY_SIMILARITY_SETTINGS'] = old
+
+
+
+def _close(a, b, rtol=1e-12):
+    """a == b, floats to rtol. rf's default factory predicts with n_jobs=-1,
+    and its threads sum the trees in no fixed order, so two fits of the same
+    forest can differ in the last bit (measured 2026-09-25: 1.402832974397575
+    against 1.4028329743975747). That is not a change of number."""
+    import math
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k], rtol) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_close(x, y, rtol) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float):
+        return (a == b or (math.isnan(a) and math.isnan(b))
+                or math.isclose(a, b, rel_tol=rtol, abs_tol=0.0))
+    return a == b
+
+def test_rows_and_resume():
+    """2026-09-25: the D-versus-D' rows (or, for a measurement-only experiment,
+    the per-pass checkpoint), a rerun that resumes every pass, and -- where
+    the experiment finds neighbours -- the similarity sweep."""
+    print("\nrows, resume and the similarity sweep:")
+    from experiments.noise.d_vs_dprime import ROW_FIELDS
+    kw = dict(models=['rf'], levels=[0.0], simex_draws=[0])
+    res = run_it(make_data(), 'toy_rows', **dict(kw))
+    check('R1. no D-vs-D\' rows: this experiment changes no training label',
+          not _rows_of(res) and 'checkpoint' in res)
+    again = run_it(make_data(), 'toy_rows', **dict(kw))
+    got = again['checkpoint']
+    check('R2. a rerun resumes every pass from the checkpoint and returns the '
+          'same scores', got['passes_resumed_from_checkpoint'] > 0
+          and got['rows_written_this_run'] == 0
+          and again['per_fold'] == res['per_fold'],
+          f"{got['passes_resumed_from_checkpoint']} passes resumed")
+    # The same dataset name: the injected noise is seeded on it, so another
+    # name would compare two different draws. The settings are in the
+    # checkpoint signature, so this run recomputes rather than resumes.
+    names = 'model_input,base_2|lightgbm_gain|euclidean,forest_proximity|none|forest'
+    r_sw = _with_settings(names, lambda: run_it(make_data(), 'toy_rows',
+                                                **dict(kw)))
+    g0, g1 = res['per_fold'][0]['gamma'], r_sw['per_fold'][0]['gamma']
+    check('R3. every other (setting, k) writes its own Gamma intercept and '
+          'today\'s intercepts are unchanged',
+          'base_1@base_2|lightgbm_gain|euclidean|k5' in g1
+          and 'base_1@forest_proximity|none|forest|k20' in g1
+          and all(_close(g1[k], v) for k, v in g0.items()),
+          f'{len(g1)} intercepts')
+
+
 if __name__ == '__main__':
     test_pure()
     test_runs()
+    test_rows_and_resume()
     test_parser()
     print("\n" + ("ALL GREEN" if not FAIL else f"FAILED: {FAIL}"))
     sys.exit(1 if FAIL else 0)

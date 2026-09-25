@@ -171,6 +171,14 @@ from experiments.noise.n34_group_random_effects import (
     recovery_share, _paired, _mean_on,
 )
 from kirby.utils.noisy_labels import oof_predict
+# The D-versus-D' rows, per-pass checkpoint, cached builds and controls shared
+# by n32-n41 (n32's shared block, 2026-09-25).
+from experiments.noise.n32_iterative_and_dual_selection import (
+    downstream_model_list, fit_predict_cached, scaled_base_cells,
+    cached_hybrid, ledger_signature, PassLedger, restart_flag, arm_rows,
+    arm_result, control_twins, twin_scores, controls_enabled, replicate_seed,
+    _nc,
+)
 
 EXP_ID = 'n39_correlated_sources'
 
@@ -448,13 +456,13 @@ def pooled_within_variance(labels, rec_mol, train_mol):
 
 # ── Runner ────────────────────────────────────────────────────────────────
 
-def _fit_predict(factory, X_tr, y_tr, X_va, metric_name, weights=None):
-    m = factory()
-    if weights is None:
-        m.fit(X_tr, y_tr)
-    else:
-        m.fit(X_tr, y_tr, sample_weight=weights)
-    return _predict_for_metric(m, X_va, metric_name)
+def _fit_predict(factory, X_tr, y_tr, X_va, metric_name, weights=None,
+                 dataset_name=None, model_name=None):
+    """One fit's held-out prediction. dataset_name / model_name, added
+    2026-09-25, route a seeded model through noise_cache
+    (n32.fit_predict_cached); the prediction is the same."""
+    return fit_predict_cached(dataset_name, model_name, factory, X_tr, y_tr,
+                              X_va, metric_name, sample_weight=weights)
 
 
 def _passes(dataset_name, count_dists, levels, rhos, tau_fracs, draws):
@@ -474,8 +482,11 @@ def cond_key(cd, rho, tf):
     return f'{cd}|rho{rho:g}|tau{tf:g}'
 
 
-def run(data, config, output_dir, dataset_name, **kwargs):
-    """N39: simulated sources with correlated errors and offsets."""
+def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
+    """N39: simulated sources with correlated errors and offsets.
+
+    force_rerun (run_dataset.py --force-rerun, via run_all) sets aside the
+    rows file and the per-pass checkpoint and recomputes every pass."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N39: SEVERAL SOURCES PER MOLECULE, CORRELATED ERRORS")
     print("=" * 70)
@@ -525,8 +536,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_ent = len(y_ent)
     label_sd = float(np.std(y_ent))
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
         downstream_models, task_type='regression', n_samples=n_ent)
     downstream_models = [m for m in downstream_models if m in model_factories]
@@ -587,6 +597,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid_labels=noisy: rebuilt per pass from the plain_mean labels.'),
         'claim_scope': ('Sources, offsets and correlation are simulated. Every '
                         'number is confined to this dataset.'),
+        'similarity_note': ('n39 finds no neighbours, so it has no similarity '
+                            'axis; its rows carry model_input|none|process.'),
+        'controls_run': controls_enabled(),
+        'rows_note': ('D is plain_mean, D\' each other arm, score_clean the '
+                      'clean arm. noise_condition in a row is '
+                      '<count distribution>|rho<rho>|tau<tau>, level the '
+                      'sigma_e level.'),
     }
 
     splits = list(cv_split(ent_groups, n_folds, next(iter(ent_reps.values())),
@@ -658,6 +675,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"draw); spaces {list(spaces)}")
 
     errors = {}
+    metric = (metric_name, metric_fn, lower_is_better)
 
     def build_spaces(fold_i, train_idx, val_idx, y_feat):
         train_reps = {k: v[train_idx] for k, v in ent_reps.items()}
@@ -666,15 +684,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         out = {}
         # Each single-representation space holds one matrix per distinct
         # representation at that rank, shared by the models that rank it there.
+        # Standardised once per fold through noise_cache (2026-09-25).
         for _sp in base_spaces:
             _k = int(_sp.split('_')[1])
-            _bcells = []
-            for _rn, _ms in base_rank_groups(base_by_model, _k,
-                                             downstream_models).items():
-                sc = StandardScaler()
-                _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                sc.transform(val_reps[_rn]), list(_ms)))
-            out[_sp] = _bcells
+            out[_sp] = scaled_base_cells(dataset_name, ent_reps, train_idx,
+                                         val_idx, base_by_model, _k,
+                                         downstream_models)
         for _sp in spaces:
             if _sp in base_spaces:
                 continue
@@ -682,10 +697,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for _bp_m, _mnames, _shareable in group_models_by_recipe(
                     {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                      for _m in downstream_models}, downstream_models):
-                X_tr_h, X_va_h = hybrid_for_fold(
-                    train_reps, val_reps, y_feat, _bp_m, g_tr,
-                    None if _shareable else model_factories[_mnames[0]](),
-                    metric_fn, lower_is_better)
+                # Cached per (fold, recipe, labels), 2026-09-25.
+                X_tr_h, X_va_h = cached_hybrid(
+                    dataset_name, train_reps, val_reps, y_feat, _bp_m, g_tr,
+                    _mnames[0], model_factories, metric, train_idx, _shareable)
                 if X_tr_h is None:
                     errors[f'{_sp}/{_mnames[0]}|f{fold_i}|build'] = (
                         'the hybrid could not be built')
@@ -698,8 +713,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return out
 
     def oof_fn(X, y, g):
-        return oof_predict(X, y, g if g is not None else np.arange(len(y)),
-                           n_splits=oof_splits)
+        # Cached on the label hash (2026-09-25).
+        return _nc.cached_oof_predict(
+            dataset_name, X, y, g if g is not None else np.arange(len(y)),
+            n_splits=oof_splits)
+
+    # Rows and the per-pass checkpoint, 2026-09-25 (n32's PassLedger). A pass
+    # is one (count distribution, rho, tau, level, draw, fold); the real-data
+    # block is checkpointed per fold as 'real|f<fold>'. The file stem is
+    # main()'s result suffix.
+    ledger = PassLedger(output_dir, EXP_ID, dataset_name, 'sources',
+                        signature=ledger_signature(data, config, results,
+                                                   splits),
+                        restart=bool(force_rerun) or restart_flag(kwargs))
+    restored = ledger.restored() or {}
 
     fold_cache = {}
 
@@ -713,10 +740,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── The real-data block ──
     real_block = None
     if rec_mol is not None:
-        real_block = {'per_fold': [], 'documents_available': rec_doc is not None,
-                      'published_error_label_units':
-                          REFERENCE_ERROR_LABEL_UNITS.get(dataset_name)}
+        real_block = restored.get('real_block') or {
+            'per_fold': [], 'documents_available': rec_doc is not None,
+            'published_error_label_units':
+                REFERENCE_ERROR_LABEL_UNITS.get(dataset_name)}
         for fold_i, (train_idx, val_idx) in enumerate(splits):
+            if ledger.pass_done(f'real|f{fold_i}'):
+                continue
             ctx = fold_ctx(fold_i, train_idx, val_idx)
             spaces_now = ctx['spaces'] or build_spaces(
                 fold_i, train_idx, val_idx, y_ent[train_idx])
@@ -752,12 +782,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         errors[f'real|{key}|f{fold_i}'] = (
                             f'{type(exc).__name__}: {exc}')
             real_block['per_fold'].append(frec)
+            ledger.finish_pass(f'real|f{fold_i}', dict(
+                restored, real_block=real_block, errors=errors))
             print(f"    real pairs fold {fold_i}: {cnt['pairs_used']} pairs, "
                   f"within variance {s_w2:.4f}")
     results['real_data'] = convert_numpy(real_block) if real_block else None
 
     # ── The simulation ──
     acc, tails, est = {}, {}, {}
+    if restored.get('acc') is not None:
+        acc, tails, est = restored['acc'], restored['tails'], restored['est']
+        errors.update(restored.get('errors') or {})
+        print(f"  resumed {len(ledger.passes_done)} finished passes")
     t0 = time.time()
     structures = {}
     for cd, level, rho, tf, draw in passes:
@@ -775,6 +811,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for fold_i, (train_idx, val_idx) in enumerate(splits):
             pk = f'd{draw}f{fold_i}'
+            ledger_key = f'{ck}|{lk}|{pk}'
+            if ledger.pass_done(ledger_key):
+                continue
+            pass_rows = []
             y_va = y_ent[val_idx]
             y_cl = y_ent[train_idx]
             y_pl = y_mean[train_idx]
@@ -846,6 +886,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             f'{type(exc).__name__}: {exc}')
                     space_cell = cell.setdefault(ekey, {})
                     tspace = tcell.setdefault(ekey, {})
+                    pass_scores = {}
                     for arm in ARMS:
                         if arm not in cols:
                             continue
@@ -854,7 +895,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             try:
                                 pred = _fit_predict(model_factories[mname],
                                                     X_tr_s, y_arm, X_va_s,
-                                                    metric_name, w_arm)
+                                                    metric_name, w_arm,
+                                                    dataset_name=dataset_name,
+                                                    model_name=mname)
                                 s = float(metric_fn(y_va, pred))
                             except Exception as exc:
                                 errors[f'{ck}|{lk}|{ekey}|{arm}|{mname}|{pk}'] = (
@@ -862,8 +905,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 continue
                             space_cell.setdefault(arm, {}).setdefault(
                                 mname, {})[pk] = s
+                            pass_scores.setdefault(arm, {})[mname] = s
                             tspace.setdefault(arm, {}).setdefault(
                                 mname, {})[pk] = tail_scores(y_va, pred)
+                    # ── Controls (KIRBY_NOISE_CONTROLS=1): each arm that
+                    # changed the plain_mean labels or their weights. ──
+                    # TODO(similarity-sweep 2026-09-25):
+                    # offset_removed_rho_hat_weights changes the labels AND
+                    # the weights at once; controls.py twins one change, so
+                    # it has no twin until the owner says which the control
+                    # should move (arm_result returns None for it).
+                    for arm in ARMS:
+                        if arm in ('clean', ARM_TO_BEAT) or arm not in cols:
+                            continue
+                        y_arm, w_arm = cols[arm]
+                        twins = control_twins(
+                            arm_result(y_pl, y=y_arm, weight=w_arm), X_tr_s,
+                            y_pl, (replicate_seed(arm, ck), draw, fold_i,
+                                   int(round(level * 1000))))
+                        for tw, by_m in twin_scores(
+                                dataset_name, twins, model_factories,
+                                cell_models, X_va_s, y_va, metric).items():
+                            pass_scores[f'{arm}|{tw}'] = by_m
+                    pass_rows += arm_rows(
+                        dataset_name=dataset_name, exp_id=EXP_ID,
+                        metric=metric, condition=ck, level=level, draw=draw,
+                        fold=fold_i, model_input=ekey,
+                        scores_by_arm=pass_scores, reference=ARM_TO_BEAT)
+            ledger.add_rows(pass_rows)
+            ledger.finish_pass(ledger_key, {
+                'acc': acc, 'tails': tails, 'est': est, 'errors': errors,
+                'real_block': real_block})
         rh = [e.get('rho_hat') for e in est[ck][lk] if e.get('rho_hat') is not None]
         print(f"    {ck} level {lk} d{draw}: rho_hat "
               f"{np.nanmean(rh) if rh else float('nan'):.3f} (true {rho:g}) "
@@ -872,6 +944,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['per_condition'] = convert_numpy(acc)
     results['tail_per_condition'] = convert_numpy(tails)
     results['estimates_per_pass'] = convert_numpy(est)
+    results['d_vs_dprime'] = ledger.describe()
     if errors:
         results['_errors'] = errors
     results['summary'] = convert_numpy(_summarise(

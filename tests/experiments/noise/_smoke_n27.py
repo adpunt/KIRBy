@@ -38,6 +38,12 @@ from kirby.find_best_hybrid import Blueprint
 
 OUT = tempfile.mkdtemp(prefix='n27_smoke_')
 FAIL = []
+
+# 2026-09-25: n27 now caches through noise_cache under KIRBY_CACHE_DIR and
+# checkpoints under the output directory, so the toy entries go to a
+# temporary directory, as tests/smoke/smoke_noise_similarity_foundation.py
+# does.
+os.environ['KIRBY_CACHE_DIR'] = tempfile.mkdtemp(prefix='n27_smoke_cache_')
 N = int(os.environ.get('KIRBY_SMOKE_N', '180'))
 
 
@@ -251,6 +257,38 @@ def test_cli():
     check('--base-rep is gone', '--base-rep' not in p.stdout)
 
 
+# ── the D-versus-D' rows and the checkpoint (2026-09-25) ────────────────────
+
+def test_rows_and_checkpoint():
+    """Plan section 2 on n27: the run writes D-versus-D' rows beside its
+    result file, each with the metric direction and a gain signed by it, and
+    leaves no per-pass checkpoint behind once the result is complete."""
+    import json
+    print("\nthe D-versus-D' rows and the checkpoint:")
+    res = run_it(make_data(), 'toy_rows', models=['rf'], base_reps={'rf': ['toy', 'second']}, shares=[0.9], repeats=1, levels=[0.5], draws=[0], alphas=[0.5], parts=['removal_cost', 'relabelled'])
+    path = res['rows']['rows_file']
+    rows = ([json.loads(l) for l in open(path)]
+            if path and os.path.exists(path) else [])
+    check('rows were written to the rows file', len(rows) > 0, str(path))
+    methods = {x['method'] for x in rows}
+    check('the rows name the methods that change the training data',
+          {'removal_cost', 'move_toward_oof'} <= methods, str(sorted(methods)))
+    check('every row carries the direction the dataset\'s metric has',
+          all(x['lower_is_better'] is bool(res['lower_is_better'])
+              for x in rows), str(res['lower_is_better']))
+    ok = all((x['gain'] != x['gain']) or abs(
+        x['gain'] - ((x['score_D'] - x['score_Dprime'])
+                     if x['lower_is_better']
+                     else (x['score_Dprime'] - x['score_D']))) < 1e-12
+             for x in rows)
+    check('gain is score_D against score_Dprime, signed by the direction', ok)
+    check('D is the correct-label fit, so score_D equals score_clean',
+          all(x['score_D'] == x['score_clean'] for x in rows))
+    ck = os.path.join(OUT, 'n27_removal_cost_and_propagation', '_checkpoints')
+    check('no checkpoint is left once the result is complete',
+          not (os.path.isdir(ck) and os.listdir(ck)), ck)
+
+
 if __name__ == '__main__':
     test_draws()
     test_move_and_sign()
@@ -260,6 +298,7 @@ if __name__ == '__main__':
     test_labels_untouched()
     test_refuses_classification()
     test_cli()
+    test_rows_and_checkpoint()
     print()
     if FAIL:
         print(f"{len(FAIL)} FAILED: {FAIL}")

@@ -289,7 +289,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                           sim_threshold, activity_k,
                           smiles=None, is_clf=False,
                           dataset_name=None, models_to_run=None,
-                          search_verbose=False):
+                          search_verbose=False, output_dir=None):
     """Compare prediction error on cliff vs non-cliff compounds.
 
     2026-09-12, decided: n01 searches its recipe inside each fold, on the fast
@@ -483,6 +483,13 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
 
     fold_searches = {}
     fold_search_errors = []
+    # TODO(similarity-sweep 2026-09-25): the owner's run settings for the
+    # prelim noise runs are KIRBY_NO_COLD_SEARCH=1 -- experiments read the
+    # precompute and never start a search. n01 searches inside each fold
+    # (decided 2026-09-12, above), so under that setting a fold whose search
+    # is not already in the nested-CV cache namespace is refused and the
+    # hybrid arm drops that fold (fold_search_errors records it). Which of the
+    # two decisions wins for n01 is the owner's call; nothing here changes it.
     for fold_i, (train_idx, _val_idx) in enumerate(folds):
         try:
             fold_searches[fold_i] = find_best_hybrid(
@@ -705,7 +712,116 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
               f"(2 base representations + 2 hybrids) per fold), "
               f"0 new model fits")
 
-    def _evaluate_condition(get_Xy_fn, label, model_factory):
+    # ── The similarity axis and the per-fold checkpoint, 2026-09-25 ────────
+    # Plan sections 1-3. The cliffs above are ONE similarity: ECFP4 Tanimoto
+    # at 0.55 over every pair of molecules (or the fallbacks), and every key
+    # this function returned before 2026-09-25 is graded on them, unchanged.
+    #
+    # The sweep adds the cliff definition under every similarity setting at
+    # every k in SWEPT_KS: a held-out molecule is a cliff when one of its k
+    # nearest TRAINING molecules in that setting's features differs from it by
+    # more than the activity threshold above (activity_k x the label MAD; a
+    # different class on a classification set), and the same predictions are
+    # re-graded cliff against non-cliff. Neighbours come from
+    # n07.fold_neighbours (noise_cache), validation rows against training
+    # rows, so the held-out labels define the stratum and never a feature.
+    #
+    # TODO(similarity-sweep 2026-09-25): translating 'structurally similar'
+    # from a Tanimoto threshold (0.55) or a top-2%-of-pairs cutoff to "one of
+    # the k nearest training molecules" is this change's choice, not the
+    # owner's. The two agree in spirit and differ in count: a k-nearest
+    # definition gives every molecule k candidate partners whatever their
+    # distance. Owner to confirm or name another rule.
+    #
+    # n01 has no noise and changes no training data, so it writes no
+    # D-versus-D' rows; each (model, model input, fold) fit is checkpointed
+    # instead and read back on resume.
+    from experiments.noise.n07_remediation import (
+        sweep_settings, sweep_ks, usable_ks, fold_similarity_spaces,
+        fold_neighbours, FoldCheckpoint, similarity_record,
+        cached_build_fold_hybrid)
+    from experiments.noise.similarity_space import neighbours_at
+    from experiments._shared import input_fingerprint
+    sim_settings = sweep_settings()
+    sim_ks = sweep_ks()
+    sim_acc = {}
+    sim_unavailable = {}
+    if is_clf:
+        _act_thr = None
+    else:
+        _act_thr = float(activity_k) * float(
+            np.median(np.abs(labels - np.median(labels))))
+    ckpt = FoldCheckpoint(output_dir, 'n01_activity_cliff_framework',
+                          dataset_name or 'unnamed', tag='folds',
+                          fingerprint={
+                              'input': input_fingerprint(data, config),
+                              'models': list(model_factories),
+                              'sim_threshold': sim_threshold,
+                              'activity_k': activity_k,
+                              'n_folds': len(folds)})
+
+    def _fold_top2(model_name, fold_i):
+        """This fold's search's top 2 single representations for the model
+        (top2_base_reps_by_fold, filled above). [] when it has none."""
+        sel = ((top2_base_reps_by_fold.get(int(fold_i)) or {})
+               .get(model_name) or {}).get('selected') or []
+        return [e.get('rep') for e in sel if e.get('rep') in reps][:2]
+
+    def _sim_strata(model_name, label, fold_i, train_idx, val_idx, X_tr_s,
+                    X_va_s, y_val, y_pred):
+        """Cliff against non-cliff under every (setting, k), for one fold's
+        predictions."""
+        bp_f = (bp_by_model_fold.get(model_name) or {}).get(fold_i)
+        spaces_tr, spaces_va, unav = fold_similarity_spaces(
+            dataset_name, sim_settings, model_input_tr=X_tr_s,
+            model_input_va=X_va_s, reps=reps, train_idx=train_idx,
+            val_idx=val_idx, y_train=labels[train_idx],
+            groups_train=(np.asarray(groups)[train_idx]
+                          if groups is not None else None),
+            base_reps=_fold_top2(model_name, fold_i),
+            recipes=({'hybrid': (bp_f, 'none')} if bp_f is not None else {}),
+            augmentations=None, model_name=model_name,
+            model_factory=model_factories.get(model_name),
+            metric=(metric_name, metric_fn, lower_is_better),
+            task_type=task_type)
+        nb = fold_neighbours(
+            dataset_name, sim_settings, spaces_tr, spaces_va,
+            labels[train_idx],
+            smiles_train=(None if smiles is None else
+                          [smiles[i] for i in train_idx]),
+            smiles_val=(None if smiles is None else
+                        [smiles[i] for i in val_idx]),
+            is_clf=is_clf)
+        y_tr = labels[train_idx]
+        for st in sim_settings:
+            L = nb.get(st.name)
+            if L is None or not L.get('available') or L.get('idx_val') is None:
+                sim_unavailable.setdefault(f'{model_name}|{label}|{st.name}',
+                                           unav.get(st.space)
+                                           or (L or {}).get('reason'))
+                continue
+            for k in sim_ks:
+                if L['idx_val'].shape[1] < k:
+                    continue
+                idx = neighbours_at(L, k, which='val')[0]
+                if is_clf:
+                    cl = np.any(y_tr[idx] != y_val[:, None], axis=1)
+                else:
+                    cl = np.any(np.abs(y_tr[idx] - y_val[:, None]) > _act_thr,
+                                axis=1)
+                row = {'n_val': int(len(y_val)), 'n_cliff': int(cl.sum()),
+                       'cliff': None, 'noncliff': None}
+                for key_, m_ in (('cliff', cl), ('noncliff', ~cl)):
+                    if int(m_.sum()) > 1:
+                        try:
+                            row[key_] = float(metric_fn(y_val[m_], y_pred[m_]))
+                        except Exception:
+                            pass
+                (sim_acc.setdefault(model_name, {}).setdefault(label, {})
+                 .setdefault(st.name, {}).setdefault(str(k), [])
+                 .append(row))
+
+    def _evaluate_condition(get_Xy_fn, label, model_factory, model_name=None):
         """Run CV, return {metric_all, metric_cliff, metric_noncliff, gap, ...}."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
 
@@ -722,18 +838,29 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             X_tr_s = scaler.fit_transform(X_tr)
             X_va_s = scaler.transform(X_va)
 
-            model = model_factory()
-            model.fit(X_tr_s, y_train)
-            if metric_name == 'auc' and hasattr(model, 'predict_proba'):
-                proba = model.predict_proba(X_va_s)
-                if getattr(proba, 'ndim', 1) == 2 and proba.shape[1] == 2:
-                    y_pred = proba[:, 1]
+            def _fit_predict(X_tr_s=X_tr_s, X_va_s=X_va_s, y_train=y_train):
+                model = model_factory()
+                model.fit(X_tr_s, y_train)
+                if metric_name == 'auc' and hasattr(model, 'predict_proba'):
+                    proba = model.predict_proba(X_va_s)
+                    if getattr(proba, 'ndim', 1) == 2 and proba.shape[1] == 2:
+                        _p = proba[:, 1]
+                    else:
+                        _p = proba
                 else:
-                    y_pred = proba
-            else:
-                y_pred = model.predict(X_va_s)
+                    _p = model.predict(X_va_s)
+                return {'y_pred': np.asarray(_p).tolist(),
+                        'dtype': str(np.asarray(_p).dtype)}
+            # The fit, written to the checkpoint as the fold finishes and read
+            # back on resume (2026-09-25). The prediction is stored at full
+            # precision and rebuilt in its own dtype, so a resumed fold scores
+            # the same numbers.
+            _rec = ckpt.cached([model_name, label, int(fold_i)], _fit_predict)
+            y_pred = np.asarray(_rec['y_pred'], dtype=_rec['dtype'])
 
             fold_all.append(metric_fn(y_val, y_pred))
+            _sim_strata(model_name, label, fold_i, train_idx, val_idx,
+                        X_tr_s, X_va_s, y_val, y_pred)
 
             val_cliff = np.array([i for i, vi in enumerate(val_idx)
                                   if vi in cliff_indices])
@@ -797,7 +924,8 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         for rep_name, X_rep in reps.items():
             def _get_rep(tr, va, yt, fold_i, _X=X_rep):
                 return _X[tr], _X[va]
-            res = _evaluate_condition(_get_rep, rep_name, model_factory)
+            res = _evaluate_condition(_get_rep, rep_name, model_factory,
+                                      model_name=model_name)
             if res:
                 per_model[rep_name] = res
                 mn = res['metric']
@@ -824,7 +952,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                     return None, None
                 train_reps = {name: rep[tr] for name, rep in reps.items()}
                 val_reps = {name: rep[va] for name, rep in reps.items()}
-                X_tr_h, X_va_h, _ = build_fold_hybrid(
+                # Stored through noise_cache since 2026-09-25
+                # (n07.cached_build_fold_hybrid): the same call, keyed on its
+                # inputs, so a resumed run does not rebuild it.
+                X_tr_h, X_va_h, _ = cached_build_fold_hybrid(
+                    dataset_name or 'unnamed',
                     train_reps, val_reps, yt, _bp,
                     augmentations_train=None, augmentations_val=None,
                     groups=(groups[tr] if groups is not None else None),
@@ -833,7 +965,8 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                     lower_is_better=lower_is_better)
                 return X_tr_h, X_va_h
 
-            res = _evaluate_condition(_get_hybrid, 'hybrid', model_factory)
+            res = _evaluate_condition(_get_hybrid, 'hybrid', model_factory,
+                                      model_name=model_name)
             if res:
                 per_model['_hybrid'] = res
                 mn = res['metric']
@@ -864,7 +997,47 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     strat_results = (dict(strat_results_by_model[_legacy_model])
                      if _legacy_model else {})
 
+    # The similarity axis, 2026-09-25: {model: {model input: {setting: {k:
+    # {cliff, noncliff, gap, n_folds_cliff, n_folds_noncliff, mean n_cliff}}}}},
+    # in the dataset's own metric, the gap sign-normalised the way
+    # cliff_noncliff_gap above is (positive = worse on cliffs).
+    stratified_by_similarity = {}
+    for _m, _by_l in sim_acc.items():
+        for _l, _by_s in _by_l.items():
+            for _sn, _by_k in _by_s.items():
+                for _k, _rows in _by_k.items():
+                    _c = [r['cliff'] for r in _rows if r['cliff'] is not None]
+                    _n = [r['noncliff'] for r in _rows
+                          if r['noncliff'] is not None]
+                    sc_c = float(np.mean(_c)) if _c else float('nan')
+                    sc_n = float(np.mean(_n)) if _n else float('nan')
+                    gap = (float('nan') if (np.isnan(sc_c) or np.isnan(sc_n))
+                           else float(sc_c - sc_n) if lower_is_better
+                           else float(sc_n - sc_c))
+                    (stratified_by_similarity.setdefault(_m, {})
+                     .setdefault(_l, {}).setdefault(_sn, {}))[_k] = {
+                        f'{metric_name}_cliff': sc_c,
+                        f'{metric_name}_noncliff': sc_n,
+                        'cliff_noncliff_gap': gap,
+                        'n_cliff_folds': len(_c),
+                        'n_noncliff_folds': len(_n),
+                        'mean_n_cliff_val': float(np.mean(
+                            [r['n_cliff'] for r in _rows])),
+                        'mean_n_val': float(np.mean(
+                            [r['n_val'] for r in _rows])),
+                    }
+
     return {
+        'stratified_by_similarity': convert_numpy(stratified_by_similarity),
+        'similarity': convert_numpy(similarity_record(
+            sim_settings, None, cliff_rule=(
+                'a held-out molecule is a cliff when one of its k nearest '
+                'training molecules in the setting differs by more than '
+                f'{_act_thr} label units' if not is_clf else
+                'a held-out molecule is a cliff when one of its k nearest '
+                'training molecules in the setting has another class'),
+            spaces_unavailable=sim_unavailable,
+            checkpoint_file=ckpt.path, folds_read_back=ckpt.n_resumed)),
         'cliff_source': sim_source,
         # False means the cliffs were found by concatenating the very
         # representations the cliff/non-cliff gap then grades. Any comparison
@@ -995,7 +1168,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # 2026-09-20: `noise_helpers.run_all` puts the caller's model list in
         # config['models'] and passes no `models` kwarg. Without this the
         # configured list was dropped and every run scored all five models.
-        models_to_run=(kwargs.get('models') or config.get('models') or None))
+        models_to_run=(kwargs.get('models') or config.get('models') or None),
+        output_dir=output_dir)
 
     # Top-3 base representations now come from the per-fold searches (mean of
     # each representation's rf baseline over the folds that scored it), not

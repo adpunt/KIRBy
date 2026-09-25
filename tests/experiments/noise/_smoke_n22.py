@@ -36,6 +36,13 @@ And four more that are about the plumbing rather than the separation:
 import sys
 import os
 
+# The similarity sweep and the noise cache, both added 2026-09-25. A smoke runs
+# today's behaviour -- neighbours in the model-input matrix only -- unless the
+# caller names settings in KIRBY_SIMILARITY_SETTINGS, and it never reads or
+# writes $KIRBY_CACHE_DIR/noise_cache: a cached build would hide the spy.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+os.environ.setdefault('KIRBY_NOISE_CACHE', '0')
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -285,6 +292,45 @@ check('and with no hybrid either, the run is a skip with a reason, not a crash',
       res9.get('skipped') is True
       and res9.get('policy') == 'no_feature_space',
       f"policy {res9.get('policy')}")
+
+# ── 10: the shared similarity axis, added 2026-09-25 ──
+# Three settings: today's (neighbours in the space's own features), rf's rank-1
+# single representation weighted by lightgbm_gain, and forest proximity. The
+# model_input row at k=10 must be the default path's number to the last bit:
+# the same estimator, the same exclude_groups, handed the list it would have
+# found itself.
+n22._blueprint_for = lambda *a, **k: (
+    None, None, 'the pool is not consulted in this smoke', _SEARCH)
+_prev_sim = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+os.environ['KIRBY_SIMILARITY_SETTINGS'] = (
+    'model_input,base_1|lightgbm_gain|euclidean,forest_proximity|none|forest')
+try:
+    res10 = n22.run(_RUN_DATA, {}, OUT, 'herg_ic50')
+finally:
+    os.environ['KIRBY_SIMILARITY_SETTINGS'] = _prev_sim or 'model_input'
+_sa = res10.get('similarity_axis') or {}
+_same, _n = 0, 0
+for _sp in _sa:
+    for _e, _v in _sa[_sp].get('model_input|none|process|k=10', {}).items():
+        _n += 1
+        _same += int(_v['records']['detection_average_precision']
+                     == res10['per_space'][_sp][_e]['records'][
+                         'detection_average_precision'])
+check('the similarity axis writes a grading per space, setting and k',
+      set(_sa) == {'base_1', 'base_2'}
+      and any('|k=5' in k for k in _sa['base_1'])
+      and any(k.startswith('forest_proximity') for k in _sa['base_1']),
+      f"{ {sp: len(v) for sp, v in _sa.items()} }")
+check('model_input at k=10 is the default path to the last bit',
+      _n > 0 and _same == _n, f'{_same} of {_n} detectors identical')
+_b2 = _sa.get('base_2', {})
+_ap_own = res10['per_space']['base_2']['neighbor_residual']['records'][
+    'detection_average_precision']
+_ap_b1 = (_b2.get('base_1|lightgbm_gain|euclidean|k=10', {})
+          .get('neighbor_residual', {}).get('records') or {}).get(
+    'detection_average_precision', float('nan'))
+check("in base_2 (noise), neighbours found in base_1 find the flag better",
+      _ap_b1 > _ap_own + 0.2, f'{_ap_b1:.3f} against {_ap_own:.3f}')
 
 print("=" * 70)
 print(f"  {len(FAIL)} failed" if FAIL else "  all checks passed")

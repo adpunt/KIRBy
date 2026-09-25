@@ -118,6 +118,14 @@ from kirby.utils.noise_estimation import (
     clip_to_range, GaussianProcessEstimator,
 )
 from kirby.utils.noisy_labels import oof_predict
+# The similarity-sweep kit and the disk caches, added 2026-09-25 (plan
+# sections 1-3). See n07_remediation's SIMILARITY-SWEEP KIT block.
+from experiments.noise.n07_remediation import (
+    sweep_settings, sweep_ks, RowSink, sweep_context, similarity_sweep,
+    cleaned_from_weights, cleaned_from_labels, similarity_record,
+)
+from experiments.noise import noise_cache as _nc
+from experiments.noise.noise_cache import NEIGHBOUR_DETECTORS
 
 # 2026-09-12, owner's decision: n11's pool subset includes similarity hybrids,
 # which replaces the four-block stack this file built by hand. The import of
@@ -485,13 +493,51 @@ def _mean_detection(rows):
     return out
 
 
+def _gp_target(dataset_name, X, y, groups):
+    """The Gaussian-process smoothing target, GaussianProcessEstimator's
+    out-of-fold posterior mean, stored through noise_cache (added
+    2026-09-25): keyed on the content of X, y and the groups and on the fold
+    count, so the base-space target and the similarity sweep's target for the
+    same (features, labels) are fitted once. Deterministic: the estimator is
+    seeded (random_state=42)."""
+    def _fit():
+        _gp = GaussianProcessEstimator(n_folds=EXTRA_TARGET_SPLITS,
+                                       groups=groups)
+        _gp.estimate(X, y)
+        return np.asarray(_gp.predictions_, dtype=float)
+    return _nc.cached(dataset_name, 'n11_gp_target',
+                      {'X': _nc.array_hash(X), 'y': _nc.array_hash(y),
+                       'groups': _nc.array_hash(groups),
+                       'n_folds': int(EXTRA_TARGET_SPLITS)}, _fit)
+
+
 def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                          X_eval_train, X_eval_val, y_val,
                          model_factories, metric_fn, n_samples,
                          is_clf=False, groups=None,
                          corrupted_mask=None, noise_condition=None,
-                         extra_targets=None, eval_by_model=None):
+                         extra_targets=None, eval_by_model=None,
+                         precomputed_neighbors=None, k_override=None,
+                         dprime_cb=None, fit_models=True):
     """Run full alpha × remediation grid for one estimator config.
+
+    precomputed_neighbors / k_override / dprime_cb / fit_models, added
+    2026-09-25 for the similarity sweep (plan sections 1-2). All four default
+    to the behaviour before that date.
+      precomputed_neighbors  a similarity_space.neighbour_lists dict handed to
+                             a neighbour estimator, so it finds each
+                             molecule's neighbours in the similarity setting's
+                             features while X_space stays whatever it is;
+                             metric_name is then not read
+      k_override             how many neighbours (default 10, as below)
+      dprime_cb              called as dprime_cb(remediation, cleaned) with
+                             every D' this grid builds -- the weighted or
+                             relabelled training set, in the dict shape
+                             n07.cleaned_training_set returns -- keyed by the
+                             same remediation string the legacy key carries
+      fit_models             False skips this function's own model fits, for
+                             a caller that fits D' itself (the D-versus-D'
+                             rows)
 
     eval_by_model: {model key: (X_train, X_val)} -- the features each entry of
     model_factories is fitted and scored on. run() passes one pair per
@@ -529,7 +575,16 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
     kwargs = {}
     if est_name in NEIGHBOR_ESTIMATORS:
         kwargs['metric'] = metric_name
-        kwargs['k'] = 10
+        kwargs['k'] = 10 if k_override is None else int(k_override)
+    if precomputed_neighbors is not None:
+        # Only the neighbour estimators read a list (noise_cache.
+        # NEIGHBOUR_DETECTORS); handed to any other one it would be ignored
+        # and the row would carry today's numbers under a setting's name.
+        if est_name not in NEIGHBOUR_DETECTORS:
+            raise ValueError(f"{est_name} reads no neighbour list")
+        kwargs['precomputed_neighbors'] = precomputed_neighbors
+        kwargs['k'] = 10 if k_override is None else int(k_override)
+        kwargs['metric'] = None
     # Inspect the estimator constructor once so we only forward kwargs it
     # actually accepts (different estimator families expose different flags).
     try:
@@ -586,7 +641,10 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                 for mn in model_factories:
                     failure_log[f'{mn}|{wm}_{alpha}'] = f'{type(exc).__name__}: {exc}'
                 continue
-            for mn, mf in model_factories.items():
+            if dprime_cb is not None:
+                dprime_cb(f'{wm}_{alpha}', cleaned_from_weights(
+                    X_space, y_noisy, weights))
+            for mn, mf in (model_factories.items() if fit_models else ()):
                 key = f'{mn}|{wm}_{alpha}'
                 try:
                     model = mf()
@@ -623,7 +681,11 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                             failure_log[f'{mn}|{_prefix}{sm}_{alpha}'] = \
                                 f'{type(exc).__name__}: {exc}'
                         continue
-                    for mn, mf in model_factories.items():
+                    if dprime_cb is not None:
+                        dprime_cb(f'{_prefix}{sm}_{alpha}',
+                                  cleaned_from_labels(X_space, y_smoothed))
+                    for mn, mf in (model_factories.items() if fit_models
+                                   else ()):
                         key = f'{mn}|{_prefix}{sm}_{alpha}'
                         try:
                             model = mf()
@@ -656,7 +718,10 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                     np.count_nonzero(y_clipped != np.asarray(y_noisy,
                                                              dtype=float)))
                 results['_n_training_labels'] = int(len(y_noisy))
-                for mn, mf in model_factories.items():
+                if dprime_cb is not None:
+                    dprime_cb(f'quantile_clip_{alpha}',
+                              cleaned_from_labels(X_space, y_clipped))
+                for mn, mf in (model_factories.items() if fit_models else ()):
                     key = f'{mn}|quantile_clip_{alpha}'
                     try:
                         model = mf()
@@ -1014,6 +1079,50 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # baseline + estimation spaces + grid are recomputed per seed.
     NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
 
+    # ── The similarity axis, added 2026-09-25 (plan sections 1-2) ──────────
+    # n11's own estimation-space axis above is unchanged: every key it fills
+    # is what it was. The sweep below is the suite-wide axis on top. Each
+    # neighbour estimator (the ones noise_cache.NEIGHBOUR_DETECTORS names that
+    # this run enables) reads its neighbours from every similarity setting at
+    # every k in SWEPT_KS, and the full correction grid of
+    # _run_estimator_grid -- every weighting, every smoothing rule, target and
+    # alpha, the clip -- is applied to its scores. The model input is each
+    # evaluation unit's own single representation, as in the legacy grid.
+    # One D-versus-D' row per (estimator, correction, setting, k, model): RF,
+    # SVM and the unit's own model.
+    #
+    # TODO(similarity-sweep 2026-09-25): 'hybrid' (HybridNoiseEstimator)
+    # averages three neighbour estimators but takes no neighbour list, so it
+    # is not in the sweep; giving it one is a change to noise_estimation.py.
+    sim_settings = sweep_settings()
+    sink = RowSink(output_dir, 'n11_estimation_remediation_grid',
+                   dataset_name, kwargs.get('noise_condition'))
+    # TODO(similarity-sweep 2026-09-25): the hybrid and hybrid_similarity
+    # similarity spaces use the one recipe this file reads, rf's
+    # (get_best_search_for_downstream(downstream_model='rf') above), for every
+    # evaluation unit's model. The plan says each model's own prediction-built
+    # hybrid; reading one recipe per model is a pool read per model. Owner to
+    # say whether rf's recipe stands in for every model here.
+    sim_recipes = {}
+    for _r in hybrid_recipes:
+        _sp = ('hybrid' if _r['objective'] == 'predictive'
+               else 'hybrid_similarity' if _r['objective'] == 'similarity'
+               else None)
+        if _sp is not None:
+            sim_recipes[_sp] = (_r['blueprint'], _r['aug_condition'])
+    sim_estimators = [e for e in available_estimators
+                      if e in NEIGHBOUR_DETECTORS]
+    sim_detection = {}
+    sweep_ctx = sweep_context(
+        experiment='n11_estimation_remediation_grid',
+        dataset_name=dataset_name, sink=sink, settings=sim_settings,
+        metric=(metric_name, metric_fn, lower_is_better), task_type=task_type,
+        condition=noise_condition, level=None, data=data,
+        factories=model_factories)
+    print(f"  Similarity axis: {len(sim_settings)} settings x ks "
+          f"{list(sweep_ks())} x estimators {sim_estimators}; rows -> "
+          f"{sink.path}")
+
     # 2026-09-12, owner's decision: n11's pool subset includes similarity
     # hybrids. The per-fold cache the hand-built four-block stack needed
     # (sim_by_fold / sim_fold_info) is gone with it — both hybrid spaces are now
@@ -1053,22 +1162,27 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
             # The evaluation features, one scaled pair per single
             # representation any unit is fitted on, shared by those units.
+            # Cached 2026-09-25 (noise_cache.cached_scaled): the same
+            # StandardScaler arithmetic, stored once per (representation
+            # content, fold) across every level and condition.
             _eval_by_rep = {}
             for _u, (_m, _k, _rn) in eval_units.items():
                 if _rn not in _eval_by_rep:
-                    scaler_eval = StandardScaler()
-                    _eval_by_rep[_rn] = (
-                        scaler_eval.fit_transform(reps[_rn][train_idx]),
-                        scaler_eval.transform(reps[_rn][val_idx]))
+                    _eval_by_rep[_rn] = _nc.cached_scaled(
+                        dataset_name, reps[_rn], train_idx, val_idx)
             eval_by_unit = {_u: _eval_by_rep[_rn]
                             for _u, (_m, _k, _rn) in eval_units.items()}
 
             # Clean baseline (noise-independent — compute once per fold per unit)
+            # Through noise_cache.cached_fit_predict since 2026-09-25: the same
+            # fit and model.predict, stored once per (features, labels, model)
+            # -- it was refitted at every level -- and read back by the
+            # D-versus-D' rows.
             for _u in eval_units:
                 _xtr, _xva = eval_by_unit[_u]
-                _mdl = unit_factories[_u]()
-                _mdl.fit(_xtr, y_train_clean)
-                _clean_f = float(metric_fn(y_val, _mdl.predict(_xva)))
+                _clean_f = float(metric_fn(y_val, _nc.cached_fit_predict(
+                    dataset_name, eval_units[_u][0], unit_factories[_u],
+                    _xtr, y_train_clean, _xva)))
                 clean_scores[_u].append(_clean_f)
                 clean_by_fold[_u][fold_idx] = _clean_f
 
@@ -1104,9 +1218,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
                 for _u in eval_units:
                     _xtr, _xva = eval_by_unit[_u]
-                    _mdl = unit_factories[_u]()
-                    _mdl.fit(_xtr, y_noisy)
-                    _noisy_fs = float(metric_fn(y_val, _mdl.predict(_xva)))
+                    _noisy_fs = float(metric_fn(y_val, _nc.cached_fit_predict(
+                        dataset_name, eval_units[_u][0], unit_factories[_u],
+                        _xtr, y_noisy, _xva)))
                     noisy_scores[_u].append(_noisy_fs)
                     noisy_by_fold[_u].setdefault(fold_idx, []).append(_noisy_fs)
 
@@ -1160,8 +1274,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                  else None)
                         if 'oof' in EXTRA_TARGETS:
                             try:
-                                extra_targets['oof'] = oof_predict(
-                                    X_space, y_noisy, _g_tr,
+                                # noise_cache.cached_oof_predict, 2026-09-25:
+                                # the same oof_predict call, stored once per
+                                # (features, labels, groups).
+                                extra_targets['oof'] = _nc.cached_oof_predict(
+                                    dataset_name, X_space, y_noisy, _g_tr,
                                     n_splits=min(EXTRA_TARGET_SPLITS,
                                                  len(y_noisy)))
                             except Exception as exc:
@@ -1180,12 +1297,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                     'KIRBY_NOISE_LIGHT_ESTIMATORS=1')
                             else:
                                 try:
-                                    _gp = GaussianProcessEstimator(
-                                        n_folds=EXTRA_TARGET_SPLITS,
-                                        groups=_g_tr)
-                                    _gp.estimate(X_space, y_noisy)
-                                    extra_targets['gp'] = np.asarray(
-                                        _gp.predictions_, dtype=float)
+                                    extra_targets['gp'] = _gp_target(
+                                        dataset_name, X_space, y_noisy, _g_tr)
                                 except Exception as exc:
                                     extra_target_errors.setdefault(
                                         f'{space_name}|gp',
@@ -1257,6 +1370,72 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                  .setdefault(est_key, {})
                                  .setdefault(remed_key, {})
                                  .setdefault(fold_idx, []).append(score))
+
+                # ── The similarity sweep for this (level, fold, draw). ──
+                # One pass per evaluation unit. The extra smoothing targets are
+                # the ones the legacy grid builds for the unit's own base
+                # space (same features, same labels, same groups), read back
+                # from noise_cache.
+                _g_sw = groups[train_idx] if groups is not None else None
+                for _u, (_m, _k_rank, _rn) in eval_units.items():
+                    if not sim_estimators or not sink.enabled:
+                        break
+                    _xtr, _xva = eval_by_unit[_u]
+                    _xt = {}
+                    if not is_clf and 'oof' in EXTRA_TARGETS:
+                        try:
+                            _xt['oof'] = _nc.cached_oof_predict(
+                                dataset_name, _xtr, y_noisy, _g_sw,
+                                n_splits=min(EXTRA_TARGET_SPLITS,
+                                             len(y_noisy)))
+                        except Exception as exc:
+                            extra_target_errors.setdefault(
+                                f'sweep:{_rn}|oof',
+                                f'{type(exc).__name__}: {exc}')
+                    if not is_clf and 'gp' in EXTRA_TARGETS \
+                            and not light_estimators:
+                        try:
+                            _xt['gp'] = _gp_target(dataset_name, _xtr,
+                                                   y_noisy, _g_sw)
+                        except Exception as exc:
+                            extra_target_errors.setdefault(
+                                f'sweep:{_rn}|gp',
+                                f'{type(exc).__name__}: {exc}')
+
+                    def _dprimes(setting, lists, k, _xtr=_xtr, _xt=_xt):
+                        for est_name in sim_estimators:
+                            got = []
+                            res = _run_estimator_grid(
+                                est_name, None, _xtr, y_noisy, None, None,
+                                y_val, {}, metric_fn, n_samples,
+                                is_clf=is_clf, groups=_g_sw,
+                                corrupted_mask=_cmask,
+                                noise_condition=noise_condition,
+                                extra_targets=_xt,
+                                precomputed_neighbors=lists, k_override=k,
+                                dprime_cb=lambda r, c: got.append((r, c)),
+                                fit_models=False)
+                            if '_error' in res:
+                                yield est_name, 'estimator_failed', None
+                                continue
+                            if '_detection' in res:
+                                (sim_detection.setdefault(str(sigma), {})
+                                 .setdefault(est_name, {})
+                                 .setdefault(setting.name, {})
+                                 .setdefault(str(k), [])
+                                 .append(res['_detection']))
+                            for remed, cleaned in got:
+                                yield est_name, remed, cleaned
+                    similarity_sweep(
+                        sweep_ctx, model_name=_m,
+                        model_input=f'{_u}:{_rn}', X_tr=_xtr,
+                        X_va=_xva, y_tr_noisy=y_noisy,
+                        y_tr_clean=y_train_clean, y_val=y_val,
+                        train_idx=train_idx, val_idx=val_idx,
+                        groups_tr=_g_sw, fold=fold_idx - 1, draw=noise_seed,  # rows count folds from 0
+                        recipes=sim_recipes,
+                        base_reps=base_by_model.get(_m, []),
+                        make_dprimes=_dprimes, level=sigma)
 
         # Aggregate across folds. One clean mean, one noisy mean and one gap PER
         # MODEL: recovery is a fraction of that model's own clean-to-noisy gap, and
@@ -1480,6 +1659,20 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'is a best-case hybrid, the caveat that already applied to the '
             'prediction arm.'),
     }
+
+    # The similarity axis, 2026-09-25. Every key above is n11's own grid,
+    # unchanged. The swept numbers are the D-versus-D' rows in
+    # results['similarity']['rows_file'] and, for detection,
+    # {level: {estimator: {setting: {k: mean detection reading}}}}.
+    results['similarity'] = similarity_record(
+        sim_settings, sink, estimators_swept=sim_estimators,
+        spaces_unavailable=sweep_ctx['unavailable'])
+    results['detection_by_similarity'] = {
+        _lv: {_e: {_sn: {_k: _mean_detection(_rows)
+                         for _k, _rows in _byk.items()}
+                   for _sn, _byk in _bys.items()}
+              for _e, _bys in _bye.items()}
+        for _lv, _bye in sim_detection.items()}
 
     # Summary
     results['summary'] = _compute_summary(results)

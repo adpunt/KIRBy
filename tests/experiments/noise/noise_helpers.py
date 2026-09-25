@@ -97,6 +97,13 @@ SINGLE_DATASET_EXPERIMENTS = [
     # under the five in DETECTION_IS_DEFINED; its default is outlier_p10.
     'n21',   # which distance the nearest neighbours are found in
     'n23',   # cleaning driven by a per-molecule uncertainty estimate
+    # n24 and n25 were written and committed (4c85148, a4f5579) but never
+    # listed here or in the two import maps below, so run_dataset.py could not
+    # reach them -- the same gap n21 and n23 had. Registered 2026-09-25. Both
+    # take a condition (n24:435, n25:786); n25 only the five in
+    # DETECTION_IS_DEFINED (n25:787-793), see CONDITION_LIMITED_TO.
+    'n24',   # delete the flagged molecules, rewrite them, or weigh them down
+    'n25',   # exempting activity-cliff molecules from cleaning
     # n26-n30 added 2026-09-24 from an outside research report on why cleaning
     # fails at this accuracy (n28's arms went into n19 instead of a new file).
     # n26 and n29 inject nothing and need repeat measurements; every dataset
@@ -130,6 +137,12 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n39',   # repeat measurements from sources whose errors are correlated
     'n40',   # retuned models, seed averaging, stacking, a GP with a noise term
     'n41',   # flags with a controlled false-flag rate, and three more detectors
+    # n42 added 2026-09-25 (plan section 6): every data-changing method the
+    # files above own, imported from them, crossed with every similarity
+    # setting and every model input, one D-versus-D' row per fit. It takes a
+    # condition (HONOURS_NOISE_CONDITION) and sweeps conditions_for_task when
+    # given none. Before n06 because n06 must stay last.
+    'n42',   # every mitigation method x similarity setting x model input
     # n06 runs LAST, and that is load-bearing: its headline is the rank
     # correlation between its own ordering of the noise estimators and the
     # ordering n11 and n13 measured under injected noise, and it reads those
@@ -1110,19 +1123,50 @@ def sweep_conditions(run_one, exp_id, data, config, output_dir,
             f"resumable. A caller with nowhere to write wants one condition, "
             f"not a sweep: call the experiment's _run_one_condition directly.")
 
+    # force_rerun reaches here from run_dataset.py --force-rerun through
+    # run_all, which hands it to every run() that forwards its kwargs to this
+    # function (noise_helpers._takes_force_rerun). Before 2026-09-25 run_all
+    # never passed it, so a condition file on disk was skipped even under
+    # --force-rerun.
     force = bool(kwargs.pop('force_rerun', False))
+    # What each condition file is stamped with and compared against on
+    # resume: the same input_fingerprint run_all stamps its files with and
+    # compares (run_all, 'Resume' block). Before 2026-09-25 a condition file
+    # was kept whenever it existed and was non-empty, so a change of fold
+    # grouping, labels or representations reused numbers computed from the
+    # old data. A file written before this stamp has no fingerprint and is
+    # recomputed once, as run_all does with its own files.
+    from experiments._shared import (
+        input_fingerprint, fingerprint_mismatch, experiment_result_is_empty)
+    fingerprint = input_fingerprint(data, config)
     done, ran = {}, []
     for cond in conditions:
         dest = Path(output_dir) / exp_id / f'{dataset_name}__{cond}.json'
         if dest.exists() and dest.stat().st_size > 0 and not force:
-            print(f"  {cond}: already on disk, skipping ({dest})")
-            done[cond] = str(dest)
-            continue
+            try:
+                with open(dest) as fh:
+                    prev = json.load(fh)
+                # A caller whose data carries no labels gets fingerprint {}
+                # (input_fingerprint): nothing to compare, so the file stands.
+                why = ('records no measurement'
+                       if experiment_result_is_empty(prev,
+                                                     classify_unmarked=True)
+                       else None if not fingerprint
+                       else fingerprint_mismatch(prev.get('input_fingerprint'),
+                                                 fingerprint))
+            except (ValueError, OSError) as exc:
+                why = f'could not be read ({exc})'
+            if not why:
+                print(f"  {cond}: already on disk, skipping ({dest})")
+                done[cond] = str(dest)
+                continue
+            print(f"  {cond}: RERUN, existing file {why} ({dest})")
         print(f"\n{'=' * 70}\n{exp_id.upper()} CONDITION {cond}\n{'=' * 70}")
         t0 = time.time()
         res = run_one(data, config, output_dir, dataset_name,
                       noise_condition=cond, **kwargs)
         save_experiment_results(res, output_dir, exp_id, dataset_name,
+                                fingerprint=fingerprint,
                                 filename_suffix=cond)
         print(f"  {cond} done in {time.time() - t0:.0f}s -> {dest}")
         done[cond] = str(dest)
@@ -1353,6 +1397,8 @@ def _import_experiment(exp_id: str):
         'n21': 'n21_neighbour_distance',
         'n22': 'n22_curator_flag',
         'n23': 'n23_uncertainty_cleaning',
+        'n24': 'n24_delete_or_keep',
+        'n25': 'n25_cliff_exemption',
         'n26': 'n26_noise_variance_from_repeats',
         'n27': 'n27_removal_cost_and_propagation',
         'n29': 'n29_document_bias',
@@ -1368,6 +1414,7 @@ def _import_experiment(exp_id: str):
         'n39': 'n39_correlated_sources',
         'n40': 'n40_model_side_regularisation',
         'n41': 'n41_conformal_fdr_detection',
+        'n42': 'n42_similarity_noise_sweep',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -1399,6 +1446,8 @@ def _experiment_full_name(exp_id: str) -> str:
         'n21': 'n21_neighbour_distance',
         'n22': 'n22_curator_flag',
         'n23': 'n23_uncertainty_cleaning',
+        'n24': 'n24_delete_or_keep',
+        'n25': 'n25_cliff_exemption',
         'n26': 'n26_noise_variance_from_repeats',
         'n27': 'n27_removal_cost_and_propagation',
         'n29': 'n29_document_bias',
@@ -1414,6 +1463,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'n39': 'n39_correlated_sources',
         'n40': 'n40_model_side_regularisation',
         'n41': 'n41_conformal_fdr_detection',
+        'n42': 'n42_similarity_noise_sweep',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -1445,9 +1495,57 @@ def _experiment_full_name(exp_id: str) -> str:
 # n40 and n41 joined 2026-09-25. n41 writes a skip under a condition where every
 # label moves, as n32 does. n37, n38 and n39 are left out for the reasons at
 # their entries in SINGLE_DATASET_EXPERIMENTS.
+# n24 and n25 joined 2026-09-25: both read `noise_condition`
+# (n24:435, n25:786).
+# n42 joined 2026-09-25: it sweeps through sweep_conditions, which reads
+# `noise_condition` (n42.run).
 HONOURS_NOISE_CONDITION = {'n07', 'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23',
-                           'n32', 'n33', 'n34', 'n40', 'n41'}
+                           'n24', 'n25',
+                           'n32', 'n33', 'n34', 'n40', 'n41', 'n42'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
+
+# Experiments that take a condition but RAISE under any condition outside a
+# set: n21 (n21:36-40) and n25 (n25:787-793) need some molecules left
+# uncorrupted, so only DETECTION_IS_DEFINED. Since 2026-09-25 a failed
+# experiment makes run_dataset.py exit 1, so a job named with, say, gaussian
+# would fail every time on a condition these two cannot run by design.
+# run_all writes a skip marker carrying the reason for them instead, the way
+# should_skip_experiment does; an explicit sweep in their own run() is
+# unaffected.
+CONDITION_LIMITED_TO = {'n21': DETECTION_IS_DEFINED,
+                        'n25': DETECTION_IS_DEFINED}
+
+
+def _takes_force_rerun(mod):
+    """Whether mod.run can be handed force_rerun without breaking it.
+
+    True when run() names force_rerun, or when it hands its kwargs to
+    sweep_conditions, which pops force_rerun (noise_helpers.sweep_conditions)
+    before calling the single-condition entry point. Any other run() is not
+    given the keyword: a **kwargs that is forwarded on to a function without
+    it would raise. Added 2026-09-25 so --force-rerun reaches the condition
+    files a sweep writes; before, run_all never passed it and a condition
+    file on disk was always skipped.
+    """
+    import inspect
+    fn = getattr(mod, 'run', None)
+    if fn is None:
+        return False
+    try:
+        if 'force_rerun' in inspect.signature(fn).parameters:
+            return True
+        return 'sweep_conditions(' in inspect.getsource(fn)
+    except (TypeError, OSError, ValueError):
+        return False
+
+
+def _error_record(exp_id, exc, kind=None):
+    """What run_all stores for a failed experiment. The traceback text is
+    kept so run_dataset.py can write it to <output>/_errors/ (2026-09-25)."""
+    import traceback
+    return {'error': str(exc) or type(exc).__name__,
+            'error_kind': kind or type(exc).__name__,
+            'traceback': traceback.format_exc()}
 
 
 def run_all(dataset_name: str, output_dir: str,
@@ -1775,10 +1873,34 @@ def run_all(dataset_name: str, output_dir: str,
                                     filename_suffix=noise_condition)
             continue
 
+        # An experiment that cannot be imported is a FAILED experiment, not a
+        # skip. Until 2026-09-25 this printed a line and continued, so a
+        # syntax error or a missing module left no file, no error record and a
+        # run that looked finished. Recorded now; run_dataset.py exits 1.
         try:
             mod = _import_experiment(exp_id)
-        except (ImportError, KeyError) as e:
-            print(f"  SKIP {exp_id}: import failed ({e})")
+        except Exception as e:
+            print(f"  {exp_id} FAILED: import failed "
+                  f"({type(e).__name__}: {e})")
+            import traceback
+            traceback.print_exc()
+            results[exp_id] = _error_record(exp_id, e, kind=(
+                f'import:{type(e).__name__}'))
+            continue
+
+        _limited = CONDITION_LIMITED_TO.get(exp_id)
+        if noise_condition and _limited and noise_condition not in _limited:
+            _skip = {'skipped': True,
+                     'reason': (f'{exp_id} runs only under {list(_limited)}: '
+                                f'under {noise_condition!r} every training '
+                                f'label moves and no molecule has a right '
+                                f'one to find'),
+                     'noise_condition': noise_condition}
+            print(f"  SKIP {exp_id}: {_skip['reason']}")
+            results[exp_id] = _skip
+            save_experiment_results(_skip, output_dir,
+                                    _experiment_full_name(exp_id), dataset_name,
+                                    filename_suffix=noise_condition)
             continue
 
         try:
@@ -1798,6 +1920,8 @@ def run_all(dataset_name: str, output_dir: str,
                         f"condition in the file and reads no keyword. Run it "
                         f"without noise_condition, or list only the experiments "
                         f"in {sorted(HONOURS_NOISE_CONDITION | SWEEPS_ALL_CONDITIONS)}.")
+            if _takes_force_rerun(mod):
+                _exp_kwargs['force_rerun'] = bool(force_rerun)
             exp_result = mod.run(data, config, output_dir, dataset_name,
                                  **_exp_kwargs)
             results[exp_id] = exp_result
@@ -1825,7 +1949,26 @@ def run_all(dataset_name: str, output_dir: str,
             print(f"  {exp_id} FAILED: {e}")
             import traceback
             traceback.print_exc()
-            results[exp_id] = {'error': str(e)}
+            results[exp_id] = _error_record(exp_id, e)
+
+        except SystemExit as e:
+            # SystemExit is not an Exception: a library that calls sys.exit()
+            # instead of raising walks past the handler above and ends the
+            # whole run with nothing said. complexity_helpers.run_all catches
+            # it for this reason (complexity_helpers.py:1242-1263, c21 on
+            # flab_thermo_tresanco, 2026-09-25). Same handling here, 2026-09-25.
+            print(f"  {exp_id} FAILED: a library called sys.exit({e.code}) "
+                  f"instead of raising. Caught so the remaining experiments "
+                  f"still run.")
+            import traceback
+            traceback.print_exc()
+            results[exp_id] = _error_record(
+                exp_id, f'SystemExit({e.code}) — a library exited the process',
+                kind='SystemExit')
+
+        except KeyboardInterrupt:
+            # Deliberate: Ctrl-C and SIGINT must still stop the run.
+            raise
 
     total = time.time() - t0
     print(f"\n{'=' * 70}")

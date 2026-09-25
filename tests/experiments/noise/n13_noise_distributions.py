@@ -111,6 +111,15 @@ from kirby.noise_spec import (
 from kirby.utils.lnl_methods import (
     get_lnl_method, _standard_dnn_train_predict, LNL_REGISTRY)
 from kirby.utils.noise_estimation import get_noise_estimator, weights_from_scores
+# The similarity-sweep kit and the disk caches, added 2026-09-25 (plan
+# sections 1-3). See n07_remediation's SIMILARITY-SWEEP KIT block.
+from experiments.noise.n07_remediation import (
+    sweep_settings, sweep_ks, RowSink, sweep_context, similarity_sweep,
+    detector_scores_with, cleaned_from_weights, similarity_record,
+    FoldCheckpoint,
+)
+from experiments.noise import noise_cache as _nc
+from experiments.noise.noise_cache import NEIGHBOUR_DETECTORS
 
 
 # The conditions. This experiment's whole subject is whether the SHAPE of the noise
@@ -845,23 +854,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # Single-representation features (independent of labels), one scaled
         # pair per representation any unit or Track A space uses.
+        # Cached 2026-09-25 (noise_cache.cached_scaled): the same
+        # StandardScaler arithmetic, stored once per (representation content,
+        # fold).
         _by_rep = {}
         for _rn in ({r for _m, _k, r in eval_units.values()}
                     | {r for _k, r in track_a_base.values()}):
-            sc_eval = StandardScaler()
-            _by_rep[_rn] = (sc_eval.fit_transform(reps[_rn][train_idx]),
-                            sc_eval.transform(reps[_rn][val_idx]))
+            _by_rep[_rn] = _nc.cached_scaled(dataset_name, reps[_rn],
+                                             train_idx, val_idx)
         eval_by_unit = {u: _by_rep[rn] for u, (_m, _k, rn) in eval_units.items()}
 
         # Clean baseline per unit (Track B reference)
         for _u, (mname, _k, _rn) in eval_units.items():
             if _u not in clean_scores_by_model:
                 clean_scores_by_model[_u] = []
+            # Through noise_cache.cached_fit_predict since 2026-09-25: the
+            # same fit and model.predict, stored once per (features, labels,
+            # model) and read back by the D-versus-D' rows.
             try:
-                m = model_factories[mname]()
-                m.fit(eval_by_unit[_u][0], y_train_clean)
-                clean_scores_by_model[_u].append(
-                    float(metric_fn(y_val, m.predict(eval_by_unit[_u][1]))))
+                clean_scores_by_model[_u].append(float(metric_fn(
+                    y_val, _nc.cached_fit_predict(
+                        dataset_name, mname, model_factories[mname],
+                        eval_by_unit[_u][0], y_train_clean,
+                        eval_by_unit[_u][1]))))
             except Exception:
                 pass
 
@@ -929,6 +944,71 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _canonical_level = min(strengths, key=lambda v: abs(v - reference_noise_level(dataset_name))) \
         if strengths else 0.0
 
+    # ── The similarity axis and the checkpoint, added 2026-09-25 ──────────
+    # Plan sections 1-2. Track B's neighbour estimator (local_variance_ratio;
+    # noise_cache.NEIGHBOUR_DETECTORS) reads its neighbours from every
+    # similarity setting at every k in SWEPT_KS, and its sample-weight repair
+    # (exponential at strength 0.1, as Track B) is written as D-versus-D' rows
+    # for RF, SVM and the unit's model, on each unit's single representation.
+    # Everything Track A and Track B already report is unchanged.
+    #
+    # Track A's distance_selection finds neighbours and drops training
+    # molecules, so it is swept too (see Track A in the loop).
+    #
+    # TODO(similarity-sweep 2026-09-25): Track A's other methods change how
+    # the network trains, not the training set, so there is no D' to fit RF
+    # and SVM on and they write no rows. small_loss and confident_learning do
+    # drop molecules but do not return which; mentornet reads a neighbour list
+    # but carves its checkpoint-selection rows out of X_train first
+    # (lnl_methods.py, MentorNet.train_and_predict), so a list over the
+    # training fold no longer lines up. Each needs a decision on its D'.
+    sim_settings = sweep_settings()
+    sink = RowSink(output_dir, 'n13_noise_distributions', dataset_name)
+    sim_estimators = [e for e in estimators if e in NEIGHBOUR_DETECTORS]
+    sweep_ctx = sweep_context(
+        experiment='n13_noise_distributions', dataset_name=dataset_name,
+        sink=sink, settings=sim_settings,
+        metric=(metric_name, metric_fn, lower_is_better), task_type=task_type,
+        condition=None, level=None, data=data, factories=model_factories)
+    sim_detection = {}
+    track_a_sim = {}
+    # The DNN's rows need a DNN factory beside the roster's.
+    sweep_ctx['factories'] = dict(get_model_factories(
+        ['rf', 'svm', 'dnn'], task_type=task_type, n_samples=len(labels)),
+        **model_factories)
+
+    def _sim_recipes_for(mname):
+        """The hybrid spaces a model's similarity settings read: its own
+        matched recipe where it came from the predictive family, else the rf
+        one; the similarity-objective recipe when that family is on disk."""
+        rec = {'hybrid': (bp, aug_condition)}
+        if (objective_by_model.get(mname) == 'predictive'
+                and mname in bp_by_model):
+            rec['hybrid'] = (bp_by_model[mname],
+                             aug_by_model.get(mname, aug_condition))
+        if bp_sim is not None:
+            rec['hybrid_similarity'] = (bp_sim, sim_aug_condition)
+        return rec
+
+    # n13 wrote its result once, at the end, after every (condition, level)
+    # had run -- days on a large dataset. Each (condition, level) is now
+    # written as it finishes and read back on the next run
+    # (n07_remediation.FoldCheckpoint), keyed on the inputs; a changed input
+    # recomputes. Floats round-trip through JSON exactly, so a resumed file is
+    # the same numbers.
+    from experiments._shared import input_fingerprint
+    ckpt = FoldCheckpoint(output_dir, 'n13_noise_distributions', dataset_name,
+                          tag='levels', fingerprint={
+                              'input': input_fingerprint(data, config),
+                              'noise_seeds': list(NOISE_SEEDS),
+                              'lnl_methods': list(lnl_methods),
+                              'estimators': list(estimators),
+                              'models': list(model_factories),
+                              'lnl_epochs': LNL_EPOCHS})
+    print(f"  Similarity axis: {len(sim_settings)} settings x ks "
+          f"{list(sweep_ks())} x Track B estimators {sim_estimators}; rows -> "
+          f"{sink.path}; checkpoint -> {ckpt.path}")
+
     # ── Main loop: noise type × strength ──
     for noise_type in noise_types:
         print(f"\n  === {noise_type} ===")
@@ -941,6 +1021,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # by the condition itself (outlier_p01/p05/p10).
         for strength in _levels_for_condition(noise_type):
             strength_key = str(strength)
+
+            # Resume: a (condition, level) already on disk is read back, with
+            # the provenance, build failures and unweighted models it added.
+            _ck = ckpt.get([noise_type, strength_key])
+            if _ck is not None:
+                strength_result = _ck['strength_result']
+                noise_provenance.update(_ck.get('noise_provenance') or {})
+                for _kf, _nf in (_ck.get('sim_build_failures') or {}).items():
+                    sim_build_failures[_kf] = (sim_build_failures.get(_kf, 0)
+                                               + int(_nf))
+                UNWEIGHTED_TRACK_B_MODELS.update(_ck.get('unweighted') or [])
+                if _ck.get('track_a_sim'):
+                    track_a_sim[f'{noise_type}:{strength_key}'] = \
+                        _ck['track_a_sim']
+                if _ck.get('detection_sim'):
+                    sim_detection[f'{noise_type}:{strength_key}'] = \
+                        _ck['detection_sim']
+                reselection_block = strength_result[
+                    'per_fold_scores_single_recipe']
+                _is_canonical = (noise_type == 'gaussian'
+                                 and abs(strength - _canonical_level) < 1e-9)
+                if _is_canonical or canonical_reselected is None:
+                    canonical_reselected = reselection_block
+                    canonical_reselected_key = f'{noise_type}:{strength_key}'
+                nt_result['per_strength'][strength_key] = strength_result
+                print(f"    σ={strength_key}: read back from {ckpt.path}")
+                continue
+            _prov_before = set(noise_provenance)
+            _sbf_before = dict(sim_build_failures)
 
             noisy_baseline_by_model = {u: [] for u in eval_units}
             # {space: {method: [scores]}} for track A
@@ -989,11 +1098,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Noisy baseline per unit
                     for _u, (mname, _k, _rn) in eval_units.items():
                         try:
-                            m = model_factories[mname]()
                             _xtr, _xva = fd['eval_by_unit'][_u]
-                            m.fit(_xtr, y_noisy)
                             _sc_base = float(metric_fn(
-                                fd['y_val'], m.predict(_xva)))
+                                fd['y_val'], _nc.cached_fit_predict(
+                                    dataset_name, mname, model_factories[mname],
+                                    _xtr, y_noisy, _xva)))
                             noisy_baseline_by_model[_u].append(_sc_base)
                             # Per-fold single-representation arm for
                             # fold_reselection (reuses this same fit — no extra
@@ -1161,6 +1270,71 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             except Exception:
                                 pass
 
+                    # ── Track A's distance_selection under every similarity
+                    # setting, 2026-09-25. The one LNL method that finds
+                    # neighbours and drops training molecules
+                    # (lnl_methods.DistanceBasedSelection takes a neighbour
+                    # list since 2026-09-25). Its DNN score per (space,
+                    # setting, k) goes to results['track_a_by_similarity'];
+                    # the rows it kept are D', written as rows for RF, SVM
+                    # and the DNN. The neighbour spaces are the DNN's.
+                    if ('distance_selection' in lnl_methods and sink.enabled):
+                        _g_tr = (groups[fd['train_idx']]
+                                 if groups is not None else None)
+                        for space_name, X_train_s, X_val_s in _track_a_spaces:
+                            def _ds_dprimes(setting, lists, k,
+                                            _Xtr=X_train_s, _Xva=X_val_s,
+                                            _sp=space_name):
+                                try:
+                                    _mth = get_lnl_method(
+                                        'distance_selection', k=k,
+                                        precomputed_neighbors=lists,
+                                        epochs=LNL_EPOCHS, patience=10,
+                                        random_state=_seed_combined,
+                                        is_clf=is_clf,
+                                        classes_=(np.unique(labels) if is_clf
+                                                  else None))
+                                    _res = _mth.train_and_predict(
+                                        _Xtr, y_noisy, _Xva, fd['y_val'])
+                                except Exception as _e:
+                                    print(f"      distance_selection "
+                                          f"{setting.name} k={k} failed: {_e}")
+                                    yield ('distance_selection',
+                                           'threshold_pct=85', None)
+                                    return
+                                (track_a_sim.setdefault(
+                                    f'{noise_type}:{strength_key}', {})
+                                 .setdefault(_sp, {})
+                                 .setdefault(setting.name, {})
+                                 .setdefault(str(k), []).append(float(
+                                     metric_fn(fd['y_val'], _res['y_pred']))))
+                                # The kept rows, rebuilt from what the method
+                                # returns (lnl_methods.py: flagged = suspicion
+                                # above its threshold; all kept when fewer
+                                # than 10 would remain).
+                                _md = _res['metadata']
+                                _keep = ~(np.asarray(_md['suspicion_scores'])
+                                          > float(_md['threshold']))
+                                if _keep.sum() < 10:
+                                    _keep = np.ones(len(y_noisy), dtype=bool)
+                                yield ('distance_selection', 'threshold_pct=85',
+                                       {'X': _Xtr[_keep],
+                                        'y': np.asarray(y_noisy)[_keep],
+                                        'keep': _keep, 'sample_weight': None,
+                                        'label_column': None})
+                            similarity_sweep(
+                                sweep_ctx, model_name='dnn',
+                                model_input=f'dnn:{space_name}', X_tr=X_train_s,
+                                X_va=X_val_s, y_tr_noisy=y_noisy,
+                                y_tr_clean=fd['y_train_clean'],
+                                y_val=fd['y_val'], train_idx=fd['train_idx'],
+                                val_idx=fd['val_idx'], groups_tr=_g_tr,
+                                fold=fi, draw=noise_seed,
+                                recipes=_sim_recipes_for(TRACK_A_MODEL),
+                                base_reps=base_by_model.get(TRACK_A_MODEL, []),
+                                make_dprimes=_ds_dprimes, level=strength,
+                                condition=noise_type)
+
                     # ── Track B: Estimation + remediation ──
                     # Asymmetry by design: the noise-detection step iterates
                     # over the single-representation and hybrid spaces (so the
@@ -1246,6 +1420,54 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         pass
                             except Exception:
                                 pass
+
+                    # ── The similarity sweep for this (fold, draw). ──
+                    # One pass per evaluation unit the Track B repair is
+                    # fitted for. The estimator is built as Track B builds it
+                    # (get_noise_estimator(name): k=10, the process distance,
+                    # is_clf left False, no group exclusion), so the lists
+                    # are built without group exclusion and MODEL_INPUT at
+                    # k=10 is Track B's own neighbour lookup in the unit's
+                    # representation.
+                    for _u, (mname, _k_rank, _rn) in eval_units.items():
+                        if (not sim_estimators or not sink.enabled
+                                or mname in UNWEIGHTED_TRACK_B_MODELS):
+                            continue
+                        _xtr, _xva = fd['eval_by_unit'][_u]
+
+                        def _dprimes(setting, lists, k, _xtr=_xtr):
+                            for est_name in sim_estimators:
+                                sc = detector_scores_with(
+                                    dataset_name, est_name, _xtr, y_noisy,
+                                    lists, k, is_clf=False)
+                                if sc is None:
+                                    yield est_name, 'exponential_0.1', None
+                                    continue
+                                _det = detection_scores(_cmask, sc, noise_type)
+                                if _det is not None:
+                                    (sim_detection
+                                     .setdefault(f'{noise_type}:{strength_key}',
+                                                 {})
+                                     .setdefault(est_name, {})
+                                     .setdefault(setting.name, {})
+                                     .setdefault(str(k), []).append(_det))
+                                w = weights_from_scores(sc, strength=0.1,
+                                                        method='exponential')
+                                yield (est_name, 'exponential_0.1',
+                                       cleaned_from_weights(_xtr, y_noisy, w))
+                        similarity_sweep(
+                            sweep_ctx, model_name=mname,
+                            model_input=f'{_u}:{_rn}',
+                            X_tr=_xtr, X_va=_xva, y_tr_noisy=y_noisy,
+                            y_tr_clean=fd['y_train_clean'], y_val=fd['y_val'],
+                            train_idx=fd['train_idx'], val_idx=fd['val_idx'],
+                            groups_tr=(groups[fd['train_idx']]
+                                       if groups is not None else None),
+                            fold=fi, draw=noise_seed,
+                            recipes=_sim_recipes_for(mname),
+                            base_reps=base_by_model.get(mname, []),
+                            make_dprimes=_dprimes, level=strength,
+                            condition=noise_type)
 
             # Aggregate per model
             noisy_mean_by_model = {mn: float(np.mean(s)) if s else float('nan')
@@ -1415,6 +1637,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     for _sp, _by_est in detection_acc.items()}
 
             nt_result['per_strength'][strength_key] = convert_numpy(strength_result)
+            ckpt.put([noise_type, strength_key], {
+                'strength_result': nt_result['per_strength'][strength_key],
+                'noise_provenance': {k: v for k, v in noise_provenance.items()
+                                     if k not in _prov_before},
+                'sim_build_failures': {
+                    k: v - _sbf_before.get(k, 0)
+                    for k, v in sim_build_failures.items()
+                    if v != _sbf_before.get(k, 0)},
+                'unweighted': sorted(UNWEIGHTED_TRACK_B_MODELS),
+                'track_a_sim': track_a_sim.get(f'{noise_type}:{strength_key}'),
+                'detection_sim': sim_detection.get(
+                    f'{noise_type}:{strength_key}')})
 
             # Print compact
             print(f"    σ={strength_key}: noisy={noisy_mean:.4f}", end='')
@@ -1491,6 +1725,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                  "dataset"),
         'build_failures': dict(sim_build_failures),
     })
+
+    # The similarity axis, 2026-09-25. Every key above is n13's own tracks,
+    # unchanged. The swept numbers are the D-versus-D' rows in
+    # results['similarity']['rows_file'] and, for detection,
+    # {'<condition>:<level>': {estimator: {setting: {k: mean reading}}}}.
+    results['similarity'] = similarity_record(
+        sim_settings, sink, estimators_swept=sim_estimators,
+        spaces_unavailable=sweep_ctx['unavailable'],
+        checkpoint_file=ckpt.path,
+        levels_read_back_from_checkpoint=ckpt.n_resumed)
+    # {'<condition>:<level>': {space: {setting: {k: mean DNN score}}}}.
+    results['track_a_by_similarity'] = {
+        _cl: {_sp: {_sn: {_k: {'mean': float(np.mean(_v)), 'n': len(_v)}
+                          for _k, _v in _byk.items()}
+                    for _sn, _byk in _bys.items()}
+              for _sp, _bys in _bysp.items()}
+        for _cl, _bysp in track_a_sim.items()}
+    results['detection_by_similarity'] = {
+        _cl: {_e: {_sn: {_k: _mean_detection(_rows)
+                         for _k, _rows in _byk.items()}
+                   for _sn, _byk in _bys.items()}
+              for _e, _bys in _bye.items()}
+        for _cl, _bye in sim_detection.items()}
 
     # Summary
     results['summary'] = _compute_summary(results)

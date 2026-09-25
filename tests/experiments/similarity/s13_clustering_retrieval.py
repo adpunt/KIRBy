@@ -579,9 +579,63 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # than 2 held-out rows and so contributed no coherence term.
     clusters_dropped = {}
 
+    # Each fold's scores are written to
+    # s13_clustering_retrieval/<dataset>.partial.jsonl when the fold finishes
+    # and read back on the next attempt (2026-09-25; _checkpoint.py). What is
+    # stored is that fold's entry in every per-fold dict below (each is keyed
+    # by fold index), merged back in fold order so the dicts come out with the
+    # same keys in the same order as an uninterrupted run. KMeans, PCA and the
+    # importance fits are seeded and nothing draws from a state shared between
+    # folds. A fold in which a build, a scale, a PCA or a retrieval raised is
+    # not stored, so it is retried.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's13_clustering_retrieval', dataset_name),
+        run_identity('s13_clustering_retrieval', dataset_name, data, config,
+                     kwargs=kwargs, budget=budget, k_retrieval=k_retrieval,
+                     n_clusters_list=list(n_clusters_list),
+                     matched_on=matched_on, n_folds=len(folds)))
+
+    def _slice2(d, f):
+        return {a: v[f] for a, v in d.items() if f in v}
+
+    def _slice3(d, f):
+        out = {}
+        for a, bm in d.items():
+            row = {b: v[f] for b, v in bm.items() if f in v}
+            if row:
+                out[a] = row
+        return out
+
+    def _merge3(d, sl, f):
+        for a, row in sl.items():
+            for b, val in row.items():
+                d.setdefault(a, {}).setdefault(b, {})[f] = val
+
     print(f"\n  Held-out CV ({len(folds)} folds, group-aware)")
     for fold_i, (tr, va) in enumerate(folds):
         y_tr, y_va = labels[tr], labels[va]
+        if _ck.done(fold=fold_i):
+            _sv = _ck.get(fold=fold_i)
+            _merge3(clustering_fold, _sv['clustering'], fold_i)
+            _merge3(clustering_pooled_fold, _sv['clustering_pooled'], fold_i)
+            _merge3(clusters_dropped, _sv['clusters_dropped'], fold_i)
+            _merge3(clustering_matched_fold, _sv['clustering_matched'], fold_i)
+            for _s, _row in _sv['retrieval'].items():
+                for _c, _v in _row.items():
+                    _acc_ret(_s, _c, fold_i, _v)
+            for _s, _v in _sv['pca_control_dims'].items():
+                pca_control_dims.setdefault(_s, {})[fold_i] = _v
+            for _s, _v in _sv['pca_control_slot_width'].items():
+                pca_control_slot_width.setdefault(_s, {})[fold_i] = _v
+            pca_control_of.update(_sv['pca_control_of'])
+            if _sv['fold_recipes'] is not None:
+                fold_recipes[fold_i] = _sv['fold_recipes']
+            if _sv['pool_base_rep'] is not None:
+                pool_base_rep[fold_i] = _sv['pool_base_rep']
+            continue
+        _fold_threw = []
 
         # Assemble this fold's (train, val) matrices for every space.
         fold_spaces = {}
@@ -596,6 +650,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             Xc_va = np.hstack([reps[r][va] for r in sorted_reps]
                               + [augmentations[a][va] for a in sorted_augs])
         except Exception as e:
+            _fold_threw.append(1)
             print(f"    fold {fold_i}: PCA input failed: "
                   f"{type(e).__name__}: {e}")
 
@@ -619,6 +674,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 Xp_tr = pca.fit_transform(sc.fit_transform(Xc_tr))
                 Xp_va = pca.transform(sc.transform(Xc_va))
             except Exception as e:
+                _fold_threw.append(1)
                 print(f"    fold {fold_i}: PCA failed ({pca_dim} components): "
                       f"{type(e).__name__}: {e}")
                 return None, None
@@ -701,6 +757,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         'pool_n_other_folds': h.get('n_other_folds'),
                     }
                 except Exception as e:
+                    _fold_threw.append(1)
                     print(f"    fold {fold_i}: hybrid build failed "
                           f"({sname}): {type(e).__name__}: {str(e)[:80]}")
 
@@ -735,6 +792,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 Xtr_s, Xva_s = _scale_train_val(np.asarray(Xtr, dtype=np.float64),
                                                 np.asarray(Xva, dtype=np.float64))
             except Exception as e:
+                _fold_threw.append(1)
                 print(f"    fold {fold_i}: scale failed ({sname}): "
                       f"{type(e).__name__}: {e}")
                 continue
@@ -752,6 +810,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             Xtr_s, y_tr, Xva_s, y_va, nc, is_clf,
                             method=matched_method)
                     except Exception as e:
+                        _fold_threw.append(1)
                         print(f"    fold {fold_i}: {matched_method} failed "
                               f"({sname}, nc={nc}): {type(e).__name__}: {e}")
                         _cm = float('nan')
@@ -781,9 +840,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              _heldout_retrieval(Xtr_s * w, y_tr, Xva_s * w, y_va,
                                                 k_retrieval, is_clf))
                 except Exception as e:
+                    _fold_threw.append(1)
                     print(f"    fold {fold_i}: weighted retrieval failed "
                           f"({sname}): {type(e).__name__}: {e}")
                     _acc_ret(sname, 'weighted', fold_i, float('nan'))
+
+        if not _fold_threw:
+            _pcw = _slice2(pca_control_slot_width, fold_i)
+            _ck.put({
+                'clustering': _slice3(clustering_fold, fold_i),
+                'clustering_pooled': _slice3(clustering_pooled_fold, fold_i),
+                'clusters_dropped': _slice3(clusters_dropped, fold_i),
+                'clustering_matched': _slice3(clustering_matched_fold, fold_i),
+                'retrieval': _slice3(retrieval_fold, fold_i),
+                'pca_control_dims': _slice2(pca_control_dims, fold_i),
+                'pca_control_slot_width': _pcw,
+                'pca_control_of': {c: pca_control_of[c] for c in _pcw},
+                'fold_recipes': fold_recipes.get(fold_i),
+                'pool_base_rep': pool_base_rep.get(fold_i),
+            }, fold=fold_i)
 
     # ── Fold-index-aligned score lists ──
     # 2026-09-12: every list below has one entry per fold, NaN where that fold

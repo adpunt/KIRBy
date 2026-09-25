@@ -104,9 +104,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"shuffled activity columns over them, built in "
           f"{time.time() - _t_null:.1f}s")
 
+    # Each representation's scores are written to
+    # s01_similarity_baseline/<dataset>.partial.jsonl as they finish and read
+    # back on the next attempt (2026-09-25; _checkpoint.py). Before this the
+    # whole dict was written once, by the caller, after the last
+    # representation. A representation's scores depend only on its matrix, the
+    # labels and the pairs/shuffles above (fixed seeds, sac_pair_sample and
+    # permuted_delta_ranks), so reading one back gives the numbers a fresh
+    # computation gives.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's01_similarity_baseline', dataset_name),
+        run_identity('s01_similarity_baseline', dataset_name, data, config,
+                     kwargs=kwargs, scalable=_scalable))
     for rep_name, X in reps.items():
+        if _ck.done(rep=rep_name):
+            results[rep_name] = _ck.get(rep=rep_name)
+            continue
         per_rep_fn(rep_name, X, labels, results, n_sample, is_classification,
                    pairs=pairs, perm_ranks=perm_ranks)
+        _ck.put(results[rep_name], rep=rep_name)
 
     # Summary table (both paths populate results identically)
     print("\n  Summary:")

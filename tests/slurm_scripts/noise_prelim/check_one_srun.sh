@@ -17,7 +17,8 @@
 #
 # CLUSTER. --clusters=htc is on the line. If srun on the arc login node refuses
 # it, log in to htc-login.arc.ox.ac.uk (ARC docs, connecting-to-arc.html) and
-# drop the flag: the login node picks the cluster. NEVER pass --account.
+# drop the flag: the login node picks the cluster. No --account: SLURM bills
+# the default association (see check_one.sbatch for choosing one).
 set -uo pipefail
 DATASET="${1:?usage: check_one_srun.sh <dataset> <experiment> [condition]}"
 EXP="${2:?usage: check_one_srun.sh <dataset> <experiment> [condition]}"

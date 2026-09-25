@@ -507,6 +507,9 @@ def main():
                          'whose two variants are in different halves. Each '
                          'half ends with about half of this number.')
     ap.add_argument('--output', default=None)
+    ap.add_argument('--force-rerun', action='store_true',
+                    help='Discard the (dataset, mode) results an earlier '
+                         'attempt finished (<output>.partial.jsonl).')
     ap = add_distance_metric_arg(ap)
     args = ap.parse_args()
 
@@ -524,31 +527,64 @@ def main():
     print(f'Excluded datasets: '
           + '; '.join(f'{k} ({v})' for k, v in EXCLUDED_DATASETS.items()))
 
+    out = args.output or os.path.join(HERE, 'results',
+                                      'opig_scaffold_similarity.json')
+
+    # Each (dataset, mode) result is written to <output>.partial.jsonl as soon
+    # as it finishes and read back on the next attempt (2026-09-25;
+    # experiments/_checkpoint.py). The pairs come from a fixed seed, so a
+    # result read back is what a fresh computation gives. When every mode of a
+    # dataset is stored the dataset is not loaded again. A mode that raised, or
+    # a dataset that failed to load, is not stored and makes the script exit 1
+    # after the JSON is written. tests/experiments is appended to sys.path, not
+    # prepended: its package names (similarity, noise, ...) must not shadow
+    # the similarity_metrics modules imported above.
+    if HERE not in sys.path:
+        sys.path.append(HERE)
+    from _checkpoint import script_checkpoint, exit_if_failed
+    _ck = script_checkpoint('opig_scaffold_similarity', out, args,
+                            exclude=('datasets', 'mode', 'output'),
+                            n_pairs_used=n_pairs)
+    _failed = []
+
     results, t0 = {}, time.time()
     for ds in datasets:
         if ds not in SCAFFOLD_DATASETS:
             print(f'  SKIP {ds}: not a scaffold-compatible dataset')
             continue
+        if modes and all(_ck.done(dataset=ds, mode=m) for m in modes):
+            _saved = [_ck.get(dataset=ds, mode=m) for m in modes]
+            r = dict(_saved[0]['base'])
+            for m, sv in zip(modes, _saved):
+                r[m] = sv['result']
+            results[ds] = r
+            print(f'  {ds:26s} finished in an earlier attempt, read back')
+            continue
         try:
             ctx = load_dataset(ds, n_pairs=n_pairs)
         except Exception as e:
             print(f'  FAILED to load {ds}: {type(e).__name__}: {e}')
+            _failed.append(ds)
             continue
         r = {'mean_mutations': ctx['mean_mutations'], 'n': ctx['n'],
              'kind': ctx['kind'], 'domain': SCAFFOLD_DATASETS[ds]['domain']}
+        _base = dict(r)
         for m in modes:
             try:
+                if _ck.done(dataset=ds, mode=m):
+                    r[m] = _ck.get(dataset=ds, mode=m)['result']
+                    continue
                 r[m] = {'representations': mode_representations,
                         'features': mode_features,
                         'controls': mode_controls}[m](ctx)
+                _ck.put({'base': _base, 'result': r[m]}, dataset=ds, mode=m)
             except Exception as e:
                 print(f'  {ds}/{m} FAILED: {type(e).__name__}: {e}')
+                _failed.append(f'{ds}/{m}')
         results[ds] = r
         print(f'  {ds:26s} done ({time.time()-t0:.0f}s)', flush=True)
 
     print_analysis(results)
-    out = args.output or os.path.join(HERE, 'results',
-                                      'opig_scaffold_similarity.json')
     os.makedirs(os.path.dirname(out), exist_ok=True)
 
     def conv(o):
@@ -560,6 +596,7 @@ def main():
     with open(out, 'w') as f:
         json.dump(results, f, indent=2, default=conv)
     print(f'\nwrote {out}')
+    exit_if_failed(_failed, 'dataset or mode')
 
 
 if __name__ == '__main__':

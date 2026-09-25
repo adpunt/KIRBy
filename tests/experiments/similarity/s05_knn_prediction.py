@@ -476,8 +476,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _fold_build_cache[cache_key] = out
         return out
 
+    # Each budget's cells, and then each representation's baseline, are written
+    # to s05_knn_prediction/<dataset>.partial.jsonl when they finish and read
+    # back on the next attempt (2026-09-25; _checkpoint.py). The stored unit
+    # holds everything the loop body adds to the results and to the
+    # per-fold-reselection lists (hybrid_candidates, baseline_candidates), so
+    # the code after the loops sees the same objects. Nothing in these loops
+    # draws from a shared random state. A unit in which any fold raised (a
+    # build, a weighting, an importance fit) is not stored, so it is retried.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's05_knn_prediction', dataset_name),
+        run_identity('s05_knn_prediction', dataset_name, data, config,
+                     kwargs=kwargs, k_values=list(k_values),
+                     knn_vote=knn_vote, budgets=list(budgets)))
+
     for budget in budgets:
         print(f"\n  Budget={budget}:")
+        if _ck.done(budget=budget):
+            _saved = _ck.get(budget=budget)
+            results['per_budget'][budget] = _saved['budget_results']
+            results['per_budget_status'][budget] = _saved['status']
+            hybrid_candidates.extend(_saved['candidates'])
+            continue
+        _n_cand_before = len(hybrid_candidates)
+        _threw = []
 
         budget_results = {}
         # F18: cells whose every fold threw, so the reason for a missing
@@ -527,6 +551,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         except Exception as e:
                             print(f"  [warn] fold {fold_i} failed: "
                                   f"{type(e).__name__}: {str(e)[:80]}")
+                            _threw.append(fold_i)
                             continue
                         if blueprint is None:
                             print(f"  [warn] fold {fold_i}: the pool's "
@@ -578,6 +603,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             except Exception as e:
                                 print(f"  [warn] fold {fold_i} failed: "
                                       f"{type(e).__name__}: {str(e)[:80]}")
+                                _threw.append(fold_i)
                                 continue
 
                         model = _make_knn(k, len(y_train))
@@ -646,6 +672,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              if not arms
                              else 'every arm x condition x k cell lost all folds')),
         }
+        if not _threw:
+            _ck.put({'budget_results': budget_results,
+                     'status': results['per_budget_status'][budget],
+                     'candidates': hybrid_candidates[_n_cand_before:]},
+                    budget=budget)
     # ── Per-rep kNN baselines (individual representations) ──
     # Try all k values and pick the best per metric direction.
     print(f"\n  Individual representation kNN baselines (metric={metric_name}):")
@@ -661,6 +692,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     baseline_candidates = {}  # {f"{rep}|k{k}": [per-fold score, ...]}
 
     for rep_name, X_rep in reps.items():
+        if _ck.done(baseline_rep=rep_name):
+            _saved = _ck.get(baseline_rep=rep_name)
+            results['per_rep_baselines'][rep_name] = _saved['baseline']
+            baseline_candidates.update(_saved['candidates'])
+            continue
+        _threw = []
+        _cand_before = set(baseline_candidates)
         best_k_score = None
         best_k_used = k_values[0]
         best_k_scores_uw = None
@@ -682,6 +720,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # rather than silently falling back to unweighted kNN.
                 print(f"      importance fold failed (rep={rep_name}): "
                       f"{type(exc).__name__}: {exc}")
+                _threw.append('importance')
                 fold_importance.append(None)
 
         for k_candidate in k_values:
@@ -715,6 +754,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         print(f"      weighted kNN fold failed "
                               f"(rep={rep_name}, k={k_candidate}): "
                               f"{type(exc).__name__}: {exc}")
+                        _threw.append(('weighted', fold_i))
                         fold_scores_w.append(float('nan'))
 
             if not fold_scores_uw:
@@ -748,6 +788,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"kNN {metric_name}={sc_mean:.4f}+/-{sc_std:.3f}, "
               f"weighted {metric_name}={sc_w_mean:.4f} "
               f"(delta={delta:+.4f}, positive=improvement)")
+        if not _threw:
+            _ck.put({'baseline': results['per_rep_baselines'][rep_name],
+                     'candidates': {_c: v for _c, v in baseline_candidates.items()
+                                    if _c not in _cand_before}},
+                    baseline_rep=rep_name)
 
     # ── The pool's best single representation, per fold ──
     # 2026-09-12 decision: the pool gives the best single representation as well

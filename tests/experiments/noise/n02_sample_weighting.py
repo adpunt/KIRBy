@@ -113,6 +113,14 @@ from experiments._shared import (
 
 from kirby.utils.noise_estimation import (ActivityCliffAwareEstimator,
                                           weights_from_scores)
+# The similarity-sweep kit, the checkpoint and the disk caches, added
+# 2026-09-25 (plan sections 1-3). See n07_remediation's SIMILARITY-SWEEP KIT.
+from experiments.noise.n07_remediation import (
+    sweep_settings, sweep_ks, RowSink, sweep_context, similarity_sweep,
+    detector_scores_with, cleaned_from_weights, similarity_record,
+    FoldCheckpoint, cached_build_fold_hybrid,
+)
+from experiments.noise import noise_cache as _nc
 
 
 # Models that support sample_weight in .fit().
@@ -228,7 +236,19 @@ def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False,
     _, indices = nn.kneighbors(X_weighted)
     # Exclude self (first neighbor)
     neighbor_idx = indices[:, 1:]
+    return reliability_from_neighbours(y, neighbor_idx, is_clf=is_clf,
+                                       strength=strength)
 
+
+def reliability_from_neighbours(y, neighbor_idx, is_clf=False, strength=None):
+    """The reliability weight from a neighbour list, the second half of
+    compute_reliability_scores, split out 2026-09-25 so the similarity sweep
+    can hand it neighbours found in a similarity setting's features. The
+    arithmetic is the lines that followed the neighbour search there,
+    unchanged, so compute_reliability_scores returns what it returned.
+
+    neighbor_idx: (n, k) indices into the same rows, the row itself excluded.
+    """
     if is_clf:
         # Classification: fraction of neighbors with same class
         same_class = (y[neighbor_idx] == y[:, None]).astype(float)
@@ -322,6 +342,111 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
 
     # =========================================================================
+    # The similarity axis, the D-versus-D' rows and the checkpoint, added
+    # 2026-09-25 (plan sections 1-3).
+    # =========================================================================
+    # n02 injects no noise, so D is the clean training fold and D' is it
+    # weighted. Its two weightings each read neighbours -- the reliability
+    # weight (a label's distance from its neighbours' mean) and the
+    # cliff-aware weight (ActivityCliffAwareEstimator) -- and both are swept
+    # over every similarity setting at every k in SWEPT_KS, on the same model
+    # input each condition fits, one row per (weighting, setting, k, model):
+    # RF, SVM and the condition's model. noise_condition 'none', level 0.0,
+    # draw 0.
+    #
+    # ⛔ n02's own conditions weight the model input by sqrt(importance) before
+    # finding neighbours (compute_reliability_scores), so its by_importance
+    # numbers are not any swept setting: MODEL_INPUT is the unweighted model
+    # input, and base_k|<weighting>|<distance> weights through fold_weights.
+    # The conditions are kept exactly as they were.
+    #
+    # Every fold's conditions are written to a checkpoint as the fold finishes
+    # (n02 wrote its result once, at the end) and read back on resume.
+    from experiments._shared import input_fingerprint
+    sim_settings = sweep_settings()
+    sink = RowSink(output_dir, 'n02_sample_weighting', dataset_name)
+    ckpt = FoldCheckpoint(output_dir, 'n02_sample_weighting', dataset_name,
+                          tag='folds', fingerprint={
+                              'input': input_fingerprint(data, config),
+                              'models': list(model_factories),
+                              'importance_methods': list(importance_methods),
+                              'k_neighbors': int(k_neighbors),
+                              'strength': DEFAULT_STRENGTH})
+    sweep_ctx = sweep_context(
+        experiment='n02_sample_weighting', dataset_name=dataset_name,
+        sink=sink, settings=sim_settings,
+        metric=(metric_name, metric_fn, lower_is_better), task_type=task_type,
+        condition='none', level=0.0, data=data, factories=model_factories)
+    _sim_need = {s.space for s in sim_settings}
+    _sim_info_memo = {}
+
+    def _sim_info(mname):
+        """(top-2 single representations, {space: (recipe, aug)}) for one
+        model, read from the pool the way the hybrid block below reads it.
+        Read only when a swept setting needs a base, augmented or hybrid
+        space, and once per model."""
+        if mname in _sim_info_memo:
+            return _sim_info_memo[mname]
+        base, rec = [], {}
+        if _sim_need - {'model_input', 'tanimoto_ecfp4', 'forest_proximity'}:
+            from experiments._shared import noise_base_reps_by_model
+            try:
+                _s, _m = get_best_search_for_downstream(
+                    reps, labels, groups, downstream_model=mname, budget=None,
+                    augmentations=augmentations, dataset_name=dataset_name,
+                    task_type=task_type, data=data, pool_subset=POOL_SUBSET)
+                _b, _ = noise_base_reps_by_model({mname: _s}, [mname],
+                                                 reps=reps,
+                                                 dataset_name=dataset_name,
+                                                 verbose=False)
+                base = _b.get(mname, [])
+                _rs, _ = pool_recipes_by_family(
+                    _m, SPACE_FOR_FAMILY,
+                    eligible_families=POOL_SUBSETS[POOL_SUBSET])
+                rec = {_r['space']: (_r['blueprint'],
+                                     _r['aug_condition'] or 'uncapped')
+                       for _r in _rs}
+            except Exception as _exc:
+                sweep_ctx['unavailable'].setdefault(
+                    f'{mname}|pool', f'{type(_exc).__name__}: {_exc}')
+        _sim_info_memo[mname] = (base, rec)
+        return base, rec
+
+    def _n02_sweep(*, model_name, model_input, X_tr, X_va, y_tr, y_va,
+                   train_idx, val_idx, fold):
+        if not sink.enabled:
+            return
+        from experiments.noise.similarity_space import neighbours_at
+        base, rec = _sim_info(model_name)
+
+        def _dprimes(setting, lists, k):
+            idx = neighbours_at(lists, k)[0]
+            w = reliability_from_neighbours(y_tr, idx, is_clf=is_clf)
+            yield ('reliability_weight', f'strength={DEFAULT_STRENGTH}',
+                   cleaned_from_weights(X_tr, y_tr, w))
+            sc = detector_scores_with(dataset_name, 'activity_cliff_aware',
+                                      X_tr, y_tr, lists, k, is_clf=is_clf)
+            if sc is None:
+                yield 'cliff_aware_weight', 'strength=1.0', None
+                return
+            # ActivityCliffAwareEstimator.get_weights(strength=1.0), the
+            # weight compute_cliff_aware_weights hands the fit.
+            w2 = 1.0 / (1.0 + 1.0 * np.asarray(sc, dtype=float))
+            yield ('cliff_aware_weight', 'strength=1.0',
+                   cleaned_from_weights(X_tr, y_tr, w2 / w2.mean()))
+        similarity_sweep(
+            sweep_ctx, model_name=model_name, model_input=model_input,
+            X_tr=X_tr, X_va=X_va, y_tr_noisy=y_tr, y_tr_clean=y_tr, y_val=y_va,
+            train_idx=train_idx, val_idx=val_idx,
+            groups_tr=(groups[train_idx] if groups is not None else None),
+            fold=fold, draw=0, recipes=rec, base_reps=base,
+            make_dprimes=_dprimes)
+
+    print(f"  Similarity axis: {len(sim_settings)} settings x ks "
+          f"{list(sweep_ks())}; rows -> {sink.path}; checkpoint -> "
+          f"{ckpt.path}")
+
+    # =========================================================================
     # CONDITIONS 1-2: Individual reps (base_unweighted, base_weighted)
     # =========================================================================
     print("  --- Conditions 1-2: Individual reps ---")
@@ -340,67 +465,90 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             weighted_scores = {m: [] for m in importance_methods}
             reliability_stats = {m: [] for m in importance_methods}
 
-            for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                                labels, mode=mode):
+            for _fi, (train_idx, val_idx) in enumerate(cv_split(
+                    groups, n_folds, sample_X, labels, mode=mode)):
                 y_train, y_val = labels[train_idx], labels[val_idx]
-                scaler = StandardScaler()
-                X_train = scaler.fit_transform(X_rep[train_idx])
-                X_val = scaler.transform(X_rep[val_idx])
+                # noise_cache.cached_scaled, 2026-09-25: the same
+                # StandardScaler arithmetic, stored once per (representation
+                # content, fold).
+                X_train, X_val = _nc.cached_scaled(dataset_name, X_rep,
+                                                   train_idx, val_idx)
 
-                # Condition 1: unweighted
-                try:
-                    model_uw = model_factory()
-                    model_uw.fit(X_train, y_train)
-                    fold_uw = metric_fn(
-                        y_val, _predict_for_metric(model_uw, X_val))
-                except Exception:
-                    continue
-
-                # Condition 2: importance-weighted sample weights, once per
-                # scorer in the sweep.
-                fold_w = {}
-                fold_stats = {}
-                for imp_method in importance_methods:
+                # One fold's conditions 1 and 2, written to the checkpoint as
+                # it finishes and read back on resume (2026-09-25). A fold a
+                # failure dropped is stored as dropped, with the reason.
+                def _rep_fold(X_train=X_train, X_val=X_val, y_train=y_train,
+                              y_val=y_val, model_factory=model_factory):
+                    # Condition 1: unweighted
                     try:
-                        # Compute feature importance on the SAME (scaled)
-                        # matrix the reliability scorer will consume.
-                        # Previously importance was computed on raw
-                        # X_rep[train_idx] while reliability ran on scaled
-                        # X_train — fine for tree-based importance
-                        # (scale-invariant) but breaks the moment `method`
-                        # switches to a scale-sensitive one (permutation,
-                        # deeplift on continuous features).
-                        imp = compute_feature_importance(
-                            {rep_name: X_train}, y_train,
-                            method=imp_method)
-                        imp_scores = imp[rep_name]
-
-                        # Compute per-sample reliability in importance-weighted space
-                        sample_weights = compute_reliability_scores(
-                            X_train, y_train, imp_scores, k=k_neighbors,
-                            is_clf=is_clf)
-
-                        fold_stats[imp_method] = {
-                            'mean': float(np.mean(sample_weights)),
-                            'std': float(np.std(sample_weights)),
-                            'min': float(np.min(sample_weights)),
-                            'pct_below_05': float(
-                                np.mean(sample_weights < 0.5) * 100),
-                        }
-
-                        model_w = model_factory()
-                        model_w.fit(X_train, y_train,
-                                    sample_weight=sample_weights)
-                        fold_w[imp_method] = metric_fn(
-                            y_val, _predict_for_metric(model_w, X_val))
+                        model_uw = model_factory()
+                        model_uw.fit(X_train, y_train)
+                        fold_uw = metric_fn(
+                            y_val, _predict_for_metric(model_uw, X_val))
                     except Exception:
-                        break
+                        return {'dropped': 'the unweighted fit failed'}
 
-                # Any failure drops the fold from every list, weighted and
-                # unweighted alike, so no mean is taken over a fold the
-                # others do not have.
-                if len(fold_w) != len(importance_methods):
+                    # Condition 2: importance-weighted sample weights, once per
+                    # scorer in the sweep.
+                    fold_w = {}
+                    fold_stats = {}
+                    for imp_method in importance_methods:
+                        try:
+                            # Compute feature importance on the SAME (scaled)
+                            # matrix the reliability scorer will consume.
+                            # Previously importance was computed on raw
+                            # X_rep[train_idx] while reliability ran on scaled
+                            # X_train — fine for tree-based importance
+                            # (scale-invariant) but breaks the moment `method`
+                            # switches to a scale-sensitive one (permutation,
+                            # deeplift on continuous features).
+                            imp = compute_feature_importance(
+                                {rep_name: X_train}, y_train,
+                                method=imp_method)
+                            imp_scores = imp[rep_name]
+
+                            # Compute per-sample reliability in importance-weighted space
+                            sample_weights = compute_reliability_scores(
+                                X_train, y_train, imp_scores, k=k_neighbors,
+                                is_clf=is_clf)
+
+                            fold_stats[imp_method] = {
+                                'mean': float(np.mean(sample_weights)),
+                                'std': float(np.std(sample_weights)),
+                                'min': float(np.min(sample_weights)),
+                                'pct_below_05': float(
+                                    np.mean(sample_weights < 0.5) * 100),
+                            }
+
+                            model_w = model_factory()
+                            model_w.fit(X_train, y_train,
+                                        sample_weight=sample_weights)
+                            fold_w[imp_method] = metric_fn(
+                                y_val, _predict_for_metric(model_w, X_val))
+                        except Exception:
+                            break
+
+                    # Any failure drops the fold from every list, weighted and
+                    # unweighted alike, so no mean is taken over a fold the
+                    # others do not have.
+                    if len(fold_w) != len(importance_methods):
+                        return {'dropped': 'a weighted fit failed'}
+                    return {'uw': fold_uw, 'w': fold_w, 'stats': fold_stats}
+
+
+                _rec = ckpt.cached(['per_rep', rep_name, model_name, _fi],
+                                   _rep_fold)
+                # D versus D' and the similarity axis in this representation,
+                # 2026-09-25: the reliability weight and the cliff-aware
+                # weight with neighbours from every setting at every k.
+                _n02_sweep(model_name=model_name,
+                           model_input=f'{model_name}:{rep_name}',
+                           X_tr=X_train, X_va=X_val, y_tr=y_train, y_va=y_val,
+                           train_idx=train_idx, val_idx=val_idx, fold=_fi)
+                if 'dropped' in _rec:
                     continue
+                fold_uw, fold_w, fold_stats = (_rec['uw'], _rec['w'],
+                                               _rec['stats'])
 
                 unweighted_scores.append(fold_uw)
                 for imp_method in importance_methods:
@@ -710,8 +858,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             ca_scores = []
             n_features_list = []
 
-            for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                                labels, mode=mode):
+            for _fi, (train_idx, val_idx) in enumerate(cv_split(
+                    groups, n_folds, sample_X, labels, mode=mode)):
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
                 val_reps = {k: v[val_idx] for k, v in reps.items()}
                 y_train, y_val = labels[train_idx], labels[val_idx]
@@ -720,7 +868,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
                     val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
-                    X_train_h, X_val_h, feature_info = build_fold_hybrid(
+                    # Stored through noise_cache since 2026-09-25
+                    # (n07.cached_build_fold_hybrid): the same call, keyed on
+                    # its inputs, so a resumed run does not rebuild it.
+                    X_train_h, X_val_h, feature_info = cached_build_fold_hybrid(
+                        dataset_name,
                         train_reps, val_reps, y_train, model_bp,
                         augmentations_train=train_augs, augmentations_val=val_augs,
                         groups=(groups[train_idx] if groups is not None else None),
@@ -746,65 +898,86 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_train_s = scaler.fit_transform(X_train_h)
                 X_val_s = scaler.transform(X_val_h)
 
-                # Condition 3: hybrid unweighted
-                try:
-                    model_uw = model_factory()
-                    model_uw.fit(X_train_s, y_train)
-                    fold_uw = metric_fn(
-                        y_val, _predict_for_metric(model_uw, X_val_s))
-                except Exception:
-                    continue
-
-                # Condition 4: hybrid + importance-weighted sample weights, once
-                # per scorer in the sweep.
-                fold_w = {}
-                fold_stats = {}
-                for imp_method in importance_methods:
+                # One fold's conditions 3 to 5, written to the checkpoint as
+                # it finishes and read back on resume (2026-09-25).
+                def _hyb_fold(X_train_s=X_train_s, X_val_s=X_val_s,
+                              y_train=y_train, y_val=y_val,
+                              model_factory=model_factory):
+                    # Condition 3: hybrid unweighted
                     try:
-                        # Compute importance on the SAME (scaled) hybrid matrix
-                        # the reliability scorer consumes — same alignment fix as
-                        # the base-rep block above. The raw X_train_h was
-                        # previously passed to compute_feature_importance while
-                        # X_train_s (the scaled version) was passed to
-                        # compute_reliability_scores.
-                        imp = compute_feature_importance(
-                            {'hybrid': X_train_s}, y_train, method=imp_method)
-                        imp_scores = imp['hybrid']
-
-                        sample_weights = compute_reliability_scores(
-                            X_train_s, y_train, imp_scores, k=k_neighbors,
-                            is_clf=is_clf)
-
-                        fold_stats[imp_method] = {
-                            'mean': float(np.mean(sample_weights)),
-                            'std': float(np.std(sample_weights)),
-                            'min': float(np.min(sample_weights)),
-                            'pct_below_05': float(
-                                np.mean(sample_weights < 0.5) * 100),
-                        }
-
-                        model_w = model_factory()
-                        model_w.fit(X_train_s, y_train,
-                                    sample_weight=sample_weights)
-                        fold_w[imp_method] = metric_fn(
-                            y_val, _predict_for_metric(model_w, X_val_s))
+                        model_uw = model_factory()
+                        model_uw.fit(X_train_s, y_train)
+                        fold_uw = metric_fn(
+                            y_val, _predict_for_metric(model_uw, X_val_s))
                     except Exception:
-                        break
+                        return {'dropped': 'the unweighted fit failed'}
 
-                if len(fold_w) != len(importance_methods):
-                    continue
+                    # Condition 4: hybrid + importance-weighted sample weights, once
+                    # per scorer in the sweep.
+                    fold_w = {}
+                    fold_stats = {}
+                    for imp_method in importance_methods:
+                        try:
+                            # Compute importance on the SAME (scaled) hybrid matrix
+                            # the reliability scorer consumes — same alignment fix as
+                            # the base-rep block above. The raw X_train_h was
+                            # previously passed to compute_feature_importance while
+                            # X_train_s (the scaled version) was passed to
+                            # compute_reliability_scores.
+                            imp = compute_feature_importance(
+                                {'hybrid': X_train_s}, y_train, method=imp_method)
+                            imp_scores = imp['hybrid']
 
-                # Condition 5: same hybrid matrix, weights from
-                # ActivityCliffAwareEstimator instead of neighbour agreement.
-                try:
-                    ca_weights = compute_cliff_aware_weights(
-                        X_train_s, y_train, k=k_neighbors, is_clf=is_clf)
-                    model_ca = model_factory()
-                    model_ca.fit(X_train_s, y_train, sample_weight=ca_weights)
-                    fold_ca = metric_fn(
-                        y_val, _predict_for_metric(model_ca, X_val_s))
-                except Exception:
+                            sample_weights = compute_reliability_scores(
+                                X_train_s, y_train, imp_scores, k=k_neighbors,
+                                is_clf=is_clf)
+
+                            fold_stats[imp_method] = {
+                                'mean': float(np.mean(sample_weights)),
+                                'std': float(np.std(sample_weights)),
+                                'min': float(np.min(sample_weights)),
+                                'pct_below_05': float(
+                                    np.mean(sample_weights < 0.5) * 100),
+                            }
+
+                            model_w = model_factory()
+                            model_w.fit(X_train_s, y_train,
+                                        sample_weight=sample_weights)
+                            fold_w[imp_method] = metric_fn(
+                                y_val, _predict_for_metric(model_w, X_val_s))
+                        except Exception:
+                            break
+
+                    if len(fold_w) != len(importance_methods):
+                        return {'dropped': 'a weighted fit failed'}
+
+                    # Condition 5: same hybrid matrix, weights from
+                    # ActivityCliffAwareEstimator instead of neighbour agreement.
+                    try:
+                        ca_weights = compute_cliff_aware_weights(
+                            X_train_s, y_train, k=k_neighbors, is_clf=is_clf)
+                        model_ca = model_factory()
+                        model_ca.fit(X_train_s, y_train, sample_weight=ca_weights)
+                        fold_ca = metric_fn(
+                            y_val, _predict_for_metric(model_ca, X_val_s))
+                    except Exception:
+                        return {'dropped': 'the cliff-aware fit failed'}
+                    return {'uw': fold_uw, 'w': fold_w, 'stats': fold_stats,
+                            'ca': fold_ca}
+
+                _rec = ckpt.cached(['hybrid', model_name, space_name, _fi],
+                                   _hyb_fold)
+                # D versus D' and the similarity axis in this hybrid,
+                # 2026-09-25.
+                _n02_sweep(model_name=model_name,
+                           model_input=f'{model_name}:{space_name}',
+                           X_tr=X_train_s, X_va=X_val_s, y_tr=y_train,
+                           y_va=y_val, train_idx=train_idx, val_idx=val_idx,
+                           fold=_fi)
+                if 'dropped' in _rec:
                     continue
+                fold_uw, fold_w, fold_stats, fold_ca = (
+                    _rec['uw'], _rec['w'], _rec['stats'], _rec['ca'])
 
                 unweighted_scores.append(fold_uw)
                 for imp_method in importance_methods:
@@ -1187,6 +1360,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"{_d['delta_vs_source_mean']:+.4f}, vs best single "
               f"representation ({_d['best_rep']}) "
               + (f"{_vb:+.4f}" if _vb is not None else "not defined"))
+
+    # The similarity axis, 2026-09-25. Every key above is n02's own
+    # conditions, unchanged; the swept numbers are the rows.
+    results['similarity'] = similarity_record(
+        sim_settings, sink, spaces_unavailable=sweep_ctx['unavailable'],
+        checkpoint_file=ckpt.path, folds_read_back=ckpt.n_resumed)
 
     return make_structured_output(
         experiment_id='n02',

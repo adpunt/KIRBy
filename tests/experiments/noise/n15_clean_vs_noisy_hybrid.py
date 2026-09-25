@@ -112,6 +112,16 @@ from experiments._shared import (
 )
 from experiments.noise.noise_helpers import noisy_search_specs
 from kirby.noise_spec import make_noisy_labels, noisy_labels_hash
+# The disk cache and the per-(noise spec, model) checkpoint, added 2026-09-25
+# (plan section 3). n15 finds no neighbours and changes no training data --
+# both arms train on the same noisy labels and differ in which recipe built
+# the features -- so it takes no similarity setting and writes no
+# D-versus-D' rows (plan section 6).
+from experiments.noise import noise_cache as nc
+from experiments.noise import _sim_axis_n15_n22 as sx
+
+# The name the checkpoint and the result file are filed under.
+EXP_FULL_NAME = 'n15_clean_vs_noisy_hybrid'
 
 
 def _bp_fingerprint(bp):
@@ -147,6 +157,19 @@ def _agreement(fp_clean, fp_noisy):
 
 def _search_settings(n_samples):
     """The search settings BOTH arms run under. Owner's decision 2026-09-12.
+
+    TODO(similarity-sweep 2026-09-25): the run instructions for the noise
+    suite (owner, 2026-09-25) are the fast tier, --pruning-mode calibrated and
+    KIRBY_NO_COLD_SEARCH=1, "experiments read the precompute and never start
+    a search". n15 cannot follow them without a design decision: its noisy arm
+    IS a fresh search on the noisy labels, one per (noise spec, model), and
+    its clean arm is searched live under these same settings so the two arms
+    are like for like (see the paragraph below and _fetch_bp). What the
+    precompute stored is the clean arm only, under different settings
+    ('aggressive_pruning' and tune=True here, not what tests/
+    precompute_hybrids.py wrote). Whether n15 keeps its live searches, moves
+    both arms to 'calibrated', or reads the clean arm from the precompute is
+    the owner's call. Nothing about the searches is changed here.
 
     Three things, and why each is here.
 
@@ -348,6 +371,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'summary': {},
     }
 
+    # ── The checkpoint ──
+    # Added 2026-09-25. Before it, n15 held every (noise spec, model) cell in
+    # memory and wrote once at the end, and each cell is two recipe searches.
+    # The results are now pickled after every cell, so a killed run resumes at
+    # the next one. The searches themselves are already on disk.
+    ck = sx.FoldCheckpoint(
+        output_dir, EXP_FULL_NAME, dataset_name,
+        sx.run_signature(data, config, {
+            'specs': [s_.spec_id for s_ in specs],
+            'models': downstream_models, 'settings': search_settings}))
+    if ck.state is not None:
+        results = ck.state
+
     for spec in specs:
         sid = spec.spec_id
         print(f"\n--- noise {sid} (target effective noise "
@@ -422,6 +458,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 f"the clean labels unchanged and this column differs from "
                 f"them. The zero-noise cell is the reference every other level "
                 f"is read against.")
+        _checked_before = results.get('noisy_labels_checked', {}).get(sid)
         results.setdefault('noisy_labels_checked', {})[sid] = {
             'hash': _noisy_hash,
             'deterministic': True,
@@ -430,11 +467,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'target_effective_noise': _lvl,
             'checked_against_search_column': False,
         }
+        if _checked_before:
+            # A resumed run: keep what the cells already run recorded here.
+            for _k in ('checked_against_search_column',
+                       'engine_train_labels_id'):
+                if _k in _checked_before:
+                    results['noisy_labels_checked'][sid][_k] = \
+                        _checked_before[_k]
 
-        results['per_noise_per_model'][sid] = {}
-        results['blueprint_agreement'][sid] = {}
+        # setdefault, not a fresh dict, since 2026-09-25: a resumed run
+        # restores the cells already scored and must not wipe them here.
+        results['per_noise_per_model'].setdefault(sid, {})
+        results['blueprint_agreement'].setdefault(sid, {})
 
         for model_name, model_factory in model_factories.items():
+            if ck.is_done(f'{sid}|{model_name}'):
+                print(f"  {model_name}: already in the checkpoint, skipped")
+                continue
             clean_search, clean_bp, clean_aug = _fetch_bp(
                 reps, labels, groups, augmentations, config, data,
                 dataset_name, task_type, model_name, spec=None,
@@ -571,10 +620,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         sc = StandardScaler()
                         X_tr_s = sc.fit_transform(X_tr)
                         X_va_s = sc.transform(X_va)
-                        m = model_factory()
-                        m.fit(X_tr_s, y_train)
-                        scores[arm][fold_i] = float(
-                            metric_fn(y_val, m.predict(X_va_s)))
+                        if model_name in sx.CACHEABLE_MODELS:
+                            # Through noise_cache since 2026-09-25 (plan
+                            # section 3): the same fit and the same
+                            # model.predict, stored under the content of the
+                            # features and labels. Seeded models only.
+                            _pred = nc.cached_fit_predict(
+                                dataset_name, model_name, model_factory,
+                                X_tr_s, y_train, X_va_s,
+                                predict_mode='predict')
+                        else:
+                            m = model_factory()
+                            m.fit(X_tr_s, y_train)
+                            _pred = m.predict(X_va_s)
+                        scores[arm][fold_i] = float(metric_fn(y_val, _pred))
                     except Exception as exc:
                         print(f"    WARNING: {model_name}/{arm} fold {fold_i} "
                               f"failed: {type(exc).__name__}: {exc}")
@@ -629,6 +688,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"over {len(paired)} paired folds"
                   f"{f', {len(dropped)} dropped' if dropped else ''} "
                   f"{'(identical blueprints)' if agree['identical'] else ''}")
+            ck.save(f'{sid}|{model_name}', results)
 
     # ── One row per (level, model), averaging that level's noise draws ──
     # The cells above are keyed by noise SPEC, and there are now three specs per
@@ -728,6 +788,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "nothing\n  and the existing noise results stand as reported.")
         print("=" * 70)
 
+    # n15's result file is written by its caller (run_all or main), not here.
+    # The snapshot is cleared on return: a kill between this return and that
+    # write costs a re-run of the cells, never a stale resume.
+    ck.clear()
     return results
 
 

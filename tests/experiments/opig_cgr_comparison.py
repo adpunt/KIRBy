@@ -988,6 +988,11 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Discard what an earlier attempt finished '
+             '(<output>.partial.jsonl) and recompute every item.')
+
     parser = add_distance_metric_arg(parser)
 
     args = parser.parse_args()
@@ -1006,27 +1011,48 @@ def main():
     print(f"  CKA: {'skip' if args.skip_correlation else 'yes'}")
     print("=" * 70)
 
+    output_path = (args.output or
+                   'tests/results/comparisons/opig_cgr_comparison.json')
+
+    # Each dataset is written to <output>.partial.jsonl as soon as it finishes
+    # and read back on the next attempt (2026-09-25;
+    # experiments/_checkpoint.py). Before, a failure or a kill lost every
+    # dataset, because the one JSON below was written after the last. A dataset
+    # that raised or returned {'error'} is not stored, is retried next time,
+    # and makes the script exit 1 after the JSON is written.
+    from experiments._checkpoint import (
+        script_checkpoint, is_failed_item, exit_if_failed)
+    _ck = script_checkpoint('opig_cgr_comparison', output_path, args,
+                            exclude=('datasets', 'output'))
+    _failed = []
+
     all_results = {}
     for ds_name in datasets:
         try:
-            result = evaluate_dataset(
-                ds_name, args.n_folds,
-                skip_hybrid=args.skip_hybrid,
-                skip_correlation=args.skip_correlation,
-                pruning_mode=args.pruning_mode)
+            if _ck.done(dataset=ds_name):
+                result = _ck.get(dataset=ds_name)
+                print(f"  {ds_name}: finished in an earlier attempt, read back")
+            else:
+                result = evaluate_dataset(
+                    ds_name, args.n_folds,
+                    skip_hybrid=args.skip_hybrid,
+                    skip_correlation=args.skip_correlation,
+                    pruning_mode=args.pruning_mode)
+                _ck.put(result, dataset=ds_name)
+            if is_failed_item(result):
+                _failed.append(ds_name)
             all_results[ds_name] = result
         except Exception as e:
             print(f"  FAILED: {e}")
             import traceback
             traceback.print_exc()
+            _failed.append(ds_name)
 
     # Analysis
     if all_results:
         print_analysis(all_results)
 
     # Save
-    output_path = (args.output or
-                   'tests/results/comparisons/opig_cgr_comparison.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1044,6 +1070,7 @@ def main():
     with open(p, 'w') as f:
         json.dump(_nan_to_none(convert_numpy(all_results)), f, indent=2)
     print(f"\nResults saved: {p}")
+    exit_if_failed(_failed, 'dataset')
 
 
 if __name__ == '__main__':

@@ -82,6 +82,14 @@ row per random draw of the molecules, with the best and the worst draw. The
 propagation parts write one row per pass, and a pass is one (noise draw, fold)
 for injected and one fold for relabelled.
 
+ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 2-3). removal_cost and
+relabelled change the training data, so each writes one D-versus-D' row per
+fold (D = every molecule at its correct label, so score_D = score_clean).
+injected adds noise and writes none. The accumulators are checkpointed per
+fold; the scaled representations, hybrid builds, out-of-fold targets and the
+fits of seeded models on correct and injected labels go through noise_cache.
+controls.py's twins of relabelled run with KIRBY_NOISE_CONTROLS=1.
+
 Usage:
     python n27_removal_cost_and_propagation.py --dataset herg_ki --mode full
 """
@@ -113,6 +121,16 @@ from experiments.noise.noise_helpers import (
 )
 from experiments.noise.n07_remediation import _predict_for_metric
 from kirby.utils.noisy_labels import oof_predict
+# The D-versus-D' rows, the per-fold checkpoint, the caches and the controls
+# (2026-09-25, plan sections 2-3). They live in n23 for the reason given at
+# the top of its shared block.
+from experiments.noise import noise_cache as nc
+from experiments.noise.controls import controls_enabled
+from experiments.noise.n23_uncertainty_cleaning import (
+    RowSink, PassCheckpoint, ensure_dprime_models, control_twins,
+    as_cleanup_dict, cached_base_cell, cached_hybrid_cell, CACHEABLE_MODELS,
+    NO_NEIGHBOURS,
+)
 
 # Shares of the training molecules kept in the removal part. 1.0 is the
 # reference every other share is paired against.
@@ -186,6 +204,25 @@ def _fit_predict(factory, X_tr, y_tr, X_va, metric_name):
         return None, f'{type(exc).__name__}: {exc}'
 
 
+def _fit_predict_cached(dataset_name, model_name, factory, X_tr, y_tr, X_va,
+                        metric_name):
+    """_fit_predict through noise_cache.cached_fit_predict for a seeded model
+    (CACHEABLE_MODELS), and _fit_predict itself otherwise. Used for the fits
+    plan section 3 lists as repeated: the correct-label fit and the fit on
+    injected labels, which other experiments make for the same draw. The
+    prediction rule is n07._predict_for_metric's (noise_cache.predict_mode_for),
+    so a stored value equals a refit. Added 2026-09-25."""
+    if dataset_name is None or model_name not in CACHEABLE_MODELS:
+        return _fit_predict(factory, X_tr, y_tr, X_va, metric_name)
+    try:
+        return np.asarray(nc.cached_fit_predict(
+            dataset_name, model_name, factory, X_tr, y_tr, X_va,
+            predict_mode=nc.predict_mode_for(metric_name)),
+            dtype=float), None
+    except Exception as exc:
+        return None, f'{type(exc).__name__}: {exc}'
+
+
 def _score(pred, y_va, metric_fn):
     """(the dataset's own metric, mean squared error), both against y_va."""
     y_va = np.asarray(y_va, dtype=float)
@@ -204,14 +241,23 @@ def _levels_and_draws(dataset_name, levels=None, draws=None):
 
 def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
                   recipe_for_space_by_model, downstream_models,
-                  model_factories, metric_fn, lower_is_better):
+                  model_factories, metric_fn, lower_is_better, *,
+                  dataset_name=None, reps=None, train_idx=None, val_idx=None,
+                  metric_name=None):
     """{space: [(training matrix, held-out matrix, models scored on it)]}.
 
     base_k holds one matrix per distinct representation at rank k, shared by
     the models that rank it there. A hybrid space is one matrix per distinct
     recipe, n23's layout: a model with no recipe gets no matrix rather than
     another model's.
+
+    Since 2026-09-25 (plan section 3), given dataset_name, reps, train_idx,
+    val_idx and metric_name, a single-representation matrix goes through
+    noise_cache.cached_scaled and a hybrid through
+    noise_cache.cached_hybrid_for_fold: the same values, stored.
     """
+    _cache = (dataset_name is not None and reps is not None
+              and train_idx is not None)
     out = {}
     for k in range(1, NOISE_BASE_REP_COUNT + 1):
         bsp = f'base_{k}'
@@ -220,6 +266,11 @@ def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
         cells = []
         for rn, ms in base_rank_groups(base_by_model, k,
                                        downstream_models).items():
+            if _cache:
+                _Xt, _Xv = cached_base_cell(dataset_name, reps[rn],
+                                            train_idx, val_idx)
+                cells.append((_Xt, _Xv, list(ms)))
+                continue
             sc = StandardScaler()
             cells.append((sc.fit_transform(train_reps[rn]),
                           sc.transform(val_reps[rn]), list(ms)))
@@ -231,10 +282,17 @@ def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
         for bp_m, mnames, shareable in group_models_by_recipe(
                 {m: recipe_for_space_by_model.get(m, {}).get(sp)
                  for m in downstream_models}, downstream_models):
-            X_tr_h, X_va_h = hybrid_for_fold(
-                train_reps, val_reps, y_tr, bp_m, g_tr,
-                None if shareable else model_factories[mnames[0]](),
-                metric_fn, lower_is_better)
+            if _cache:
+                X_tr_h, X_va_h = cached_hybrid_cell(
+                    dataset_name, train_reps, val_reps, y_tr, bp_m, g_tr,
+                    None if shareable else mnames[0],
+                    None if shareable else model_factories[mnames[0]](),
+                    (metric_name, metric_fn, lower_is_better), train_idx)
+            else:
+                X_tr_h, X_va_h = hybrid_for_fold(
+                    train_reps, val_reps, y_tr, bp_m, g_tr,
+                    None if shareable else model_factories[mnames[0]](),
+                    metric_fn, lower_is_better)
             if X_tr_h is not None:
                 sh = StandardScaler()
                 cells.append((sh.fit_transform(X_tr_h), sh.transform(X_va_h),
@@ -273,7 +331,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                  or ('removal_cost', 'injected', 'relabelled'))
 
     # ⛔ config FIRST, then the kwarg -- n24's comment at :418 says why.
-    downstream_models = list(
+    # rf and svm are added when the caller left them out: every D-versus-D'
+    # row needs them (ensure_dprime_models, owner decision 2026-09-25).
+    downstream_models = ensure_dprime_models(
         kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
@@ -431,8 +491,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     errors = {}
     t0 = time.time()
 
+    # ── Rows and the per-fold checkpoint (2026-09-25) ──
+    # The two parts that CHANGE the training data write D-versus-D' rows:
+    # removal_cost (D' = a random share of the molecules) and relabelled (D'
+    # = the labels moved toward the out-of-fold prediction). D is the fold's
+    # training molecules at their correct labels, so score_D and score_clean
+    # are both the share-1.0 fit. The injected part adds noise and removes
+    # none, so it is a measurement, not a D', and writes no row.
+    _metric = (metric_name, metric_fn, lower_is_better)
+    rows = RowSink(output_dir, 'n27_removal_cost_and_propagation',
+                   dataset_name, experiment='n27', metric=_metric,
+                   condition=kwargs.get('tag'), data=data, config=config)
+    ckpt = PassCheckpoint(
+        output_dir, 'n27_removal_cost_and_propagation', dataset_name,
+        condition=kwargs.get('tag'), data=data, config=config,
+        source_file=__file__,
+        key={'parts': parts, 'shares': shares, 'repeats': repeats,
+             'alphas': alphas, 'oof_splits': oof_splits,
+             'passes': passes, 'models': list(downstream_models),
+             'base_reps': base_by_model, 'n_splits': n_folds})
+    done_folds = set()
+    _state = ckpt.load()
+    if _state:
+        ref, removal, injected, relabelled, errors = (
+            _state['ref'], _state['removal'], _state['injected'],
+            _state['relabelled'], _state['errors'])
+        done_folds = set(_state['done'])
+        print(f"  resumed from {ckpt.path}: {len(done_folds)} folds already "
+              f"done")
+    _cache_kw = dict(dataset_name=dataset_name, reps=reps,
+                     metric_name=metric_name)
+
     for fold_i, (train_idx, val_idx) in enumerate(splits):
         fkey = f'f{fold_i}'
+        if fkey in done_folds:
+            print(f"    fold {fold_i}: on disk in the checkpoint")
+            continue
         y_tr = labels[train_idx]
         y_va = labels[val_idx]
         g_tr = groups[train_idx] if groups is not None else None
@@ -445,7 +539,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         clean_spaces = _build_spaces(
             train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
             recipe_for_space_by_model, downstream_models, model_factories,
-            metric_fn, lower_is_better)
+            metric_fn, lower_is_better, train_idx=train_idx, val_idx=val_idx,
+            **_cache_kw)
         for sp in spaces:
             if sp not in clean_spaces:
                 errors[f'{sp}|{fkey}|build'] = (
@@ -456,8 +551,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for X_tr_s, X_va_s, cell_models in cells:
                 # ── The correct-label fit: share 1.0, alpha 0, level 0 ──
                 for mname in cell_models:
-                    pred, err = _fit_predict(model_factories[mname], X_tr_s,
-                                             y_tr, X_va_s, metric_name)
+                    # Through noise_cache for a seeded model (2026-09-25).
+                    pred, err = _fit_predict_cached(
+                        dataset_name, mname, model_factories[mname], X_tr_s,
+                        y_tr, X_va_s, metric_name)
                     if pred is None:
                         errors[f'{space}|{mname}|{fkey}|reference'] = err
                         continue
@@ -488,12 +585,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     'score': s, 'mse': mse,
                                     'training_molecules_kept': int(len(keep)),
                                     'training_molecules': int(n_tr)}
+                                # D' = this random share. It is random by
+                                # construction, so it has no random twin.
+                                _ref = ((ref.get(space) or {}).get(mname)
+                                        or {}).get(fkey) or {}
+                                rows.add(method='removal_cost',
+                                         method_setting=(f'share={share:g}|'
+                                                         f'draw=r{rep_i}'),
+                                         similarity_setting=NO_NEIGHBOURS,
+                                         model_input=space, model=mname,
+                                         noise_condition='none', level=None,
+                                         draw=0, fold=fold_i,
+                                         score_D=_ref.get('score'),
+                                         score_Dprime=s,
+                                         score_clean=_ref.get('score'))
 
                 # ── relabelled ──
                 if 'relabelled' in parts:
                     try:
-                        oof = oof_predict(X_tr_s, y_tr, g_tr,
-                                          n_splits=oof_splits)
+                        # noise_cache.cached_oof_predict since 2026-09-25:
+                        # the same call (seed 0), stored.
+                        oof = nc.cached_oof_predict(dataset_name, X_tr_s, y_tr,
+                                                    g_tr, n_splits=oof_splits)
                     except Exception as exc:
                         errors[f'{space}|{cell_models[0]}|{fkey}|oof'] = (
                             f'{type(exc).__name__}: {exc}')
@@ -517,6 +630,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                  .setdefault(mname, {}))[fkey] = {
                                     'score': s, 'mse': mse,
                                     'moved_variance': moved_var}
+                                _ref = ((ref.get(space) or {}).get(mname)
+                                        or {}).get(fkey) or {}
+                                rows.add(method='move_toward_oof',
+                                         method_setting=f'alpha={alpha:g}',
+                                         similarity_setting=NO_NEIGHBOURS,
+                                         model_input=space, model=mname,
+                                         noise_condition='none', level=None,
+                                         draw=0, fold=fold_i,
+                                         score_D=_ref.get('score'),
+                                         score_Dprime=s,
+                                         score_clean=_ref.get('score'))
+                            # Controls (KIRBY_NOISE_CONTROLS=1 only): the
+                            # label changes y' - y dealt to random molecules
+                            # and permuted (controls.py).
+                            _cd = as_cleanup_dict(X_tr_s, y_tr, labels=y_mv)
+                            _seed = (int(fold_i), int(zlib.crc32(
+                                f'{space}|{cell_models[0]}|{akey}'.encode())
+                                & 0x7FFFFFFF))
+                            for cname, tw, why in control_twins(
+                                    _cd, X_tr_s, y_tr, _seed):
+                                if tw is None:
+                                    errors[f'{space}|a{akey}|{cname}|'
+                                           f'{fkey}'] = why
+                                    continue
+                                for mname in cell_models:
+                                    pred, err = _fit_predict(
+                                        model_factories[mname], X_tr_s,
+                                        tw['y'], X_va_s, metric_name)
+                                    _ref = ((ref.get(space) or {}).get(mname)
+                                            or {}).get(fkey) or {}
+                                    rows.add(
+                                        method='move_toward_oof',
+                                        method_setting=(f'alpha={alpha:g}|'
+                                                        f'control={cname}'),
+                                        similarity_setting=NO_NEIGHBOURS,
+                                        model_input=space, model=mname,
+                                        noise_condition='none', level=None,
+                                        draw=0, fold=fold_i,
+                                        score_D=_ref.get('score'),
+                                        score_Dprime=(None if pred is None else
+                                                      _score(pred, y_va,
+                                                             metric_fn)[0]),
+                                        score_clean=_ref.get('score'))
 
         # ── injected ──
         for level, draw in passes:
@@ -546,14 +702,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         train_reps, val_reps, y_noisy, g_tr, base_by_model,
                         tuple(sp for sp in spaces if sp not in BASE_SPACES),
                         recipe_for_space_by_model, downstream_models,
-                        model_factories, metric_fn, lower_is_better).items()
+                        model_factories, metric_fn, lower_is_better,
+                        train_idx=train_idx, val_idx=val_idx,
+                        **_cache_kw).items()
                     if sp not in BASE_SPACES})
             for space, cells in noisy_spaces.items():
                 for X_tr_s, X_va_s, cell_models in cells:
                     for mname in cell_models:
-                        pred, err = _fit_predict(model_factories[mname],
-                                                 X_tr_s, y_noisy, X_va_s,
-                                                 metric_name)
+                        # Through noise_cache for a seeded model: the fit on
+                        # the injected labels is the no-cleaning fit other
+                        # experiments make for the same draw (2026-09-25).
+                        pred, err = _fit_predict_cached(
+                            dataset_name, mname, model_factories[mname],
+                            X_tr_s, y_noisy, X_va_s, metric_name)
                         if pred is None:
                             errors[f'{space}|{pkey}|{mname}|injected'] = err
                             continue
@@ -563,6 +724,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             'score': s, 'mse': mse,
                             'injected_variance': inj_var, 'fold': fkey}
 
+        # The fold is finished: its rows to disk, then the accumulators.
+        rows.flush()
+        done_folds.add(fkey)
+        ckpt.save({'ref': ref, 'removal': removal, 'injected': injected,
+                   'relabelled': relabelled, 'errors': errors,
+                   'done': sorted(done_folds)})
         print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
 
     results['per_fold'] = convert_numpy({
@@ -572,7 +739,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['_errors'] = errors
     results['summary'] = convert_numpy(_summarise(
         ref, removal, injected, relabelled, lower_is_better, metric_name))
+    results['rows'] = rows.summary()
+    results['controls_run'] = bool(controls_enabled())
     _print_summary(results)
+    print(f"  D-versus-D' rows: {rows.n_written} written this run to "
+          f"{rows.path or 'memory'}")
+    ckpt.clear()
     return results
 
 

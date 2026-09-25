@@ -14,6 +14,11 @@
 #                 cores it will never use, and the idle-CPU count stops meaning
 #                 anything for it. Check a shape BEFORE submitting it:
 #                     bash tests/slurm_scripts/where_to_submit.sh --fits 16 256G
+#   - CLUSTER   : everything below reports on the login node's cluster only.
+#                 For the (cluster, account) pair with the best fair share on
+#                 arc AND htc, a script reads:
+#                     bash tests/slurm_scripts/where_to_submit.sh --best-cluster-account
+#                 which prints e.g. "htc stat-cadd" (added 2026-09-25).
 #   - WHY STUCK : pending on (Priority) while §3 shows idle CPUs means one of
 #                 two things. Either the REQUESTED WALL (§4) — a 2-day job
 #                 cannot backfill into a short idle gap — or the MEMORY, if
@@ -131,6 +136,48 @@ if [ "${1:-}" = "--fits" ]; then
   exit 0
 fi
 
+# --best-cluster-account [CLUSTER]: print ONLY "<cluster> <account>", the pair
+# with the highest FairShare among the (cluster, account) associations this user
+# holds. ADDED 2026-09-25.
+#
+# WHY IT EXISTS. Fair share is kept per cluster AND per account
+# (extend_precompute_chain.sh:48-56). Measured 2026-09-24, FairShare, higher
+# starts sooner: htc stat-cadd 0.0491, htc stat-ecr 0.0360, arc stat-cadd
+# 0.0326, arc stat-ecr 0.0195. --emit below reads sshare with no -M, which is
+# the login node's cluster only, so from arc-login it can never answer htc.
+# The account has nothing to do with the /data/stat-ecr paths: those are a
+# filesystem, and every job reads KIRBY_CACHE_DIR there whichever account pays.
+#
+# With a CLUSTER argument (arc or htc) only that cluster's accounts compete, for
+# a caller that has already chosen the cluster. BEST_CLUSTERS (default
+# "arc,htc") names the clusters considered otherwise.
+#
+# Reads sacctmgr (which associations exist) and sshare -M (their FairShare).
+# Exit 1 with a message on stderr when neither answers, so a caller can tell
+# "no answer" from an answer.
+if [ "${1:-}" = "--best-cluster-account" ]; then
+  only="${2:-}"
+  clusters="${only:-${BEST_CLUSTERS:-arc,htc}}"
+  # "<cluster> <account>" per association. -P is '|'-separated, one row each.
+  allowed=$(sacctmgr -n -P show assoc user="$U" format=cluster,account 2>/dev/null \
+            | awk -F'|' 'NF>=2 && $1!="" && $2!="" {print $1, $2}' | sort -u)
+  # The user's own row per (cluster, account). sshare -M prints one block per
+  # cluster; with -P and an explicit Cluster column every row names its cluster.
+  shares=$(sshare -M "$clusters" -n -P -u "$U" -o Cluster,Account,User,FairShare 2>/dev/null \
+           | awk -F'|' -v u="$U" 'NF==4 && $3==u && $4 ~ /^[0-9.eE+-]+$/ {print $4, $1, $2}')
+  best=$(printf '%s\n' "$shares" | while read -r fs cl acct; do
+           [ -n "$acct" ] || continue
+           # An association sacctmgr does not list cannot be billed; when
+           # sacctmgr gave nothing at all, sshare's own rows are the list.
+           if [ -z "$allowed" ] || printf '%s\n' "$allowed" | grep -qx "$cl $acct"; then
+             echo "$fs $cl $acct"
+           fi
+         done | sort -g -r | head -1)
+  [ -n "$best" ] || { echo "where_to_submit --best-cluster-account: no FairShare row for $U on ${clusters}" >&2; exit 1; }
+  echo "$best" | awk '{print $2, $3}'
+  exit 0
+fi
+
 # --emit: print ONLY "ACCOUNT PARTITION" for a submit script to consume, applying
 # the documented rule — account = the allowed account with the higher FairShare
 # (§2); partition = medium by default (long/medium share nodes; short is usually
@@ -139,6 +186,13 @@ fi
 # It does NOT consider memory. Run --fits by hand before trusting it for a
 # memory-heavy job; changing what it emits would change every submit script that
 # consumes it.
+#
+# ⛔ SINGLE-CLUSTER BLINDSPOT (noted 2026-09-25, behaviour unchanged). sshare
+# here has no -M, so it answers for the login node's cluster only. Run from
+# arc-login it compares arc stat-cadd with arc stat-ecr and never sees htc,
+# where both accounts stood higher on 2026-09-24 (0.0491 and 0.0360 against
+# arc's 0.0326 and 0.0195). A job submitted with its answer and no --clusters
+# goes to the login node's cluster. Use --best-cluster-account for the pair.
 if [ "${1:-}" = "--emit" ]; then
   allowed=$(sacctmgr -n show assoc user="$U" format=account%40 2>/dev/null | awk 'NF{print $1}' | sort -u)
   acct=$(sshare -n -u "$U" -o Account,FairShare 2>/dev/null \

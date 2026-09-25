@@ -113,6 +113,14 @@ from experiments._shared import (  # noqa: E402
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from kirby.utils.noise_estimation import get_noise_estimator  # noqa: E402
+# The shared similarity axis and the per-fold checkpoint, added 2026-09-25
+# (plan sections 1-3). n22 changes no training data -- it grades detectors
+# against a flag -- so it writes no D-versus-D' rows (plan section 6).
+from experiments.noise import _sim_axis_n15_n22 as sx  # noqa: E402
+from experiments.noise.similarity_space import SWEPT_KS  # noqa: E402
+
+# The name the checkpoint is filed under.
+EXP_FULL_NAME = 'n22_curator_flag'
 
 from noise_helpers import detection_scores  # noqa: E402
 
@@ -614,10 +622,160 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     timings = {}
     exclusion_note = {}
 
+    # ── The shared similarity axis and the checkpoint ──
+    # Added 2026-09-25 (plan sections 1-3).
+    #
+    # THE SIMILARITY AXIS. Every detector that reads a neighbour list
+    # (the four estimators that take precomputed_neighbors,
+    # noise_estimation._neighbours_for) is re-run on each fold's rows with its
+    # neighbours found in every setting of sx.sweep_settings() -- rf's top-2
+    # single representations, each plus augmented features, rf's two hybrids
+    # rebuilt through noise_helpers.hybrid_for_fold, ECFP4 Tanimoto on the
+    # records' SMILES, forest proximity -- at every k in SWEPT_KS. Each
+    # record's own other measurements stay excluded (exclude_groups, as
+    # below). The same grading follows, over records and over molecules,
+    # under 'similarity_axis'. The feature space each detector's X is in is
+    # the space it is filed under, as before; only the neighbours move.
+    # KIRBY_SIMILARITY_SETTINGS=model_input switches it off.
+    #
+    # CHECKPOINT. Every score array is pickled after every (space, fold), so
+    # a killed run resumes at the next one.
+    sweep = sx.sweep_settings()
+    results['similarity_settings_swept'] = [s_.name for s_ in sweep]
+    results['similarity_ks_swept'] = list(SWEPT_KS) if sweep else []
+    # Which neighbours every number OUTSIDE the rows and the similarity axis was
+    # computed with, so each result record names its similarity setting.
+    results['similarity_setting_of_the_default_path'] = sx.TODAY
+    _nb_params = {}
+    for e in estimators:
+        try:
+            _nb_params[e] = 'precomputed_neighbors' in inspect.signature(
+                type(get_noise_estimator(e)).__init__).parameters
+        except Exception:
+            _nb_params[e] = False
+    sim_estimators = [e for e in estimators if _nb_params.get(e)]
+    results['similarity_estimators'] = sim_estimators
+    # TODO(similarity-sweep 2026-09-25): a neighbour-based estimator whose
+    # class takes no precomputed_neighbors (n11's 'hybrid' estimator, when it
+    # resolves) still finds its own neighbours in the space's X and is not on
+    # the similarity axis. Adding it needs precomputed_neighbors on that class
+    # in src/kirby/utils/noise_estimation.py, outside this file.
+    results['similarity_estimators_not_swept'] = [
+        e for e in estimators if not _nb_params.get(e)]
+    # {space: {'<setting>|k=<k>': {estimator: row as per_space holds}}}
+    sim_graded = {}
+    sim_unavailable = {}
+    # {(setting|k, estimator): full-length scores} of the space in flight.
+    sim_scores = {}
+    try:
+        from experiments._shared import get_model_factories
+        _rf_factory = get_model_factories(['rf'], task_type=task_type,
+                                          n_samples=n_samples).get('rf')
+    except Exception:
+        _rf_factory = None
+    _metric = (metric_name, _fn, lower_is_better)
+    _recipes_rf = {}
+    for _nm, (_kind, _bp, _aug) in spaces.items():
+        if _kind == 'hybrid' and _nm == _space_name('predictive'):
+            _recipes_rf['hybrid'] = _bp
+        elif _kind == 'hybrid' and _nm == _space_name('similarity'):
+            _recipes_rf['hybrid_similarity'] = _bp
+    ck = sx.FoldCheckpoint(
+        output_dir, EXP_FULL_NAME, dataset_name,
+        sx.run_signature(data, config, {
+            'estimators': estimators, 'spaces': sorted(spaces),
+            'base_spaces': base_spaces, 'budget': budget,
+            'pool_subset': pool_subset}))
+    if ck.state is not None:
+        (scores, failures, est_seconds, timings, exclusion_note, sim_graded,
+         sim_unavailable, sim_scores) = ck.state
+
+    def _grade_all(sus):
+        row = {'records': grade(flag, sus, label='records')}
+        sus_mol = _by_molecule(sus, molecule_of_row, n_molecules, 'max')
+        row['molecules'] = grade(flag_by_molecule, sus_mol, label='molecules')
+        return row
+
+    def _sweep_fold(X_fold, X_tr, X_va, train_idx, val_idx, rows, y_fold,
+                    excl_fold, is_val):
+        """Every neighbour-reading detector under every setting and k, on
+        one fold's rows, X_fold being the rows as the detectors see them.
+        Fills sim_scores for the held-out records."""
+        # _clean_matrix, as the base spaces above get it: a non-finite entry
+        # would put nan into every distance of its row.
+        train_reps = {k_: _clean_matrix(v[train_idx]) for k_, v in reps.items()}
+        val_reps = {k_: _clean_matrix(v[val_idx]) for k_, v in reps.items()}
+        aug_tr = aug_va = None
+        if augmentations:
+            aug_tr = {a: m_[train_idx] for a, m_ in augmentations.items()}
+            aug_va = {a: m_[val_idx] for a, m_ in augmentations.items()}
+        g_tr = (np.asarray(search_groups)[train_idx]
+                if search_groups is not None else None)
+        sp_tr, sp_va, unav = sx.build_spaces(
+            dataset_name, sweep, X_model_tr=X_tr, X_model_va=X_va,
+            train_reps=train_reps, val_reps=val_reps, train_idx=train_idx,
+            base_names=list(base_spaces.values()), recipes=_recipes_rf,
+            y_train=labels[train_idx], groups_train=g_tr, model_name='rf',
+            model_factory=_rf_factory, metric=_metric, task_type=task_type,
+            augmentations_train=aug_tr, augmentations_val=aug_va,
+            want_val=True)
+        # The fold's rows, training then held out, as the estimators see
+        # them. 'model_input' is X_fold itself.
+        sp_all = {k_: np.vstack([v, sp_va[k_]]) for k_, v in sp_tr.items()
+                  if sp_va.get(k_) is not None}
+        sp_all['model_input'] = X_fold
+        smiles_rows = sx.smiles_for(data, rows)
+        fold_groups_all = (np.asarray(search_groups)[rows]
+                           if search_groups is not None else None)
+        for setting in sweep:
+            if setting.space in unav:
+                sim_unavailable.setdefault(setting.name, unav[setting.space])
+                continue
+            nb, why = sx.neighbour_lists(
+                dataset_name, setting, sp_all, y_fold,
+                exclude_groups=excl_fold, smiles_train=smiles_rows,
+                is_clf=is_clf)
+            if nb is None:
+                sim_unavailable.setdefault(setting.name, why)
+                continue
+            for k in sx.ks_held(nb):
+                sim = sx.sim_name(setting, k)
+                for est_name in sim_estimators:
+                    try:
+                        cls = type(get_noise_estimator(est_name))
+                        params = inspect.signature(cls.__init__).parameters
+                        kw = {'k': int(k), 'precomputed_neighbors': nb}
+                        # The same arguments the default path hands the
+                        # estimator (the loop below), plus the lists.
+                        if fold_groups_all is not None and 'groups' in params:
+                            kw['groups'] = fold_groups_all
+                        if 'exclude_groups' in params:
+                            kw['exclude_groups'] = excl_fold
+                        if is_clf and 'is_clf' in params:
+                            kw['is_clf'] = True
+                        est = get_noise_estimator(est_name, **kw)
+                        sc_ = np.asarray(est.estimate(X_fold, y_fold),
+                                         dtype=float)
+                    except Exception as exc:
+                        sim_unavailable.setdefault(
+                            f'{sim}|{est_name}',
+                            f'{type(exc).__name__}: {exc}')
+                        continue
+                    arr = sim_scores.setdefault(
+                        (sim, est_name),
+                        np.full(n_samples, np.nan, dtype=np.float32))
+                    arr[rows[is_val]] = sc_[is_val]
+
     for space_name, (kind, blueprint, aug) in spaces.items():
         print(f"\n  === {space_name} ===")
+        if ck.is_done(f'{space_name}|done'):
+            print("    already in the checkpoint, skipped")
+            continue
         t_space = time.time()
         for fold_i, (train_idx, val_idx) in enumerate(folds):
+            if ck.is_done(f'{space_name}|f{fold_i}'):
+                print(f"    fold {fold_i}: already in the checkpoint, skipped")
+                continue
             t_fold = time.time()
             if kind == 'hybrid':
                 try:
@@ -691,12 +849,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     failures[space_name].setdefault(est_name, []).append(
                         f'fold {fold_i}: {type(exc).__name__}: {exc}')
                 est_seconds[space_name][est_name] += time.time() - t_est
+            if sweep and sim_estimators:
+                _sweep_fold(X_fold, X_tr, X_va, train_idx, val_idx, rows,
+                            y_fold, excl_fold, is_val)
+            ck.save(f'{space_name}|f{fold_i}',
+                    (scores, failures, est_seconds, timings, exclusion_note,
+                     sim_graded, sim_unavailable, sim_scores))
             print(f"    fold {fold_i}: {len(train_idx)} records chose the "
                   f"features, {len(val_idx)} records scored "
                   f"[{time.time() - t_fold:.0f}s]")
         timings[space_name] = round(time.time() - t_space, 1)
+        if sweep:
+            # Grade this space's similarity axis, then free its arrays.
+            _g = {}
+            for (sim, est_name), sus in sorted(sim_scores.items()):
+                _g.setdefault(sim, {})[est_name] = _grade_all(
+                    np.asarray(sus, dtype=float))
+            sim_graded[space_name] = _g
+            sim_scores = {}
+        ck.save(f'{space_name}|done',
+                (scores, failures, est_seconds, timings, exclusion_note,
+                 sim_graded, sim_unavailable, sim_scores))
 
     results['seconds_per_space'] = timings
+    if sweep:
+        results['similarity_axis'] = convert_numpy(sim_graded)
+        results['similarity_axis_note'] = (
+            "similarity_axis[space]['<setting>|k=<k>'][detector] holds the "
+            "same grading as per_space, with the detector's neighbours found "
+            "in that similarity setting. The detector's own features are still "
+            "the space's.")
+        if sim_unavailable:
+            results['similarity_axis_unavailable'] = sim_unavailable
     results['seconds_per_estimator'] = {
         sp: {e: round(v, 1) for e, v in sorted(d.items(), key=lambda kv: -kv[1])}
         for sp, d in est_seconds.items()}
@@ -804,6 +988,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'suspicion': {sp: {e: scores[sp][e].tolist() for e in estimators}
                       for sp in spaces},
     })
+    # n22's result file is written by its caller (run_all or main), not here.
+    # The snapshot is cleared on return: a kill between this return and that
+    # write costs a re-run, never a stale resume.
+    ck.clear()
     return results
 
 

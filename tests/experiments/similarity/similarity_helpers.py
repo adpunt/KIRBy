@@ -1587,10 +1587,20 @@ def run_all(dataset_name: str, output_dir: str,
                                     _experiment_full_name(exp_id), dataset_name)
             continue
 
+        # An experiment that cannot be imported is a FAILED experiment, not a
+        # skip: until 2026-09-25 this printed a line and continued, leaving no
+        # file and no error record. Recorded now, with the traceback, so
+        # run_dataset.py writes it to <output>/_errors/ and exits 1.
         try:
             mod = _import_experiment(exp_id)
-        except (ImportError, KeyError) as e:
-            print(f"  SKIP {exp_id}: import failed ({e})")
+        except Exception as e:
+            import traceback
+            print(f"  {exp_id} FAILED: import failed "
+                  f"({type(e).__name__}: {e})")
+            traceback.print_exc()
+            results[exp_id] = {'error': str(e) or type(e).__name__,
+                               'error_kind': f'import:{type(e).__name__}',
+                               'traceback': traceback.format_exc()}
             continue
 
         # Build kwargs — pass similarity-specific params
@@ -1677,7 +1687,29 @@ def run_all(dataset_name: str, output_dir: str,
             print(f"  {exp_id} FAILED: {e}")
             import traceback
             traceback.print_exc()
-            results[exp_id] = {'error': str(e)}
+            results[exp_id] = {'error': str(e) or type(e).__name__,
+                               'error_kind': type(e).__name__,
+                               'traceback': traceback.format_exc()}
+
+        except SystemExit as e:
+            # SystemExit is not an Exception: a library that calls sys.exit()
+            # instead of raising walks past the handler above and ends the
+            # whole run with nothing said. complexity_helpers.run_all catches
+            # it for this reason (complexity_helpers.py:1242-1263). Same
+            # handling here, added 2026-09-25.
+            print(f"  {exp_id} FAILED: a library called sys.exit({e.code}) "
+                  f"instead of raising. Caught so the remaining experiments "
+                  f"still run.")
+            import traceback
+            traceback.print_exc()
+            results[exp_id] = {
+                'error': f'SystemExit({e.code}) — a library exited the process',
+                'error_kind': 'SystemExit',
+                'traceback': traceback.format_exc()}
+
+        except KeyboardInterrupt:
+            # Deliberate: Ctrl-C and SIGINT must still stop the run.
+            raise
 
     total = time.time() - t0
     print(f"\n{'=' * 70}")

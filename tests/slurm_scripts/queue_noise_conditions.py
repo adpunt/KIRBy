@@ -38,10 +38,28 @@ files hold the same computation.
 Needs the repo environment (it reads the condition lists and each dataset's task
 type): run it after `. setup.sh`, in an srun or on the login node.
 
+CLUSTER AND ACCOUNT. CHANGED 2026-09-25. Fair share is kept per cluster AND per
+account. Measured 2026-09-24, FairShare, higher starts sooner: htc stat-cadd
+0.0491, htc stat-ecr 0.0360, arc stat-cadd 0.0326, arc stat-ecr 0.0195
+(extend_precompute_chain.sh:48-56). The account used to come from
+`where_to_submit.sh --emit`, which reads the login node's cluster only, and no
+--clusters was passed, so every job went to the login node's cluster.
+Now:
+  --clusters   default: the cluster of `where_to_submit.sh --best-cluster-account`.
+               Passed to sbatch as --clusters and to squeue as -M.
+  --account    an explicit value always wins. 'none' passes no --account and
+               SLURM bills the default association. Default: the best account
+               ON THE CHOSEN CLUSTER, from --best-cluster-account <cluster>.
+A dependency cannot reach a job on another cluster. A dataset with pc_ jobs
+queued on a cluster other than the one chosen is therefore SKIPPED with a
+message, never queued with no wait: its noise jobs would start before its
+precompute ends.
+
 Usage:
     python tests/slurm_scripts/queue_noise_conditions.py                   # print only
     python tests/slurm_scripts/queue_noise_conditions.py --hold --apply
     python tests/slurm_scripts/queue_noise_conditions.py --datasets "herg_ki caco2" --links 2
+    python tests/slurm_scripts/queue_noise_conditions.py --clusters htc --account stat-cadd
 """
 import argparse
 import os
@@ -75,7 +93,12 @@ def main():
                          'resumes, skipping experiments already written')
     ap.add_argument('--wall', default='12:00:00')
     ap.add_argument('--partition', default='short,medium')
-    ap.add_argument('--account', default='')
+    ap.add_argument('--account', default='',
+                    help="explicit account; wins over the fair-share lookup. "
+                         "'none' passes no --account")
+    ap.add_argument('--clusters', default='',
+                    help='arc or htc; default: the cluster with the best fair '
+                         'share (where_to_submit.sh --best-cluster-account)')
     ap.add_argument('--begin', default='')
     args = ap.parse_args()
 
@@ -97,19 +120,41 @@ def main():
         conds = clf if tt == 'classification' else reg
         per_ds[ds] = [c for c in conds if not only or c in only]
 
-    account = args.account
-    if not account:
-        r = subprocess.run(['bash', os.path.join(HERE, 'where_to_submit.sh'), '--emit'],
-                           capture_output=True, text=True)
-        account = (r.stdout.split() or [''])[0]
-    if not account:
-        sys.exit('Could not resolve an account. Pass --account.')
+    cluster, account = args.clusters, args.account
+    if not cluster or not account:
+        # An explicit --clusters restricts the lookup to that cluster, so the
+        # account is the best one THERE, not the best overall.
+        cmd = ['bash', os.path.join(HERE, 'where_to_submit.sh'),
+               '--best-cluster-account'] + ([cluster] if cluster else [])
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        best = r.stdout.split()
+        if len(best) != 2:
+            sys.exit(f'Could not resolve a cluster and account '
+                     f'({r.stderr.strip() or "no output"}). '
+                     f'Pass --clusters and --account.')
+        cluster = cluster or best[0]
+        account = account or best[1]
+    account_flag = [] if account == 'none' else [f'--account={account}']
 
     user = os.environ.get('USER')
-    rows = subprocess.run(['squeue', '-u', user, '-h', '-t', 'PD,R', '-o', '%i|%j'],
+    rows = subprocess.run(['squeue', '-M', cluster, '-u', user, '-h', '-t', 'PD,R',
+                           '-o', '%i|%j'],
                           capture_output=True, text=True).stdout.splitlines()
+    # pc_ jobs on the OTHER cluster, which no dependency can reach.
+    other_pc = defaultdict(list)
+    for other in [c for c in ('arc', 'htc') if c != cluster]:
+        for r in subprocess.run(['squeue', '-M', other, '-u', user, '-h',
+                                 '-t', 'PD,R', '-o', '%i|%j'],
+                                capture_output=True, text=True).stdout.splitlines():
+            jid, _, name = r.partition('|')
+            m = re.fullmatch(r'pc_(.+)_(general_.*|\d+|x\d+)', name)
+            if jid.strip().isdigit() and m:
+                other_pc[m.group(1)].append(f'{other}:{jid.strip()}')
     pc, first_cx, existing = defaultdict(list), {}, set()
     for r in rows:
+        # squeue -M can print a "CLUSTER: <name>" line; it has no '|'.
+        if '|' not in r:
+            continue
         jid, name = r.split('|', 1)
         if not jid.isdigit():
             continue
@@ -121,14 +166,25 @@ def main():
         if m and (m.group(1) not in first_cx or int(jid) < first_cx[m.group(1)]):
             first_cx[m.group(1)] = int(jid)
 
+    blocked = {ds: other_pc[ds] for ds in datasets if other_pc.get(ds)}
+    for ds, ids in blocked.items():
+        print(f"  {ds}: SKIPPED -- precompute queued on another cluster "
+              f"({', '.join(ids)}); a dependency cannot reach it. Queue this "
+              f"dataset on that cluster, or after its precompute ends.")
+    datasets = [ds for ds in datasets if ds not in blocked]
+    if not datasets:
+        print("Nothing left to queue.")
+        return
+
     order = []
-    for i in range(max(len(v) for v in per_ds.values())):
+    for i in range(max(len(per_ds[ds]) for ds in datasets)):
         for ds in datasets:
             if i < len(per_ds[ds]):
                 order.append((ds, per_ds[ds][i]))
 
     n_jobs = len(order) * args.links
-    print(f"account {account}   partition {args.partition}   wall {args.wall}")
+    print(f"cluster {cluster}   account {account if account != 'none' else '<SLURM default>'}"
+          f"   partition {args.partition}   wall {args.wall}")
     print(f"{len(order)} (dataset, condition) pairs x {args.links} link(s) = {n_jobs} jobs"
           f"{'   HELD' if args.hold else ''}")
     for ds in datasets:
@@ -150,7 +206,7 @@ def main():
                 print(f"  {name}: already queued, skipped")
                 continue
             ids = [prev] if prev else dep
-            cmd = ['sbatch', '--parsable', f'--account={account}',
+            cmd = ['sbatch', '--parsable', f'--clusters={cluster}', *account_flag,
                    f'--partition={args.partition}', f'--time={args.wall}',
                    '--cpus-per-task=8', f'--mem={mem}', f'--job-name={name}',
                    f'--mail-user={EMAIL}', '--mail-type=FAIL',
