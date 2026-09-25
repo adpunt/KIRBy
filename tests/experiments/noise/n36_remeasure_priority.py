@@ -35,21 +35,19 @@ B get the second measurement.
                             first. The prediction is a group-aware LightGBM
                             out-of-fold fit inside the training molecules, on the
                             start labels, in the space being scored.
-  variance_x_leverage       (s2e/1 - s2e/2) x leverage. s2e is the pooled
-                            within-molecule variance of the TRAINING molecules'
-                            measurements.
-  variance_x_leverage_x_disagreement
-                            that, times disagreement.
+  leverage                  leverage (defined below), largest first.
+  leverage_x_disagreement   leverage x disagreement, largest first.
   sparsest                  the mean distance to the 5 nearest training
                             molecules, largest first.
 
-⛔ UNDER THIS START THE VARIANCE TERM IS THE SAME FOR EVERY CANDIDATE. Every
-candidate starts at one measurement and goes to two, so s2e/1 - s2e/2 = s2e/2
-for all of them. `variance_x_leverage` therefore ranks by leverage alone, and
-`variance_x_leverage_x_disagreement` by leverage x disagreement. The report's
-formula differs between molecules only when their starting counts differ. The
-variance term is still written, so the rule is the report's and not a renamed
-one.
+WHY NO VARIANCE TERM. The report multiplies leverage by the drop in label
+variance a second measurement buys, s2e/1 - s2e/2, where s2e is the pooled
+within-molecule variance of the training molecules' measurements. Every
+candidate here starts at one measurement and goes to two. So that drop is s2e/2
+for every candidate, and it cannot change the order. It is left out, and the
+rules are named for what they rank by. Until 2026-09-25 they were called
+`variance_x_leverage` and `variance_x_leverage_x_disagreement`, with the
+constant still multiplied in; the order is the same.
 
 LEVERAGE, AND WHY THIS ONE. The report says "model leverage or influence" and
 names no formula. Used here: 1 + the number of training molecules that have this
@@ -125,8 +123,8 @@ SPACE_FOR_FAMILY = {
 BUDGET_SHARES = (0.10, 0.25, 0.50)
 
 # The ranking rules. 'random' is the reference every other rule is paired with.
-RULES = ('random', 'disagreement', 'variance_x_leverage',
-         'variance_x_leverage_x_disagreement', 'sparsest')
+RULES = ('random', 'disagreement', 'leverage', 'leverage_x_disagreement',
+         'sparsest')
 
 # How many random allocations each rule is paired against.
 RANDOM_DRAWS = 3
@@ -186,12 +184,13 @@ def neighbour_stats(X_tr, n_neighbours=N_NEIGHBOURS):
     return leverage, sparsity
 
 
-def rank_candidates(rule, cand, *, disagreement, leverage, sparsity, s2e,
+def rank_candidates(rule, cand, *, disagreement, leverage, sparsity,
                     random_seed):
     """The candidates' indices, best first, under one rule.
 
     cand          training-local indices of the candidates
     disagreement  per training molecule, |start - oof|
+    leverage      per training molecule, from neighbour_stats
     Ties are broken by a seeded draw so no rule inherits molecule order.
     """
     rng = np.random.default_rng(int(random_seed))
@@ -200,10 +199,10 @@ def rank_candidates(rule, cand, *, disagreement, leverage, sparsity, s2e,
         score = tie
     elif rule == 'disagreement':
         score = disagreement[cand]
-    elif rule == 'variance_x_leverage':
-        score = (s2e / 1.0 - s2e / 2.0) * leverage[cand]
-    elif rule == 'variance_x_leverage_x_disagreement':
-        score = (s2e / 1.0 - s2e / 2.0) * leverage[cand] * disagreement[cand]
+    elif rule == 'leverage':
+        score = leverage[cand]
+    elif rule == 'leverage_x_disagreement':
+        score = leverage[cand] * disagreement[cand]
     elif rule == 'sparsest':
         score = sparsity[cand]
     else:
@@ -328,10 +327,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f'among their {N_NEIGHBOURS} nearest neighbours, Euclidean, in the '
             'standardised space being scored'),
         'variance_term_note': (
-            'Every candidate starts at 1 measurement and goes to 2, so '
-            's2e/1 - s2e/2 = s2e/2 for all of them. variance_x_leverage ranks '
-            'by leverage alone and variance_x_leverage_x_disagreement by '
-            'leverage x disagreement.'),
+            'No variance term is used: every candidate goes from 1 measurement '
+            'to 2, so the variance drop s2e/1 - s2e/2 = s2e/2 is the same for '
+            'all of them and cannot change the order.'),
         'hybrid_note': (
             'The hybrid is rebuilt per (fold, seed) on the zero-budget training '
             'labels and shared by every rule and budget.'),
@@ -401,7 +399,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             errors[f'f{fold_i}'] = 'no training molecule measured twice or more'
             continue
         # The training fold's own pooled within-molecule variance. Only
-        # training molecules' measurements enter it.
+        # training molecules' measurements enter it. Recorded for the reader;
+        # no rule uses it (see WHY NO VARIANCE TERM in the header).
         s2e = direct_noise_variance([values[j] for j in tr])['s2e']
 
         for seed in seeds:
@@ -468,7 +467,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 ranked = rank_candidates(
                                     rule, cand, disagreement=disagreement,
                                     leverage=leverage, sparsity=sparsity,
-                                    s2e=s2e,
                                     random_seed=1000 * seed + 17 * fold_i + r)
                                 columns[f'{b:g}|{rule}|{r}'] = \
                                     labels_after_budget(start_tr, spare_tr,
