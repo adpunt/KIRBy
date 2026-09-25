@@ -1129,6 +1129,55 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    Conformal failed: {e}")
             results['conformal'] = {'error': str(e)}
 
+    # Name the comparator by the quantity THIS FILE measures.
+    #
+    # `comparator_rep` above is extract_top3_base_reps(search, model='knn')[0]:
+    # the representation a kNN predicts the LABEL best from, by RMSE. What s06
+    # reports is the Spearman correlation between a held-out molecule's distance
+    # to its neighbours and a model's absolute residual. Different quantities.
+    #
+    # Measured 2026-09-24 by ranking all 14 single-representation arms already
+    # stored here by the reported correlation: the named comparator came 13th of
+    # 14 on caco2, 8th on herg_ki and 10th on adme_mdr1 — bottom half on every
+    # dataset, while the printed headline and the conformal
+    # `hybrid_genuinely_tighter` flag compared the hybrid against it.
+    #
+    # Every representation is scored either way, so NO stored number changes.
+    # What changes is which arm the headline names. The kNN-RMSE choice is kept
+    # at `comparator_rep_by_knn_rmse` so any earlier result stays readable, and
+    # KIRBY_S06_COMPARATOR=knn_rmse restores the old behaviour.
+    try:
+        _mode = os.environ.get('KIRBY_S06_COMPARATOR', '').strip().lower()
+        _dec = results.get('distance_error_correlation') or {}
+        _kk = sorted(_dec, key=lambda x: int(x[1:]) if x[1:].isdigit() else 0)
+        if _mode != 'knn_rmse' and _kk:
+            _arms = _dec[_kk[0]]
+            _singles = {n: v for n, v in _arms.items()
+                        if isinstance(v, (int, float)) and not n.startswith('hybrid')}
+            if _singles:
+                _best = max(_singles, key=_singles.get)
+                _old = results.get('comparator_rep')
+                _rank = (sorted(_singles, key=_singles.get, reverse=True).index(_old) + 1
+                         if _old in _singles else None)
+                results['comparator_rep_by_knn_rmse'] = _old
+                results['comparator_rep'] = _best
+                results['comparator_basis'] = {
+                    'ranked_by': 'distance-error correlation, the quantity s06 reports',
+                    'previous': _old,
+                    'previous_rank_by_reported_quantity': _rank,
+                    'n_single_rep_arms': len(_singles),
+                    'note': ('Every representation is scored either way; this '
+                             'only decides which arm the headline and the '
+                             'conformal hybrid_genuinely_tighter flag name. '
+                             'KIRBY_S06_COMPARATOR=knn_rmse restores the old '
+                             'choice.')}
+                if _best != _old:
+                    print(f"  Comparator re-pointed: {_old} (rank "
+                          f"{_rank} of {len(_singles)} by the reported "
+                          f"quantity) -> {_best}")
+    except Exception as _e:
+        results['comparator_basis'] = {'error': str(_e)}
+
     return results
 
 
