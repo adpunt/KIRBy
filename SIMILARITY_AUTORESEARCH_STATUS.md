@@ -358,6 +358,29 @@ best single representation:
     manhattan, 1 (shipped)     -0.0237  +0.0260   -0.0233
     euclidean, 0               +0.1891  +0.1283   +0.0453
 
+**s02 weight-method sweep, 2 of 9 cells landed 2026-09-25.** The file's
+`weight_methods` carried one value, so which importance method does the
+weighting had never been varied. Nine cells now run it at three methods
+(lightgbm_gain, deeplift, treeshap) across the three datasets. Both
+lightgbm_gain cells are in. The number is the Spearman correlation between the
+distance separating a pair of molecules and the absolute difference in their
+activities, over 5000 sampled pairs; higher is better. Seven representations,
+budget 100 features, one search configuration.
+
+    lightgbm_gain   lineage  hybrid unweighted  hybrid weighted   weighted minus
+                                                                 best single rep
+    caco2           rf              0.3586           0.3704          +0.0244
+    caco2           knn             0.3466           0.3656          +0.0197
+    herg_ki         rf              0.3067           0.2693          -0.0671
+    herg_ki         knn             0.3109           0.2713          -0.0651
+
+Weighting features by importance raises the correlation on caco2 and lowers it
+on herg_ki. The two lineages agree in sign and to within 0.005 inside each
+dataset, so the disagreement is between the datasets, not between lineages.
+These cells use the one-configuration search; the stored run above used twelve,
+so the nine cells are comparable to each other and not to the shipped row.
+deeplift and treeshap have never produced an s02 number; 7 cells outstanding.
+
 **s04 — wins two of three once its levers open.** Held-out RMSE delta on cliff
 molecules, positive means the hybrid won:
 
