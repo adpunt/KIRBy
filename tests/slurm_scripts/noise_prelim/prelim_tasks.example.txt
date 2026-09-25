@@ -1,0 +1,9 @@
+# <dataset> <experiment> [condition]   '-' = the experiment's own condition
+# Example only. The experiments that take a condition are
+# noise_helpers.HONOURS_NOISE_CONDITION plus n13; any other experiment is run
+# without one (run_one.py says so in the log).
+caco2 n07 outlier_p10
+caco2 n07 censoring
+caco2 n11 gaussian
+caco2 n18 -
+caco2 n17 -
