@@ -67,20 +67,18 @@ def run(cmd):
 
 
 def queued(datasets, user):
+    # One call per cluster: with -h, squeue -M a,b drops the CLUSTER: lines,
+    # so a combined call cannot say which cluster a job is on.
     out = defaultdict(list)
-    cluster = '?'
-    for line in run(['squeue', '-M', 'arc,htc', '-u', user, '-h',
-                     '-o', '%i|%j|%T']).splitlines():
-        m = re.match(r'CLUSTER:\s*(\S+)', line)
-        if m:
-            cluster = m.group(1)
-            continue
-        parts = line.strip().split('|')
-        if len(parts) != 3:
-            continue
-        ds = pc_dataset(parts[1], datasets)
-        if ds:
-            out[ds].append((cluster, parts[0], parts[2]))
+    for cluster in ('arc', 'htc'):
+        for line in run(['squeue', '-M', cluster, '-u', user, '-h',
+                         '-o', '%i|%j|%T']).splitlines():
+            parts = line.strip().split('|')
+            if len(parts) != 3:
+                continue
+            ds = pc_dataset(parts[1], datasets)
+            if ds:
+                out[ds].append((cluster, parts[0], parts[2]))
     return out
 
 
