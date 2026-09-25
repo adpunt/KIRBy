@@ -550,6 +550,62 @@ lower better: herg_ki hybrid 415.1 against raw ECFP4 429.3; adme_mdr1 hybrid
 -87.40 against -55.26; caco2 nothing separates and random picking beats the
 hybrid.
 
+## s11 caco2: two of the three seeds cannot tell the conditions apart
+
+Measured 2026-09-25 on the matched caco2 pair, both halves at 1 configuration.
+s11 runs each condition at three seeds, random_state 42, 43 and 44, and reports
+the mean of their areas under the best-found curve. On caco2, seed 42 returns
+one single area that is the same for all eleven conditions, and in both halves
+of this pair seed 44 does too. Only seed 43 gives eleven different numbers.
+
+    caco2 run          seed 42            seed 43            seed 44
+    hunt, fixed        1 area, 11 conds   11 areas           1 area, 11 conds
+    hunt, median       1 area, 11 conds   11 areas           1 area, 11 conds
+    kirby_s11_fixed    1 area, 11 conds   10 areas           4 conds share one
+    kirby_s11_median   1 area, 11 conds   10 areas           4 conds share one
+
+A seed whose area does not change when the representation changes is measuring
+its own starting set, not the condition. The caco2 ranking between the eleven
+conditions therefore rests on one seed of the three, and the other two pull
+every condition's mean toward the same constant. herg_ki and adme_mdr1 are far
+weaker: there the most any seed shares is 7 of 11 conditions and 3 of 11.
+
+This is what the three numbers are, not a proposal. The choices are to report
+the seeds separately rather than as a mean, to drop a seed whose area is
+constant across conditions, or to leave it and say so where the caco2 number
+is used. That is yours.
+
+## s11 hybrid_bnn: the length scale was never what made its acquisition flat
+
+The flat acquisition count is picks out of 300, being 3 seeds times 100 picks.
+Under the fixed length-scale start four conditions acquire flat; under the
+median start all four fall to zero and hybrid_bnn alone stays at 119.
+
+    condition           area, fixed   area, median   flat picks fixed/median
+    ecfp4_raw              -161.117       -167.382            276 / 0
+    best_single            -161.117       -167.022             99 / 0
+    pca_50d                -158.534       -167.521            181 / 0
+    random_50d             -161.482       -167.119            300 / 0
+    hybrid_bnn             -167.709       -167.709            119 / 119
+    tanimoto_ecfp4         -167.347       -167.347              0 / 0
+    hybrid_50d             -167.668       -167.668              0 / 0
+    hybrid_50d_refit       -167.648       -167.588              0 / 0
+    random_acq             -164.018       -164.018              0 / 0
+    hybrid_ngboost         -167.062       -167.041              7 / 0
+    hybrid_gauche_gp       -167.587       -167.587              0 / 0
+
+hybrid_bnn returns a bit-identical area under both starts. It is a dropout
+network, not a Gaussian process, so the RBF length scale never enters its
+prediction and sweeping that start could not have moved it. The earlier open
+question, whether the length-scale start explains hybrid_bnn's flat
+acquisition, is answered: it does not, and the sigma floor was already ruled
+out by measurement.
+
+The four conditions that do use the RBF Gaussian process get worse under the
+median start, by 5.6 to 9.0 in the area, while their flat picks fall to zero.
+Acquiring properly scored worse than acquiring flat on caco2. Stated, not
+explained.
+
 ## s11 length scale, MATCHED on all three datasets
 
 Both halves at 1 configuration, so the recipes are identical and the length
