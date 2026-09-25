@@ -220,9 +220,31 @@ def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
     # file, so whichever ran last wins for both. Omitted when tuning is off, so
     # every baseline file written before 2026-09-04 still hits.
     tn = f'__tuned{int(tune_n_iter)}' if tune else ''
+    # The distance coefficient namespaces the baseline for exactly the reason
+    # noise_id, objective and tune do above. A geometry baseline is a
+    # representation's score UNDER A DISTANCE, and nothing else in this filename
+    # or in the meta records which distance produced it. Two coefficients
+    # sharing a cache root therefore read each other's scores as their own.
+    #
+    # Measured 2026-09-24: 60 readacross baselines sat in one root, written
+    # under an unrecorded coefficient, and six queued s06 runs under minkowski
+    # p=0.5 and euclidean were about to read them. They were stopped before any
+    # wrote, and each coefficient was given a separate KIRBY_CACHE_DIR as a
+    # workaround. This removes the need for that workaround.
+    #
+    # Omitted for the default, so every baseline file written before this keeps
+    # hitting — same convention as the three suffixes above.
+    try:
+        from kirby.similarity.distance_config import (
+            get_distance_metric, DEFAULT_DISTANCE_METRIC)
+        _dm = get_distance_metric()
+    except Exception:
+        _dm, DEFAULT_DISTANCE_METRIC = None, None
+    dm = (f'__dist-{_sanitize_filename_part(_dm)}'
+          if _dm and _dm != DEFAULT_DISTANCE_METRIC else '')
     return (_cache_base() / 'baselines' /
             f'{dataset_name}__{rep_name}__{model_name}__'
-            f'{metric_name}__{n_folds}f_{seed}{sec}{nz}{ob}{tn}.pkl')
+            f'{metric_name}__{n_folds}f_{seed}{sec}{nz}{ob}{tn}{dm}.pkl')
 
 
 def _fold_score_cache_path(dataset_name: str, kind: str, fold_idx: int,
@@ -1002,8 +1024,22 @@ def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
     # and nothing else in the name or meta distinguishes it. Omitted when off,
     # so existing entries keep their path.
     tn = f'__tuned{int(tune_n_iter)}' if tune else ''
+    # The distance coefficient namespaces this file for the same reason as the
+    # three suffixes above, and for the same reason it namespaces the baseline
+    # path. A hybrid evaluated under a geometry objective is scored through a
+    # distance; nothing else here records which one. Omitted for the default so
+    # existing entries keep their path. See _baseline_cache_path for the
+    # incident this prevents.
+    try:
+        from kirby.similarity.distance_config import (
+            get_distance_metric, DEFAULT_DISTANCE_METRIC)
+        _dm = get_distance_metric()
+    except Exception:
+        _dm, DEFAULT_DISTANCE_METRIC = None, None
+    dm = (f'__dist-{_sanitize_filename_part(_dm)}'
+          if _dm and _dm != DEFAULT_DISTANCE_METRIC else '')
     fname = (f'{subset_hash}__{a}__{i}__{e}__b{budget}__'
-             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}{nz}{ob}{tn}.pkl')
+             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}{aug_sfx}{nz}{ob}{tn}{dm}.pkl')
     return _cache_base() / 'hybrid_evals' / dataset_name / fname
 
 
