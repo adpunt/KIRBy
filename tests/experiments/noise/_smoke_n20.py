@@ -34,6 +34,14 @@ What has to be true, and why each one is here.
   6. Both regimes run, the counts are bounded by the folds that ran, and a
      detection score is written where a corrupted subset exists.
 
+  7. THE MENU IS WHAT n07 OFFERS, MINUS WHAT THE SEARCH CANNOT BE HANDED.
+     Every cleanup n20 names hands back a row mask or a full-length cleaned
+     label column; every one it leaves out hands back a per-row weight and
+     neither of those, or declines outright. Checked by calling each cleanup,
+     not by reading the comment beside it. The four that are not defined on a
+     class label are dropped on a classification dataset, and every one that
+     survives that gate really runs on one.
+
 RUN COST. The grid is cut to what the machinery needs. The search is cut to one
 internal evaluator and one representation count, and tuning is off -- on 200
 molecules a fast-tier tuned search is about 250s and this file runs eight of
@@ -105,7 +113,13 @@ def make_data(n=200, seed=0):
 
 
 def run_it(data, name, **kw):
-    """One tiny n20 run."""
+    """One tiny n20 run.
+
+    The detector and the cleaning run in rf's top 2 single representations,
+    ranked inside each fold from that fold's own search on the uncleaned
+    labels (owner's decision 2026-09-25). `aaa` and `bbb` are the only two, so
+    every fold runs both as base_1 and base_2 in some order.
+    """
     return n20.run(
         data, {'n_splits': 2}, OUT, name,
         models=['rf'], flag_rates=[0.10],
@@ -194,7 +208,8 @@ def test_level_zero_reading(r):
         check('level 0.0 ran', False, 'no level-0 block')
         return
     seen = []
-    for cleanup, crow in lvl['per_cleanup'].items():
+    for cleanup, crow in ((c, cr) for brow in lvl['per_base'].values()
+                          for c, cr in brow['per_cleanup'].items()):
         if cleanup == n20.IDENTITY_CONTROL:
             continue
         for rk, rrow in crow['per_flag_rate'].items():
@@ -302,7 +317,7 @@ def test_downweight_is_refused_not_faked(r):
 
     ran, leaked = False, []
     for reg in r['per_regime'].values():
-        for lvl in reg.values():
+        for lvl in (b for lv in reg.values() for b in lv.values()):
             for rate in (lvl.get('downweight') or {}).values():
                 for arms in rate.values():
                     ran = ran or bool(arms.get('search_asis__fit_cleaned'))
@@ -319,7 +334,7 @@ def test_remove_has_all_four(r):
     print("\nremove reaches the feature selection by dropping rows:")
     got = {}
     for reg in r['per_regime'].values():
-        for lvl in reg.values():
+        for lvl in (b for lv in reg.values() for b in lv.values()):
             for rate in (lvl.get('remove') or {}).values():
                 for arms in rate.values():
                     for a in n20.ARMS:
@@ -329,6 +344,116 @@ def test_remove_has_all_four(r):
           ', '.join(f'{a}={got.get(a, 0)}' for a in n20.ARMS))
     check('the fourth arm exists: features from the kept rows, fit on every row',
           got.get('search_cleaned__fit_asis', 0) > 0)
+
+
+# ── 7. the menu: which of n07's cleanups n20 runs, and why not the rest ─────
+
+def test_the_menu_matches_n07():
+    """Every name n20 runs is one n07 offers, and every name it does not run
+    returns something the recipe search cannot be handed.
+
+    This is the invariant behind n20.CLEANUPS, checked by CALLING the cleanup
+    rather than by reading the comment next to it. `keep` is a row mask the
+    cleaned search can run on and `label_column` is a full-length column it can
+    take as train_labels=; a cleanup handing back neither has no cleaned search
+    and so no searched-on-cleaned arm.
+
+    Nothing here fits a hybrid or runs a search, so it costs one small fit per
+    cleanup.
+    """
+    print("\nwhich of n07's cleanups n20 runs:")
+    from experiments.noise.n07_remediation import (
+        CLEANUPS as N07_CLEANUPS, REGRESSION_ONLY_CLEANUPS,
+        SCORE_FREE_CLEANUPS, cleaned_training_set)
+
+    check('every cleanup n20 names is one n07 offers',
+          all(c in N07_CLEANUPS for c in n20.CLEANUPS),
+          f'{[c for c in n20.CLEANUPS if c not in N07_CLEANUPS]}')
+
+    rng = np.random.default_rng(7)
+    n = 60
+    X = rng.normal(size=(n, 4))
+    y = X @ rng.normal(size=4) + rng.normal(0, .2, n)
+    scores = rng.random(n)
+    g = np.arange(n)
+
+    def built(name, is_clf=False, labels=None):
+        try:
+            return cleaned_training_set(name, X, y if labels is None else labels,
+                                        scores, 0.10, is_clf=is_clf, groups=g)
+        except Exception as exc:
+            return exc
+
+    reaches, refused = [], []
+    for name in n20.CLEANUPS:
+        if name == 'downweight':
+            continue
+        out = built(name)
+        ok = (isinstance(out, dict)
+              and (out.get('keep') is not None
+                   or out.get('label_column') is not None))
+        (reaches if ok else refused).append(name)
+    check('every cleanup n20 runs hands back a row mask or a label column',
+          not refused,
+          f'{len(reaches)} do: {reaches}' + (f'; these do not: {refused}'
+                                             if refused else ''))
+
+    # And the ones left out, by the value they return rather than by argument.
+    for name in N07_CLEANUPS:
+        if name in n20.CLEANUPS:
+            continue
+        out = built(name)
+        if out is None:
+            check(f'{name} is left out: it declines outright here', True,
+                  'returned None, so there is nothing to search on')
+            continue
+        check(f'{name} is left out: it returns a weight and nothing else',
+              isinstance(out, dict) and out.get('keep') is None
+              and out.get('label_column') is None
+              and out.get('sample_weight') is not None,
+              'keep None, label_column None, sample_weight set')
+
+    # downweight is in the list and is the one exception: it is scored on its
+    # two fit-side arms and its two searched-on-cleaned arms are recorded as
+    # undefined. test_downweight_is_refused_not_faked checks that end.
+    dw = built('downweight')
+    check('downweight, the one in the list that cannot reach the search, '
+          'returns a weight and nothing else',
+          isinstance(dw, dict) and dw.get('keep') is None
+          and dw.get('label_column') is None
+          and dw.get('sample_weight') is not None)
+
+    # The classification gate.
+    run_clf, dropped_clf = n20.cleanups_for(True)
+    check('a regression-only cleanup is not offered on a class label',
+          set(dropped_clf) == {c for c in n20.CLEANUPS
+                               if c in REGRESSION_ONLY_CLEANUPS}
+          and not any(c in REGRESSION_ONLY_CLEANUPS for c in run_clf),
+          f'dropped {list(dropped_clf)}, kept {list(run_clf)}')
+    run_reg, dropped_reg = n20.cleanups_for(False)
+    check('nothing is dropped on a regression label',
+          run_reg == n20.CLEANUPS and dropped_reg == ())
+
+    # Every cleanup that survives the gate really does run on a class label.
+    y_clf = (y > np.median(y)).astype(int)
+    broke = [c for c in run_clf
+             if isinstance(built(c, is_clf=True, labels=y_clf), Exception)]
+    check('every cleanup offered on a class label really runs on one',
+          not broke, f'{broke}')
+
+    # The permuted-flag control, one entry per cleanup the shuffled score can
+    # reach.
+    want_control = {c for c in n20.CLEANUPS
+                    if c not in ('downweight',)
+                    and c not in SCORE_FREE_CLEANUPS}
+    have_control = {v for v in n20.RANDOM_FLAG_CLEANUPS.values()}
+    check('every cleanup the suspicion score decides has a permuted-flag twin',
+          want_control == have_control,
+          f'without one: {sorted(want_control - have_control)}; '
+          f'with one and not expected: {sorted(have_control - want_control)}')
+    check('a permuted-flag twin runs the cleanup it is named after',
+          all(v in n20.CLEANUPS for v in n20.RANDOM_FLAG_CLEANUPS.values()),
+          f'{len(n20.RANDOM_FLAG_CLEANUPS)} twins')
 
 
 # ── 6. both regimes, the counts, and what was graded against ────────────────
@@ -349,7 +474,8 @@ def test_regimes_counts_and_grading():
     ok_bound = ok_paired = True
     cells = 0
     for reg in r['summary']['per_regime'].values():
-        for lvl in reg['per_level'].values():
+        for lvl in (b for lv in reg['per_level'].values()
+                    for b in lv['per_base'].values()):
             for crow in lvl['per_cleanup'].values():
                 for rrow in crow['per_flag_rate'].values():
                     for mrow in rrow['per_model'].values():
@@ -373,7 +499,8 @@ def test_regimes_counts_and_grading():
           r['arm_the_suite_runs_today'] == 'search_asis__fit_cleaned'
           and r['arm_the_question_is_about'] == 'search_cleaned__fit_cleaned')
 
-    det = r.get('detection') or {}
+    det = {f'{b}/{k}': v for b, by_lvl in (r.get('detection') or {}).items()
+           for k, v in by_lvl.items()}
     read = [k for k, v in det.items()
             if v and np.isfinite(v.get('detection_average_precision',
                                        float('nan')))]
@@ -388,13 +515,37 @@ def test_regimes_counts_and_grading():
     return r
 
 
+def test_quick_two_single_representations():
+    """The quick screen: one fold pair, no injection, both single
+    representations run the detector and the cleanups."""
+    print("\nthe single representations come from each fold's own search:")
+    r = run_it(make_data(seed=7), 'toy_quick', regimes=['as_they_come'])
+    per_fold = r['base_reps_by_fold']
+    check("every fold names rf's top 2 from its own search",
+          per_fold and all(sorted(v) == ['base_1', 'base_2']
+                           and sorted(v.values()) == ['aaa', 'bbb']
+                           for v in per_fold.values()), str(per_fold))
+    lvl = r['per_regime']['as_they_come']['none']
+    got = {b: sum(len(f) for c in lvl[b].values() for rt in c.values()
+                  for arms in rt.values() for f in arms.values())
+           for b in ('base_1', 'base_2') if b in lvl}
+    check('both single representations produced arm scores',
+          set(got) == {'base_1', 'base_2'} and all(got.values()), str(got))
+
+
 if __name__ == '__main__':
+    if '--quick' in sys.argv:
+        test_quick_two_single_representations()
+        print("\n" + "=" * 60)
+        print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}" if FAIL else "ALL GREEN")
+        sys.exit(1 if FAIL else 0)
     res = test_search_path_identity()
     test_level_zero_reading(res)
     test_engine_refusals()
     test_two_columns_two_identities()
     test_downweight_is_refused_not_faked(res)
     test_remove_has_all_four(res)
+    test_the_menu_matches_n07()
     test_regimes_counts_and_grading()
     print("\n" + "=" * 60)
     if FAIL:

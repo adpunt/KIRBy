@@ -85,7 +85,9 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n38.get_best_search_for_downstream
     n38.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        # Every model's top 2 single representations, given directly.
+        kw.setdefault('base_reps', {m: ['toy', 'second']
+                                    for m in n38.DOWNSTREAM_MODELS})
         kw.setdefault('oof_splits', 3)
         kw.setdefault('itlm_rounds', 2)
         return n38._run_one_condition(data, {'n_splits': 3}, OUT, name, **kw)
@@ -148,22 +150,22 @@ def test_full_runs():
                  noise_condition='sparse_dprime_p10', levels=[0.0, 4.0],
                  draws=[0], random_seeds=[0])
     missing = {b: [a for a in res['arms']
-                   if a not in res['per_level'][b]['4']['base']]
+                   if a not in res['per_level'][b]['4']['base_1']]
                for b in n38.LABEL_BASES}
     check('4. every arm is scored at level 4 in both label bases',
           not any(missing.values()), f'missing {missing}')
-    rl = res['per_level']['real']['4']['base']['robust_loss']
+    rl = res['per_level']['real']['4']['base_1']['robust_loss']
     check('4a. robust_loss is scored for rf and lightgbm',
           set(rl) == {'rf', 'lightgbm'})
     ok = True
     for b in n38.LABEL_BASES:
-        for r in res['method_records'][b]['4']['base']:
+        for r in res['method_records'][b]['4']['base_1']:
             f = r['pass'].split('f')[-1]
             rsd = res['fold_records'][b][f'f{f}']['resid_sd']
             ok &= (np.isclose(r['injection']['shift_label_units'], 4.0 * rsd)
                    and np.isclose(r['resid_sd'], rsd))
     check('4b. the realised shift is level x the fold\'s resid_sd', ok)
-    det = res['detection']['real']['4']['base']
+    det = res['detection']['real']['4']['base_1']
     th = res['theory_at_nominal_dprime']['4']
     check("4c. the out-of-fold residual finds a 4-SD shift",
           det['scores']['detection_auroc'] > 0.9,
@@ -172,8 +174,8 @@ def test_full_runs():
           f"{det['dprime_in_this_space']:.2f}")
     check('4d. vs_signal is written for the semi-synthetic base only',
           list(res['per_level_vs_signal']) == ['semi_synthetic']
-          and 'no_cleaning' in res['per_level_vs_signal']['semi_synthetic']['4']['base'])
-    s = res['summary']['real']['per_level']['4']['base']['rf']['per_arm']
+          and 'no_cleaning' in res['per_level_vs_signal']['semi_synthetic']['4']['base_1'])
+    s = res['summary']['real']['per_level']['4']['base_1']['rf']['per_arm']
     check('4e. winsorise and ITLM are paired against their random twins',
           len(s['winsorise_c1.5']['vs_random_twin']) == 1
           and len(s['itlm_a0.9']['vs_random_twin']) == 1)
@@ -181,11 +183,22 @@ def test_full_runs():
           all('0' not in v for v in res['detection'].values()))
     check('4g. no errors were recorded', '_errors' not in res,
           str(res.get('_errors'))[:300])
+    check('4h. base_1 and base_2 both ran, each model\'s pair is named, and '
+          'resid_sd is measured in the first model\'s rank-1 representation',
+          res['spaces_run'] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second']
+                                            for m in ['rf', 'lightgbm']}
+          and 'base_rep' not in res
+          and res['resid_sd_rep'] == 'toy'
+          and all(a in res['per_level'][b]['4']['base_2']
+                  for b in n38.LABEL_BASES for a in res['arms']),
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}, "
+          f"{res.get('resid_sd_rep')}")
 
     res_d = run_it(make_data(), 'toy', models=['lightgbm'],
                    noise_condition='dense_oofmse', levels=[1.0], draws=[0],
                    random_seeds=[0], label_bases=['real'])
-    inj = [r['injection'] for r in res_d['method_records']['real']['1']['base']]
+    inj = [r['injection'] for r in res_d['method_records']['real']['1']['base_1']]
     ratio = [i['injected_variance_realised'] / i['injected_variance_target']
              for i in inj]
     check('5. a dense run writes no detection and injects the asked variance',
@@ -200,7 +213,7 @@ def test_full_runs():
                  arms=['clean', 'no_cleaning'])
     check('6. hetero_seen is skipped without SMILES and runs with them',
           r6.get('skipped') == 'no_smiles'
-          and 'no_cleaning' in r6b['per_level']['real']['1']['base'])
+          and 'no_cleaning' in r6b['per_level']['real']['1']['base_1'])
 
     res_h = run_it(make_data(), 'toy', recipe=fake_recipe(['toy', 'second']),
                    models=['lightgbm'], noise_condition='sparse_dprime_up_p05',
@@ -236,8 +249,10 @@ def test_the_command_line():
          '--help'], capture_output=True, text=True)
     wanted = ('--dataset', '--noise-condition', '--levels', '--draws',
               '--label-bases', '--random-seeds', '--models', '--exp-folds',
-              '--base-rep', '--tag')
+              '--tag')
     missing = [f for f in wanted if f not in out.stdout]
+    check('9b. --base-rep is gone', out.returncode == 0
+          and '--base-rep' not in out.stdout)
     check('9. the parser lists every flag',
           out.returncode == 0 and not missing,
           f'missing {missing}' if missing else f'{len(wanted)} flags present')
