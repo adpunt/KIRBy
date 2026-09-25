@@ -250,6 +250,143 @@ def test_retention_direction_lower_is_better():
     print("  OK retention/recovery direction correct for lower-is-better RMSE")
 
 
+def test_n09_base_reps_are_top_two_for_the_dnn():
+    """n09's single-representation comparison is the DNN's top 2. 2026-09-25.
+
+    The stored search is a stand-in whose baselines rank three representations
+    differently for rf and for the DNN, so the test fails if n09 reads the rf
+    ranking. The inner feature search is replaced by one that raises, so the
+    hybrid arms drop out and only conditions A and C run -- the part that
+    changed -- without calling find_best_hybrid locally.
+    """
+    from types import SimpleNamespace
+    n09 = _load_experiment('n09_lnl_survey', 'n09_lnl_survey.py')
+    rng = np.random.default_rng(0)
+    n = 60
+    X = rng.normal(size=(n, 6))
+    y = X @ rng.normal(size=6) + rng.normal(0, 0.1, n)
+    data = {'labels': y,
+            'reps': {'aaa': X, 'bbb': X[:, ::-1] + rng.normal(0, 0.5, X.shape),
+                     'ccc': rng.normal(size=(n, 6))},
+            'groups': np.arange(n), 'task_type': 'regression', 'metric': 'rmse'}
+    search = SimpleNamespace(
+        metric_name='rmse', lower_is_better=True,
+        baselines={'aaa': {'rf': 0.9, 'dnn': 0.3},
+                   'bbb': {'rf': 0.2, 'dnn': 0.5},
+                   'ccc': {'rf': 0.1, 'dnn': 0.9}},
+        baseline_fold_scores={})
+    meta = {'best_config': {'blueprint': SimpleNamespace(budget=4)},
+            'aug_condition': 'none'}
+
+    def _lookup(*a, **k):
+        return search, meta
+
+    def _no_search(*a, **k):
+        raise RuntimeError('inner search stubbed out in the smoke')
+
+    n09.get_best_search_for_downstream = _lookup
+    n09.find_best_hybrid = _no_search
+    r = n09._run_one_condition(
+        data, {'n_splits': 2}, '/tmp', 'qm9', noise_condition='gaussian',
+        sigmas=[0.0, 0.5], noise_seeds=[0], methods=['small_loss'])
+    assert r['base_reps_by_model'] == {'dnn': ['aaa', 'bbb']}, \
+        f"expected the DNN's top 2 (aaa, bbb), got {r['base_reps_by_model']}"
+    assert r['base_reps_ranked_by'] == 'dnn'
+    assert r['base_reps_search_model'] == 'dnn'
+    assert 'base_rep' not in r
+    for lvl in ('0.0', '0.5'):
+        blk = r['per_sigma'][lvl]
+        for bk in ('base_1_no_lnl', 'base_2_no_lnl'):
+            assert blk[bk]['n_folds'] == 2, (lvl, bk, blk[bk])
+        assert 'base_no_lnl' not in blk
+    hi = r['per_sigma']['0.5']
+    for bk in ('base_1_lnl', 'base_2_lnl'):
+        assert hi[bk]['small_loss']['n_folds'] == 2, (bk, hi[bk])
+    assert (hi['base_1_no_lnl']['fold_scores']
+            != hi['base_2_no_lnl']['fold_scores']), \
+        "the two ranks produced identical scores -- same features twice?"
+    s = r['summary']
+    assert set(s['hybrid_vs_base']) == {'base_1', 'base_2'}
+    assert s['hybrid_vs_base']['base_2']['representation'] == 'bbb'
+    assert 'clean_base_1' in s and 'clean_base_2' in s
+    assert set(r['retention']['0.5']) >= {'base_1_no_lnl', 'base_2_no_lnl',
+                                          'base_1_lnl', 'base_2_lnl'}
+
+    # A caller-given list overrides the ranking.
+    r2 = n09._run_one_condition(
+        data, {'n_splits': 2}, '/tmp', 'qm9', noise_condition='gaussian',
+        sigmas=[0.0, 0.5], noise_seeds=[0], methods=['small_loss'],
+        base_reps={'dnn': ['ccc']})
+    assert r2['base_reps_by_model'] == {'dnn': ['ccc']}
+    assert 'base_1_no_lnl' in r2['per_sigma']['0.0']
+    assert 'base_2_no_lnl' not in r2['per_sigma']['0.0']
+    print("  OK n09: conditions A and C run in the DNN's rank-1 (aaa) and "
+          "rank-2 (bbb) representations; a caller list overrides the ranking")
+
+
+def test_n13_single_reps_per_model_and_track_a_for_the_dnn():
+    """n13 end to end, the single representations. 2026-09-25.
+
+    The stored search ranks aaa then bbb for rf, and ccc then bbb for the DNN,
+    so Track A (the DNN) and Track B (rf) use different pairs. The hybrid
+    builds are stubbed to raise, so only the single-representation spaces run.
+    """
+    from types import SimpleNamespace
+    n13 = _load_experiment('n13_noise_distributions', 'n13_noise_distributions.py')
+    rng = np.random.default_rng(0)
+    n = 60
+    X = rng.normal(size=(n, 6))
+    y = X @ rng.normal(size=6) + rng.normal(0, 0.1, n)
+    data = {'labels': y,
+            'reps': {'aaa': X, 'bbb': X[:, ::-1] + rng.normal(0, 0.5, X.shape),
+                     'ccc': rng.normal(size=(n, 6))},
+            'groups': np.arange(n), 'task_type': 'regression', 'metric': 'rmse'}
+    search = SimpleNamespace(
+        metric_name='rmse', lower_is_better=True,
+        baselines={'aaa': {'rf': 0.3, 'dnn': 0.5},
+                   'bbb': {'rf': 0.5, 'dnn': 0.3},
+                   'ccc': {'rf': 0.9, 'dnn': 0.1}},
+        baseline_fold_scores={}, all_results=[])
+    meta = {'best_config': {'blueprint': SimpleNamespace(
+                budget=4, augmentation_strategy='none')},
+            'objective': 'predictive', 'objective_choice': 'only_family',
+            'pool_subset': 'predictive_and_similarity', 'metric_name': 'rmse',
+            'aug_condition': 'none', 'by_objective': {}}
+
+    def _no_build(*_a, **_k):
+        raise RuntimeError('hybrid build stubbed out in the smoke')
+
+    n13.get_best_search_for_downstream = lambda *a, **k: (search, meta)
+    n13.build_fold_hybrid = _no_build
+    n13.LNL_METHODS = ['small_loss']
+    n13.ESTIMATORS = ['local_variance_ratio']
+    n13.LNL_EPOCHS = 5
+    n13.NOISE_SEEDS = [0]
+    r = n13.run(data, {'n_splits': 2, 'models': ['rf']}, '/tmp', 'qm9',
+                noise_types=['gaussian'], strengths=[0.5])
+    assert 'error' not in r, r.get('error')
+    assert r['base_reps_by_model'] == {'rf': ['aaa', 'bbb'],
+                                       'dnn': ['ccc', 'bbb']}, \
+        r['base_reps_by_model']
+    st = r['per_noise_type']['gaussian']['per_strength']['0.5']
+    assert set(st['track_a']) == {'base_1_ccc', 'base_2_bbb'}, set(st['track_a'])
+    row = st['track_a']['base_1_ccc']['small_loss']
+    assert set(row['retention']) == {'base_1', 'base_2'}, row
+    assert set(st['clean_score_dnn']) == {'base_1', 'base_2'}
+    assert set(st['track_b']) == {'base_1_aaa', 'base_2_bbb'}, set(st['track_b'])
+    for sp in ('base_1_aaa', 'base_2_bbb'):
+        units = set(st['track_b'][sp]['local_variance_ratio'])
+        assert units == {'rf@base_1', 'rf@base_2'}, (sp, units)
+    assert set(st['noisy_score_by_model']) == {'rf@base_1', 'rf@base_2'}
+    assert np.isfinite(st['noisy_score'])
+    blk = st['per_fold_scores_single_recipe']
+    assert set(blk['baselines_by_model']['rf']) == {'aaa', 'bbb'}, blk
+    s = r['summary']
+    assert set(s['hybrid_advantage_persists']) == {'base_1', 'base_2'}
+    print("  OK n13: Track A in the DNN's top 2 (ccc, bbb), Track B detects in "
+          "rf's top 2 (aaa, bbb) and fits rf on both, baselines list both")
+
+
 def test_modules_import():
     for fn in ['n09_lnl_survey.py', 'n13_noise_distributions.py']:
         _load_experiment(fn[:-3], fn)
@@ -261,8 +398,10 @@ def main():
         test_modules_import,
         test_retention_direction_lower_is_better,
         test_n09_inject_noise_reg_and_clf,
+        test_n09_base_reps_are_top_two_for_the_dnn,
         test_n13_noise_types_differ,
         test_n13_inject_noise_clf,
+        test_n13_single_reps_per_model_and_track_a_for_the_dnn,
         test_lnl_methods_regression_differentiate,
         test_lnl_methods_classification_and_gating,
     ]

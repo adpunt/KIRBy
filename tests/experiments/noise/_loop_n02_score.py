@@ -92,7 +92,7 @@ from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
     load_data, get_domain_metric, get_model_factories, cv_split,
-    compute_feature_importance, pick_noise_base_rep,
+    compute_feature_importance,
     get_best_search_for_downstream, build_fold_hybrid,
     fold_hybrid_scoring_kwargs, pool_recipes_by_family, POOL_SUBSETS,
 )
@@ -197,6 +197,13 @@ def main():
                    help='whose stored recipe the hybrid space is built from')
     p.add_argument('--tag', default='sweep')
     p.add_argument('--out-dir', default='/Volumes/seagate/local_noise_run/loop_n02')
+    p.add_argument('--base-rep', required=True,
+                   help=('the single representation to compare against. '
+                         'Required: the fixed preference list that used to '
+                         'choose it was deleted 2026-09-25; the noise '
+                         'experiments now compare against each downstream '
+                         "model's top 2 single representations by its "
+                         'stored score'))
     a = p.parse_args()
 
     a.score_space = a.score_space or a.space
@@ -235,7 +242,10 @@ def main():
     labels = np.asarray(data['labels'])
     groups = data['groups']
     augmentations = data.get('augmentations')
-    base_rep = pick_noise_base_rep(reps, a.dataset)
+    base_rep = a.base_rep
+    if base_rep not in reps:
+        raise SystemExit(f'--base-rep {base_rep!r} is not among the loaded '
+                         f'representations {sorted(reps)}')
     sample_X = next(iter(reps.values()))
     factories = get_model_factories(models, task_type=task_type,
                                     n_samples=len(labels))

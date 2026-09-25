@@ -97,7 +97,8 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n39.get_best_search_for_downstream
     n39.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', {m: ['toy', 'second']
+                                    for m in n39.DOWNSTREAM_MODELS})
         return n39.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n39.get_best_search_for_downstream = real
@@ -211,6 +212,12 @@ def test_full(recipe, label):
     res = run_it(make_data(), 'toy', recipe=recipe, models=models, **SMALL)
     errs = res.get('_errors', {})
     check(f'8. [{label}] no errors', not errs, str(list(errs.items())[:3]))
+    check(f'8. [{label}] base_1 and base_2 ran, and each model\'s pair is named',
+          res['spaces_run'][:2] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second']
+                                            for m in models}
+          and 'base_rep' not in res,
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
     pc = res['per_condition']
     ok = True
     for ck in pc:
@@ -227,7 +234,7 @@ def test_full(recipe, label):
     check(f'8. [{label}] every arm x model x space x condition has 3 passes',
           ok and len(pc) == 2, f'conditions {list(pc)}, spaces '
           f"{res['spaces_run']}")
-    t = res['tail_per_condition'][list(pc)[0]]['0.5']['base']['plain_mean']['rf']
+    t = res['tail_per_condition'][list(pc)[0]]['0.5']['base_1']['plain_mean']['rf']
     check(f'8. [{label}] a tail record per score',
           len(t) == 3 and all(v is None or 'tail_rmse_top' in v for v in t.values()))
     est = res['summary']['estimates']
@@ -245,7 +252,8 @@ def test_replicate():
     rd = res.get('real_data')
     ok = (rd is not None and len(rd['per_fold']) == 3
           and rd['documents_available']
-          and all('base' in f['per_space'] for f in rd['per_fold'])
+          and all('base_1' in f['per_space'] and 'base_2' in f['per_space']
+                  for f in rd['per_fold'])
           and all(f['rho_at_published_error'] is None
                   and f['rho_at_published_error_reason'] for f in rd['per_fold']))
     check('9. the real-data block is written per fold, rho at a published '
@@ -262,8 +270,8 @@ def test_direction():
                  count_distributions=['uniform_1_to_4'], levels=[0.5],
                  rhos=[0.3], tau_fracs=[0.0], draws=[0])
     ck = list(res['per_condition'])[0]
-    raw = res['per_condition'][ck]['0.5']['base']
-    e = res['summary']['per_condition'][ck]['0.5']['base']['rf']['per_arm']['clean']
+    raw = res['per_condition'][ck]['0.5']['base_1']
+    e = res['summary']['per_condition'][ck]['0.5']['base_1']['rf']['per_arm']['clean']
     gains = [raw['clean']['rf'][k] - raw['plain_mean']['rf'][k]
              for k in raw['plain_mean']['rf']]
     check('10. under spearman a higher score counts as a gain',
@@ -279,9 +287,10 @@ def test_parser():
                          capture_output=True, text=True).stdout
     flags = ['--levels', '--rhos', '--tau-fracs', '--count-distributions',
              '--draws', '--offset-method', '--hybrid-labels', '--exp-folds',
-             '--base-rep', '--tag']
+             '--tag']
     missing = [f for f in flags if f not in out]
     check('11. the parser lists every flag', not missing, f'missing {missing}')
+    check('11b. --base-rep is gone', '--base-rep' not in out)
 
 
 if __name__ == '__main__':

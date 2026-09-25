@@ -221,12 +221,17 @@ def main():
                 shown = '  n/a' if v is None else f'{v:+.3f}'
                 tail = f'  ({why})' if why else ''
                 print(f"      {e:<24s} {shown}  over {n} groups{tail}")
-        minus = block['minus_comparator']
-        for space, row in minus['per_space'].items():
-            named = {e: d for e, d in row.items() if d is not None}
-            if named:
-                print(f"    {space} minus {minus['comparator_space']}: "
-                      + ', '.join(f'{e} {d:+.3f}' for e, d in named.items()))
+        # One block per single representation: rf's top 2, base_1 and base_2.
+        for base_sp, minus in block['minus_comparator'].items():
+            for space, row in minus['per_space'].items():
+                named = {e: d for e, d in row.items() if d is not None}
+                if named:
+                    print(f"    {space} minus {base_sp} "
+                          f"({minus['comparator_representation']}): "
+                          + ', '.join(f'{e} {d:+.3f}'
+                                      for e, d in named.items()))
+    print(f"\n  single representations: {results.get('base_reps_by_model')}"
+          f"; missing: {results.get('base_reps_missing')}")
 
     assert os.path.exists(results['per_row_scores_file']), \
         'the per-molecule scores were not written'

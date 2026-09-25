@@ -81,7 +81,9 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n32.get_best_search_for_downstream
     n32.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', {
+            m: ['toy', 'second']
+            for m in (kw.get('models') or n32.DOWNSTREAM_MODELS)})
         kw.setdefault('noise_condition', n32.DEFAULT_NOISE_CONDITION)
         return n32._run_one_condition(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
@@ -205,26 +207,34 @@ def test_full_runs():
                  noise_condition='shift_only_p10', levels=[0.0, 2.0],
                  draws=[0], alphas=[0.9], random_seeds=[0, 1],
                  detectors=[d for d in n32.DETECTORS if d != 'cleanlab'])
-    lv = res['per_level']['2']['base']
+    check('6-. spaces base_1 and base_2 ran, and the representations are '
+          'named', res['spaces_run'] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second']
+                                            for m in models}
+          and 'base_rep' not in res,
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
+    check('6-b. base_2 is scored for every model',
+          set(res['per_level']['2']['base_2']['no_cleaning']) == set(models))
+    lv = res['per_level']['2']['base_1']
     missing = [a for a in res['arms'] if a not in lv]
     check('6. every arm is scored at level 2', not missing,
           f'missing {missing}' if missing else f"{len(res['arms'])} arms")
-    det = res['detection']['2']['base']
+    det = res['detection']['2']['base_1']
     no_auroc = [d for d in n32.DETECTORS if d != 'cleanlab'
                 if d not in det or not np.isfinite(det[d]['detection_auroc'])]
     check('6b. every detector is graded, with an AUROC', not no_auroc,
           ', '.join(f"{d} {det[d]['detection_auroc']:.2f}" for d in det))
     check('6c. the out-of-fold residual finds a 2-SD shift well above chance',
           det['oof_residual']['detection_auroc'] > 0.8)
-    tails = res['tails']['2']['base']['itlm_a0.9']['rf']
+    tails = res['tails']['2']['base_1']['itlm_a0.9']['rf']
     check('6d. tail scores are written for every scored pass',
           len(tails) == 3 and all('tail_rmse_top' in v for v in tails.values()))
-    recs = res['method_records']['2']['base']
+    recs = res['method_records']['2']['base_1']
     ok = all(r['itlm_a0.9']['molecules_removed']
              == r['training_molecules'] - int(round(0.9 * r['training_molecules']))
              for r in recs)
     check('6e. ITLM removes the share it was asked to on every pass', ok)
-    s = res['summary']['per_level']['2']['base']['rf']['per_arm']
+    s = res['summary']['per_level']['2']['base_1']['rf']['per_arm']
     check('6f. ITLM and the exchange are paired against their random controls',
           len(s['itlm_a0.9']['vs_random_removal']) == 2
           and len(s['two_learner']['vs_random_removal']) == 2)
@@ -245,9 +255,9 @@ def test_full_runs():
     check('10. the metric direction is read off the dataset',
           res['metric'] == 'rmse' and res['lower_is_better']
           and res_s['metric'] == 'spearman' and not res_s['lower_is_better'])
-    e = res_s['summary']['per_level']['2']['base']['rf']['per_arm']['clean']
-    b = res_s['per_level']['2']['base']['no_cleaning']['rf']
-    g = res_s['per_level']['2']['base']['clean']['rf']
+    e = res_s['summary']['per_level']['2']['base_1']['rf']['per_arm']['clean']
+    b = res_s['per_level']['2']['base_1']['no_cleaning']['rf']
+    g = res_s['per_level']['2']['base_1']['clean']['rf']
     k = sorted(set(b) & set(g))
     check('10b. a spearman gain is arm minus no_cleaning',
           np.isclose(e['vs_no_cleaning']['mean_gain'],
@@ -288,11 +298,12 @@ def test_the_command_line():
          '--help'], capture_output=True, text=True)
     wanted = ('--dataset', '--noise-condition', '--levels', '--draws',
               '--alphas', '--detectors', '--random-seeds', '--models',
-              '--exp-folds', '--base-rep', '--tag')
+              '--exp-folds', '--tag')
     missing = [f for f in wanted if f not in out.stdout]
     check('11. the parser lists every flag',
           out.returncode == 0 and not missing,
           f'missing {missing}' if missing else f'{len(wanted)} flags present')
+    check('11b. --base-rep is gone', '--base-rep' not in out.stdout)
 
 
 if __name__ == '__main__':

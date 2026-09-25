@@ -23,8 +23,13 @@ inject nothing and are untouched.
 ⛔ NEXT: every stored result from those ten is not comparable to a new one. Nothing
 has re-run yet.
 
-### A2. `pick_noise_base_rep` no longer picks the control alphabetically
-On `flab_thermo_tresanco` the control is now `onehot`, was `esm2_cdr` — a learned
+### A2. The fixed preference list no longer picked the control alphabetically (2026-09-21)
+2026-09-25, owner's decision: the fixed preference list and the function that
+applied it are deleted. The single-representation comparison in the noise
+experiments is now each downstream model's top 2 single representations by that
+model's score in the stored search. The text below records the 2026-09-21 state.
+
+On `flab_thermo_tresanco` the control became `onehot`, was `esm2_cdr` — a learned
 embedding and 8th of the 10 by how well it predicts, 0.391 spearman with a random
 forest against 0.594 for the best.
 
@@ -41,7 +46,8 @@ score is already weak. n07 at 0.5 produced a clean-to-corrupted gap of 3% of the
 clean score on flab, negative on one fold.
 
 MEASURED 2026-09-21, and it weakens the case for moving the level: that 3% was
-saprot. In the onehot `pick_noise_base_rep` now returns for flab, the same level
+saprot. In the onehot the fixed preference list then returned for flab (list
+deleted 2026-09-25), the same level
 0.5 and the same tenth of the training molecules give a gap of 0.0644 spearman
 against a clean score of 0.4068 — 15.8% of it — over 3 folds and 3 corruption
 draws. The realised dose is 0.501 of the clean label standard deviation in both.
@@ -139,8 +145,8 @@ exponent 1.0 under lightgbm_gain and euclidean was the ONE comparison whose mean
 gain beat the spread of the per-cell gains behind it, +0.0120 average precision
 over the plain row, spread 0.0056, ahead in 4 of the 4 cells.
 
-RE-READ 2026-09-21 in `onehot`, which is what `pick_noise_base_rep` now returns
-for this dataset, at 2 folds by 3 draws and all three neighbour counts -- 36
+RE-READ 2026-09-21 in `onehot`, which is what the fixed preference list then
+returned for this dataset (list deleted 2026-09-25), at 2 folds by 3 draws and all three neighbour counts -- 36
 paired readings per comparison, in
 `/Volumes/seagate/local_noise_run/loop_n21/flab_thermo_tresanco__folds_and_draws__11distances_6passes.json`
 -- a copy kept under that name because the live file is being overwritten, see
@@ -307,8 +313,10 @@ heteroscedastic_nn 30, ngboost 49, gaussian_process 88, **hetero_gp 1070**.
 The earlier reading said the opposite — 42 CPU-seconds at 1280 features,
 recorded the same day as "hetero_gp is NOT expensive". At 5600 it is 12 times
 the next slowest, and it is why a five-source n23 run in onehot takes hours.
-`pick_noise_base_rep` returning `onehot` on every antibody set is what put the
-five sources at 5600 features in the first place.
+The fixed preference list returning `onehot` on every antibody set is what put
+the five sources at 5600 features in the first place. That list was deleted
+2026-09-25; the comparison is now each downstream model's top 2 single
+representations.
 
 ⛔ NEXT: owner's decision. Nothing has been cut.
 

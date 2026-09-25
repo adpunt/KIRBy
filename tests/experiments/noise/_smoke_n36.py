@@ -49,7 +49,9 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n36.get_best_search_for_downstream
     n36.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', {
+            m: ['toy', 'second']
+            for m in (kw.get('models') or n36.DOWNSTREAM_MODELS)})
         return n36.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n36.get_best_search_for_downstream = real
@@ -131,13 +133,18 @@ def test_helpers():
 
 
 def test_run():
-    print("a run, base only:")
+    print("a run, single representations only:")
     data = make_data(n_mol=180, seed=4)
     res = run_it(data, 'toy_base', models=['rf'], budget_shares=[0.25, 0.5],
                  seeds=[0, 1], random_draws=2, oof_splits=3)
-    check('only the base space ran', res['spaces_run'] == ['base'],
+    check('only base_1 and base_2 ran', res['spaces_run'] == ['base_1', 'base_2'],
           str(res['spaces_run']))
-    row = res['per_space']['base']['rf']
+    check('the representations are named per model',
+          res['base_reps_by_model'] == {'rf': ['toy', 'second']}
+          and 'base_rep' not in res, str(res.get('base_reps_by_model')))
+    check('base_2 is scored', bool(
+        res['per_space']['base_2']['rf']['rule_vs_random'].get('0.5')))
+    row = res['per_space']['base_1']['rf']
     passes = set(row['scores']['zero_budget'])
     check('3 folds x 2 seeds = 6 passes', len(passes) == 6, str(sorted(passes)))
     check('all-measurements reference paired on every pass',
@@ -174,6 +181,16 @@ def test_run():
               bool(got.get('rule_vs_random', {}).get('0.5')))
     check('no errors recorded', '_errors' not in res, str(res.get('_errors')))
 
+    print("two models with different rank-1 representations:")
+    res = run_it(data, 'toy_split', models=['rf', 'lightgbm'],
+                 base_reps={'rf': ['toy', 'second'],
+                            'lightgbm': ['second', 'toy']},
+                 budget_shares=[0.5], seeds=[0], random_draws=1, oof_splits=3)
+    check('each model is scored in base_1 and base_2',
+          all(res['per_space'][s].get(m, {}).get('rule_vs_random', {}).get('0.5')
+              for s in ('base_1', 'base_2') for m in ('rf', 'lightgbm')))
+    check('no errors recorded', '_errors' not in res, str(res.get('_errors')))
+
     print("a dataset with no repeats:")
     flat = make_data(seed=3)
     flat.pop('replicate_groups')
@@ -188,8 +205,9 @@ def test_help():
                        capture_output=True, text=True)
     check('--help exits 0', p.returncode == 0, p.stderr[-300:])
     for flag in ('--budget-shares', '--seeds', '--random-draws',
-                 '--oof-splits', '--base-rep', '--tag'):
+                 '--oof-splits', '--tag'):
         check(f'{flag} is offered', flag in p.stdout)
+    check('--base-rep is gone', '--base-rep' not in p.stdout)
 
 
 if __name__ == '__main__':

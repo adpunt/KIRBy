@@ -27,7 +27,11 @@ And four more that are about the plumbing rather than the separation:
      with no flag column is skipped with a different one.
   8. `run` end to end: every record scored in the fold that held it out, both
      gradings written, and a run where no hybrid recipe comes back still
-     produces every base-space number rather than being dropped.
+     produces every base-space number rather than being dropped. The base
+     spaces are rf's top 2 single representations, base_1 and base_2, by rf's
+     score in the stored search (owner's decision 2026-09-25).
+  9. With no stored search there is no rf ranking: base_1 and base_2 are
+     skipped, base_reps_missing says why, and no fallback list is used.
 """
 import sys
 import os
@@ -38,6 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import tempfile  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 
 import numpy as np  # noqa: E402
 
@@ -203,8 +208,16 @@ check('a row-count mismatch refuses rather than grading the wrong records',
 # The pool is stubbed out. Asking it for a recipe on 240 made-up rows starts a
 # live hybrid search, which ran past ten minutes here and is not what this
 # file is checking; a run with no recipe is also case 8's second half.
+# No recipe, but a stored search whose rf scores rank repA above repB, so
+# base_1 is repA and base_2 is repB. repA carries the labels' signal and repB
+# is unrelated noise, so the detector check below reads base_1 = repA; a
+# detector in repB has no informative neighbours and scores near chance.
+_SEARCH = SimpleNamespace(
+    metric_name='spearman', lower_is_better=False,
+    baselines={'repA': {'rf': 0.55}, 'repB': {'rf': 0.40}},
+    baseline_fold_scores={}, all_results=[])
 n22._blueprint_for = lambda *a, **k: (
-    None, None, 'the pool is not consulted in this smoke', None)
+    None, None, 'the pool is not consulted in this smoke', _SEARCH)
 
 N_REC = 240
 _rng = np.random.RandomState(7)
@@ -221,17 +234,23 @@ n22._flag_for_rows = lambda d, name: (
     'synthetic, built in this smoke')
 
 os.environ['KIRBY_NOISE_LIGHT_ESTIMATORS'] = '1'   # the four kNN detectors
-res = n22.run({'reps': {'repA': _X, 'repB': _rng.normal(size=(N_REC, 5))},
-               'labels': _y, 'task_type': 'regression', 'groups': _mol,
-               'replicate_groups': _mol, 'augmentations': None},
-              {}, OUT, 'herg_ic50')
+_RUN_DATA = {'reps': {'repA': _X, 'repB': _rng.normal(size=(N_REC, 5))},
+             'labels': _y, 'task_type': 'regression', 'groups': _mol,
+             'replicate_groups': _mol, 'augmentations': None}
+res = n22.run(_RUN_DATA, {}, OUT, 'herg_ic50')
 
 check('a run with no hybrid recipe still produces the base-space numbers',
-      not res.get('skipped') and len(res.get('per_space', {})) == 1,
+      not res.get('skipped')
+      and list(res.get('per_space', {})) == ['base_1', 'base_2'],
       f"spaces {list(res.get('per_space', {}))}, skipped "
       f"{res.get('skipped')}")
+check("the base spaces are rf's top 2, in rf's order",
+      res.get('base_reps_by_model') == {'rf': ['repA', 'repB']}
+      and res['space_provenance']['base_1']['representation'] == 'repA'
+      and res['space_provenance']['base_2']['representation'] == 'repB',
+      f"{res.get('base_reps_by_model')}")
 
-_sp = list(res['per_space'])[0]
+_sp = 'base_1'
 _est = list(res['per_space'][_sp])[0]
 check('every record kept a score, in the fold that held it out',
       res['per_space'][_sp][_est]['records']['n_scored'] == N_REC,
@@ -252,6 +271,20 @@ check('the detectors find labels the flag really sits on',
 check('the flag counts and the flag texts are on the result',
       res['n_records_flagged'] == 24 and res['n_records'] == N_REC,
       f"{res['n_records_flagged']} flagged of {res['n_records']}")
+
+# ── 9: no stored search, so no rf ranking and no base space ──
+n22._blueprint_for = lambda *a, **k: (
+    None, None, 'the pool is not consulted in this smoke', None)
+res9 = n22.run(_RUN_DATA, {}, OUT, 'herg_ic50')
+check('with no stored search, base_1 and base_2 are skipped with a reason',
+      res9.get('base_reps_by_model') == {}
+      and 'rf' in res9.get('base_reps_missing', {})
+      and res9.get('comparator_spaces') == [],
+      f"missing {res9.get('base_reps_missing')}")
+check('and with no hybrid either, the run is a skip with a reason, not a crash',
+      res9.get('skipped') is True
+      and res9.get('policy') == 'no_feature_space',
+      f"policy {res9.get('policy')}")
 
 print("=" * 70)
 print(f"  {len(FAIL)} failed" if FAIL else "  all checks passed")

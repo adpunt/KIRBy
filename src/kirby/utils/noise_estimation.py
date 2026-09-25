@@ -1615,8 +1615,10 @@ class NGBoostEstimator(NoiseEstimator):
 
     n23 gives this estimator 2 inner folds, so at 500 stages one uncertainty
     estimate costs 240 CPU-seconds at 1,280 features and 1,000 at 5,600.
-    `pick_noise_base_rep` returns `onehot` on an antibody set, which is 5,600
-    features wide, and n23's headline needs 6 of those estimates -- 3 outer
+    When this was measured n23's single representation on an antibody set was
+    `onehot`, 5,600 features wide (that fixed choice was deleted 2026-09-25;
+    the comparison is now each model's top 2), and n23's headline needs 6 of
+    those estimates -- 3 outer
     folds at each of 2 injected levels -- so the old schedule was 100
     CPU-minutes of one source in a run whose other four sources together cost
     under 10.

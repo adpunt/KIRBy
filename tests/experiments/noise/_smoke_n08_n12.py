@@ -292,6 +292,87 @@ def test_fix4f_clf_skip_partition():
               'is_clf' not in params)
 
 
+def test_n12_single_reps_are_each_models_top_two():
+    """n12 end to end, the two single representations per model. 2026-09-25.
+
+    The stored search ranks 'aaa' then 'bbb' for rf and 'bbb' then 'ccc' for
+    svm, so rank 1 holds two representations (one per model) and each model is
+    evaluated on its own two. The hybrid build is stubbed to raise, so only the
+    base conditions run -- the part that changed.
+    """
+    print("n12 run(), each model's top-2 single representations:")
+    from types import SimpleNamespace
+    rng = np.random.RandomState(0)
+    n = 80
+    X = rng.randn(n, 6)
+    y = X[:, 0] * 2 + X[:, 1] + 0.2 * rng.randn(n)
+    data = {'reps': {'aaa': X, 'bbb': X[:, ::-1] + 0.5 * rng.randn(n, 6),
+                     'ccc': rng.randn(n, 6)},
+            'labels': y, 'groups': np.repeat(np.arange(n // 4), 4),
+            'task_type': 'regression', 'domain': 'molecular',
+            'dataset_name': 'smoke_n12', 'augmentations': None}
+    search = SimpleNamespace(
+        metric_name='rmse', lower_is_better=True,
+        baselines={'aaa': {'rf': 0.3, 'svm': 0.9},
+                   'bbb': {'rf': 0.5, 'svm': 0.2},
+                   'ccc': {'rf': 0.9, 'svm': 0.4}},
+        baseline_fold_scores={})
+    bp = SimpleNamespace(importance_method='lightgbm_gain', budget=4,
+                         allocation_method='fixed', reps=['aaa', 'bbb'],
+                         objective='predictive', internal_evaluator='lightgbm',
+                         augmentation_strategy='none')
+    meta = {'objective': 'predictive', 'objective_choice': 'only_family',
+            'pool_subset': 'predictive_and_similarity', 'tier': 'general',
+            'aug_condition': 'none', 'score_mean': 0.5, 'metric_name': 'rmse',
+            'lower_is_better': True, 'best_config': {'blueprint': bp},
+            'by_objective': {}}
+    saved = (n12.get_best_search_for_downstream, n12.build_fold_hybrid,
+             n12.IMPORTANCE_METHODS, n12.K_VALUES)
+
+    def _no_build(*_a, **_k):
+        raise RuntimeError('hybrid build stubbed out in the smoke')
+    try:
+        n12.get_best_search_for_downstream = lambda *a, **k: (search, meta)
+        n12.build_fold_hybrid = _no_build
+        n12.IMPORTANCE_METHODS = ['lightgbm_gain']
+        n12.K_VALUES = [5]
+        r = n12._run_one_condition(data, {'n_splits': 2, 'models': ['rf', 'svm']},
+                                   None, 'smoke_n12', sigmas=[0.5],
+                                   noise_seeds=[0])
+    finally:
+        (n12.get_best_search_for_downstream, n12.build_fold_hybrid,
+         n12.IMPORTANCE_METHODS, n12.K_VALUES) = saved
+    check('no early return', 'error' not in r, str(r.get('error')))
+    check("each model's own top 2",
+          r.get('base_reps_by_model') == {'rf': ['aaa', 'bbb'],
+                                          'svm': ['bbb', 'ccc']},
+          str(r.get('base_reps_by_model')))
+    check('rank 1 holds one representation per model, each for its own model',
+          r['base_conditions_by_rank']['base_1'] == {'aaa': ['rf'],
+                                                     'bbb': ['svm']},
+          str(r['base_conditions_by_rank']))
+    sr = r['per_sigma']['0.5']
+    units = {'rf@base_1', 'rf@base_2', 'svm@base_1', 'svm@base_2'}
+    check('one clean-to-noisy gap per model per rank',
+          set(sr['gap_by_model']) == units, str(sorted(sr['gap_by_model'])))
+    cond = sr['per_importance_method']['lightgbm_gain']
+    check('all four base conditions were scored',
+          {'base_1_unweighted', 'base_1_imp_weighted', 'base_2_unweighted',
+           'base_2_imp_weighted'} <= set(cond), str(sorted(cond)))
+    rows = [v for k, v in cond['base_1_unweighted'].items()
+            if isinstance(v, dict) and 'denoised' in v]
+    check('every unit is fitted in a base condition, on its own features',
+          {v['model'] for v in rows} == units
+          and {(v['downstream_model'], v['fitted_on_representation'])
+               for v in rows} == {('rf', 'aaa'), ('rf', 'bbb'),
+                                  ('svm', 'bbb'), ('svm', 'ccc')},
+          str(sorted({v['model'] for v in rows})))
+    s = r['summary']['sigma_0.5']
+    check('the weighting answer is kept per rank',
+          set(s['weighting_helps_base']) == {'base_1', 'base_2'},
+          str(s['weighting_helps_base']))
+
+
 def main():
     print("=" * 60)
     print("FAST SMOKE: n08 / n11 / n12 helpers")
@@ -303,6 +384,7 @@ def main():
     test_run_condition_populates(is_clf=True)
     test_n11_run_estimator_grid()
     test_fix4f_clf_skip_partition()
+    test_n12_single_reps_are_each_models_top_two()
     print("=" * 60)
     if FAILS:
         print(f"RESULT: {len(FAILS)} FAILURES: {FAILS}")

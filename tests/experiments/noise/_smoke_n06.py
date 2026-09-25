@@ -18,11 +18,15 @@ What it checks:
   5. The GP cap drops whole groups, never single rows.
   6. Estimator names from n06 and from n11 resolve to the same class.
   7. run() end to end: one score per molecule from its own fold, the hybrid
-     minus the comparator, a transfer entry that refuses with a reason when
-     there is no stored ranking, per-row scores written to disk, and NO
-     best_estimator anywhere.
+     minus each of rf's top 2 single representations (base_1, base_2), a
+     transfer entry that refuses with a reason when there is no stored
+     ranking, per-row scores written to disk, and NO best_estimator anywhere.
   8. A dataset with no repeat structure writes a skip carrying its count,
      instead of raising or writing an empty result.
+  9. With no rf ranking -- no stored search, or a similarity search with no rf
+     scores -- the single-representation spaces are skipped and the reason is
+     written to base_reps_missing. No fallback list (owner's decision
+     2026-09-25).
 
 Run:  python tests/experiments/noise/_smoke_n06.py
 """
@@ -37,6 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 
 import n06_bindingdb_ground_truth as n06  # noqa: E402
 import _ground_truth_providers as gtp  # noqa: E402
@@ -258,6 +263,19 @@ class _SpreadEstimator:
         return w / w.mean()
 
 
+def _fake_search(rf_scores):
+    """A stored search holding only single-representation scores.
+
+    rf_scores: {rep: rf score}. None for a rep stands for a search that fitted
+    no rf, the way a similarity-objective search fits no model.
+    """
+    return SimpleNamespace(
+        metric_name='spearman', lower_is_better=False,
+        baselines={r: ({'rf': v} if v is not None else {})
+                   for r, v in rf_scores.items()},
+        baseline_fold_scores={}, all_results=[])
+
+
 def _synthetic_dataset(n_groups=60):
     """n_groups pairs, each pair a repeat measurement of one (drug, protein).
 
@@ -276,7 +294,10 @@ def _synthetic_dataset(n_groups=60):
         cv_groups += [g % 12, g % 12]
     return {
         'labels': np.array(labels),
-        'reps': {'feat': np.array(feat).reshape(-1, 1)},
+        # feat2 is feat doubled: the same ranking of the groups, so the
+        # planted estimator scores it exactly as it scores feat.
+        'reps': {'feat': np.array(feat).reshape(-1, 1),
+                 'feat2': 2.0 * np.array(feat).reshape(-1, 1)},
         'groups': np.array(cv_groups),
         'task_type': 'regression',
         'domain': 'molecular',
@@ -303,10 +324,10 @@ def test_run_end_to_end():
         allocation_method = 'stub'
         importance_method = 'stub'
 
-    n06._blueprint_for = (
-        lambda *a, **kw: (None, None, 'stub: the similarity arm is off', None)
-        if kw.get('objective') else (_Blueprint(), 'none', {'tier': 'stub'},
-                                     None))
+    # rf ranks feat first and feat2 second, so base_1 is feat, base_2 feat2.
+    search = _fake_search({'feat': 0.60, 'feat2': 0.50})
+    n06._blueprint_for = lambda *a, **kw: (
+        _Blueprint(), 'none', {'tier': 'stub'}, search)
     n06._fold_hybrid_pair = lambda tr, va, reps, labels, groups, bp, aug, augs: (
         -np.asarray(reps['feat'])[tr], -np.asarray(reps['feat'])[va])
 
@@ -329,23 +350,38 @@ def test_run_end_to_end():
     assert prov['used'] is True, prov
     assert prov['counts']['n_groups'] == 60, prov['counts']
 
-    comparator = res['comparator_space']
-    entry = res['ground_truth']['drug_target_repeats']['per_space'][comparator]
-    rho = entry['neighbor_residual']['value']
-    assert abs(rho - 1.0) < 1e-9, entry['neighbor_residual']
-    n_groups = entry['neighbor_residual']['n_replicate_groups']
-    assert n_groups == 60, n_groups
-    assert entry['neighbor_residual']['n_rows_behind_them'] == 120
+    assert res['base_reps_by_model'] == {'rf': ['feat', 'feat2']}, \
+        res['base_reps_by_model']
+    assert res['comparator_spaces'] == ['base_1', 'base_2'], \
+        res['comparator_spaces']
+    comparator = 'base_1'
+    block = res['ground_truth']['drug_target_repeats']
+    for sp in ('base_1', 'base_2'):
+        e = block['per_space'][sp]['neighbor_residual']
+        assert abs(e['value'] - 1.0) < 1e-9, (sp, e)
+        assert e['n_replicate_groups'] == 60, (sp, e)
+        assert e['n_rows_behind_them'] == 120, (sp, e)
+    rho = block['per_space'][comparator]['neighbor_residual']['value']
+    n_groups = block['per_space'][comparator]['neighbor_residual'][
+        'n_replicate_groups']
 
-    # The second question is subtracted, not merely written twice.
-    minus = res['ground_truth']['drug_target_repeats']['minus_comparator']
-    assert minus['comparator_space'] == comparator, minus
-    delta = minus['per_space']['hybrid_predictive']['neighbor_residual']
-    assert abs(delta - (-2.0)) < 1e-9, (
-        delta, "the stubbed hybrid ranks the groups backwards, so the hybrid "
-               "minus the comparator must be -1 - (+1) = -2")
-    hybrid_rho = (res['ground_truth']['drug_target_repeats']['per_space']
-                  ['hybrid_predictive']['neighbor_residual']['value'])
+    # The second question is subtracted, not merely written twice, once per
+    # single representation.
+    minus = block['minus_comparator']
+    assert sorted(minus) == ['base_1', 'base_2'], sorted(minus)
+    for sp, rn in (('base_1', 'feat'), ('base_2', 'feat2')):
+        assert minus[sp]['comparator_space'] == sp, minus[sp]
+        assert minus[sp]['comparator_representation'] == rn, minus[sp]
+        d = minus[sp]['per_space']['hybrid_predictive']['neighbor_residual']
+        assert abs(d - (-2.0)) < 1e-9, (
+            sp, d, "the stubbed hybrid ranks the groups backwards, so the "
+                   "hybrid minus the comparator must be -1 - (+1) = -2")
+        assert 'base_1' not in minus[sp]['per_space'] and \
+            'base_2' not in minus[sp]['per_space'], minus[sp]
+    delta = minus['base_1']['per_space']['hybrid_predictive'][
+        'neighbor_residual']
+    hybrid_rho = block['per_space']['hybrid_predictive'][
+        'neighbor_residual']['value']
     assert abs(hybrid_rho - (-1.0)) < 1e-9, hybrid_rho
 
     # No stored n11 or n13 ranking exists under this temporary directory, so
@@ -365,9 +401,12 @@ def test_run_end_to_end():
         list(arrays)
     assert np.isfinite(arrays[key]).sum() == 120, \
         "every molecule should carry a score from its own fold"
+    assert 'score__base_2__neighbor_residual' in arrays, list(arrays)
     assert len(res['per_group']['ground_truth']) == 60
 
-    print(f"PASS run(): spearman {rho:.6f} over {n_groups} groups "
+    print(f"PASS run(): base_1 feat and base_2 feat2 by rf's ranking, "
+          f"hybrid minus each is -2; "
+          f"spearman {rho:.6f} over {n_groups} groups "
           f"(expect 1.0 over 60) in {comparator}, {hybrid_rho:.6f} in the "
           f"stubbed hybrid (expect -1.0), the two subtracted give "
           f"{delta:.6f} (expect -2.0); 120 molecules scored, transfer "
@@ -423,6 +462,11 @@ def test_run_on_a_classification_dataset():
     saved_published = gtp._published_source_calls
     saved_get = n06.get_noise_estimator
     saved_resolve = n06.resolve_estimators
+    saved_bp = n06._blueprint_for
+    # No hybrid recipe, but a stored search that ranks the one representation,
+    # so base_1 runs and base_2 does not exist.
+    n06._blueprint_for = lambda *a, **kw: (
+        None, None, 'stub: no recipe', _fake_search({'feat': 0.7}))
     gtp.MIN_GROUND_TRUTH_GROUPS = 5
     gtp._published_source_calls = lambda *a, **kw: (published, {'stand_in': True})
     n06.get_noise_estimator = lambda name, **kw: _SpreadEstimator(**kw)
@@ -437,9 +481,11 @@ def test_run_on_a_classification_dataset():
         gtp._published_source_calls = saved_published
         n06.get_noise_estimator = saved_get
         n06.resolve_estimators = saved_resolve
+        n06._blueprint_for = saved_bp
 
     assert res.get('skipped') is not True, res.get('reason')
     assert res['task_type'] == 'classification'
+    assert res['comparator_spaces'] == ['base_1'], res['comparator_spaces']
     # Only the class-aware estimators, and too few of them for the headline.
     assert 'transfer_cannot_be_computed' in res, sorted(res)
     ran = {n06._canonical(e) for e in res['estimators_run']}
@@ -448,7 +494,7 @@ def test_run_on_a_classification_dataset():
     block = res['ground_truth']['cross_curator']
     assert block['statistic'] == 'auroc', block['statistic']
     assert block['n_groups'] == 15, block['n_groups']
-    entry = block['per_space'][res['comparator_space']]
+    entry = block['per_space']['base_1']
     est = sorted(entry)[0]
     # The planted estimator scores exactly the molecules the collections split
     # over, so it separates them perfectly.
@@ -491,6 +537,52 @@ def test_run_with_no_repeat_structure():
           f"n_pairs_measured_more_than_once="
           f"{counts['n_pairs_measured_more_than_once']}, not a crash and not "
           f"an empty result")
+
+
+def test_no_rf_ranking_skips_the_single_representations():
+    """No fallback list: without an rf ranking there is no base_1 or base_2.
+
+    Two ways to have no rf ranking. The pool returns no search at all, or it
+    returns a similarity-objective search whose single representations carry
+    no rf score. Either way the single-representation spaces are skipped,
+    base_reps_missing says why, and a run with no hybrid either is a skip with
+    a reason, not a crash.
+    """
+    data = _synthetic_dataset()
+    saved_resolve = n06.resolve_estimators
+    saved_bp = n06._blueprint_for
+    saved_get = n06.get_noise_estimator
+    n06.resolve_estimators = lambda is_clf=False: ['neighbor_residual']
+    n06.get_noise_estimator = lambda name, **kw: _SpreadEstimator(**kw)
+    got = {}
+    try:
+        for label, search in (('no search', None),
+                              ('similarity search, no rf scores',
+                               _fake_search({'feat': None, 'feat2': None}))):
+            n06._blueprint_for = lambda *a, _s=search, **kw: (
+                None, None, 'stub: no recipe', _s)
+            got[label] = n06.run(data, {}, os.path.join(SMOKE_OUTPUT, 'no_rf'),
+                                 'smoke_no_rf', similarity_arm=False)
+    finally:
+        n06.resolve_estimators = saved_resolve
+        n06._blueprint_for = saved_bp
+        n06.get_noise_estimator = saved_get
+
+    for label, res in got.items():
+        assert res['base_reps_by_model'] == {}, (label,
+                                                 res['base_reps_by_model'])
+        assert 'rf' in res['base_reps_missing'], (label,
+                                                  res['base_reps_missing'])
+        assert res['comparator_spaces'] == [], (label,
+                                                res['comparator_spaces'])
+        assert (res['skipped'] is True
+                and res['policy'] == 'no_feature_space'), (label,
+                                                          res.get('policy'))
+    print("PASS no rf ranking: with no search, and with a similarity search "
+          "holding no rf scores, base_1 and base_2 are skipped and "
+          "base_reps_missing gives the reason -- "
+          + '; '.join(f"{k}: {v['base_reps_missing']['rf'][:60]}"
+                      for k, v in got.items()))
 
 
 def test_published_source_calls():
@@ -573,5 +665,6 @@ if __name__ == '__main__':
     test_run_end_to_end()
     test_run_on_a_classification_dataset()
     test_run_with_no_repeat_structure()
+    test_no_rf_ranking_skips_the_single_representations()
     shutil.rmtree(SMOKE_OUTPUT, ignore_errors=True)
     print("\nALL N06 SMOKE TESTS PASSED")

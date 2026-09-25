@@ -23,12 +23,19 @@ Methods tested:
     auto-filtered when task_type='classification' via REGRESSION_ONLY_LNL.
 
 6 conditions × 5 noise levels × {12 or 10} methods:
-  A: base_no_lnl            — Base rep + standard DNN (baseline)
+  A: base_<k>_no_lnl        — Single representation + standard DNN (baseline)
   B: hybrid_no_lnl          — Hybrid + standard DNN
-  C: base_lnl               — Base rep + each LNL method
+  C: base_<k>_lnl           — Single representation + each LNL method
   D: hybrid_lnl             — Hybrid + each LNL method
   E: weighted_hybrid_no_lnl — Importance-weighted hybrid + standard DNN
   F: weighted_hybrid_lnl    — Importance-weighted hybrid + each LNL method
+
+THE SINGLE-REPRESENTATION COMPARISON (A and C) is run once per rank, k = 1 and
+2: the top 2 single representations for the DNN, ranked by the DNN's own score
+in the stored search (_shared.noise_base_reps_by_model, owner's decision
+2026-09-25). The DNN is the ranking model because it is the network every
+condition here trains. Which representations those are is written to
+`base_reps_by_model`, and `base_reps_ranked_by` says the model.
 
 Outputs per-sigma:
   - delta_from_clean: signed (noisy_score - clean_score); always defined.
@@ -72,7 +79,7 @@ from kirby.noise_spec import GROUPED_STRATEGIES
 from experiments.noise.noise_helpers import (
     inject_train_labels, noise_spec_for, detection_scores, sweep_conditions, conditions_for_task)
 from experiments._shared import (
-    pick_noise_base_rep,
+    noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
@@ -95,6 +102,11 @@ SIGMAS = None
 # noise_condition=..., one run each, and censoring takes the censored-fraction grid.
 NOISE_CONDITION = 'gaussian'
 ALL_METHODS = list(LNL_REGISTRY.keys())
+
+# The model whose ranking picks the single representations for conditions A and
+# C. Every condition in this file trains the same DNN (_run_baseline, and the LNL
+# methods' own networks), so its ranking is the one that applies.
+BASE_RANK_MODEL = 'dnn'
 
 # Reduced budget grid for the per-(noise level, fold) feature search.
 # The full pool covers [10, 25, 50, 100, 250, 500, 1000, 2000]; we trim to
@@ -284,6 +296,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         dataset_name=dataset_name, task_type=task_type,
         data=data,
     )
+    _dnn_search_found = meta is not None
     if meta is None:
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,
@@ -308,15 +321,38 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
     # Per-fold weights computed from feat_info (not global) — see conditions E/F below
 
-    # Control arm = one plain base representation. Shared helper: it will
-    # NOT fall back onto a structure-tuned sim_* recipe, which is a study
-    # treatment and must never become the thing treatments are measured
-    # against. See _shared.pick_noise_base_rep.
-    base_rep_name = pick_noise_base_rep(reps, dataset_name)
+    # ── The single-representation comparison: the DNN's top 2 ──
+    # Ranked by the DNN's own score in the stored search fetched above. When the
+    # pool held no DNN search and the rf one came back instead, the DNN's score
+    # is read out of that rf search's baselines; `base_reps_search_model` says
+    # which search it was. A `base_reps` kwarg ({model: [reps]}) overrides the
+    # ranking, for a smoke or a direct caller.
+    _base_override = kwargs.get('base_reps')
+    if _base_override is not None:
+        base_by_model = ({BASE_RANK_MODEL: list(_base_override[BASE_RANK_MODEL])}
+                         if _base_override.get(BASE_RANK_MODEL) else {})
+        base_missing = ({} if base_by_model else
+                        {BASE_RANK_MODEL: 'not given by the caller'})
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {BASE_RANK_MODEL: search}, [BASE_RANK_MODEL], reps=reps,
+            dataset_name=dataset_name)
+    # [(rank, representation), ...] -- rank 1 first. Shorter than
+    # NOISE_BASE_REP_COUNT, or empty, when fewer representations carry a DNN
+    # score; conditions A and C then run for the ranks that exist.
+    base_ranks = list(enumerate(
+        (base_by_model.get(BASE_RANK_MODEL) or [])[:NOISE_BASE_REP_COUNT],
+        start=1))
+    base_keys = [f'base_{k}' for k, _ in base_ranks]
 
     print(f"  Dataset: {dataset_name} ({len(labels)} samples)")
     print(f"  Metric: {metric_name}")
-    print(f"  Base rep: {base_rep_name} (dim={reps[base_rep_name].shape[1]})")
+    for _k, _rn in base_ranks:
+        print(f"  Single representation rank {_k} for {BASE_RANK_MODEL}: "
+              f"{_rn} (dim={reps[_rn].shape[1]})")
+    if not base_ranks:
+        print(f"  No single-representation comparison: "
+              f"{base_missing.get(BASE_RANK_MODEL)}")
     print(f"  Sigmas: {sigmas}")
     print(f"  Methods: {len(methods_to_test)}")
     print(f"  Folds: {n_folds}")
@@ -324,7 +360,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
-        'base_rep': base_rep_name,
+        # Conditions A and C run once per rank: base_1_* in the DNN's rank-1
+        # single representation, base_2_* in its rank-2 one.
+        'base_reps_by_model': base_by_model,
+        'base_reps_missing': base_missing,
+        'base_reps_ranked_by': BASE_RANK_MODEL,
+        # Which downstream model's stored search the ranking was read from:
+        # 'dnn', or 'rf' when the pool held no DNN search.
+        'base_reps_search_model': ('dnn' if _dnn_search_found
+                                   else ('rf' if meta is not None else None)),
         'sigmas': sigmas,
         'noise_condition': noise_condition,
         'noise_provenance': noise_provenance,
@@ -359,41 +403,34 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
 
-        sigma_results = {
-            'base_no_lnl': [],
-            'hybrid_no_lnl': [],
-            'weighted_hybrid_no_lnl': [],
-        }
+        # One base_<k>_no_lnl list per rank of the single-representation
+        # comparison, beside the two hybrid ones.
+        _plain_keys = ([f'{b}_no_lnl' for b in base_keys]
+                       + ['hybrid_no_lnl', 'weighted_hybrid_no_lnl'])
+        _lnl_keys = ([f'{b}_lnl' for b in base_keys]
+                     + ['hybrid_lnl', 'weighted_hybrid_lnl'])
+        sigma_results = {k: [] for k in _plain_keys}
         # Which fold each score came from. A fold where the hybrid build fails
         # drops out of the hybrid arms but not the base arm, so without this the
         # two means are averages over different folds and their difference is
         # not a paired comparison.
-        sigma_folds = {
-            'base_no_lnl': [],
-            'hybrid_no_lnl': [],
-            'weighted_hybrid_no_lnl': [],
-        }
+        sigma_folds = {k: [] for k in _plain_keys}
         # Which noise draw each score came from, aligned with sigma_folds. A
         # hybrid build fails for one (fold, draw) pass, not for a whole fold,
         # so the fold index alone does not say which passes an arm holds.
-        sigma_draws = {
-            'base_no_lnl': [],
-            'hybrid_no_lnl': [],
-            'weighted_hybrid_no_lnl': [],
-        }
+        sigma_draws = {k: [] for k in _plain_keys}
         # Detection readings for this level, one list per (condition, method).
         # Stays empty unless the condition is one where a corrupted subset exists.
         detection_acc = {}
         if sigma > 0:
-            sigma_results['base_lnl'] = {m: [] for m in methods_to_test}
-            sigma_results['hybrid_lnl'] = {m: [] for m in methods_to_test}
-            sigma_results['weighted_hybrid_lnl'] = {m: [] for m in methods_to_test}
+            for _ck in _lnl_keys:
+                sigma_results[_ck] = {m: [] for m in methods_to_test}
             # Same fold bookkeeping for the method conditions. A method that
             # raised on one fold, or a fold whose hybrid build failed, drops
             # out of one arm and not another; without this the 36 method arms
             # carried neither their fold indices nor their per-fold scores, so
             # no two of them could be compared fold by fold.
-            for _ck in ('base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl'):
+            for _ck in _lnl_keys:
                 sigma_folds[_ck] = {m: [] for m in methods_to_test}
                 sigma_draws[_ck] = {m: [] for m in methods_to_test}
 
@@ -436,12 +473,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 groups=noise_groups, dataset_name=dataset_name)
             noise_provenance.setdefault(_spec.spec_id, _prov)
 
-            # Build base rep features
-            X_base_train = reps[base_rep_name][train_idx]
-            X_base_val = reps[base_rep_name][val_idx]
-            scaler_base = StandardScaler()
-            X_base_train_s = scaler_base.fit_transform(X_base_train)
-            X_base_val_s = scaler_base.transform(X_base_val)
+            # The single-representation features, one pair per rank, each
+            # scaled on this fold's training molecules.
+            X_base_by_key = {}
+            for (_k, _rn), _bk in zip(base_ranks, base_keys):
+                scaler_base = StandardScaler()
+                X_base_by_key[_bk] = (
+                    scaler_base.fit_transform(reps[_rn][train_idx]),
+                    scaler_base.transform(reps[_rn][val_idx]))
 
             # Build hybrid features by running a fresh feature-mix search on
             # the NOISY training labels (matching the c06 per-variant pattern).
@@ -582,18 +621,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 print(f"    Hybrid failed (fold {fold_idx}): {e}")
                 hybrid_ok = False
 
-            # --- Condition A: base, no LNL ---
-            try:
-                y_pred_a = _run_baseline(X_base_train_s, y_train,
-                                         X_base_val_s, y_val,
-                                         random_state=42 + fold_idx,
-                                         is_clf=is_clf, classes_=classes_)
-                score_a = float(metric_fn(y_val, y_pred_a))
-                sigma_results['base_no_lnl'].append(score_a)
-                sigma_folds['base_no_lnl'].append(fold_idx)
-                sigma_draws['base_no_lnl'].append(noise_seed)
-            except Exception as e:
-                print(f"    Condition A failed: {e}")
+            # --- Condition A: single representation, no LNL, once per rank ---
+            for _bk, (X_base_train_s, X_base_val_s) in X_base_by_key.items():
+                try:
+                    y_pred_a = _run_baseline(X_base_train_s, y_train,
+                                             X_base_val_s, y_val,
+                                             random_state=42 + fold_idx,
+                                             is_clf=is_clf, classes_=classes_)
+                    score_a = float(metric_fn(y_val, y_pred_a))
+                    sigma_results[f'{_bk}_no_lnl'].append(score_a)
+                    sigma_folds[f'{_bk}_no_lnl'].append(fold_idx)
+                    sigma_draws[f'{_bk}_no_lnl'].append(noise_seed)
+                except Exception as e:
+                    print(f"    Condition A ({_bk}) failed: {e}")
 
             # --- Condition B: hybrid, no LNL ---
             if hybrid_ok:
@@ -660,22 +700,24 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 lnl_kwargs = dict(random_state=42 + fold_idx,
                                   is_clf=is_clf, classes_=classes_)
                 for method_name in methods_to_test:
-                    # Condition C: base + LNL
-                    try:
-                        method_c = get_lnl_method(method_name, **lnl_kwargs)
-                        # Keeps each method's checkpoint-selection carve
-                        # scaffold-disjoint inside the training fold.
-                        method_c.selection_groups = train_groups_subset
-                        result_c = method_c.train_and_predict(
-                            X_base_train_s, y_train, X_base_val_s, y_val)
-                        score_c = float(metric_fn(y_val, result_c['y_pred']))
-                        _record_detection(detection_acc, 'base_lnl', method_name,
-                                           result_c, _cmask, noise_condition)
-                        sigma_results['base_lnl'][method_name].append(score_c)
-                        sigma_folds['base_lnl'][method_name].append(fold_idx)
-                        sigma_draws['base_lnl'][method_name].append(noise_seed)
-                    except Exception as e:
-                        print(f"    C/{method_name} failed: {e}")
+                    # Condition C: single representation + LNL, once per rank
+                    for _bk, (X_base_train_s, X_base_val_s) in X_base_by_key.items():
+                        _ck = f'{_bk}_lnl'
+                        try:
+                            method_c = get_lnl_method(method_name, **lnl_kwargs)
+                            # Keeps each method's checkpoint-selection carve
+                            # scaffold-disjoint inside the training fold.
+                            method_c.selection_groups = train_groups_subset
+                            result_c = method_c.train_and_predict(
+                                X_base_train_s, y_train, X_base_val_s, y_val)
+                            score_c = float(metric_fn(y_val, result_c['y_pred']))
+                            _record_detection(detection_acc, _ck, method_name,
+                                               result_c, _cmask, noise_condition)
+                            sigma_results[_ck][method_name].append(score_c)
+                            sigma_folds[_ck][method_name].append(fold_idx)
+                            sigma_draws[_ck][method_name].append(noise_seed)
+                        except Exception as e:
+                            print(f"    C/{_bk}/{method_name} failed: {e}")
 
                     # Condition D: hybrid + LNL
                     if hybrid_ok:
@@ -713,7 +755,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
         # Aggregate fold results
         agg = {}
-        for cond_key in ['base_no_lnl', 'hybrid_no_lnl', 'weighted_hybrid_no_lnl']:
+        for cond_key in _plain_keys:
             scores = sigma_results[cond_key]
             if scores:
                 agg[cond_key] = {
@@ -736,7 +778,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                  'fold_scores': []}
 
         if sigma > 0:
-            for cond_key in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
+            for cond_key in _lnl_keys:
                 agg[cond_key] = {}
                 for method_name in methods_to_test:
                     scores = sigma_results[cond_key][method_name]
@@ -765,14 +807,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         results['per_sigma'][str(sigma)] = convert_numpy(agg)
 
         # Print summary for this sigma
-        a_score = agg['base_no_lnl']['mean']
         b_score = agg['hybrid_no_lnl']['mean']
         e_score = agg['weighted_hybrid_no_lnl']['mean']
-        print(f"    Base DNN: {a_score:.4f}, Hybrid DNN: {b_score:.4f}, "
+        print("    " + ", ".join(
+            f"{_bk} DNN: {agg[f'{_bk}_no_lnl']['mean']:.4f}"
+            for _bk in base_keys)
+              + (", " if base_keys else "")
+              + f"Hybrid DNN: {b_score:.4f}, "
               f"Weighted Hybrid DNN: {e_score:.4f}")
         if sigma > 0:
             # Best LNL method per condition
-            for cond in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
+            for cond in _lnl_keys:
                 best_name = None
                 best_score = float('-inf') if not lower_is_better else float('inf')
                 for m in methods_to_test:
@@ -800,7 +845,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     #                     (e.g. clean=-0.1, noisy=-0.5 → 500%). The signed
     #                     delta is the safer headline quantity.
     clean_sigma = results['per_sigma'].get('0.0', {})
-    clean_base = clean_sigma.get('base_no_lnl', {}).get('mean', float('nan'))
+    # One clean reference per rank of the single-representation comparison.
+    clean_base = {_bk: clean_sigma.get(f'{_bk}_no_lnl', {}).get('mean', float('nan'))
+                  for _bk in base_keys}
     clean_hybrid = clean_sigma.get('hybrid_no_lnl', {}).get('mean', float('nan'))
     clean_whybrid = clean_sigma.get('weighted_hybrid_no_lnl', {}).get('mean', float('nan'))
 
@@ -834,28 +881,32 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'score_ratio_pct': _score_ratio_pct(noisy_val, clean_val),
         }
 
+    _lnl_keys_all = ([f'{b}_lnl' for b in base_keys]
+                     + ['hybrid_lnl', 'weighted_hybrid_lnl'])
     retention = {}
     for sigma_key, sigma_data in results['per_sigma'].items():
         if sigma_key == '0.0':
             continue
         sigma_ret = {}
 
-        noisy_base = sigma_data.get('base_no_lnl', {}).get('mean', float('nan'))
         noisy_hybrid = sigma_data.get('hybrid_no_lnl', {}).get('mean', float('nan'))
         noisy_whybrid = sigma_data.get('weighted_hybrid_no_lnl', {}).get('mean', float('nan'))
 
-        sigma_ret['base_no_lnl'] = _pair(noisy_base, clean_base)
+        for _bk in base_keys:
+            noisy_base = sigma_data.get(f'{_bk}_no_lnl', {}).get('mean', float('nan'))
+            sigma_ret[f'{_bk}_no_lnl'] = _pair(noisy_base, clean_base[_bk])
         sigma_ret['hybrid_no_lnl'] = _pair(noisy_hybrid, clean_hybrid)
         sigma_ret['weighted_hybrid_no_lnl'] = _pair(noisy_whybrid, clean_whybrid)
 
-        for cond in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
+        for cond in _lnl_keys_all:
             sigma_ret[cond] = {}
             if 'weighted_hybrid' in cond:
                 clean_ref = clean_whybrid
             elif 'hybrid' in cond:
                 clean_ref = clean_hybrid
             else:
-                clean_ref = clean_base
+                # base_<k>_lnl is read against its own rank's clean reference.
+                clean_ref = clean_base[cond[:-len('_lnl')]]
             for method_name in methods_to_test:
                 m_score = sigma_data.get(cond, {}).get(method_name, {}).get(
                     'mean', float('nan'))
@@ -874,7 +925,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # SUMMARY
     # =========================================================================
     summary = {
-        'clean_base': clean_base,
+        **{f'clean_{_bk}': clean_base[_bk] for _bk in base_keys},
         'clean_hybrid': clean_hybrid,
         'clean_weighted_hybrid': clean_whybrid,
     }
@@ -883,7 +934,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     highest_sigma = str(max(s for s in sigmas if s > 0))
     hs_data = results['per_sigma'].get(highest_sigma, {})
 
-    for cond in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
+    for cond in _lnl_keys_all:
         best_name = None
         best_score = float('-inf') if not lower_is_better else float('inf')
         for m in methods_to_test:
@@ -936,31 +987,40 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             return float('nan'), float('nan')
         return float(np.mean(ka)), float(np.mean(kb))
 
-    hybrid_improves = []
-    hybrid_harms = []
-    for m in methods_to_test:
-        _base_arm = hs_data.get('base_lnl', {}).get(m, {})
-        _hyb_arm = hs_data.get('hybrid_lnl', {}).get(m, {})
-        base_s, hyb_s = _shared_fold_means(_base_arm, _hyb_arm)
-        if np.isnan(base_s) or np.isnan(hyb_s):
-            # Say so rather than drop the method from the counts in silence:
-            # both arms scored something, and they still share no pass.
-            if _base_arm.get('n_folds') and _hyb_arm.get('n_folds'):
-                print(f"    {m}: base and hybrid share no (fold, draw) pass "
-                      f"at sigma={highest_sigma}; left out of "
-                      f"hybrid_improves/hybrid_harms")
-            continue
-        if (not lower_is_better and hyb_s > base_s) or \
-           (lower_is_better and hyb_s < base_s):
-            hybrid_improves.append(m)
-        elif (not lower_is_better and hyb_s < base_s) or \
-             (lower_is_better and hyb_s > base_s):
-            hybrid_harms.append(m)
-
-    summary['hybrid_improves'] = hybrid_improves
-    summary['hybrid_harms'] = hybrid_harms
-    summary['n_hybrid_improves'] = len(hybrid_improves)
-    summary['n_hybrid_harms'] = len(hybrid_harms)
+    # Read once against each rank of the single-representation comparison:
+    # summary['hybrid_vs_base']['base_1'] is the hybrid against the DNN's rank-1
+    # single representation, ['base_2'] against its rank-2 one.
+    hybrid_vs_base = {}
+    for _bk in base_keys:
+        hybrid_improves = []
+        hybrid_harms = []
+        for m in methods_to_test:
+            _base_arm = hs_data.get(f'{_bk}_lnl', {}).get(m, {})
+            _hyb_arm = hs_data.get('hybrid_lnl', {}).get(m, {})
+            base_s, hyb_s = _shared_fold_means(_base_arm, _hyb_arm)
+            if np.isnan(base_s) or np.isnan(hyb_s):
+                # Say so rather than drop the method from the counts in
+                # silence: both arms scored something, and they still share
+                # no pass.
+                if _base_arm.get('n_folds') and _hyb_arm.get('n_folds'):
+                    print(f"    {m}: {_bk} and hybrid share no (fold, draw) "
+                          f"pass at sigma={highest_sigma}; left out of "
+                          f"hybrid_improves/hybrid_harms")
+                continue
+            if (not lower_is_better and hyb_s > base_s) or \
+               (lower_is_better and hyb_s < base_s):
+                hybrid_improves.append(m)
+            elif (not lower_is_better and hyb_s < base_s) or \
+                 (lower_is_better and hyb_s > base_s):
+                hybrid_harms.append(m)
+        hybrid_vs_base[_bk] = {
+            'representation': dict(base_ranks)[int(_bk.split('_')[1])],
+            'hybrid_improves': hybrid_improves,
+            'hybrid_harms': hybrid_harms,
+            'n_hybrid_improves': len(hybrid_improves),
+            'n_hybrid_harms': len(hybrid_harms),
+        }
+    summary['hybrid_vs_base'] = hybrid_vs_base
 
     # Methods where weighted hybrid > hybrid (does weighting help?)
     whybrid_improves = []
@@ -1002,10 +1062,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                           reverse=not lower_is_better)
         return sorted_m[:3]
 
-    top3_base = _top3(hs_data.get('base_lnl', {}))
+    top3_base = {_bk: _top3(hs_data.get(f'{_bk}_lnl', {})) for _bk in base_keys}
     top3_hybrid = _top3(hs_data.get('hybrid_lnl', {}))
     top3_whybrid = _top3(hs_data.get('weighted_hybrid_lnl', {}))
-    summary['top3_base'] = top3_base
+    for _bk in base_keys:
+        summary[f'top3_{_bk}'] = top3_base[_bk]
     summary['top3_hybrid'] = top3_hybrid
     summary['top3_weighted_hybrid'] = top3_whybrid
     # Guard against a spurious "ranking changed" verdict when one arm never
@@ -1013,9 +1074,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # its top-3 list is empty and `[] != [populated]` would report True even
     # though no comparison actually happened. Report None (no valid comparison)
     # instead of a misleading True in that case.
-    summary['ranking_changed'] = (
-        None if (not top3_base or not top3_hybrid)
-        else top3_base != top3_hybrid)
+    # One verdict per rank of the single-representation comparison.
+    summary['ranking_changed'] = {
+        _bk: (None if (not top3_base[_bk] or not top3_hybrid)
+              else top3_base[_bk] != top3_hybrid)
+        for _bk in base_keys}
     summary['ranking_changed_weighted'] = (
         None if (not top3_hybrid or not top3_whybrid)
         else top3_hybrid != top3_whybrid)
@@ -1023,18 +1086,24 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['summary'] = convert_numpy(summary)
 
     print(f"\n  === SUMMARY ===")
-    print(f"  Clean: base={clean_base:.4f}, hybrid={clean_hybrid:.4f}, "
+    print("  Clean: " + "".join(f"{_bk}={clean_base[_bk]:.4f}, "
+                                for _bk in base_keys)
+          + f"hybrid={clean_hybrid:.4f}, "
           f"weighted_hybrid={clean_whybrid:.4f}")
     print(f"  Best at sigma={highest_sigma}: "
-          f"base_lnl={summary.get('best_base_lnl')}, "
-          f"hybrid_lnl={summary.get('best_hybrid_lnl')}, "
+          + "".join(f"{_bk}_lnl={summary.get(f'best_{_bk}_lnl')}, "
+                    for _bk in base_keys)
+          + f"hybrid_lnl={summary.get('best_hybrid_lnl')}, "
           f"weighted_hybrid_lnl={summary.get('best_weighted_hybrid_lnl')}")
-    print(f"  Hybrid improves {len(hybrid_improves)}/{len(methods_to_test)} methods")
+    for _bk, _v in hybrid_vs_base.items():
+        print(f"  Hybrid improves over {_bk} ({_v['representation']}): "
+              f"{_v['n_hybrid_improves']}/{len(methods_to_test)} methods")
     print(f"  Weighted improves over hybrid: "
           f"{len(whybrid_improves)}/{len(methods_to_test)} methods")
     print(f"  Ranking changed: {summary['ranking_changed']}")
     print(f"  Ranking changed (weighted): {summary['ranking_changed_weighted']}")
-    print(f"  Top-3 base: {top3_base}")
+    for _bk in base_keys:
+        print(f"  Top-3 {_bk}: {top3_base[_bk]}")
     print(f"  Top-3 hybrid: {top3_hybrid}")
     print(f"  Top-3 weighted hybrid: {top3_whybrid}")
 

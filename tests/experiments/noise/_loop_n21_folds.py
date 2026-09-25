@@ -21,9 +21,13 @@ metrics, both importance scorers, both exponents and all three neighbour counts
 run. A distance that wins here is re-measured through n21 itself, with the
 repair, before it is believed.
 
-⛔ THE CONTROL CHANGED UNDER THIS FILE. `pick_noise_base_rep` no longer falls
-back alphabetically, so flab_thermo_tresanco's plain representation is `onehot`
-at 5600 features, not `esm2_cdr` at 1280. The recorded table -- forest
+⛔ THE CONTROL CHANGED UNDER THIS FILE. On 2026-09-21 the fixed preference
+list then used to choose the plain representation stopped falling back
+alphabetically, so flab_thermo_tresanco's plain representation became `onehot`
+at 5600 features, not `esm2_cdr` at 1280. That list was deleted 2026-09-25
+(owner's decision: the noise experiments now compare against each downstream
+model's top 2 single representations), so the plain representation is now
+passed with --base-rep. The recorded table -- forest
 proximity 0.2455, importance-weighted 0.2388, similarity hybrid 0.2182, plain
 0.2101, prediction hybrid 0.2045 -- was read in esm2_cdr. Those numbers are on
 a different footing and this run does not compare against them; it re-reads
@@ -184,7 +188,17 @@ def _restore(prior, ctx):
 
 
 def main():
-    from experiments._shared import (load_data, pick_noise_base_rep, cv_split,
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument('--base-rep', required=True,
+                   help=('the single representation to compare against. '
+                         'Required: the fixed preference list that used to '
+                         'choose it was deleted 2026-09-25; the noise '
+                         'experiments now compare against each downstream '
+                         "model's top 2 single representations by its "
+                         'stored score'))
+    a = p.parse_args()
+    from experiments._shared import (load_data, cv_split,
                                      get_domain_metric, get_model_factories,
                                      get_best_search_for_downstream)
     from experiments.noise import n21_neighbour_distance as N21
@@ -214,7 +228,10 @@ def main():
     task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    base_rep = pick_noise_base_rep(reps, DATASET)
+    base_rep = a.base_rep
+    if base_rep not in reps:
+        raise SystemExit(f'--base-rep {base_rep!r} is not among the loaded '
+                         f'representations {sorted(reps)}')
     noise_groups, _n, _l = noise_groups_for(data)
     splits = list(cv_split(groups, FOLDS, next(iter(reps.values())), labels))
 
@@ -424,9 +441,9 @@ def _write(path, ns):
         'plain_representation_features':
             int(ns['reps'][ns['base_rep']].shape[1]),
         'base_rep_note': (
-            'pick_noise_base_rep no longer falls back alphabetically. Every '
-            'n21 number recorded before 2026-09-21 was read in esm2_cdr and '
-            'is on a different footing.'),
+            'passed with --base-rep. The fixed preference list that chose it '
+            'before was deleted 2026-09-25. Every n21 number recorded before '
+            '2026-09-21 was read in esm2_cdr and is on a different footing.'),
         'dataset_metric': ns['metric_name'],
         'noise_condition': ns['CONDITION'],
         'level': ns['LEVEL'],

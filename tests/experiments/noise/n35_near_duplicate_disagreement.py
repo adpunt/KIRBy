@@ -14,17 +14,24 @@ disagree by more than 3 * sqrt(2) * sigma, where sigma is that noise estimate.
 
 WHAT IS COMPUTED, per (level, fold), on the TRAINING molecules only:
 
-  1. Every pairwise distance among the fold's training molecules, in three
+  1. Every pairwise distance among the fold's training molecules, in these
      distance spaces:
-       base              the base representation. Tanimoto distance when every
-                         value is 0 or 1 (a fingerprint); otherwise Euclidean on
-                         the fold-standardised matrix.
+       base_1, base_2    each downstream model's rank-1 and rank-2 single
+                         representation (see THE SINGLE-REPRESENTATION
+                         COMPARISON below), one matrix per distinct
+                         representation. Tanimoto distance when every value of
+                         that representation is 0 or 1 (a fingerprint);
+                         otherwise Euclidean on the fold-standardised matrix.
        <hybrid space>    Euclidean on each standardised hybrid matrix the fold
                          builds, one per group of models sharing a recipe.
        forest_proximity  one minus the share of 200 trees that put the two
-                         molecules in one leaf (kirby.utils.noise_estimation),
-                         forest fitted on the base representation and the labels
-                         AS SEEN. ⛔ REFUSED above n07.PROX_SMOOTH_MAX_ROWS
+                         molecules in one leaf (kirby.utils.noise_estimation).
+                         One forest PER FEATURE MATRIX above, fitted on that
+                         standardised matrix and the labels AS SEEN, and its
+                         weights used only in that space -- the way n18
+                         re-runs its detectors per space (owner's decision
+                         2026-09-25). Written under
+                         'forest_proximity:<space key>'. ⛔ REFUSED above n07.PROX_SMOOTH_MAX_ROWS
                          training molecules, for n07's reason: it is a square
                          matrix, and a proximity over a subsample is a different
                          quantity. ⛔ The forest reads the labels, so two
@@ -51,15 +58,15 @@ within-molecule variance of the fold's training rows, sum((k-1) * var) / sum(k-1
 which is how n19.measurement_stats and n26 read the noise directly.
 
 THE CHECK. `gaussian` at the dataset's level grid, injected into the training
-labels only. The BASE pair set depends on the features alone, so across levels
+labels only. Each base_1 / base_2 pair set depends on the features alone, so across levels
 it is the same pairs, and the increase of the base estimate over level 0 should
 be the injected variance itself -- each member of a pair carries its own draw,
 and Var(e_i - e_j) / 2 = Var(e). The realised injected variance,
 mean((y_seen - y_clean)^2) over the training molecules, is written beside it.
 The hybrid is rebuilt from the noisy labels at every level, so its features and
-therefore its pair set can move; the forest proximity is refitted on the noisy
+therefore its pair set can move; each forest proximity is refitted on the noisy
 labels, and its pairs move with them. Neither is expected to track exactly; the
-base space is the check.
+base_1 and base_2 matrices are the check, one row per matrix.
 
 THE METHOD ARM (A7). Per (level, fold, feature space, model), all scored on the
 same held-out molecules against their CLEAN labels:
@@ -71,7 +78,8 @@ same held-out molecules against their CLEAN labels:
                                     sigma^2 = the closest-bin estimate, same
                                     space, same labels.
   downweight_pairs_forest_proximity the same rule with the pairs and sigma from
-                                    the forest proximity. Absent where the
+                                    the forest proximity fitted on THIS
+                                    feature space's matrix. Absent where the
                                     proximity was refused.
 
 The weight 0.25 is FINDINGS.md section 1's "downweight to a quarter", the only
@@ -91,6 +99,13 @@ WHERE THE FEATURES COME FROM. As in n30: the recipe for each downstream model is
 read from the precomputed pool, searched on clean labels; each fold rebuilds the
 hybrid from that fold's SEEN training labels once per level, and every arm
 shares it.
+
+THE SINGLE-REPRESENTATION COMPARISON is each downstream model's top 2 base
+representations by that model's own score in the stored search -- spaces
+`base_1` and `base_2` -- the same rule as the rest of the study
+(_shared.noise_base_reps_by_model, owner's decision 2026-09-25). Which
+representations those are is written to `base_reps_by_model`; a model the pool
+holds no stored search for has none, and `base_reps_missing` says why.
 
 Usage:
     python n35_near_duplicate_disagreement.py --dataset herg_ki --mode full
@@ -112,7 +127,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.dataset_policy import (
@@ -150,6 +166,9 @@ SPACE_FOR_FAMILY = {
     'predictive': 'hybrid',
     'similarity': 'hybrid_similarity',
 }
+# base_1 and base_2 are each downstream model's rank-1 and rank-2 single
+# representation (see the module docstring).
+BASE_SPACES = tuple(f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1))
 PROXIMITY_SPACE = 'forest_proximity'
 ARMS = ('untouched', 'downweight_pairs_this_space',
         'downweight_pairs_forest_proximity')
@@ -412,11 +431,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
             f"{sorted(model_factories)}.")
 
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
     noise_groups = noise_groups_for(data)[0]
     rep_groups = build_replicate_groups(data)
-    base_binary = is_binary(reps[base_rep_name])
 
     fps_all = None
     cliff_note = None
@@ -432,9 +451,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'noise_condition': CHECK_CONDITION,
         'dose_units': noise_dose_units(dataset_name),
         'models': downstream_models,
-        'base_rep': base_rep_name,
-        'base_distance': ('tanimoto' if base_binary
-                          else 'euclidean_on_standardised_features'),
         'arms': list(ARMS),
         'arm_to_beat': 'untouched',
         'close_percentile': CLOSE_PERCENTILE,
@@ -450,22 +466,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'distance 0 with a straight line. Both hold some real activity '
             'difference and are upper bounds on the noise variance.'),
         'proximity_note': (
-            'The forest proximity is fitted on the labels as seen, so its close '
-            'pairs already tend to agree on the label. Its estimate is biased '
-            'low by construction.'),
+            'One forest per feature matrix, fitted on that standardised matrix '
+            'and the labels as seen; its weights are used only in that space. '
+            'Its close pairs already tend to agree on the label, so its '
+            'estimate is biased low by construction.'),
         'check_note': (
-            'Under gaussian, the base pair set does not depend on the labels, '
-            'so the base closest-bin estimate minus its level-0 value should '
+            'Under gaussian, each base_1/base_2 pair set does not depend on the '
+            'labels, so its closest-bin estimate minus its level-0 value should '
             'equal the realised injected variance on the same fold. The hybrid '
-            'is rebuilt from the noisy labels and the forest is refitted on '
+            'is rebuilt from the noisy labels and each forest is refitted on '
             'them, so their pair sets move with the level.'),
         'cliff_note': cliff_note,
         'per_level': {},
         'pairs_per_pass': {},
     }
 
-    sample_X = reps[base_rep_name]
-    splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
+                           mode=mode))
 
     by_model, no_recipe = pool_recipe_per_downstream_model(
         functools.partial(
@@ -494,12 +511,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             hybrid_unavailable.setdefault(_sp, {})[_m] = _why
     results['hybrid_spaces_unavailable'] = hybrid_unavailable
 
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces_run = tuple(
+        f'base_{k}' for k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, k, downstream_models))
+    # Tanimoto for a representation whose every value is 0 or 1.
+    base_binary = {r: is_binary(reps[r])
+                   for names in base_by_model.values() for r in names}
+    results['base_distance_by_rep'] = {
+        r: ('tanimoto' if b else 'euclidean_on_standardised_features')
+        for r, b in base_binary.items()}
+
     _ordered = []
     for _m in downstream_models:
         for r in recipes_by_model.get(_m, ()):
             if r['space'] not in _ordered:
                 _ordered.append(r['space'])
-    spaces = ('base',) + tuple(_ordered)
+    spaces = base_spaces_run + tuple(_ordered)
     results['hybrid_available'] = bool(_ordered)
     if _ordered:
         results['hybrid_recipe_by_model'] = convert_numpy({
@@ -517,11 +556,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         results['hybrid_unavailable_reason'] = (
             (f"the pool lookup RAISED {results['hybrid_lookup_error']}; the "
-             f"pool was never read. Every arm ran in the base representation.")
+             f"pool was never read. Every arm ran in the single "
+             f"representations only.")
             if results['hybrid_lookup_error'] else
             (f'no recipe came back from pool subset {POOL_SUBSET!r} for any '
-             f'downstream model. Every arm ran in the base representation.'))
-        print("  no hybrid recipe; base representation only")
+             f'downstream model. Every arm ran in the single '
+             f'representations only.'))
+        print("  no hybrid recipe; single representations only")
     results['spaces_run'] = list(spaces)
 
     passes = _levels_and_draws(dataset_name, levels=kwargs.get('levels'),
@@ -529,8 +570,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['noise_levels'] = sorted({l for l, _ in passes})
     print(f"  {len(labels)} rows, {len(splits)} folds, models "
           f"{downstream_models}")
-    print(f"  base representation {base_rep_name}, distance "
-          f"{results['base_distance']}; levels {results['noise_levels']}")
+    print(f"  spaces {list(spaces)}; single-representation distances "
+          f"{results['base_distance_by_rep']}; levels "
+          f"{results['noise_levels']}")
 
     acc, tails, errors, pair_acc = {}, {}, {}, {}
     t0 = time.time()
@@ -619,40 +661,61 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             val_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
                         for k, v in reps.items()}
 
-            # {space: [(X_tr, X_va, models, weights from this space's pairs)]}
-            fold_spaces = {}
-            sc = StandardScaler()
-            Xb_tr = sc.fit_transform(train_reps[base_rep_name])
-            Xb_va = sc.transform(val_reps[base_rep_name])
-            Db = (tanimoto_distance_matrix(train_reps[base_rep_name])
-                  if base_binary else euclidean_distance_matrix(Xb_tr))
-            w_base = _describe('base', Db)
-            del Db
-            fold_spaces['base'] = [(Xb_tr, Xb_va, list(downstream_models),
-                                    w_base)]
-
-            w_prox = None
-            if run_proximity:
+            def _prox(cell_key, X_tr_cell):
+                """Forest-proximity weights from a forest fitted on THIS
+                cell's standardised matrix. None when switched off, refused
+                or failed."""
+                if not run_proximity:
+                    return None
+                pkey = f'{PROXIMITY_SPACE}:{cell_key}'
                 if n_tr > PROX_SMOOTH_MAX_ROWS:
-                    prec['per_space'][PROXIMITY_SPACE] = {
+                    prec['per_space'][pkey] = {
                         'refused': (f'{n_tr} training rows is over '
                                     f'PROX_SMOOTH_MAX_ROWS='
                                     f'{PROX_SMOOTH_MAX_ROWS}; refused rather '
                                     f'than subsampled, as n07 does')}
-                else:
-                    try:
-                        from kirby.utils.noise_estimation import (
-                            forest_leaf_ids, forest_proximity_distance)
-                        Dp = forest_proximity_distance(
-                            forest_leaf_ids(Xb_tr, y0, False))
-                        w_prox = _describe(PROXIMITY_SPACE, Dp)
-                        del Dp
-                    except Exception as exc:
-                        errors[f'{lvl_key}|{PROXIMITY_SPACE}|f{fold_i}'] = (
-                            f'{type(exc).__name__}: {exc}')
+                    return None
+                try:
+                    from kirby.utils.noise_estimation import (
+                        forest_leaf_ids, forest_proximity_distance)
+                    Dp = forest_proximity_distance(
+                        forest_leaf_ids(X_tr_cell, y0, False))
+                    w = _describe(pkey, Dp)
+                    del Dp
+                    return w
+                except Exception as exc:
+                    errors[f'{lvl_key}|{pkey}|f{fold_i}'] = (
+                        f'{type(exc).__name__}: {exc}')
+                    return None
+
+            # {space: [(X_tr, X_va, models, weights from this space's pairs,
+            #           weights from this space's forest proximity)]}
+            # Each single-representation space holds one matrix per distinct
+            # representation at that rank, shared by the models that rank it
+            # there.
+            fold_spaces = {}
+            for _k, _bsp in enumerate(BASE_SPACES, start=1):
+                if _bsp not in spaces:
+                    continue
+                _bcells = []
+                for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                                 downstream_models).items():
+                    sc = StandardScaler()
+                    Xb_tr = sc.fit_transform(train_reps[_rn])
+                    Xb_va = sc.transform(val_reps[_rn])
+                    _key = (_bsp if list(_ms) == list(downstream_models)
+                            else f'{_bsp}/{_ms[0]}')
+                    Db = (tanimoto_distance_matrix(train_reps[_rn])
+                          if base_binary[_rn]
+                          else euclidean_distance_matrix(Xb_tr))
+                    w_b = _describe(_key, Db)
+                    del Db
+                    _bcells.append((Xb_tr, Xb_va, list(_ms), w_b,
+                                    _prox(_key, Xb_tr)))
+                fold_spaces[_bsp] = _bcells
 
             for _sp in spaces:
-                if _sp == 'base':
+                if _sp in BASE_SPACES:
                     continue
                 _cells = []
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
@@ -673,13 +736,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _key = (_sp if list(_mnames) == list(downstream_models)
                             else f'{_sp}/{_mnames[0]}')
                     w_h = _describe(_key, euclidean_distance_matrix(Xh_tr))
-                    _cells.append((Xh_tr, Xh_va, list(_mnames), w_h))
+                    _cells.append((Xh_tr, Xh_va, list(_mnames), w_h,
+                                   _prox(_key, Xh_tr)))
                 if _cells:
                     fold_spaces[_sp] = _cells
 
             for space in spaces:
-                for X_tr_s, X_va_s, cell_models, w_self in fold_spaces.get(
-                        space, ()):
+                for (X_tr_s, X_va_s, cell_models, w_self,
+                     w_prox) in fold_spaces.get(space, ()):
                     _ekey = (space if cell_models == list(downstream_models)
                              else f'{space}/{cell_models[0]}')
                     space_cell = cell.setdefault(space, {})
@@ -709,9 +773,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              .setdefault(mname, {})[pass_key]) = tl
 
             pair_acc.setdefault(lvl_key, []).append(prec)
-            b = prec['per_space'].get('base', {})
+            _b1 = next((k for k in prec['per_space']
+                        if k == 'base_1' or k.startswith('base_1/')), None)
+            b = prec['per_space'].get(_b1, {}) if _b1 else {}
             print(f"    level {lvl_key} fold {fold_i}: {n_tr} training rows, "
-                  f"{b.get('n_close_pairs')} close pairs in base, closest-bin "
+                  f"{b.get('n_close_pairs')} close pairs in {_b1}, closest-bin "
                   f"estimate {b.get('closest_bin_estimate', float('nan')):.4f}, "
                   f"injected {prec['realised_injected_variance']:.4f}, "
                   f"{b.get('flagged_pairs')} pairs flagged "
@@ -872,8 +938,6 @@ def main():
                         help='Do not count activity cliffs among flagged pairs')
     parser.add_argument('--exp-folds', type=int, default=None,
                         help='Outer folds. Overrides the 1 or 5 --mode gives')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help="Base representation. Default: pick_noise_base_rep's")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename')
     args = parser.parse_args()
@@ -891,8 +955,6 @@ def main():
         kw['skip_proximity'] = True
     if args.skip_cliffs:
         kw['skip_cliffs'] = True
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
 
     res = run(data, config, args.output, args.dataset, **kw)
     suffix = CHECK_CONDITION if not args.tag else f'{CHECK_CONDITION}_{args.tag}'

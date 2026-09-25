@@ -313,16 +313,31 @@ def _model_score(cell, model):
 
 
 def _read_n09(payload, dataset, experiment, source_file):
-    """per_sigma[level][condition]['mean'], and per_sigma[level][condition][method]['mean']."""
+    """per_sigma[level][condition]['mean'], and per_sigma[level][condition][method]['mean'].
+
+    Since 2026-09-25 n09 runs its single-representation conditions once per
+    rank of the DNN's top 2: 'base_1_no_lnl' / 'base_2_no_lnl' and
+    'base_1_lnl' / 'base_2_lnl', with the representations in
+    payload['base_reps_by_model']['dnn']. A file written before that carries
+    the one 'base_no_lnl' / 'base_lnl' pair and 'base_rep', and is still read.
+    """
     per = payload.get('per_sigma') or {}
     if not isinstance(per, dict) or not per:
         return []
     cond = payload.get('noise_condition', 'unknown')
     kw = _common(payload, dataset, experiment, source_file)
-    base_rep = payload.get('base_rep', '?')
     out = []
 
-    plain = ['base_no_lnl', 'hybrid_no_lnl', 'weighted_hybrid_no_lnl']
+    # {condition prefix: the representation it was run in}, one entry per rank.
+    _rank_model = payload.get('base_reps_ranked_by', 'dnn')
+    _ranked = (payload.get('base_reps_by_model') or {}).get(_rank_model)
+    if _ranked is not None:
+        base_arms = {'base_%d' % (i + 1): r for i, r in enumerate(_ranked)}
+    else:
+        base_arms = {'base': payload.get('base_rep', '?')}
+
+    plain = (['%s_no_lnl' % b for b in base_arms]
+             + ['hybrid_no_lnl', 'weighted_hybrid_no_lnl'])
     for arm in plain:
         levels, scores = [], []
         for lvl, key in _levels_of(per):
@@ -331,14 +346,24 @@ def _read_n09(payload, dataset, experiment, source_file):
                 levels.append(lvl)
                 scores.append(v)
         if len(levels) >= MIN_POINTS_2P:
-            out.append(Curve(condition=cond, what='%s (base rep %s)' % (arm, base_rep),
+            # A single-representation arm names its representation. The
+            # hybrid arms are not run in one, so they carry none.
+            _b = arm[:-len('_no_lnl')]
+            if _b == 'base':
+                what = '%s (base rep %s)' % (arm, base_arms[_b])
+            elif _b in base_arms:
+                what = '%s (single representation %s)' % (arm, base_arms[_b])
+            else:
+                what = arm
+            out.append(Curve(condition=cond, what=what,
                              levels=levels, scores=scores, **kw))
 
     # The level-0 slot holds no method scores at all (n09 only fills them where
     # sigma > 0), so a method curve is missing its bottom point by construction. Kept,
     # and the missing level is what `n_points` and `lowest level fitted` report.
     methods = payload.get('methods') or []
-    for arm in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
+    for arm in (['%s_lnl' % b for b in base_arms]
+                + ['hybrid_lnl', 'weighted_hybrid_lnl']):
         for m in methods:
             levels, scores = [], []
             for lvl, key in _levels_of(per):

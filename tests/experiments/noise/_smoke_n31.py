@@ -82,7 +82,9 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n31.get_best_search_for_downstream
     n31.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', {
+            m: ['toy', 'second']
+            for m in (kw.get('models') or n31.DOWNSTREAM_MODELS)})
         return n31.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n31.get_best_search_for_downstream = real
@@ -201,7 +203,7 @@ def test_measured_near_predicted():
                  flag_seeds=[0])
     rows = []
     for lvl in ('0.5', '1'):
-        d = res['summary']['per_condition']['shift_only_p10'][lvl]['base'][
+        d = res['summary']['per_condition']['shift_only_p10'][lvl]['base_1'][
             'detection']
         rows.append((lvl, d['predicted_auroc_mean'],
                      d['measured_auroc_signed_residual_mean']))
@@ -219,24 +221,32 @@ def test_full_runs():
                  levels=[0.0, 1.0], draws=[0], precisions=[0.0, 0.5, 1.0],
                  flag_seeds=[0, 1])
     pc = res['per_condition']
+    check('8-. spaces base_1 and base_2 ran, and the representations are named',
+          res['spaces_run'] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second']
+                                            for m in models}
+          and 'base_rep' not in res,
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
+    check('8-b. base_2 is scored too',
+          'noisy' in pc['outlier_only_p10']['1']['base_2'])
     check('8. level 0 is never run', all('0' not in pc[c] for c in pc))
     check('8a. no fit raised', not res.get('_errors'),
           str(list((res.get('_errors') or {}).items())[:2]))
-    arms = pc['outlier_only_p10']['1']['base']
+    arms = pc['outlier_only_p10']['1']['base_1']
     want = (['clean', 'noisy'] + [f'detector/{o}' for o in n31.OPERATIONS]
             + [f'flags_p{q:g}/seed{s}/{o}' for q in (0.0, 0.5, 1.0)
                for s in (0, 1) for o in n31.OPERATIONS])
     missing = [a for a in want if a not in arms]
     check('8b. every arm scored under outlier_only_p10', not missing,
           f'missing {missing[:4]}' if missing else f'{len(want)} arms')
-    g = pc['gaussian']['1']['base']
+    g = pc['gaussian']['1']['base_1']
     check('8c. gaussian: detector operations run, no synthetic arm',
           'detector/remove' in g and not any(a.startswith('flags_') for a in g))
-    dg = res['diagnostics']['gaussian']['1']['base']
+    dg = res['diagnostics']['gaussian']['1']['base_1']
     check('8d. gaussian: detection and prediction are absent with a reason',
           all('detection_not_defined_because' in r
               and 'predicted_auroc' not in r for r in dg.values()))
-    ds = res['diagnostics']['shift_only_p05']['1']['base']
+    ds = res['diagnostics']['shift_only_p05']['1']['base_1']
     check('8e. shift: prediction, both detections, and residual shape per pass',
           len(ds) == 3 and all(
               np.isfinite(r['predicted_auroc'])
@@ -244,14 +254,26 @@ def test_full_runs():
               and 'detection_auroc' in r['detection_signed_residual']
               and 'excess_kurtosis' in r['residual_shape_noisy']
               for r in ds.values()))
-    tl = res['tails']['outlier_only_p10']['1']['base']
+    tl = res['tails']['outlier_only_p10']['1']['base_1']
     check('8f. a tail record beside every score',
           all(set(tl[a][m]) == set(arms[a][m]) for a in arms for m in arms[a]))
-    syn = res['summary']['per_condition']['outlier_only_p10']['1']['base'][
+    syn = res['summary']['per_condition']['outlier_only_p10']['1']['base_1'][
         'per_model']['rf']['synthetic']
     check('8g. the summary holds a curve per operation',
           set(syn) == set(n31.OPERATIONS)
           and all('break_even_precision' in e for e in syn.values()))
+
+    res_x = run_it(make_data(), 'toy', models=models,
+                   base_reps={'rf': ['toy', 'second'],
+                              'lightgbm': ['second', 'toy']},
+                   conditions=['shift_only_p10'], levels=[1.0], draws=[0],
+                   precisions=[1.0], flag_seeds=[0])
+    dx = res_x['diagnostics']['shift_only_p10']['1']
+    sx = res_x['per_condition']['shift_only_p10']['1']['base_1']['noisy']
+    check('8h. models with different rank-1 representations get separate '
+          'matrices in base_1, and both are scored',
+          {'base_1/rf', 'base_1/lightgbm'} <= set(dx)
+          and set(sx) == set(models), f'{sorted(dx)}')
 
     dc = dict(make_data(), labels=(make_data()['labels'] > 5).astype(int),
               task_type='classification')
@@ -276,15 +298,15 @@ def test_full_runs():
     check('9d. the metric direction is read off the dataset',
           res['metric'] == 'rmse' and res['lower_is_better']
           and res_s['metric'] == 'spearman' and not res_s['lower_is_better'])
-    row = res_s['summary']['per_condition']['shift_only_p10']['1']['base'][
+    row = res_s['summary']['per_condition']['shift_only_p10']['1']['base_1'][
         'per_model']['rf']
-    b = res_s['per_condition']['shift_only_p10']['1']['base']['noisy']['rf']
-    c = res_s['per_condition']['shift_only_p10']['1']['base']['clean']['rf']
+    b = res_s['per_condition']['shift_only_p10']['1']['base_1']['noisy']['rf']
+    c = res_s['per_condition']['shift_only_p10']['1']['base_1']['clean']['rf']
     k = sorted(set(b) & set(c))
     check('9e. a spearman gain is arm minus noisy',
           np.isclose(row['clean_vs_noisy']['mean_gain'],
                      np.mean([c[x] - b[x] for x in k])))
-    row2 = res['summary']['per_condition']['outlier_only_p10']['1']['base'][
+    row2 = res['summary']['per_condition']['outlier_only_p10']['1']['base_1'][
         'per_model']['rf']
     b2 = arms['noisy']['rf']
     c2 = arms['clean']['rf']
@@ -302,11 +324,12 @@ def test_the_command_line():
                                       'n31_regime_and_breakeven.py'), '--help'],
         capture_output=True, text=True)
     wanted = ('--dataset', '--conditions', '--levels', '--draws', '--precisions',
-              '--flag-seeds', '--models', '--exp-folds', '--base-rep', '--tag')
+              '--flag-seeds', '--models', '--exp-folds', '--tag')
     missing = [f for f in wanted if f not in out.stdout]
     check('10. the parser lists every flag',
           out.returncode == 0 and not missing,
           f'missing {missing}' if missing else f'{len(wanted)} flags present')
+    check('10b. --base-rep is gone', '--base-rep' not in out.stdout)
 
 
 if __name__ == '__main__':

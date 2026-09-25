@@ -17,7 +17,7 @@ What has to be true before any number n34 writes can be read:
   5. THE RECOVERY SHARE IS SIGNED BY THE METRIC AND REFUSED UNDER THE 2% FLOOR.
   6. A NON-GROUPED CONDITION, A CLASSIFICATION LABEL AND A DATASET WITHOUT
      SCAFFOLD GROUPS ARE SKIPPED WITH A REASON.
-  7. A FULL RUN, base only and with a hybrid recipe, writes every arm for every
+  7. A FULL RUN, single representations only and with a hybrid recipe, writes every arm for every
      model, a tail record per score, the `none` pass once, and offset recovery
      under grouped_shifted only. Under spearman the direction flips.
   8. The parser lists every flag.
@@ -92,7 +92,9 @@ def run_it(data, name, recipe=no_recipe, groups=None, **kw):
     g = toy_groups(len(data['labels'])) if groups is None else groups
     n34.noise_groups_for = lambda d: (g, int(len(np.unique(g))), 0.1)
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', {
+            m: ['toy', 'second']
+            for m in (kw.get('models') or n34.DOWNSTREAM_MODELS)})
         return n34.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n34.get_best_search_for_downstream = real_r
@@ -197,7 +199,8 @@ def test_skips():
     real = n34.noise_groups_for
     n34.noise_groups_for = lambda d: (None, 0, 0.0)
     try:
-        r3 = n34.run(make_data(), {'n_splits': 3}, OUT, 'toy', base_rep='toy')
+        r3 = n34.run(make_data(), {'n_splits': 3}, OUT, 'toy',
+                     base_reps={'rf': ['toy', 'second']})
     finally:
         n34.noise_groups_for = real
     check('6. gaussian, a class label and no groups each skip with a reason',
@@ -221,6 +224,12 @@ def test_full(recipe, label, domain='molecular'):
           and '0' not in pc['grouped_shifted'],
           f'{ {c: list(v) for c, v in pc.items()} }')
     spaces = res['spaces_run']
+    check(f'7. [{label}] base_1 and base_2 ran first, representations named',
+          spaces[:2] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second']
+                                            for m in models}
+          and 'base_rep' not in res,
+          f"{spaces}, {res.get('base_reps_by_model')}")
     ok = True
     for cond, lv in (('grouped_shifted', '0.5'), ('grouped_wider', '0.5')):
         for sp in spaces:
@@ -231,7 +240,7 @@ def test_full(recipe, label, domain='molecular'):
                         ok = False
     check(f'7. [{label}] every arm x model x space has 6 passes '
           f'(2 draws x 3 folds)', ok, f'spaces {spaces}')
-    tails = res['tail_per_condition']['grouped_shifted']['0.5']['base']['none']['rf']
+    tails = res['tail_per_condition']['grouped_shifted']['0.5']['base_1']['none']['rf']
     check(f'7. [{label}] a tail record per score',
           len(tails) == 6 and all('tail_rmse_top' in t for t in tails.values()))
     gp = res['groups_per_pass']
@@ -255,7 +264,7 @@ def test_full(recipe, label, domain='molecular'):
                     rec_ok = False
     check(f'7. [{label}] recovery writes the 3+ correlation with used and '
           f'excluded group counts', rec_ok)
-    sh_rec = gp['grouped_shifted']['0.5'][0]['per_space']['base']
+    sh_rec = gp['grouped_shifted']['0.5'][0]['per_space']['base_1']
     print(f"      grouped_shifted fold 0 base: random intercept "
           f"{sh_rec['random_intercept']['em_rounds']} rounds, group of one keeps "
           f"{sh_rec['random_intercept']['share_a_group_of_one_keeps']:.3f}; "
@@ -277,8 +286,8 @@ def test_direction():
     res = run_it(d, 'toy', models=['rf'], levels=[0.5], draws=[0],
                  noise_condition='grouped_shifted')
     s = res['summary']
-    e = s['per_condition']['grouped_shifted']['0.5']['base']['rf']['per_arm']['clean']['vs_none']
-    raw = res['per_condition']['grouped_shifted']['0.5']['base']
+    e = s['per_condition']['grouped_shifted']['0.5']['base_1']['rf']['per_arm']['clean']['vs_none']
+    raw = res['per_condition']['grouped_shifted']['0.5']['base_1']
     gains = [raw['clean']['rf'][k] - raw['none']['rf'][k] for k in raw['none']['rf']]
     check('7. under spearman a higher score counts as a gain',
           res['lower_is_better'] is False
@@ -292,9 +301,10 @@ def test_parser():
     out = subprocess.run([sys.executable, n34.__file__, '--help'],
                          capture_output=True, text=True).stdout
     flags = ['--noise-condition', '--levels', '--draws', '--em-max-rounds',
-             '--exp-folds', '--base-rep', '--tag']
+             '--exp-folds', '--tag']
     missing = [f for f in flags if f not in out]
     check('8. the parser lists every flag', not missing, f'missing {missing}')
+    check('8b. --base-rep is gone', '--base-rep' not in out)
 
 
 if __name__ == '__main__':
@@ -302,7 +312,7 @@ if __name__ == '__main__':
     test_recovery_masks_small_groups()
     test_share()
     test_skips()
-    test_full(no_recipe, 'base only')
+    test_full(no_recipe, 'single representations only')
     test_full(fake_recipe(['toy', 'second']), 'with a hybrid recipe')
     test_direction()
     test_parser()

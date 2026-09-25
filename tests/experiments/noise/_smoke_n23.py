@@ -88,15 +88,16 @@ def no_recipe(*a, **k):
     """What the pool returns on a dataset it was never built for.
 
     The hybrid space needs a precomputed pool and there is none here, so the
-    lookup is replaced and every arm runs in the base representation. n18's
-    smoke checks that a run with no recipe still produces every base number;
-    this file does not repeat that.
+    lookup is replaced and every arm runs in the two single-representation
+    spaces, whose representations the caller names through `base_reps`. n18's
+    smoke checks that a run with no recipe still produces every
+    single-representation number; this file does not repeat that.
     """
     return None, None
 
 
 def run_it(data, name, **kw):
-    """One tiny n23 run, ONE condition, in the base representation only.
+    """One tiny n23 run, ONE condition, in base_1 ('aaa') and base_2 ('bbb') only.
 
     `_run_one_condition` and not `run`. Since 2026-09-23 `run` sweeps every
     condition in SWEPT_CONDITIONS and writes each to its own file, returning an
@@ -110,7 +111,7 @@ def run_it(data, name, **kw):
     try:
         return n23._run_one_condition(
             data, {'n_splits': 3}, OUT, name,
-            models=['rf'], base_rep='aaa',
+            models=['rf'], base_reps={'rf': ['aaa', 'bbb']},
             sources=kw.pop('sources', ['ngboost', 'activity_cliff_aware']),
             drop_shares=[0.10], move_strengths=[0.5],
             estimator_folds=2, **kw)
@@ -128,15 +129,27 @@ def test_detection_before_cleaning():
     # arrived 2026-09-23: a hybrid space is one feature matrix per downstream
     # model, so the uncertainty number that grades the molecules is computed
     # per model. This run asks for one model, 'rf'.
+    check('the single-representation comparison is the two named, per model',
+          r['spaces_run'] == ['base_1', 'base_2']
+          and r['base_reps_by_model'] == {'rf': ['aaa', 'bbb']}
+          and 'base_rep' not in r,
+          f"{r['spaces_run']}, {r.get('base_reps_by_model')}")
     det = r['detection']
-    check('a detection reading was written at the corrupted level',
-          '0.5' in det and (det['0.5'].get('base') or {}).get('rf'),
+    check('a detection reading was written at the corrupted level, in both',
+          '0.5' in det
+          and all((det['0.5'].get(sp) or {}).get('rf')
+                  for sp in ('base_1', 'base_2')),
           f'levels {sorted(det)}')
     check('nothing was written at level 0.0, where nothing moved',
-          not (det.get('0') or {}).get('base'),
+          not any((det.get('0') or {}).get(sp) for sp in ('base_1', 'base_2')),
           f"level 0 block: {det.get('0')}")
+    _src = next(iter(det['0.5']['base_1']['rf']))
+    check('base_1 and base_2 are different feature matrices',
+          det['0.5']['base_1']['rf'][_src]['detection_average_precision']
+          != det['0.5']['base_2']['rf'][_src]['detection_average_precision'],
+          _src)
 
-    read = det['0.5']['base']['rf']
+    read = det['0.5']['base_1']['rf']
     for source, d in read.items():
         if not d or not np.isfinite(d['detection_average_precision']):
             continue
@@ -168,17 +181,18 @@ def test_zero_noise_control(r):
     if not got:
         return
     lvl05 = (r['summary']['per_regime']['injected']['per_level']
-             .get('0.5', {}).get('per_space', {}).get('base', {})
-             .get('per_source', {}))
+             .get('0.5', {}).get('per_space', {}))
+
+    def _at_half(key):
+        space, source = key.split('/', 1)
+        return (lvl05.get(space, {}).get('per_source', {}).get(source, {})
+                .get('settings_winning_most_folds', 0))
+
     for key, at_zero in got.items():
-        source = key.split('/', 1)[1]
-        at_half = lvl05.get(source, {}).get('settings_winning_most_folds', 0)
-        print(f"        {source:20s} won most folds in {at_zero} settings with "
-              f"nothing corrupted, {at_half} with a tenth corrupted")
+        print(f"        {key:28s} won most folds in {at_zero} settings with "
+              f"nothing corrupted, {_at_half(key)} with a tenth corrupted")
     check('cleaning wins at least as many settings where labels really moved',
-          sum(lvl05.get(k.split('/', 1)[1], {})
-              .get('settings_winning_most_folds', 0) for k in got)
-          >= sum(got.values()),
+          sum(_at_half(k) for k in got) >= sum(got.values()),
           'if this fails the cleaning is removing hard molecules, not wrong ones')
 
 
@@ -288,7 +302,7 @@ def test_the_other_sources_run():
     got = {}
     for reg in r['per_regime'].values():
         for lvl in reg.values():
-            for source, by_arm in lvl.get('base', {}).items():
+            for source, by_arm in lvl.get('base_1', {}).items():
                 got[source] = sum(len(v) for a in by_arm.values()
                                   for v in a.values())
     check('all three slower sources produced scores', len(got) == 3, f'{got}')
@@ -317,7 +331,7 @@ def test_the_sweep_checkpoints_and_resumes():
     n23.get_best_search_for_downstream = no_recipe
     try:
         idx = n23.run(data, {'n_splits': 3}, OUT, 'toy_sweep',
-                      models=['rf'], base_rep='aaa',
+                      models=['rf'], base_reps={'rf': ['aaa', 'bbb']},
                       sources=['activity_cliff_aware'],
                       drop_shares=[0.10], move_strengths=[0.5],
                       estimator_folds=2, regimes=['injected'],
@@ -353,7 +367,7 @@ def test_the_sweep_checkpoints_and_resumes():
     n23.get_best_search_for_downstream = no_recipe
     try:
         again = n23.run(data, {'n_splits': 3}, OUT, 'toy_sweep',
-                        models=['rf'], base_rep='aaa',
+                        models=['rf'], base_reps={'rf': ['aaa', 'bbb']},
                         sources=['activity_cliff_aware'],
                         drop_shares=[0.10], move_strengths=[0.5],
                         estimator_folds=2, regimes=['injected'],

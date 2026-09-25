@@ -30,13 +30,16 @@ and 1 draw every n21 number on this dataset so far was read at -- 36 paired
 readings per arm against 4. A forest shape that wins here is re-measured
 through n21 itself, with the repair, before it is believed.
 
-⛔ THE CONTROL CHANGED UNDER THIS FILE. `pick_noise_base_rep` no longer falls
-back alphabetically, so flab_thermo_tresanco's plain representation is `onehot`
+⛔ THE CONTROL CHANGED UNDER THIS FILE. On 2026-09-21 the fixed preference
+list then used to choose the plain representation stopped falling back
+alphabetically, so flab_thermo_tresanco's plain representation became `onehot`
 at 5600 features, not `esm2_cdr` at 1280. Every n21 number recorded before
 2026-09-21 -- forest proximity 0.2455, plain 0.2101 -- was read in esm2_cdr and
-is on a different footing. This script re-reads the plain rows in whatever
-`pick_noise_base_rep` now returns, so the forest arms and the control it is
-compared against are in the same representation.
+is on a different footing. That list was deleted 2026-09-25 (owner's decision:
+the noise experiments now compare against each downstream model's top 2 single
+representations). This script re-reads the plain rows in the representation
+passed with --base-rep, so the forest arms and the control it is compared
+against are in the same representation.
 
 ⛔ ROWS ARE NEVER CUT. All 672 antibodies, every fold. KIRBY_SMOKE_N is
 refused.
@@ -141,7 +144,17 @@ def _claim(out_dir, name):
 
 
 def main():
-    from experiments._shared import (load_data, pick_noise_base_rep, cv_split,
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument('--base-rep', required=True,
+                   help=('the single representation to compare against. '
+                         'Required: the fixed preference list that used to '
+                         'choose it was deleted 2026-09-25; the noise '
+                         'experiments now compare against each downstream '
+                         "model's top 2 single representations by its "
+                         'stored score'))
+    a = p.parse_args()
+    from experiments._shared import (load_data, cv_split,
                                      get_domain_metric)
     from experiments.noise import n21_neighbour_distance as N21
     from experiments.noise.noise_helpers import (
@@ -168,7 +181,10 @@ def main():
     groups = data.get('groups')
     is_clf = data['task_type'] == 'classification'
     metric_name = get_domain_metric(data)[0]
-    base_rep = pick_noise_base_rep(reps, DATASET)
+    base_rep = a.base_rep
+    if base_rep not in reps:
+        raise SystemExit(f'--base-rep {base_rep!r} is not among the loaded '
+                         f'representations {sorted(reps)}')
     noise_groups, _n_groups, _largest = noise_groups_for(data)
     splits = list(cv_split(groups, FOLDS, next(iter(reps.values())), labels))
 
@@ -278,8 +294,8 @@ def main():
             'plain_representation': base_rep,
             'plain_representation_features': int(reps[base_rep].shape[1]),
             'base_rep_note': (
-                'pick_noise_base_rep no longer falls back alphabetically, so this '
-                'is the control the suite now uses. Every n21 number recorded '
+                'passed with --base-rep. The fixed preference list that chose '
+                'it before was deleted 2026-09-25. Every n21 number recorded '
                 'before 2026-09-21 was read in esm2_cdr and is on a different '
                 'footing.'),
             'dataset_metric': metric_name,

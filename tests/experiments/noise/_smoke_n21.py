@@ -57,6 +57,10 @@ CHEAP = {
     'levels': [0.5],
     'include_hybrid': False,
     'forest_trees': 60,
+    # The single representation is named here, because there is no stored
+    # search to rank one from. n21 takes the first downstream model's top 2;
+    # with one representation there is only base_1.
+    'base_reps': {'rf': ['ecfp4']},
 }
 
 
@@ -202,9 +206,13 @@ def test_forest_proximity_is_what_it_says():
 
 # ---------------------------------------------------------------------------
 
-def _ap_by_space(results, level='0.5'):
+def _ap_by_space(results, level='0.5', base='base_1'):
+    """Average precision per space inside one single representation, with
+    the 'base_1/' prefix taken off so the checks read the family names."""
     row = results['summary']['per_level'][level]
-    return dict(row['average_precision_by_space'])
+    pre = f'{base}/'
+    return {k[len(pre):]: v for k, v in row['average_precision_by_space'].items()
+            if k.startswith(pre)}
 
 
 def _gap_over_plain(ap, space, plain):
@@ -217,7 +225,7 @@ def _gap_over_plain(ap, space, plain):
     return float(ap[space] - ap[plain])
 
 
-def _run(signal, seed, folds=3):
+def _run(signal, seed, folds=3, second_rep=False):
     """ONE condition. `_run_one_condition`, not `run`.
 
     Since 2026-09-23 n21.run sweeps every condition in DETECTION_IS_DEFINED,
@@ -227,8 +235,16 @@ def _run(signal, seed, folds=3):
     itself is covered in _smoke_n23, which tests the shared helper both now use.
     """
     data = make_data(n=400, seed=seed, signal=signal)
+    kw = dict(CHEAP)
+    if second_rep:
+        # base_2: the same features with noise on top, so it is a different
+        # matrix and every space is built twice.
+        rng = np.random.default_rng(seed + 100)
+        data['reps']['ecfp4_noisy'] = (data['reps']['ecfp4']
+                                       + rng.normal(0, 0.3, (400, 20)))
+        kw['base_reps'] = {'rf': ['ecfp4', 'ecfp4_noisy']}
     return n21._run_one_condition(data, {'n_splits': folds}, OUT,
-                                  f'n21smoke_{signal}', **CHEAP)
+                                  f'n21smoke_{signal}', **kw)
 
 
 def test_sparse_signal_rewards_the_better_distance():
@@ -291,11 +307,29 @@ def test_equal_signal_shows_no_such_gap(sparse_gaps):
 
 def test_the_spaces_and_the_convention_flags():
     print("\nwhat one run records:")
-    r = _run('sparse', seed=2, folds=2)
+    r = _run('sparse', seed=2, folds=2, second_rep=True)
     check('it ran', 'summary' in r, str(r)[:100])
     if 'summary' not in r:
         return
-    spaces = r['spaces']
+    check('the single representations are the two named, and recorded',
+          r['base_reps_used'] == {'base_1': 'ecfp4', 'base_2': 'ecfp4_noisy'}
+          and r['base_reps_ranked_by_model'] == 'rf' and 'base_rep' not in r,
+          str(r.get('base_reps_used')))
+    check('every space is built under both, and no key lacks a prefix',
+          all(k.split('/', 1)[0] in ('base_1', 'base_2') for k in r['spaces'])
+          and len([k for k in r['spaces'] if k.startswith('base_1/')])
+          == len([k for k in r['spaces'] if k.startswith('base_2/')]),
+          f"{len(r['spaces'])} spaces")
+    _pb = r['per_level']['0.5']['per_base']
+    check('each single representation has its own clean and corrupted scores',
+          _pb['base_1']['noisy_score_by_model']['rf']
+          != _pb['base_2']['noisy_score_by_model']['rf']
+          and r['per_level']['0.5']['noisy_score_by_model']
+          == _pb['base_1']['noisy_score_by_model'],
+          f"{_pb['base_1']['noisy_score_by_model']['rf']:.4f} against "
+          f"{_pb['base_2']['noisy_score_by_model']['rf']:.4f}")
+    spaces = {k[len('base_1/'):]: v for k, v in r['spaces'].items()
+              if k.startswith('base_1/')}
     families = sorted(set(s['family'] for s in spaces.values()))
     check('three families of distance are present, the hybrid being switched off',
           families == ['forest_proximity', 'importance_weighted', 'plain'],
@@ -313,9 +347,10 @@ def test_the_spaces_and_the_convention_flags():
           matched['imp_pow0.5|lightgbm_gain|manhattan'] is False)
 
     conv = r['summary']['per_level']['0.5']['weighting_convention']
-    check('the convention question is answered at both metrics',
-          sorted(conv) == ['lightgbm_gain|euclidean',
-                           'lightgbm_gain|manhattan'],
+    check('the convention question is answered at both metrics, in both',
+          sorted(conv) == [f'{b}/lightgbm_gain|{m}'
+                           for b in ('base_1', 'base_2')
+                           for m in ('euclidean', 'manhattan')],
           str(sorted(conv)))
     for name, row in conv.items():
         cmp_key = '0.5 against 1'
@@ -325,12 +360,24 @@ def test_the_spaces_and_the_convention_flags():
               f"cells")
 
     block = r['per_level']['0.5']
-    for space in spaces:
+    # base_2 is the noisier copy of the features, and on it the corrupted fit
+    # can score no worse than the clean one. n21 then refuses to divide by that
+    # gap and writes why (GAP_MIN_FRAC), which is a recorded refusal, not a
+    # missing number. Every base_1 space must still give a finite figure.
+    for space in r['spaces']:
         row = block['per_space'][space]
-        check(f'{space}: the repair figure was computed',
-              row['repair'] and np.isfinite(
-                  row['recovery_percent_of_gap_mean']),
-              f"recovery {row['recovery_percent_of_gap_mean']:+.1f}% of the gap")
+        finite = bool(row['repair']) and np.isfinite(
+            row['recovery_percent_of_gap_mean'])
+        refused = bool(row['repair']) and all(
+            (v.get('recovery_note') or '').startswith('not computed: the '
+                                                      'clean-to-corrupted gap')
+            for v in row['repair'].values())
+        check(f'{space}: the repair figure was computed, or refused with '
+              f'the gap-floor reason',
+              finite or (space.startswith('base_2/') and refused),
+              f"recovery {row['recovery_percent_of_gap_mean']:+.1f}% of the gap"
+              if finite else 'refused: the clean-to-corrupted gap is under '
+                             'GAP_MIN_FRAC of the clean score')
 
 
 def test_the_two_guards():

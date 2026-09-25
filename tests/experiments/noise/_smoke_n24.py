@@ -111,19 +111,22 @@ def no_recipe(*a, **k):
     """What the pool returns on a dataset it was never built for.
 
     The hybrid spaces need a precomputed pool and there is none here, so the
-    lookup is replaced and every arm runs in the base representation.
+    lookup is replaced and every arm runs in the single representations the
+    caller names.
     """
     return None, None
 
 
-def run_it(data, name, **kw):
-    """One tiny n24 run, in the base representation only."""
+def run_it(data, name, recipe=no_recipe, **kw):
+    """One tiny n24 run. By default one model and one single representation
+    (space base_1 only), so the fit counts below stay per one matrix."""
     real = n24.get_best_search_for_downstream
-    n24.get_best_search_for_downstream = no_recipe
+    n24.get_best_search_for_downstream = recipe
     try:
         return n24.run(
             data, {'n_splits': 3}, OUT, name,
-            models=['rf'], base_rep='aaa',
+            models=kw.pop('models', ['rf']),
+            base_reps=kw.pop('base_reps', {'rf': ['aaa']}),
             detectors=kw.pop('detectors', ['neighbor_residual']),
             flag_rates=kw.pop('flag_rates', [0.05, 0.20]),
             random_seeds=kw.pop('random_seeds', [0, 1, 2]),
@@ -140,7 +143,7 @@ def test_the_control():
     print("the control — deleting the same number at random:")
     r = run_it(make_data(seed=1), 'toy')
 
-    deleted = r['molecules_deleted']['0.5']['base']
+    deleted = r['molecules_deleted']['0.5']['base_1']
     who = sorted(deleted)
     check('the detector and every random seed have their own deletion counts',
           'neighbor_residual' in who
@@ -184,7 +187,7 @@ def test_the_control():
               f"{d['widened_molecules_summed_over_the_passes']} the injector "
               f"widened")
 
-    lvl = r['summary']['per_level']['0.5']['per_space']['base']
+    lvl = r['summary']['per_level']['0.5']['per_space']['base_1']
     rrow = lvl['per_detector']['neighbor_residual']['per_flag_rate']
     ok_per_seed = True
     for rate, block in rrow.items():
@@ -315,7 +318,7 @@ def test_rate_blind_arms_are_fitted_once():
 
     # And the numbers written under the second rate are the SAME numbers, not a
     # second fit that happened to land nearby.
-    by_rate = r['per_level']['0.5']['base']['neighbor_residual']
+    by_rate = r['per_level']['0.5']['base_1']['neighbor_residual']
     same = all(
         by_rate['0.05'][arm]['rf'] == by_rate['0.2'][arm]['rf']
         for arm in ('keep_rewrite/label_smooth', 'keep_rewrite/oof_smooth',
@@ -515,12 +518,77 @@ def test_the_command_line():
         capture_output=True, text=True)
     wanted = ('--dataset', '--noise-condition', '--levels', '--detectors',
               '--flag-rates', '--models', '--exp-folds', '--budgets', '--tag',
-              '--random-seeds', '--draws', '--base-rep')
+              '--random-seeds', '--draws')
     missing = [f for f in wanted if f not in out.stdout]
     check('the parser builds and lists every flag the runner needs',
           out.returncode == 0 and not missing,
           f'missing {missing}' if missing
           else f'{len(wanted)} flags present')
+    check('--base-rep is gone', '--base-rep' not in out.stdout)
+
+
+# ── each model its own spaces (owner's decision 2026-09-25) ────────────────
+
+def recipe_per_model(recipes):
+    """A pool stand-in that answers each downstream model with its own
+    recipe, the way pool_recipe_per_downstream_model asks it."""
+    from kirby.find_best_hybrid import Blueprint
+    asked = []
+
+    def lookup(*a, downstream_model=None, **k):
+        asked.append(downstream_model)
+        reps_, budget = recipes[downstream_model]
+        bp = Blueprint(reps=list(reps_), allocation_method='fixed',
+                       importance_method='lightgbm_gain', budget=budget,
+                       internal_evaluator='lightgbm', metric='rmse',
+                       lower_is_better=True, task_type='regression',
+                       augmentation_strategy='none')
+        meta = {'best_config': {'blueprint': bp},
+                'objective': 'predictive',
+                'objective_choice': 'smoke_fixed_recipe',
+                'pool_subset': 'predictive_and_similarity', 'tier': 'general',
+                'aug_condition': 'none', 'by_objective': {}}
+        return None, meta
+    lookup.asked = asked
+    return lookup
+
+
+def test_per_model_spaces():
+    print("\neach model in its own spaces:")
+    lookup = recipe_per_model({'rf': (['aaa', 'bbb'], 4),
+                               'lightgbm': (['aaa'], 3)})
+    r = run_it(make_data(seed=21), 'toy_per_model', recipe=lookup,
+               models=['rf', 'lightgbm'],
+               base_reps={'rf': ['aaa', 'bbb'], 'lightgbm': ['bbb', 'aaa']},
+               flag_rates=[0.10], random_seeds=[0])
+    check('the pool was asked once per downstream model',
+          sorted(lookup.asked) == ['lightgbm', 'rf'], str(lookup.asked))
+    check('both single-representation spaces and the hybrid ran',
+          r['spaces_run'] == ['base_1', 'base_2', 'hybrid'],
+          str(r['spaces_run']))
+    check('each model has its own recipe on the file',
+          sorted(r['hybrid_recipe_by_model']) == ['lightgbm', 'rf']
+          and r['hybrid_recipe_by_model']['lightgbm']['hybrid']['budget'] == 3,
+          str({m: v['hybrid']['budget']
+               for m, v in r['hybrid_recipe_by_model'].items()}))
+    lv = r['per_level']['0.5']
+    ok = all(m in lv[sp]['neighbor_residual']['0.1']['no_cleaning']
+             for sp in r['spaces_run'] for m in ('rf', 'lightgbm'))
+    check('every model is scored in every space', ok)
+    det = r['detection']['0.5']
+    want = {f'{sp}/{m}' for sp in r['spaces_run'] for m in ('rf', 'lightgbm')}
+    check('the detector ran once per distinct matrix, named by space and model',
+          want <= set(det), str(sorted(det)))
+    dl = r['molecules_deleted']['0.5']
+    check('the deletion counts are kept per matrix',
+          want <= set(dl), str(sorted(dl)))
+    srow = (r['summary']['per_level']['0.5']['per_space']['base_1']
+            ['per_detector']['neighbor_residual'])
+    check('the summary carries one detection reading per matrix',
+          set(srow['detection_by_matrix']) == {'base_1/rf', 'base_1/lightgbm'},
+          str(sorted(srow['detection_by_matrix'])))
+    check('no errors recorded', not r.get('_errors'),
+          str(r.get('_errors'))[:300])
 
 
 if __name__ == '__main__':
@@ -533,6 +601,7 @@ if __name__ == '__main__':
     test_exact_counts()
     test_injury_share()
     test_condition_guard()
+    test_per_model_spaces()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")

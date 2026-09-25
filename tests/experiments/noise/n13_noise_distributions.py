@@ -33,11 +33,28 @@ clipped rather than a dose, so it is not dose-matched and belongs on its own axi
   - grouped_wider and grouped_shifted need one scaffold group per molecule and are
     dropped on datasets with no SMILES rather than run over invented groups.
 
-Three feature spaces are compared in both tracks: the base representation, a
-hybrid built from the predictive-objective search, and a hybrid built from the
-similarity-objective search (2026-09-12 decision: n13's pool subset includes
-similarity hybrids, and the pool replaces the hand-built four-block stack this
-file used to carry).
+Three kinds of feature space are compared in both tracks: single
+representations, a hybrid built from the predictive-objective search, and a
+hybrid built from the similarity-objective search (2026-09-12 decision: n13's
+pool subset includes similarity hybrids, and the pool replaces the hand-built
+four-block stack this file used to carry).
+
+THE SINGLE REPRESENTATIONS, owner's decision 2026-09-25: each downstream
+model's top 2, ranked by that model's own score in the stored search
+(_shared.noise_base_reps_by_model). Spaces are named 'base_<k>_<rep>'.
+  Track A trains the DNN, so its single-representation spaces are the DNN's
+    top 2, and each Track A row is read against the clean DNN score on each of
+    them ('base_1' and 'base_2' anchors).
+  Track B detects noise in each model's own top 2 (a representation shared by
+    several models at one rank is built once, and its rows are fitted only for
+    those models) and in the hybrids. Every weighted fit of a model is done
+    twice, once on each of its two single representations -- including the rows
+    whose noise was detected in a hybrid. Each (model, rank) pair is an
+    evaluation unit keyed '<model>@base_<k>' with its own clean score, noisy
+    score and gap. Every '*_by_model' score field is keyed by that unit.
+  The per-fold single-recipe block lists both of a model's representations as
+    its baselines.
+Which representations those are is written to 'base_reps_by_model'.
 
 Two evaluation tracks:
   Track A: ALL 12 LNL methods from the registry (not a pre-hybrid shortlist)
@@ -62,7 +79,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
-    pick_noise_base_rep,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
@@ -155,6 +172,11 @@ except Exception:
 
 LNL_EPOCHS = 50  # reduced for speed
 
+# The model whose ranking picks Track A's two single representations. Every
+# Track A method trains a DNN (_standard_dnn_train_predict and the LNL methods'
+# own networks), so the DNN's ranking is the one that applies.
+TRACK_A_MODEL = 'dnn'
+
 # Downstream models whose fit() does NOT accept a `sample_weight` argument, so
 # they cannot participate in the Track-B sample-weight remediation track. The
 # loop below adds any model that raises TypeError on a weighted fit. The seed is
@@ -191,10 +213,11 @@ def _bp_sig(bp):
 # which solves in closed form for the scale that delivers the requested dose and
 # records what it actually delivered.
 def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
-                  augmentations_val, bp, base_rep_name, groups=None,
+                  augmentations_val, bp, base_spaces, groups=None,
                   model=None, metric_fn=None, lower_is_better=None,
                   objective=None, is_clf=None):
-    """Build 2 spaces: base rep + hybrid, with the hybrid's val features.
+    """Build the single-representation spaces + hybrid, with the hybrid's val
+    features.
 
     The hybrid goes through build_fold_hybrid, not a bare create_hybrid call.
     The bare call passed only allocation_method / importance_method /
@@ -214,7 +237,9 @@ def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
         augmentations_train: {aug_name: X_train} already sliced, or None.
         augmentations_val: {aug_name: X_val} already sliced, or None.
         bp: Blueprint from get_precomputed_search.
-        base_rep_name: Name of base representation.
+        base_spaces: {space name: representation} -- the single
+            representations noise is detected in, each scaled on this fold's
+            training rows.
         model: The downstream estimator INSTANCE the accept-or-reject step
             scores with, or None to fall back on the internal evaluator.
         metric_fn / lower_is_better: The dataset's metric and its direction,
@@ -229,9 +254,9 @@ def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
     spaces = {}
     hybrid_val_s = None
 
-    X_base = train_reps[base_rep_name]
-    sc = StandardScaler()
-    spaces[base_rep_name] = sc.fit_transform(X_base)
+    for _sp, _rn in base_spaces.items():
+        sc = StandardScaler()
+        spaces[_sp] = sc.fit_transform(train_reps[_rn])
 
     # The pool subset offers both search families, so read which one this
     # recipe came from before deciding what may be passed. build_fold_hybrid
@@ -440,12 +465,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     sample_X = next(iter(reps.values()))
 
-    # Control arm = one plain base representation. Shared helper: it will
-    # NOT fall back onto a structure-tuned sim_* recipe, which is a study
-    # treatment and must never become the thing treatments are measured
-    # against. See _shared.pick_noise_base_rep.
-    base_rep_name = pick_noise_base_rep(reps, dataset_name)
-
     print(f"  Dataset: {dataset_name} ({len(labels)} samples)")
     print(f"  Metric: {metric_name}")
     # Filter out regression-only methods for classification
@@ -487,7 +506,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         strengths = list(dataset_noise_levels(dataset_name, is_clf=is_clf))
     noise_provenance = {}
 
-    print(f"  Base rep: {base_rep_name}")
     print(f"  Noise conditions: {noise_types}")
     censoring_levels = list(kwargs.get('censoring_levels')
                             or dataset_noise_levels(dataset_name,
@@ -620,7 +638,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     bp_by_model = {}
     aug_by_model = {}
     objective_by_model = {}
-    for _mname in list(model_factories.keys()):
+    # The stored search each model's recipe came from, which also ranks that
+    # model's single representations below.
+    search_by_model = {}
+    for _mname in sorted(set(model_factories) | {TRACK_A_MODEL}):
         try:
             _s_m, _m_m = get_best_search_for_downstream(
                 reps, labels, groups,
@@ -633,7 +654,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         except Exception as _exc:
             print(f"  WARNING: matched blueprint fetch failed for {_mname} ({_exc})")
             continue
-        if _m_m is None:
+        if _s_m is not None:
+            search_by_model[_mname] = _s_m
+        if _m_m is None or _mname not in model_factories:
             continue
         _bp_m = _m_m['best_config']['blueprint']
         objective_by_model[_mname] = _m_m.get('objective')
@@ -653,6 +676,58 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_by_model[_mname] = aug_condition
             objective_by_model[_mname] = (meta.get('objective') if meta
                                           else None)
+
+    # ── Each model's top-2 single representations ──
+    # Ranked by that model's own score in its own stored search, or in the rf
+    # one when the pool held none for it. Track A trains the DNN, so the DNN is
+    # ranked too whether or not it is in the roster. A `base_reps` kwarg
+    # ({model: [reps]}) overrides the ranking, for a smoke or a direct caller.
+    _rank_models = list(model_factories) + (
+        [TRACK_A_MODEL] if TRACK_A_MODEL not in model_factories else [])
+    _base_override = kwargs.get('base_reps')
+    if _base_override is not None:
+        base_by_model = {m: list(_base_override[m])[:NOISE_BASE_REP_COUNT]
+                         for m in _rank_models if _base_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in _rank_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: search_by_model.get(m) or search for m in _rank_models},
+            _rank_models, reps=reps, dataset_name=dataset_name)
+    eval_models = [m for m in model_factories if m in base_by_model]
+    # Evaluation units for Track B and the reference scores: one per (model,
+    # rank), '<model>@base_<k>'.
+    eval_units = {f'{m}@base_{k}': (m, k, rn)
+                  for m in eval_models
+                  for k, rn in enumerate(base_by_model[m], start=1)}
+    # Track B detection spaces: {space: representation} and the models each
+    # is fitted for.
+    base_spaces = {}
+    base_space_models = {}
+    for _k in range(1, NOISE_BASE_REP_COUNT + 1):
+        for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                         eval_models).items():
+            base_spaces[f'base_{_k}_{_rn}'] = _rn
+            base_space_models[f'base_{_k}_{_rn}'] = list(_ms)
+    # Track A's single-representation spaces: the DNN's top 2.
+    track_a_base = {f'base_{_k}_{_rn}': (_k, _rn) for _k, _rn in enumerate(
+        base_by_model.get(TRACK_A_MODEL) or [], start=1)}
+    for _u, (_m, _k, _rn) in eval_units.items():
+        print(f"  evaluation unit {_u}: {_m} fitted on {_rn}")
+    for _sp, (_k, _rn) in track_a_base.items():
+        print(f"  Track A single representation rank {_k} "
+              f"({TRACK_A_MODEL}): {_rn}")
+    for _m, _why in base_missing.items():
+        print(f"  {_m}: no single representation -- {_why}")
+    if not eval_units and not track_a_base:
+        print("  no model has a single representation to be fitted on, so "
+              "nothing can be scored")
+        return {'error': 'no_single_representation', 'metric': metric_name,
+                'base_reps_by_model': base_by_model,
+                'base_reps_missing': base_missing}
+    # The headline 'clean_score'/'noisy_score' fields were random forest on
+    # the one base representation. They are now rf on its rank-1 one.
+    _ref_unit = 'rf@base_1'
 
     # Reset the unweighted-model registry to its seed for this run (module-level
     # mutable set persists across run() calls in a single process).
@@ -685,6 +760,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Downstream models participating in the honest per-fold re-score arm
         # (gated by n_samples via get_model_factories — never a fixed set).
         'models': list(model_factories.keys()),
+        # Each model's top 2 single representations, from its own score in the
+        # stored search. See the module docstring.
+        'base_reps_by_model': base_by_model,
+        'base_reps_missing': base_missing,
+        'base_reps_search_model': {
+            m: (m if m in search_by_model else 'rf') for m in base_by_model},
+        'track_a_base_reps_ranked_by': TRACK_A_MODEL,
+        'evaluation_units': {u: {'model': m, 'rank': k, 'representation': rn}
+                             for u, (m, k, rn) in eval_units.items()},
+        'evaluation_unit_key': (
+            "'<model>@base_<k>': that model fitted on its rank-k single "
+            "representation. Every *_by_model score field is keyed by it."),
+        'track_b_base_detection_spaces': {
+            sp: {'representation': rn, 'models': base_space_models[sp]}
+            for sp, rn in base_spaces.items()},
+        'reference_unit': _ref_unit,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         # Track-B sample-weight remediation excludes these models because their
         # fit() ignores sample_weight; their rows are absent from track_b
@@ -740,7 +831,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # internally). Use a dedicated DNN clean baseline for Track A retention
     # so we're comparing DNN-with-LNL vs DNN-without-LNL, not against the
     # RF baseline used by Track B and noisy-baseline reporting.
-    clean_scores_dnn = []
+    # One list per Track A anchor: the DNN on its rank-k single representation.
+    clean_scores_dnn = {f'base_{_k}': [] for _k, _rn in track_a_base.values()}
     fold_data = []
 
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
@@ -751,33 +843,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
         val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
 
-        # Base rep eval features (independent of labels)
-        X_eval_train = reps[base_rep_name][train_idx]
-        X_eval_val = reps[base_rep_name][val_idx]
-        sc_eval = StandardScaler()
-        X_eval_train_s = sc_eval.fit_transform(X_eval_train)
-        X_eval_val_s = sc_eval.transform(X_eval_val)
+        # Single-representation features (independent of labels), one scaled
+        # pair per representation any unit or Track A space uses.
+        _by_rep = {}
+        for _rn in ({r for _m, _k, r in eval_units.values()}
+                    | {r for _k, r in track_a_base.values()}):
+            sc_eval = StandardScaler()
+            _by_rep[_rn] = (sc_eval.fit_transform(reps[_rn][train_idx]),
+                            sc_eval.transform(reps[_rn][val_idx]))
+        eval_by_unit = {u: _by_rep[rn] for u, (_m, _k, rn) in eval_units.items()}
 
-        # Clean baseline per model (RF/xgboost/etc — for Track B reference)
-        for mname, mfactory in model_factories.items():
-            if mname not in clean_scores_by_model:
-                clean_scores_by_model[mname] = []
+        # Clean baseline per unit (Track B reference)
+        for _u, (mname, _k, _rn) in eval_units.items():
+            if _u not in clean_scores_by_model:
+                clean_scores_by_model[_u] = []
             try:
-                m = mfactory()
-                m.fit(X_eval_train_s, y_train_clean)
-                clean_scores_by_model[mname].append(
-                    float(metric_fn(y_val, m.predict(X_eval_val_s))))
+                m = model_factories[mname]()
+                m.fit(eval_by_unit[_u][0], y_train_clean)
+                clean_scores_by_model[_u].append(
+                    float(metric_fn(y_val, m.predict(eval_by_unit[_u][1]))))
             except Exception:
                 pass
 
-        # DNN clean baseline (matched-evaluator anchor for Track A)
-        try:
-            dnn_pred = _standard_dnn_train_predict(
-                X_eval_train_s, y_train_clean, X_eval_val_s,
-                epochs=LNL_EPOCHS, patience=10, random_state=42)
-            clean_scores_dnn.append(float(metric_fn(y_val, dnn_pred)))
-        except Exception:
-            pass
+        # DNN clean baseline on each of its two single representations
+        # (matched-evaluator anchors for Track A)
+        for _sp, (_k, _rn) in track_a_base.items():
+            try:
+                dnn_pred = _standard_dnn_train_predict(
+                    _by_rep[_rn][0], y_train_clean, _by_rep[_rn][1],
+                    epochs=LNL_EPOCHS, patience=10, random_state=42)
+                clean_scores_dnn[f'base_{_k}'].append(
+                    float(metric_fn(y_val, dnn_pred)))
+            except Exception:
+                pass
 
         # Slice augmentations through the aug-condition-aware shim so 'none'
         # pool slots really propagate no aug columns.
@@ -804,8 +902,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'val_reps_fold': val_reps_fold,
             'train_augs': train_augs,
             'val_augs': val_augs,
-            'X_eval_train_s': X_eval_train_s,
-            'X_eval_val_s': X_eval_val_s,
+            'eval_by_unit': eval_by_unit,
+            'track_a_base': {_sp: _by_rep[_rn]
+                             for _sp, (_k, _rn) in track_a_base.items()},
         })
 
     clean_mean_by_model = {mn: float(np.mean(s)) if s else float('nan')
@@ -813,8 +912,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Primary clean score for top-level reporting still uses RF; Track A
     # uses the DNN-specific clean baseline below for matched-evaluator
     # retention math.
-    clean_mean = clean_mean_by_model.get('rf', float('nan'))
-    clean_mean_dnn = float(np.mean(clean_scores_dnn)) if clean_scores_dnn else float('nan')
+    clean_mean = clean_mean_by_model.get(_ref_unit, float('nan'))
+    clean_mean_dnn = {_a: (float(np.mean(_v)) if _v else float('nan'))
+                      for _a, _v in clean_scores_dnn.items()}
 
     # A sensitivity study has no single "the" condition, so the top-level
     # contract block exposes a CANONICAL moderate-noise slice (gaussian
@@ -842,7 +942,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for strength in _levels_for_condition(noise_type):
             strength_key = str(strength)
 
-            noisy_baseline_by_model = {mn: [] for mn in model_factories}
+            noisy_baseline_by_model = {u: [] for u in eval_units}
             # {space: {method: [scores]}} for track A
             track_a_acc = {}
             # {space: {estimator: {model: [scores]}}} for track B
@@ -863,6 +963,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # and bust the 7-day wall; the LOFO re-selection over the cached
             # matched-blueprint candidates gives the held-out-fold-free
             # selection instead.
+            # reselected_base_folds[model][rep][fold], one entry per single
+            # representation of that model.
             reselected_base_folds = {mn: {} for mn in model_factories}
             reselected_hyb_folds = {mn: {} for mn in model_factories}
             reselected_hyb_name = {}  # model -> its blueprint signature (candidate name)
@@ -884,17 +986,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         groups=noise_groups, dataset_name=dataset_name)
                     noise_provenance.setdefault(_spec.spec_id, _prov)
 
-                    # Noisy baseline per model
-                    for mname, mfactory in model_factories.items():
+                    # Noisy baseline per unit
+                    for _u, (mname, _k, _rn) in eval_units.items():
                         try:
-                            m = mfactory()
-                            m.fit(fd['X_eval_train_s'], y_noisy)
+                            m = model_factories[mname]()
+                            _xtr, _xva = fd['eval_by_unit'][_u]
+                            m.fit(_xtr, y_noisy)
                             _sc_base = float(metric_fn(
-                                fd['y_val'], m.predict(fd['X_eval_val_s'])))
-                            noisy_baseline_by_model[mname].append(_sc_base)
-                            # Per-fold base-rep arm for fold_reselection (reuses
-                            # this same fit — no extra training cost).
-                            reselected_base_folds[mname].setdefault(fi, []).append(_sc_base)
+                                fd['y_val'], m.predict(_xva)))
+                            noisy_baseline_by_model[_u].append(_sc_base)
+                            # Per-fold single-representation arm for
+                            # fold_reselection (reuses this same fit — no extra
+                            # training cost).
+                            (reselected_base_folds[mname].setdefault(_rn, {})
+                             .setdefault(fi, []).append(_sc_base))
                         except Exception:
                             pass
 
@@ -902,7 +1007,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     spaces, hybrid_val_s = _build_spaces(
                         fd['train_reps_fold'], fd['val_reps_fold'], y_noisy,
                         fd['train_augs'], fd['val_augs'],
-                        bp, base_rep_name,
+                        bp, base_spaces,
                         groups=(groups[fd['train_idx']]
                                 if groups is not None else None),
                         model=(hybrid_model_factory()
@@ -1026,19 +1131,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # replay of the feature selection on the val reps here.
 
                     # ── Track A: LNL methods ──
-                    for space_name in [base_rep_name, 'hybrid', 'hybrid_sim']:
-                        if space_name not in spaces:
-                            continue
-                        X_train_s = spaces[space_name]
-
-                        if space_name == 'hybrid' and hybrid_val_s is not None:
-                            X_val_s = hybrid_val_s
-                        elif space_name == 'hybrid_sim' and hybrid_sim_val_s is not None:
-                            X_val_s = hybrid_sim_val_s
-                        elif space_name == base_rep_name:
-                            X_val_s = fd['X_eval_val_s']
-                        else:
-                            continue
+                    # The DNN's two single representations, then the hybrids.
+                    _track_a_spaces = [(_sp, _x[0], _x[1]) for _sp, _x
+                                       in fd['track_a_base'].items()]
+                    if 'hybrid' in spaces and hybrid_val_s is not None:
+                        _track_a_spaces.append(
+                            ('hybrid', spaces['hybrid'], hybrid_val_s))
+                    if 'hybrid_sim' in spaces and hybrid_sim_val_s is not None:
+                        _track_a_spaces.append(
+                            ('hybrid_sim', spaces['hybrid_sim'], hybrid_sim_val_s))
+                    for space_name, X_train_s, X_val_s in _track_a_spaces:
 
                         if space_name not in track_a_acc:
                             track_a_acc[space_name] = {}
@@ -1061,19 +1163,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                     # ── Track B: Estimation + remediation ──
                     # Asymmetry by design: the noise-detection step iterates
-                    # over both base and hybrid spaces (so the estimator sees
-                    # different geometry), but the model that consumes the
-                    # resulting sample weights ALWAYS trains on the base rep
-                    # `fd['X_eval_train_s']`. That makes Track B specifically
-                    # ask "does hybrid-derived noise detection improve base-
-                    # rep training?", distinct from Track A's "does hybrid
-                    # feature space help LNL methods that train on hybrid?".
-                    # Recovery denominator (clean/noisy baselines) is also
-                    # base-rep, so the comparison is apples-to-apples.
-                    for space_name in [base_rep_name, 'hybrid', 'hybrid_sim']:
+                    # over the single-representation and hybrid spaces (so the
+                    # estimator sees different geometry), but the model that
+                    # consumes the resulting sample weights ALWAYS trains on a
+                    # single representation -- each of that model's top 2 in
+                    # turn, one evaluation unit each. That makes Track B
+                    # specifically ask "does hybrid-derived noise detection
+                    # improve single-representation training?", distinct from
+                    # Track A's "does hybrid feature space help LNL methods
+                    # that train on hybrid?". Recovery denominator (clean/noisy
+                    # baselines) is the same unit's, so the comparison is
+                    # apples-to-apples.
+                    for space_name in list(base_spaces) + ['hybrid', 'hybrid_sim']:
                         if space_name not in spaces:
                             continue
                         X_space = spaces[space_name]
+                        # A single-representation space is fitted only for the
+                        # models that rank that representation there.
+                        _open = base_space_models.get(space_name)
 
                         if space_name not in track_b_acc:
                             track_b_acc[space_name] = {}
@@ -1097,9 +1204,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                      .append(_det))
                                 weights = weights_from_scores(noise_scores, strength=0.1,
                                                               method='exponential')
-                                for mname, mfactory in model_factories.items():
-                                    if mname not in track_b_acc[space_name][est_name]:
-                                        track_b_acc[space_name][est_name][mname] = []
+                                for _u, (mname, _k, _rn) in eval_units.items():
+                                    if _open is not None and mname not in _open:
+                                        continue
+                                    mfactory = model_factories[mname]
+                                    if _u not in track_b_acc[space_name][est_name]:
+                                        track_b_acc[space_name][est_name][_u] = []
                                     # Track B is a SAMPLE-WEIGHT remediation track:
                                     # the only thing distinguishing it from the
                                     # noisy baseline is the per-sample reliability
@@ -1117,8 +1227,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         continue
                                     try:
                                         m = mfactory()
+                                        _xtr, _xva = fd['eval_by_unit'][_u]
                                         try:
-                                            m.fit(fd['X_eval_train_s'], y_noisy,
+                                            m.fit(_xtr, y_noisy,
                                                   sample_weight=weights)
                                         except TypeError:
                                             # Model does not support sample_weight:
@@ -1129,8 +1240,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                             UNWEIGHTED_TRACK_B_MODELS.add(mname)
                                             continue
                                         score = float(metric_fn(fd['y_val'],
-                                                                 m.predict(fd['X_eval_val_s'])))
-                                        track_b_acc[space_name][est_name][mname].append(score)
+                                                                 m.predict(_xva)))
+                                        track_b_acc[space_name][est_name][_u].append(score)
                                     except Exception:
                                         pass
                             except Exception:
@@ -1139,10 +1250,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Aggregate per model
             noisy_mean_by_model = {mn: float(np.mean(s)) if s else float('nan')
                                    for mn, s in noisy_baseline_by_model.items()}
-            noisy_mean = noisy_mean_by_model.get('rf', float('nan'))
-            # Top-level gap is RF-anchored (Track B uses per-model gaps below;
-            # Track A uses the DNN-specific gap). Kept here for the JSON
-            # output's headline 'noise_gap' field.
+            noisy_mean = noisy_mean_by_model.get(_ref_unit, float('nan'))
+            # Top-level gap is anchored to rf on its rank-1 single
+            # representation (Track B uses per-unit gaps below; Track A uses
+            # the DNN-specific gaps). Kept here for the JSON output's headline
+            # 'noise_gap' field; 'reference_unit' names it.
             noise_gap_rf = clean_mean - noisy_mean
 
             strength_result = {
@@ -1157,38 +1269,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Track A aggregation (DNN-specific — retention is anchored to the
             # DNN clean baseline so it's a matched-evaluator number, not an
-            # RF-anchored mismatch as it was previously).
+            # RF-anchored mismatch as it was previously). There are two
+            # anchors, the clean DNN on its rank-1 and on its rank-2 single
+            # representation, and every row is read against both: each of
+            # 'retention', 'delta_from_clean_dnn' and its oriented twin is a
+            # dict keyed 'base_1' / 'base_2'.
+            def _vs_anchor(mean_s, anchor):
+                # retention_pct only when both sides have the same sign
+                # and the denominator is bounded away from zero; same
+                # robustness guard as n09 (R² can be negative).
+                if (not np.isnan(anchor)
+                        and anchor > 1e-10 and mean_s > 1e-10):
+                    if lower_is_better:
+                        retention = float(anchor / mean_s * 100)
+                    else:
+                        retention = float(mean_s / anchor * 100)
+                else:
+                    retention = float('nan')
+                delta = (float(mean_s - anchor) if not np.isnan(anchor)
+                         else float('nan'))
+                # Same difference, sign-normalised so a positive number always
+                # means this method beat the clean-label DNN. The raw one runs
+                # the dataset's own way and reads backwards on rmse. Added
+                # 2026-09-10 (metric-direction audit).
+                oriented = (float((anchor - mean_s) if lower_is_better
+                                  else (mean_s - anchor))
+                            if not np.isnan(anchor) else float('nan'))
+                return retention, delta, oriented
+
             for space_name, methods in track_a_acc.items():
                 space_a = {}
                 for method_name, score_list in methods.items():
                     if score_list:
                         mean_s = float(np.mean(score_list))
-                        # retention_pct only when both sides have the same sign
-                        # and the denominator is bounded away from zero; same
-                        # robustness guard as n09 (R² can be negative).
-                        if (not np.isnan(clean_mean_dnn)
-                                and clean_mean_dnn > 1e-10 and mean_s > 1e-10):
-                            if lower_is_better:
-                                retention = float(clean_mean_dnn / mean_s * 100)
-                            else:
-                                retention = float(mean_s / clean_mean_dnn * 100)
-                        else:
-                            retention = float('nan')
-                        space_a[method_name] = {
-                            'score': mean_s,
-                            'retention': retention,
-                            'delta_from_clean_dnn': float(mean_s - clean_mean_dnn)
-                                if not np.isnan(clean_mean_dnn) else float('nan'),
-                            # Same difference, sign-normalised so a positive
-                            # number always means this method beat the clean-label
-                            # DNN. The raw one above runs the dataset's own way
-                            # and reads backwards on rmse. Added 2026-09-10
-                            # (metric-direction audit).
-                            'delta_from_clean_dnn_oriented': float(
-                                (clean_mean_dnn - mean_s) if lower_is_better
-                                else (mean_s - clean_mean_dnn))
-                                if not np.isnan(clean_mean_dnn) else float('nan'),
-                        }
+                        _row = {'score': mean_s, 'retention': {},
+                                'delta_from_clean_dnn': {},
+                                'delta_from_clean_dnn_oriented': {}}
+                        for _a, _anchor in clean_mean_dnn.items():
+                            _r, _d, _o = _vs_anchor(mean_s, _anchor)
+                            _row['retention'][_a] = _r
+                            _row['delta_from_clean_dnn'][_a] = _d
+                            _row['delta_from_clean_dnn_oriented'][_a] = _o
+                        space_a[method_name] = _row
                 strength_result['track_a'][space_name] = space_a
             strength_result['clean_score_dnn'] = clean_mean_dnn
 
@@ -1207,6 +1329,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             est_results[mname] = {
                                 'denoised': denoised,
                                 'recovery': recovery,
+                                # 'mname' is the evaluation unit; these split it.
+                                'downstream_model': eval_units[mname][0],
+                                'fitted_on': f'base_{eval_units[mname][1]}',
+                                'fitted_on_representation': eval_units[mname][2],
                             }
                     space_b[est_name] = est_results
                 strength_result['track_b'][space_name] = space_b
@@ -1216,13 +1342,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # fold; np.nan for folds a model failed on), in the shape the shared
             # fold_reselection helper consumes.
             #
-            # This is NOT a re-selection. fold_reselection's job is to re-pick
-            # each side's winner from the folds other than the held-out one, and
-            # it needs a list of recipes to pick from. n13 gives it ONE hybrid
-            # recipe per model and ONE base representation, so there is nothing
-            # to re-pick and the arithmetic returns those same two numbers. The
-            # key used to be called 'fold_reselection', which promised the
-            # re-selection; it is now named for what it holds.
+            # The hybrid side is NOT a re-selection. fold_reselection's job is
+            # to re-pick each side's winner from the folds other than the
+            # held-out one, and it needs a list of recipes to pick from. n13
+            # gives it ONE hybrid recipe per model, so there is nothing to
+            # re-pick on that side. The base side holds the model's top 2 single
+            # representations (2026-09-25), so fold_reselection picks between
+            # those two without the held-out fold. The key used to be called
+            # 'fold_reselection', which promised a hybrid re-selection; it is
+            # named for what it holds.
             #
             # That one recipe per model came from the clean-label search pool
             # (get_best_search_for_downstream above), like every recipe in this
@@ -1234,11 +1362,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for mn in model_factories:
                 base_map = reselected_base_folds.get(mn, {})
                 hyb_map = reselected_hyb_folds.get(mn, {})
-                if any(base_map.get(fi) for fi in range(n_folds)):
-                    hr_baselines[mn] = {base_rep_name: [
-                        float(np.mean(base_map[fi]))
-                        if base_map.get(fi) else float('nan')
-                        for fi in range(n_folds)]}
+                _hb = {}
+                for _rn, _fmap in base_map.items():
+                    if any(_fmap.get(fi) for fi in range(n_folds)):
+                        _hb[_rn] = [float(np.mean(_fmap[fi]))
+                                    if _fmap.get(fi) else float('nan')
+                                    for fi in range(n_folds)]
+                if _hb:
+                    hr_baselines[mn] = _hb
                 if any(hyb_map.get(fi) for fi in range(n_folds)):
                     hr_candidates[mn] = [{
                         'name': reselected_hyb_name.get(mn, 'hybrid'),
@@ -1254,13 +1385,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'exclude_folds': [],
                 'candidates_by_model': hr_candidates,
                 'baselines_by_model': hr_baselines,
-                # One hybrid recipe per model and one base representation, so
-                # no leave-one-fold-out re-selection happens. Stated here so a
+                # One hybrid recipe per model, so no leave-one-fold-out
+                # re-selection happens on that side; the base side is the
+                # model's top 2 single representations. Stated here so a
                 # reader of the file does not have to infer it from the list
                 # lengths.
                 'n_candidate_recipes_per_model': {
                     mn: len(v) for mn, v in hr_candidates.items()},
-                'reselection': 'none_single_recipe_per_model',
+                'n_single_representations_per_model': {
+                    mn: len(v) for mn, v in hr_baselines.items()},
+                'reselection': ('hybrid: none, single recipe per model; '
+                                'base: leave-one-fold-out between the '
+                                "model's top 2 single representations"),
                 'recipe_source': 'clean_label_search_pool',
             }
             strength_result['per_fold_scores_single_recipe'] = reselection_block
@@ -1325,9 +1461,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                  exclude_folds=hr_exclude_folds(canonical_reselected))
             print(f"\n  === PER-FOLD SCORES, ONE RECIPE PER MODEL "
                   f"({canonical_reselected_key}) ===")
-            print("  No re-selection: one hybrid recipe and one base "
-                  "representation, so the leave-one-fold-out re-pick is a "
-                  "no-op.")
+            print("  One hybrid recipe per model, so the hybrid side is not "
+                  "re-picked; the base side is re-picked between the model's "
+                  "top 2 single representations.")
             for _mn, _r in _hr.items():
                 print(f"    {_mn}: hybrid={_r['hybrid_reselected']:.4f} "
                       f"base={_r['best_single_reselected']:.4f} "
@@ -1381,17 +1517,20 @@ def _compute_summary(results):
     # track caused, with its own separate axis, is gone. The per-type
     # normalisation is kept anyway, so an unequal grid could not silently
     # reintroduce it.
-    hybrid_wins_by_type = {}
-    hybrid_total_by_type = {}
+    #
+    # 2026-09-25: Track A holds the DNN's rank-1 and rank-2 single
+    # representations ('base_1_<rep>', 'base_2_<rep>'). Every tally below is
+    # kept once per rank -- the hybrid against base_1, and against base_2 --
+    # never with the two ranks averaged together.
+    _ranks = [f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)]
+    hybrid_wins_by_type = {_b: {} for _b in _ranks}
+    hybrid_total_by_type = {_b: {} for _b in _ranks}
     # 2026-09-12: 'hybrid_sim' — the space built from the similarity-objective
-    # search — gets its own tally against the base representation alone, so the
-    # two hybrid families can be read apart. The two buckets above no longer
-    # pool it into the baseline: hybrid_wins_by_type compares the
-    # predictive-objective space against the base representation alone, so
-    # 'base' is one base representation and not a base representation averaged
-    # with a second hybrid.
-    hybrid_sim_wins_by_type = {}
-    hybrid_sim_total_by_type = {}
+    # search — gets its own tally against the single representation alone, so
+    # the two hybrid families can be read apart. The two buckets above do not
+    # pool it into the baseline.
+    hybrid_sim_wins_by_type = {_b: {} for _b in _ranks}
+    hybrid_sim_total_by_type = {_b: {} for _b in _ranks}
 
     for nt, nt_data in results.get('per_noise_type', {}).items():
         best_method = None
@@ -1415,10 +1554,11 @@ def _compute_summary(results):
                 "guessed direction reverses every win count below and still "
                 "returns a full set of numbers.")
         lower = bool(results['lower_is_better'])
-        hybrid_wins_by_type[nt] = 0
-        hybrid_total_by_type[nt] = 0
-        hybrid_sim_wins_by_type[nt] = 0
-        hybrid_sim_total_by_type[nt] = 0
+        for _b in _ranks:
+            hybrid_wins_by_type[_b][nt] = 0
+            hybrid_total_by_type[_b][nt] = 0
+            hybrid_sim_wins_by_type[_b][nt] = 0
+            hybrid_sim_total_by_type[_b][nt] = 0
 
         for sk, sd in nt_data.get('per_strength', {}).items():
             for space_name, space_data in sd.get('track_a', {}).items():
@@ -1435,43 +1575,35 @@ def _compute_summary(results):
                             best_score = s
                             best_method = mn
 
-            # Check hybrid advantage (Track A) at this (noise_type, strength)
-            base_scores = []
-            hybrid_scores = []
-            for space_name, space_data in sd.get('track_a', {}).items():
-                for mv in space_data.values():
-                    s = mv.get('score', float('nan'))
-                    if not np.isnan(s):
-                        if space_name == 'hybrid':
-                            hybrid_scores.append(s)
-                        elif space_name != 'hybrid_sim':
-                            base_scores.append(s)
-            if base_scores and hybrid_scores:
-                hybrid_total_by_type[nt] += 1
-                b_avg = np.mean(base_scores)
-                h_avg = np.mean(hybrid_scores)
-                if (not lower and h_avg > b_avg) or (lower and h_avg < b_avg):
-                    hybrid_wins_by_type[nt] += 1
-
-            # 2026-09-12: the similarity-objective space against the base
-            # representation only, counted separately from the tally above.
-            base_only_scores = []
-            hybrid_sim_scores = []
-            for space_name, space_data in sd.get('track_a', {}).items():
-                for mv in space_data.values():
-                    s = mv.get('score', float('nan'))
-                    if np.isnan(s):
+            # Check hybrid advantage (Track A) at this (noise_type, strength),
+            # once against each rank of the single representation.
+            def _scores(pred):
+                out = []
+                for space_name, space_data in sd.get('track_a', {}).items():
+                    if not pred(space_name):
                         continue
-                    if space_name == 'hybrid_sim':
-                        hybrid_sim_scores.append(s)
-                    elif space_name != 'hybrid':
-                        base_only_scores.append(s)
-            if base_only_scores and hybrid_sim_scores:
-                hybrid_sim_total_by_type[nt] += 1
-                b_avg = np.mean(base_only_scores)
-                hs_avg = np.mean(hybrid_sim_scores)
-                if (not lower and hs_avg > b_avg) or (lower and hs_avg < b_avg):
-                    hybrid_sim_wins_by_type[nt] += 1
+                    for mv in space_data.values():
+                        s = mv.get('score', float('nan'))
+                        if not np.isnan(s):
+                            out.append(s)
+                return out
+            hybrid_scores = _scores(lambda sp: sp == 'hybrid')
+            # 2026-09-12: the similarity-objective space, counted separately.
+            hybrid_sim_scores = _scores(lambda sp: sp == 'hybrid_sim')
+            for _b in _ranks:
+                base_scores = _scores(lambda sp: sp.startswith(f'{_b}_'))
+                if base_scores and hybrid_scores:
+                    hybrid_total_by_type[_b][nt] += 1
+                    b_avg = np.mean(base_scores)
+                    h_avg = np.mean(hybrid_scores)
+                    if (not lower and h_avg > b_avg) or (lower and h_avg < b_avg):
+                        hybrid_wins_by_type[_b][nt] += 1
+                if base_scores and hybrid_sim_scores:
+                    hybrid_sim_total_by_type[_b][nt] += 1
+                    b_avg = np.mean(base_scores)
+                    hs_avg = np.mean(hybrid_sim_scores)
+                    if (not lower and hs_avg > b_avg) or (lower and hs_avg < b_avg):
+                        hybrid_sim_wins_by_type[_b][nt] += 1
 
         if best_method:
             best_per_dist[nt] = best_method
@@ -1482,25 +1614,26 @@ def _compute_summary(results):
     #   - "per_type" win rate (mean of within-type win rates) — the
     #     inflation-resistant headline. Each noise type contributes equally
     #     regardless of how many strength variants it has.
-    hybrid_wins = sum(hybrid_wins_by_type.values())
-    hybrid_total = sum(hybrid_total_by_type.values())
-    per_type_rates = {
-        nt: (hybrid_wins_by_type[nt] / hybrid_total_by_type[nt])
-        for nt in hybrid_total_by_type
-        if hybrid_total_by_type[nt] > 0
-    }
-    persists_by_type = (np.mean(list(per_type_rates.values())) > 0.5
-                       if per_type_rates else None)
+    #   Each is kept once per rank of the single representation.
+    def _rates(wins, total):
+        return {nt: (wins[nt] / total[nt]) for nt in total if total[nt] > 0}
 
-    # Same arithmetic for the similarity-objective space, against the base
+    hybrid_wins = {_b: sum(hybrid_wins_by_type[_b].values()) for _b in _ranks}
+    hybrid_total = {_b: sum(hybrid_total_by_type[_b].values()) for _b in _ranks}
+    per_type_rates = {_b: _rates(hybrid_wins_by_type[_b],
+                                 hybrid_total_by_type[_b]) for _b in _ranks}
+    persists_by_type = {
+        _b: (np.mean(list(r.values())) > 0.5 if r else None)
+        for _b, r in per_type_rates.items()}
+
+    # Same arithmetic for the similarity-objective space, against each single
     # representation alone. Added 2026-09-12 with the pool subset change.
-    sim_per_type_rates = {
-        nt: (hybrid_sim_wins_by_type[nt] / hybrid_sim_total_by_type[nt])
-        for nt in hybrid_sim_total_by_type
-        if hybrid_sim_total_by_type[nt] > 0
-    }
-    sim_persists_by_type = (np.mean(list(sim_per_type_rates.values())) > 0.5
-                            if sim_per_type_rates else None)
+    sim_per_type_rates = {_b: _rates(hybrid_sim_wins_by_type[_b],
+                                     hybrid_sim_total_by_type[_b])
+                          for _b in _ranks}
+    sim_persists_by_type = {
+        _b: (np.mean(list(r.values())) > 0.5 if r else None)
+        for _b, r in sim_per_type_rates.items()}
 
     # Does Gaussian winner transfer?
     gaussian_best = best_per_dist.get('gaussian')
@@ -1527,7 +1660,9 @@ def _compute_summary(results):
         'gaussian_rank_transfers': transfers,
         'sweep_axis_by_noise_type': sweep_axis_by_noise_type,
         # Headline flag: hybrid wins more than half of noise types on average.
-        # One vote per condition, whatever its level grid.
+        # One vote per condition, whatever its level grid. Every hybrid field
+        # below is a dict keyed 'base_1' / 'base_2': the hybrid against the
+        # DNN's rank-1 and rank-2 single representation.
         'hybrid_advantage_persists': persists_by_type,
         # Legacy raw totals (still per-(type, strength), for backwards
         # compatibility with readers that consumed the old fields).

@@ -18,9 +18,12 @@ WHAT IS COMPUTED, per fold, on the fold's training molecules as recorded:
      difference. A straight line through the K_MAX (delta, gamma) points; its
      intercept estimates the label-noise variance, in label units squared. It
      also holds real activity differences the features cannot resolve, so it is
-     an upper bound. In three distance spaces, as n35:
-       base              Tanimoto when every value is 0 or 1, else Euclidean on
-                         the fold-standardised base representation
+     an upper bound. In these distance spaces, as n35:
+       base_1, base_2    each downstream model's rank-1 and rank-2 single
+                         representation (see THE FEATURE SPACES): Tanimoto when
+                         every value is 0 or 1, else Euclidean on the
+                         fold-standardised representation. One intercept per
+                         distinct representation at that rank.
        <hybrid space>    Euclidean on each standardised hybrid matrix, built
                          from the fold's clean training labels
        forest_proximity  one minus the share of 200 trees putting the two
@@ -31,22 +34,24 @@ WHAT IS COMPUTED, per fold, on the fold's training molecules as recorded:
      pairs, squared distance, K_MAX points.
 
   2. THE CHECK. `gaussian` at the dataset's level grid, injected into the
-     training labels only. The base distances do not depend on the labels, so
-     the base intercept minus its level-0 value should equal the realised
-     injected variance on that fold. Only the base space is checked: the other
-     two spaces would move their neighbours with the labels.
+     training labels only. The distances in `gamma_reference_rep` do not depend
+     on the labels, so its intercept minus its level-0 value should equal the
+     realised injected variance on that fold. Only that representation is
+     checked: the hybrid and forest spaces would move their neighbours with the
+     labels.
 
   3. THE MODEL'S ERROR. Every downstream model in every space, fitted on the
      fold's training labels, scored on the held-out molecules: the domain metric
      and the mean squared error, both against the held-out labels as recorded.
-     Written beside it: the base Gamma intercept divided by that MSE, the share
-     of the error the noise estimate could account for. On a dataset with
+     Written beside it: the reference Gamma intercept (the intercept in
+     `gamma_reference_rep`) divided by that MSE, the share of the error the
+     noise estimate could account for. On a dataset with
      repeat measurements, the same with n26's pooled within-molecule variance
      of the training rows (n26.direct_noise_variance) in place of the intercept.
 
   4. SIMEX (Cook & Stefanski 1994), as a sensitivity curve. Extra noise
-     N(0, lambda * s2) is added to the training labels, s2 the fold's base Gamma
-     intercept, at lambda in SIMEX_LAMBDAS, SIMEX_DRAWS draws each. Every model
+     N(0, lambda * s2) is added to the training labels, s2 the fold's reference
+     Gamma intercept, at lambda in SIMEX_LAMBDAS, SIMEX_DRAWS draws each. Every model
      in every space is refitted and scored on the ORIGINAL held-out labels.
      Straight-line and quadratic fits of MSE on lambda (lambda = 0 is the plain
      fit) are carried to lambda = -1: the MSE with the estimated noise gone.
@@ -72,6 +77,16 @@ WHERE THE FEATURES COME FROM. As in n35: each downstream model's recipe is read
 from the precomputed pool, searched on clean labels; each fold rebuilds the
 hybrid from that fold's training labels.
 
+THE FEATURE SPACES. base_1 and base_2 are each downstream model's top 2 single
+representations, ranked by that model's own score in the stored search
+(_shared.noise_base_reps_by_model, owner's decision 2026-09-25);
+`base_reps_by_model` names them. A model the pool holds no search for has no
+space. The noise estimate s2 above, the check and the forest proximity each need
+ONE representation shared by every space and model, `gamma_reference_rep`: the
+rank-1 single representation of the first downstream model that has one. That
+choice was made on 2026-09-25 when the fixed preference list was deleted; the
+owner has not signed it off.
+
 Usage:
     python n37_noise_budget.py --dataset logd --mode full
     python n37_noise_budget.py --dataset herg_ic50 --mode full --simex-draws 0
@@ -94,7 +109,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.dataset_policy import (
@@ -296,11 +312,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
             f"{sorted(model_factories)}.")
 
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
     noise_groups = noise_groups_for(data)[0]
     rep_groups = build_replicate_groups(data)
-    base_binary = is_binary(reps[base_rep_name])
     if rep_groups is not None:
         row_count, row_spread = _molecule_count_and_spread(labels, rep_groups)
 
@@ -310,9 +326,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'check_condition': CHECK_CONDITION,
         'dose_units': noise_dose_units(dataset_name),
         'models': downstream_models,
-        'base_rep': base_rep_name,
-        'base_distance': ('tanimoto' if base_binary
-                          else 'euclidean_on_standardised_features'),
         'k_max': k_max,
         'simex_lambdas': list(simex_lambdas),
         'simex_draws': list(simex_draws),
@@ -324,7 +337,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'label units squared. An upper bound on the label-noise variance: '
             'it also holds activity differences the features cannot resolve.'),
         'simex_note': (
-            'extra noise at lambda * the fold base Gamma intercept, scored on '
+            'extra noise at lambda * the fold reference Gamma intercept '
+            '(gamma_reference_rep), scored on '
             'the original held-out labels; the hybrid features are built once '
             'per fold from the clean training labels and held fixed across '
             'lambda, so the curve is the model sensitivity, not the feature '
@@ -338,8 +352,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['repeat_noise_variance_whole_dataset'] = direct_noise_variance(
             measurements_by_molecule(labels, rep_groups))
 
-    sample_X = reps[base_rep_name]
-    splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
+                           mode=mode))
 
     by_model, no_recipe = pool_recipe_per_downstream_model(
         functools.partial(
@@ -373,7 +387,53 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for r in recipes_by_model.get(_m, ()):
             if r['space'] not in _ordered:
                 _ordered.append(r['space'])
-    spaces = ('base',) + tuple(_ordered)
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    # {space: [(result key, rep, models)]}: one cell per distinct
+    # representation at that rank, shared by the models that rank it there.
+    # The key is the space when every model shares it, else space/first model,
+    # as for the hybrid cells.
+    base_cells = {}
+    for _k in range(1, NOISE_BASE_REP_COUNT + 1):
+        _grp = base_rank_groups(base_by_model, _k, downstream_models)
+        if _grp:
+            base_cells[f'base_{_k}'] = [
+                (f'base_{_k}' if list(_ms) == list(downstream_models)
+                 else f'base_{_k}/{_ms[0]}', _rn, list(_ms))
+                for _rn, _ms in _grp.items()]
+    base_spaces = tuple(base_cells)
+    base_binary = {_rn: is_binary(reps[_rn])
+                   for _c in base_cells.values() for _, _rn, _ in _c}
+    results['base_distance_by_rep'] = {
+        _rn: ('tanimoto' if _b else 'euclidean_on_standardised_features')
+        for _rn, _b in base_binary.items()}
+    # The one representation s2, the check and the forest proximity are
+    # computed in (module docstring, THE FEATURE SPACES). It is the first
+    # model's rank-1 representation, so its cell is in base_1.
+    _ref_model = next((m for m in downstream_models if base_by_model.get(m)),
+                      None)
+    ref_rep = base_by_model[_ref_model][0] if _ref_model else None
+    ref_key = next((key for key, _rn, _ms in base_cells.get('base_1', ())
+                    if _ref_model in _ms), None)
+    results['gamma_reference_rep'] = ref_rep
+    results['gamma_reference_space'] = ref_key
+    results['gamma_reference_rep_chosen_as'] = (
+        f'rank-1 single representation of {_ref_model}, the first downstream '
+        f'model that has one' if _ref_model else
+        'none: no downstream model has a single representation, so there is '
+        'no noise estimate, no check and no forest proximity')
+    spaces = base_spaces + tuple(_ordered)
     results['hybrid_available'] = bool(_ordered)
     if _ordered:
         results['hybrid_recipe_by_model'] = convert_numpy({
@@ -391,11 +451,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         results['hybrid_unavailable_reason'] = (
             (f"the pool lookup RAISED {results['hybrid_lookup_error']}; the "
-             f"pool was never read. Everything ran in the base representation.")
+             f"pool was never read. Everything ran in the single "
+             f"representations only.")
             if results['hybrid_lookup_error'] else
             (f'no recipe came back from pool subset {POOL_SUBSET!r} for any '
-             f'downstream model. Everything ran in the base representation.'))
-        print("  no hybrid recipe; base representation only")
+             f'downstream model. Everything ran in the single representations '
+             f'only.'))
+        print("  no hybrid recipe; single representations only")
     results['spaces_run'] = list(spaces)
 
     passes = _levels_and_draws(dataset_name, levels=kwargs.get('levels'),
@@ -403,8 +465,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['check_levels'] = sorted({l for l, _ in passes})
     print(f"  {len(labels)} rows, {len(splits)} folds, models "
           f"{downstream_models}")
-    print(f"  base representation {base_rep_name}, distance "
-          f"{results['base_distance']}; check levels {results['check_levels']}")
+    print(f"  single representations {base_by_model}; reference "
+          f"{ref_rep} ({ref_key}); check levels {results['check_levels']}")
 
     per_fold = []
     # {space_key: {model: {'res': [...], 'pred': [...], 'rows': [...]}}}
@@ -436,18 +498,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         val_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
                     for k, v in reps.items()}
 
-        sc = StandardScaler()
-        Xb_tr = sc.fit_transform(train_reps[base_rep_name])
-        Xb_va = sc.transform(val_reps[base_rep_name])
-        Db = (tanimoto_distance_matrix(train_reps[base_rep_name])
-              if base_binary else euclidean_distance_matrix(Xb_tr))
-        g_base = gamma_test(Db, y_tr, k_max)
-        frec['gamma']['base'] = g_base
+        # {space_key: (X_tr, X_va, models)}
+        cells = {}
+        # The single-representation cells, each with its own Gamma intercept.
+        # The reference cell's distances are kept for the check and its
+        # features for the forest proximity.
+        Db = Xref_tr = None
+        for _sp in base_spaces:
+            for _key, _rn, _ms in base_cells[_sp]:
+                sc = StandardScaler()
+                Xb_tr = sc.fit_transform(train_reps[_rn])
+                Xb_va = sc.transform(val_reps[_rn])
+                _D = (tanimoto_distance_matrix(train_reps[_rn])
+                      if base_binary[_rn] else euclidean_distance_matrix(Xb_tr))
+                frec['gamma'][_key] = gamma_test(_D, y_tr, k_max)
+                cells[_key] = (Xb_tr, Xb_va, list(_ms))
+                if _key == ref_key:
+                    Db, Xref_tr = _D, Xb_tr
+                del _D
+        g_base = frec['gamma'].get(ref_key) if ref_key else None
         s2_base = (g_base or {}).get('intercept', float('nan'))
 
-        # The check: base neighbours are fixed, so the intercept should rise
-        # by the realised injected variance.
-        for level, draw in passes:
+        # The check: the reference neighbours are fixed, so the intercept
+        # should rise by the realised injected variance.
+        for level, draw in (passes if Db is not None else ()):
             try:
                 spec = noise_spec_for(dataset_name, CHECK_CONDITION, level,
                                       noise_seed=draw, is_clf=False)
@@ -467,7 +541,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         del Db
 
         if run_proximity:
-            if n_tr > PROX_SMOOTH_MAX_ROWS:
+            if Xref_tr is None:
+                frec['gamma'][PROXIMITY_SPACE] = {
+                    'refused': results['gamma_reference_rep_chosen_as']}
+            elif n_tr > PROX_SMOOTH_MAX_ROWS:
                 frec['gamma'][PROXIMITY_SPACE] = {
                     'refused': (f'{n_tr} training rows is over '
                                 f'PROX_SMOOTH_MAX_ROWS={PROX_SMOOTH_MAX_ROWS}')}
@@ -476,17 +553,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     from kirby.utils.noise_estimation import (
                         forest_leaf_ids, forest_proximity_distance)
                     Dp = forest_proximity_distance(
-                        forest_leaf_ids(Xb_tr, y_tr, False))
+                        forest_leaf_ids(Xref_tr, y_tr, False))
                     frec['gamma'][PROXIMITY_SPACE] = gamma_test(Dp, y_tr, k_max)
                     del Dp
                 except Exception as exc:
                     errors[f'f{fold_i}|{PROXIMITY_SPACE}'] = (
                         f'{type(exc).__name__}: {exc}')
 
-        # {space_key: (X_tr, X_va, models)}
-        cells = {'base': (Xb_tr, Xb_va, list(downstream_models))}
         for _sp in spaces:
-            if _sp == 'base':
+            if _sp in base_spaces:
                 continue
             for _bp_m, _mnames, _shareable in group_models_by_recipe(
                     {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
@@ -520,7 +595,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 res = y_va - pred
                 mse = float(np.mean(res ** 2))
                 row = {'metric': float(metric_fn(y_va, pred)), 'mse': mse,
-                       'gamma_base_over_mse': (s2_base / mse
+                       'gamma_reference_over_mse': (s2_base / mse
                                                if mse > 0 and np.isfinite(s2_base)
                                                else None)}
                 gk = frec['gamma'].get(key)
@@ -572,8 +647,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     frec['simex'].setdefault(key, {})[mname] = ex
 
         per_fold.append(frec)
-        gb = frec['gamma'].get('base') or {}
-        print(f"    fold {fold_i}: {n_tr} training rows, base Gamma intercept "
+        gb = (frec['gamma'].get(ref_key) if ref_key else None) or {}
+        print(f"    fold {fold_i}: {n_tr} training rows, reference Gamma intercept "
               f"{gb.get('intercept', float('nan')):.4f} (label variance "
               f"{gb.get('var_y', float('nan')):.4f}) [{time.time() - t0:.0f}s]")
 
@@ -604,7 +679,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 
 def _check(per_fold):
-    """Base intercept rise over level 0 beside the realised injected variance."""
+    """Reference intercept rise over level 0 beside the realised injected variance."""
     out = {}
     for f in per_fold:
         rows = f.get('check') or []
@@ -643,7 +718,7 @@ def _summarise(per_fold, oof_block):
         for sp, by_m in (f.get('model_error') or {}).items():
             for m, row in by_m.items():
                 (out['noise_share_of_mse'].setdefault(sp, {})
-                 .setdefault(m, []).append(row.get('gamma_base_over_mse')))
+                 .setdefault(m, []).append(row.get('gamma_reference_over_mse')))
         for sp, by_m in (f.get('simex') or {}).items():
             for m, ex in by_m.items():
                 d = (ex.get('quadratic') or {}).get('drop_share_of_plain')
@@ -685,7 +760,8 @@ def _fmt(x, p=4):
 def _print_summary(results, metric_name):
     s = results['summary']
     print("\n" + "=" * 70)
-    print("CHECK: rise of the base Gamma intercept over level 0, beside the "
+    print(f"CHECK: rise of the Gamma intercept in "
+          f"{results.get('gamma_reference_rep')} over level 0, beside the "
           "realised injected variance (label units squared)")
     for lvl in sorted(results['check'], key=float):
         r = results['check'][lvl]
@@ -696,7 +772,7 @@ def _print_summary(results, metric_name):
           "the noise variance), mean over folds:")
     for sp, g in s['gamma_intercept'].items():
         print(f"  {sp:28s} {_fmt(g['mean'])}")
-    print("\nBASE GAMMA INTERCEPT / held-out MSE, mean over folds:")
+    print("\nREFERENCE GAMMA INTERCEPT / held-out MSE, mean over folds:")
     for sp, by_m in s['noise_share_of_mse'].items():
         for m, v in by_m.items():
             print(f"  {sp}/{m}: {_fmt(v['mean'], 3)}")
@@ -737,8 +813,6 @@ def main():
                         help='Do not run the SIMEX curve')
     parser.add_argument('--exp-folds', type=int, default=None,
                         help='Outer folds. Overrides the 1 or 5 --mode gives')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help="Base representation. Default: pick_noise_base_rep's")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename')
     args = parser.parse_args()
@@ -762,8 +836,6 @@ def main():
         kw['skip_proximity'] = True
     if args.skip_simex:
         kw['skip_simex'] = True
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
 
     res = run(data, config, args.output, args.dataset, **kw)
     save_experiment_results(res, args.output, EXP_ID, args.dataset,

@@ -104,6 +104,23 @@ to the condition named on the file. n18 asks the same three-way question on the
 labels as they come, where there is no list of damaged molecules to be right
 about.
 
+THE FEATURE SPACES ARE PER DOWNSTREAM MODEL. The pool is asked for each
+model's own stored search (noise_helpers.pool_recipe_per_downstream_model), and
+each model's hybrid is rebuilt from the recipe searched for IT. Until
+2026-09-25 the pool was asked for the first model only and every model was
+scored in that model's hybrid. The single-representation comparison is each
+model's top 2 base representations by its own score in that stored search --
+spaces base_1 and base_2 (_shared.noise_base_reps_by_model); which ones is
+written to `base_reps_by_model`. A model the pool holds no search for has no
+space at all, and `base_reps_missing` and `hybrid_unavailable_by_model` say
+why. Owner's decision, 2026-09-25.
+
+The detectors and the out-of-fold and Gaussian-process targets are fitted
+inside a feature matrix, so they run once per DISTINCT matrix: once where
+every model shares one, once per model where they do not. The owner accepted
+those extra fits on 2026-09-25. Where a space holds more than one matrix, the
+detection and deletion records are keyed '<space>/<first model on it>'.
+
 WHAT THE HELD-OUT MOLECULES ARE GRADED AGAINST. `labels[val_idx]`, untouched, in
 every arm. No cleaned label and no corrupted label is ever scored against.
 
@@ -116,6 +133,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
+import functools
 import time
 import zlib
 
@@ -126,7 +144,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.dataset_policy import (
@@ -135,6 +154,7 @@ from experiments.dataset_policy import (
 from experiments.noise.noise_helpers import (
     noise_spec_for, inject_train_labels, detection_scores,
     detection_is_defined, hybrid_for_fold, DETECTION_IS_DEFINED,
+    pool_recipe_per_downstream_model, group_models_by_recipe,
 )
 # The cleanups are n07's, called rather than copied, so an arm here is the same
 # code n07 and n18 already measured. `_compute_noise_scores` is n07's detector
@@ -218,6 +238,9 @@ SPACE_FOR_FAMILY = {
     'predictive': HYBRID_SPACE,
     'similarity': 'hybrid_similarity',
 }
+
+# Each downstream model's rank-1 and rank-2 single representation.
+BASE_SPACES = tuple(f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1))
 
 
 def reads_flag_rate(cleanup, is_clf):
@@ -431,8 +454,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
             f"{sorted(model_factories)}.")
 
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
     noise_groups = noise_groups_for(data)[0]
 
     # ⛔ A GROUPED CONDITION NEEDS SCAFFOLD GROUPS AND AN ANTIBODY SET HAS NONE.
@@ -475,7 +499,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'flag_rates': flag_rates,
         'random_deletion_seeds': seeds,
         'models': downstream_models,
-        'base_rep': base_rep_name,
         'arms': arm_names,
         'arm_to_beat': 'no_cleaning',
         'arm_families': {a[0]: a[1] for a in arms},
@@ -528,9 +551,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'condition_moves_every_other_label': bool(
             condition in OUTLIER_STRATEGIES),
         'features_are_fixed_note': (
-            "Each feature space is built once per (draw, fold) from that "
+            "Each feature matrix is built once per (draw, fold) from that "
             "pass's training molecules at their CORRUPTED labels, and every "
-            'arm, detector and flag rate shares it. No cleanup reaches the '
+            'arm, detector and flag rate shares it. A hybrid matrix is built '
+            "from each downstream model's own recipe; models whose recipes "
+            'give the same matrix share one. No cleanup reaches the '
             "feature ranking or the budget split; whether it should is n20's "
             'question.'),
         'per_level': {},
@@ -539,56 +564,76 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'molecules_deleted': {},
     }
 
-    sample_X = reps[base_rep_name]
-    splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
+                           mode=mode))
 
-    # ── The hybrid recipes, fetched once. n18's block, for n18's reason. ──
-    bp = None
-    lookup_error = None
-    _meta = None
-    try:
-        _search, _meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model=downstream_models[0], budget=None,
-            augmentations=data.get('augmentations'),
+    # ── The hybrid recipes, one per downstream model (n23's block) ──
+    by_model, no_recipe = pool_recipe_per_downstream_model(
+        functools.partial(
+            get_best_search_for_downstream, reps, labels, groups,
+            budget=None, augmentations=data.get('augmentations'),
             dataset_name=dataset_name, task_type=task_type, data=data,
-            pool_subset=POOL_SUBSET)
-        bp = _meta['best_config']['blueprint'] if _meta else None
-    except Exception as exc:
-        # What went wrong is recorded, not just that something did. A dataset
-        # the precompute never covered and a stored search written under an
-        # older identity call for opposite responses and both used to be
-        # reported as "the pool held nothing".
-        lookup_error = f'{type(exc).__name__}: {exc}'
-        print(f"  hybrid recipe lookup failed: {lookup_error}")
-
-    hybrid_recipes, hybrid_unavailable = pool_recipes_by_family(
-        _meta if bp is not None else None, SPACE_FOR_FAMILY,
-        eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
-    recipe_for_space = {r['space']: r['blueprint'] for r in hybrid_recipes}
-    results['hybrid_spaces_unavailable'] = hybrid_unavailable
+            pool_subset=POOL_SUBSET),
+        downstream_models)
+    _raised = [d['lookup_error'] for d in no_recipe.values()
+               if d['lookup_error']]
+    lookup_error = _raised[0] if _raised else None
     results['hybrid_lookup_error'] = lookup_error
+    results['hybrid_unavailable_by_model'] = {
+        m: d['why'] for m, d in no_recipe.items()}
 
-    if not hybrid_recipes:
-        spaces = ('base',)
+    recipes_by_model, recipe_for_space_by_model = {}, {}
+    hybrid_unavailable = {}
+    for _m in downstream_models:
+        _rs, _un = pool_recipes_by_family(
+            by_model[_m]['meta'] if _m in by_model else None,
+            SPACE_FOR_FAMILY, eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+        recipes_by_model[_m] = _rs
+        recipe_for_space_by_model[_m] = {r['space']: r['blueprint']
+                                         for r in _rs}
+        for _sp, _why in _un.items():
+            hybrid_unavailable.setdefault(_sp, {})[_m] = _why
+    results['hybrid_spaces_unavailable'] = hybrid_unavailable
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces = tuple(
+        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, _k, downstream_models))
+
+    _ordered = []
+    for _m in downstream_models:
+        for r in recipes_by_model.get(_m, ()):
+            if r['space'] not in _ordered:
+                _ordered.append(r['space'])
+    spaces = base_spaces + tuple(_ordered)
+    if not _ordered:
         results['hybrid_available'] = False
         results['hybrid_unavailable_reason'] = (
             (f'the pool lookup RAISED {lookup_error} -- the pool was never '
              f'read, so this is not a statement about what it holds. Every arm '
-             f'ran in the base representation only.')
+             f'ran in the single representations only.')
             if lookup_error else
-            (f'no recipe came back from the pool subset {POOL_SUBSET!r}, so '
-             f'every arm ran in the base representation only. Dropping the run '
-             f'would lose real answers because one of several spaces is '
-             f'missing.'))
+            (f'no recipe came back from the pool subset {POOL_SUBSET!r} for '
+             f'any downstream model, so every arm ran in the single '
+             f'representations only. Dropping the run would lose real answers '
+             f'because one of several spaces is missing.'))
         print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
-              f"base representation only")
+              f"single representations only")
     else:
-        spaces = ('base',) + tuple(r['space'] for r in hybrid_recipes)
         results['hybrid_available'] = True
-        results['hybrid_family'] = _meta.get('objective')
-        results['hybrid_spaces'] = convert_numpy({
-            r['space']: {
+        results['hybrid_recipe_by_model'] = convert_numpy({
+            m: {r['space']: {
                 'built_under_objective': r['objective'],
                 'features_chosen_by': describe_pool_family(r['objective']),
                 'is_the_recipe_the_pool_returned': r['is_pool_winner'],
@@ -598,13 +643,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
                 'search_score_mean': r['search_score_mean'],
                 'search_metric_name': r['search_metric_name'],
-            } for r in hybrid_recipes})
-        for r in hybrid_recipes:
-            print(f"  hybrid space {r['space']}: family {r['objective']!r}, "
-                  f"budget {r['budget']} features, allocation "
-                  f"{r['allocation_method']}")
-    for _sp, _why in hybrid_unavailable.items():
-        print(f"  no {_sp} space: {_why}")
+            } for r in rs}
+            for m, rs in recipes_by_model.items() if rs})
+        for m, rs in recipes_by_model.items():
+            for r in rs:
+                print(f"  {m} / {r['space']}: family {r['objective']!r}, "
+                      f"budget {r['budget']} features, allocation "
+                      f"{r['allocation_method']}")
+    for _sp, _whys in hybrid_unavailable.items():
+        for _m, _why in _whys.items():
+            print(f"  no {_sp} space for {_m}: {_why}")
     results['spaces_run'] = list(spaces)
 
     passes = _levels_and_draws(dataset_name, condition, is_clf,
@@ -621,7 +669,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"{len(rewrite_cleanups)} that rewrite labels, "
           f"{len(reweight_cleanups)} that reduce weights, "
           f"{len(seeds)} random-deletion replicates")
-    print(f"  base representation: {base_rep_name}")
+    print(f"  spaces {list(spaces)}")
 
     # acc[level][space][detector][flag rate][arm][model][pass] = score
     acc = {}
@@ -666,223 +714,244 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             val_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
                         for k, v in reps.items()}
 
-            # The feature spaces for this pass. Built from the CORRUPTED
+            # The feature matrices for this pass. Built from the CORRUPTED
             # training labels, once, and shared by every arm below.
+            # {space: [(X_tr, X_va, models scored on it)]}. base_k holds one
+            # matrix per distinct representation at rank k, shared by the
+            # models that rank it there; a hybrid space one matrix per
+            # distinct recipe, n23's layout.
             fold_spaces = {}
-            sc = StandardScaler()
-            fold_spaces['base'] = (
-                sc.fit_transform(train_reps[base_rep_name]),
-                sc.transform(val_reps[base_rep_name]))
-            for _sp in spaces:
-                _bp = recipe_for_space.get(_sp)
-                if _bp is None:
+            for _k in range(1, NOISE_BASE_REP_COUNT + 1):
+                _bsp = f'base_{_k}'
+                if _bsp not in spaces:
                     continue
-                X_tr_h, X_va_h = hybrid_for_fold(
-                    train_reps, val_reps, y0, _bp, g_tr,
-                    model_factories[downstream_models[0]](),
-                    metric_fn, lower_is_better)
-                if X_tr_h is None:
-                    errors[f'{lvl_key}|d{draw}|f{fold_i}|{_sp}|build'] = (
-                        'the hybrid could not be built on this pass')
-                else:
+                _bcells = []
+                for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                                 downstream_models).items():
+                    sc = StandardScaler()
+                    _bcells.append((sc.fit_transform(train_reps[_rn]),
+                                    sc.transform(val_reps[_rn]), list(_ms)))
+                fold_spaces[_bsp] = _bcells
+            for _sp in spaces:
+                if _sp in BASE_SPACES:
+                    continue
+                _cells = []
+                for _bp_m, _mnames, _shareable in group_models_by_recipe(
+                        {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
+                         for _m in downstream_models}, downstream_models):
+                    X_tr_h, X_va_h = hybrid_for_fold(
+                        train_reps, val_reps, y0, _bp_m, g_tr,
+                        None if _shareable
+                        else model_factories[_mnames[0]](),
+                        metric_fn, lower_is_better)
+                    if X_tr_h is None:
+                        errors[f'{lvl_key}|d{draw}|f{fold_i}|{_sp}/'
+                               f'{_mnames[0]}|build'] = (
+                            'the hybrid could not be built on this pass')
+                        continue
                     sh = StandardScaler()
-                    fold_spaces[_sp] = (sh.fit_transform(X_tr_h),
-                                        sh.transform(X_va_h))
+                    _cells.append((sh.fit_transform(X_tr_h),
+                                   sh.transform(X_va_h), list(_mnames)))
+                if _cells:
+                    fold_spaces[_sp] = _cells
 
             for space in spaces:
-                if space not in fold_spaces:
-                    continue
-                X_tr_s, X_va_s = fold_spaces[space]
-                space_cell = cell.setdefault(space, {})
+                for X_tr_s, X_va_s, cell_models in fold_spaces.get(space, ()):
+                    # One matrix. Its name in the detection and deletion
+                    # records: the space where every model shares it, the
+                    # space and its first model where it does not.
+                    ckey = (space if cell_models == list(downstream_models)
+                            else f'{space}/{cell_models[0]}')
+                    space_cell = cell.setdefault(space, {})
 
-                # An arm that aims at a predicted value fits a model to get
-                # there, and that target depends on the features, the labels
-                # and the groups and on nothing else. Hoisted once per (pass,
-                # space), which is what n18 does and why correction_targets
-                # exists.
-                #
-                # ⛔ THE EMPTY LIST IS NOT PASSED THROUGH. correction_targets
-                # reads `want = set(want or ('oof', 'gp', 'quantile'))`, so an
-                # empty want asks it for all three -- a Gaussian process and a
-                # quantile forest fitted for arms that do not exist. On a
-                # classification label oof_smooth is dropped, so the want-list
-                # is empty there and that is exactly when it would have fired.
-                _want = targets_needed(cleanups_used)
-                targets = (correction_targets(X_tr_s, y0, groups=g_tr,
-                                              want=_want) if _want else {})
+                    # An arm that aims at a predicted value fits a model to get
+                    # there, and that target depends on the features, the labels
+                    # and the groups and on nothing else. Hoisted once per (pass,
+                    # space), which is what n18 does and why correction_targets
+                    # exists.
+                    #
+                    # ⛔ THE EMPTY LIST IS NOT PASSED THROUGH. correction_targets
+                    # reads `want = set(want or ('oof', 'gp', 'quantile'))`, so an
+                    # empty want asks it for all three -- a Gaussian process and a
+                    # quantile forest fitted for arms that do not exist. On a
+                    # classification label oof_smooth is dropped, so the want-list
+                    # is empty there and that is exactly when it would have fired.
+                    _want = targets_needed(cleanups_used)
+                    targets = (correction_targets(X_tr_s, y0, groups=g_tr,
+                                                  want=_want) if _want else {})
 
-                # The score to beat, fitted once per (pass, space, model) and
-                # shared by every detector and every flag rate -- they all have
-                # to beat the same number or the comparison is not paired.
-                base_score = {}
-                for mname in downstream_models:
-                    s, err = _fit_score(
-                        model_factories[mname],
-                        {'X': X_tr_s, 'y': y0, 'sample_weight': None},
-                        X_va_s, y_val, metric_fn, metric_name)
-                    if s is None:
-                        errors[f'{lvl_key}|{space}|{mname}|'
-                               f'f{fold_i}|no_cleaning'] = err
-                    else:
-                        base_score[mname] = s
+                    # The score to beat, fitted once per (pass, space, model) and
+                    # shared by every detector and every flag rate -- they all have
+                    # to beat the same number or the comparison is not paired.
+                    base_score = {}
+                    for mname in cell_models:
+                        s, err = _fit_score(
+                            model_factories[mname],
+                            {'X': X_tr_s, 'y': y0, 'sample_weight': None},
+                            X_va_s, y_val, metric_fn, metric_name)
+                        if s is None:
+                            errors[f'{lvl_key}|{ckey}|{mname}|'
+                                   f'f{fold_i}|no_cleaning'] = err
+                        else:
+                            base_score[mname] = s
 
-                # One random deletion is one fit per (space, model, count,
-                # seed) and the same count comes back from both detectors, so
-                # the fit is done once and read twice rather than repeated.
-                random_cache = {}
+                    # One random deletion is one fit per (space, model, count,
+                    # seed) and the same count comes back from both detectors, so
+                    # the fit is done once and read twice rather than repeated.
+                    random_cache = {}
 
-                for detector in detectors:
-                    try:
-                        scores = _compute_noise_scores(
-                            X_tr_s, y0, is_clf=is_clf, detector=detector,
-                            groups=g_tr)
-                    except Exception as exc:
-                        errors[f'{lvl_key}|{space}|{detector}|f{fold_i}|'
-                               f'detector'] = f'{type(exc).__name__}: {exc}'
-                        continue
-                    if scores is None:
-                        errors[f'{lvl_key}|{space}|{detector}|f{fold_i}|'
-                               f'detector'] = 'the estimator fit failed'
-                        continue
-                    scores = np.asarray(scores, dtype=float)
-
-                    # Did the detector rank the damaged molecules at the top,
-                    # before any arm ran? It costs no model fit.
-                    det = detection_scores(cmask, scores, condition)
-                    if det is not None:
-                        (detection_acc.setdefault(lvl_key, {})
-                         .setdefault(space, {})
-                         .setdefault(detector, []).append(det))
-
-                    det_cell = space_cell.setdefault(detector, {})
-                    # Per-pass scores for the arms that are fitted once because
-                    # their cleaned training set does not depend on the rate.
-                    blind = {}
-
-                    for slot, rate in enumerate(flag_rates):
-                        rate_key = f'{rate:g}'
-                        rate_cell = det_cell.setdefault(rate_key, {})
-                        for mname, s in base_score.items():
-                            (rate_cell.setdefault('no_cleaning', {})
-                             .setdefault(mname, {})[pass_key]) = s
-
-                        n_deleted_here = None
-                        for arm, family, cleanup, seed in arms:
-                            if family in ('no_cleaning', 'delete_at_random'):
-                                continue
-                            blind_key = (detector, cleanup)
-                            if (not reads_flag_rate(cleanup, is_clf)
-                                    and blind_key in blind):
-                                # Already fitted at the first rate; the cleaned
-                                # training set is the same column, so the same
-                                # per-pass score is written here rather than
-                                # the same fit being run again.
-                                for mname, done in blind[blind_key].items():
-                                    (rate_cell.setdefault(arm, {})
-                                     .setdefault(mname, {})[pass_key]) = done
-                                continue
-
-                            try:
-                                cleaned = cleaned_training_set(
-                                    cleanup, X_tr_s, y0, scores, rate,
-                                    is_clf=is_clf, groups=g_tr,
-                                    strength=None, targets=targets)
-                            except Exception as exc:
-                                errors[f'{lvl_key}|{space}|{detector}|'
-                                       f'{rate_key}|{arm}|f{fold_i}|clean'] = (
-                                    f'{type(exc).__name__}: {exc}')
-                                continue
-                            if cleaned is None:
-                                errors[f'{lvl_key}|{space}|{detector}|'
-                                       f'{rate_key}|{arm}|f{fold_i}|clean'] = (
-                                    'the cleanup declined on this pass')
-                                continue
-
-                            if family == 'delete':
-                                n_deleted_here = _deleted_count(cleaned, n_tr)
-                                rm = ~np.asarray(cleaned['keep'], dtype=bool)
-                                (deleted_acc.setdefault(lvl_key, {})
-                                 .setdefault(space, {})
-                                 .setdefault(detector, {})
-                                 .setdefault(rate_key, []).append({
-                                     'molecules_deleted': int(rm.sum()),
-                                     'training_molecules': n_tr,
-                                     'widened_molecules_among_the_deleted':
-                                         int(np.sum(
-                                             np.asarray(cmask, dtype=bool) & rm)),
-                                     'widened_molecules': int(np.sum(cmask))}))
-
-                            got = {}
-                            for mname in downstream_models:
-                                s, err = _fit_score(
-                                    model_factories[mname], cleaned, X_va_s,
-                                    y_val, metric_fn, metric_name)
-                                if s is None:
-                                    errors[f'{lvl_key}|{space}|{detector}|'
-                                           f'{rate_key}|{arm}|{mname}|'
-                                           f'f{fold_i}'] = err
-                                    continue
-                                got[mname] = s
-                                (rate_cell.setdefault(arm, {})
-                                 .setdefault(mname, {})[pass_key]) = s
-                            if not reads_flag_rate(cleanup, is_clf):
-                                blind[blind_key] = got
-
-                        # ── The control, on the same count ──
-                        if not n_deleted_here:
-                            errors[f'{lvl_key}|{space}|{detector}|{rate_key}|'
-                                   f'f{fold_i}|control'] = (
-                                'the deletion arm removed no molecule on this '
-                                'pass, so there is no count to match at random')
+                    for detector in detectors:
+                        try:
+                            scores = _compute_noise_scores(
+                                X_tr_s, y0, is_clf=is_clf, detector=detector,
+                                groups=g_tr)
+                        except Exception as exc:
+                            errors[f'{lvl_key}|{ckey}|{detector}|f{fold_i}|'
+                                   f'detector'] = f'{type(exc).__name__}: {exc}'
                             continue
-                        for arm, family, cleanup, seed in arms:
-                            if family != 'delete_at_random':
-                                continue
-                            ck = (space, n_deleted_here, seed)
-                            if ck not in random_cache:
-                                rs, rrate = random_deletion_scores(
-                                    n_tr, n_deleted_here,
-                                    replicate_seed(seed, level, draw, fold_i,
-                                                   n_tr, n_deleted_here))
-                                rcleaned = cleaned_training_set(
-                                    cleanup, X_tr_s, y0, rs, rrate,
-                                    is_clf=is_clf, groups=g_tr,
-                                    strength=None, targets=targets)
-                                if rcleaned is None:
-                                    errors[f'{lvl_key}|{space}|{rate_key}|'
-                                           f'{arm}|f{fold_i}|clean'] = (
-                                        'the deletion declined on this pass')
-                                    random_cache[ck] = {}
-                                else:
-                                    rm = ~np.asarray(rcleaned['keep'],
-                                                     dtype=bool)
+                        if scores is None:
+                            errors[f'{lvl_key}|{ckey}|{detector}|f{fold_i}|'
+                                   f'detector'] = 'the estimator fit failed'
+                            continue
+                        scores = np.asarray(scores, dtype=float)
+
+                        # Did the detector rank the damaged molecules at the top,
+                        # before any arm ran? It costs no model fit.
+                        det = detection_scores(cmask, scores, condition)
+                        if det is not None:
+                            (detection_acc.setdefault(lvl_key, {})
+                             .setdefault(ckey, {})
+                             .setdefault(detector, []).append(det))
+
+                        det_cell = space_cell.setdefault(detector, {})
+                        # Per-pass scores for the arms that are fitted once because
+                        # their cleaned training set does not depend on the rate.
+                        blind = {}
+
+                        for slot, rate in enumerate(flag_rates):
+                            rate_key = f'{rate:g}'
+                            rate_cell = det_cell.setdefault(rate_key, {})
+                            for mname, s in base_score.items():
+                                (rate_cell.setdefault('no_cleaning', {})
+                                 .setdefault(mname, {})[pass_key]) = s
+
+                            n_deleted_here = None
+                            for arm, family, cleanup, seed in arms:
+                                if family in ('no_cleaning', 'delete_at_random'):
+                                    continue
+                                blind_key = (detector, cleanup)
+                                if (not reads_flag_rate(cleanup, is_clf)
+                                        and blind_key in blind):
+                                    # Already fitted at the first rate; the cleaned
+                                    # training set is the same column, so the same
+                                    # per-pass score is written here rather than
+                                    # the same fit being run again.
+                                    for mname, done in blind[blind_key].items():
+                                        (rate_cell.setdefault(arm, {})
+                                         .setdefault(mname, {})[pass_key]) = done
+                                    continue
+
+                                try:
+                                    cleaned = cleaned_training_set(
+                                        cleanup, X_tr_s, y0, scores, rate,
+                                        is_clf=is_clf, groups=g_tr,
+                                        strength=None, targets=targets)
+                                except Exception as exc:
+                                    errors[f'{lvl_key}|{ckey}|{detector}|'
+                                           f'{rate_key}|{arm}|f{fold_i}|clean'] = (
+                                        f'{type(exc).__name__}: {exc}')
+                                    continue
+                                if cleaned is None:
+                                    errors[f'{lvl_key}|{ckey}|{detector}|'
+                                           f'{rate_key}|{arm}|f{fold_i}|clean'] = (
+                                        'the cleanup declined on this pass')
+                                    continue
+
+                                if family == 'delete':
+                                    n_deleted_here = _deleted_count(cleaned, n_tr)
+                                    rm = ~np.asarray(cleaned['keep'], dtype=bool)
                                     (deleted_acc.setdefault(lvl_key, {})
-                                     .setdefault(space, {})
-                                     .setdefault(f'random_seed{seed}', {})
+                                     .setdefault(ckey, {})
+                                     .setdefault(detector, {})
                                      .setdefault(rate_key, []).append({
                                          'molecules_deleted': int(rm.sum()),
                                          'training_molecules': n_tr,
                                          'widened_molecules_among_the_deleted':
-                                             int(np.sum(np.asarray(
-                                                 cmask, dtype=bool) & rm)),
-                                         'widened_molecules': int(
-                                             np.sum(cmask))}))
-                                    out = {}
-                                    for mname in downstream_models:
-                                        s, err = _fit_score(
-                                            model_factories[mname], rcleaned,
-                                            X_va_s, y_val, metric_fn,
-                                            metric_name)
-                                        if s is None:
-                                            errors[
-                                                f'{lvl_key}|{space}|{rate_key}'
-                                                f'|{arm}|{mname}|f{fold_i}'] = err
-                                        else:
-                                            out[mname] = s
-                                    random_cache[ck] = out
-                            for mname, s in random_cache[ck].items():
-                                (rate_cell.setdefault(arm, {})
-                                 .setdefault(mname, {})[pass_key]) = s
+                                             int(np.sum(
+                                                 np.asarray(cmask, dtype=bool) & rm)),
+                                         'widened_molecules': int(np.sum(cmask))}))
+
+                                got = {}
+                                for mname in cell_models:
+                                    s, err = _fit_score(
+                                        model_factories[mname], cleaned, X_va_s,
+                                        y_val, metric_fn, metric_name)
+                                    if s is None:
+                                        errors[f'{lvl_key}|{ckey}|{detector}|'
+                                               f'{rate_key}|{arm}|{mname}|'
+                                               f'f{fold_i}'] = err
+                                        continue
+                                    got[mname] = s
+                                    (rate_cell.setdefault(arm, {})
+                                     .setdefault(mname, {})[pass_key]) = s
+                                if not reads_flag_rate(cleanup, is_clf):
+                                    blind[blind_key] = got
+
+                            # ── The control, on the same count ──
+                            if not n_deleted_here:
+                                errors[f'{lvl_key}|{ckey}|{detector}|{rate_key}|'
+                                       f'f{fold_i}|control'] = (
+                                    'the deletion arm removed no molecule on this '
+                                    'pass, so there is no count to match at random')
+                                continue
+                            for arm, family, cleanup, seed in arms:
+                                if family != 'delete_at_random':
+                                    continue
+                                ck = (ckey, n_deleted_here, seed)
+                                if ck not in random_cache:
+                                    rs, rrate = random_deletion_scores(
+                                        n_tr, n_deleted_here,
+                                        replicate_seed(seed, level, draw, fold_i,
+                                                       n_tr, n_deleted_here))
+                                    rcleaned = cleaned_training_set(
+                                        cleanup, X_tr_s, y0, rs, rrate,
+                                        is_clf=is_clf, groups=g_tr,
+                                        strength=None, targets=targets)
+                                    if rcleaned is None:
+                                        errors[f'{lvl_key}|{ckey}|{rate_key}|'
+                                               f'{arm}|f{fold_i}|clean'] = (
+                                            'the deletion declined on this pass')
+                                        random_cache[ck] = {}
+                                    else:
+                                        rm = ~np.asarray(rcleaned['keep'],
+                                                         dtype=bool)
+                                        (deleted_acc.setdefault(lvl_key, {})
+                                         .setdefault(ckey, {})
+                                         .setdefault(f'random_seed{seed}', {})
+                                         .setdefault(rate_key, []).append({
+                                             'molecules_deleted': int(rm.sum()),
+                                             'training_molecules': n_tr,
+                                             'widened_molecules_among_the_deleted':
+                                                 int(np.sum(np.asarray(
+                                                     cmask, dtype=bool) & rm)),
+                                             'widened_molecules': int(
+                                                 np.sum(cmask))}))
+                                        out = {}
+                                        for mname in cell_models:
+                                            s, err = _fit_score(
+                                                model_factories[mname], rcleaned,
+                                                X_va_s, y_val, metric_fn,
+                                                metric_name)
+                                            if s is None:
+                                                errors[
+                                                    f'{lvl_key}|{ckey}|{rate_key}'
+                                                    f'|{arm}|{mname}|f{fold_i}'] = err
+                                            else:
+                                                out[mname] = s
+                                        random_cache[ck] = out
+                                for mname, s in random_cache[ck].items():
+                                    (rate_cell.setdefault(arm, {})
+                                     .setdefault(mname, {})[pass_key]) = s
 
             print(f"    level {lvl_key} draw {draw} fold {fold_i} done "
                   f"[{time.time() - t0:.0f}s]")
@@ -900,7 +969,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               for sp, by_who in by_sp.items()}
         for lvl, by_sp in deleted_acc.items()})
     results['molecules_deleted_note'] = (
-        'One entry per (level, space, who did the deleting, flag rate). Every '
+        'One entry per (level, feature matrix, who did the deleting, flag '
+        'rate). A feature matrix is named by its space where every model '
+        'shares it, and by <space>/<first model on it> where it does not. '
+        'Every '
         'number is a count of molecules summed over the passes of that level, '
         'so the share deleted is molecules_deleted divided by '
         'training_molecules. What the detector did is '
@@ -1131,6 +1203,14 @@ def _summarise(acc, arms, models, metric_name, lower_is_better, seeds,
                                 else float('nan'))
                             for m, v in base_by_model.items()},
                     }
+                # One reading per feature matrix in this space. The key is the
+                # space where every model shares one matrix, and
+                # '<space>/<first model>' where the models have their own.
+                drow['detection_by_matrix'] = {
+                    k: v.get(detector)
+                    for k, v in detection.get(lvl, {}).items()
+                    if (k == space or k.startswith(space + '/'))
+                    and v.get(detector) is not None}
                 drow['detection'] = detection.get(lvl, {}).get(space, {}).get(
                     detector)
                 srow['per_detector'][detector] = drow
@@ -1159,7 +1239,7 @@ def _print_summary(results, metric_name):
     print(f"SUMMARY ({metric_name}; paired per pass, a pass is one draw and "
           f"one fold)")
     if not results.get('hybrid_available', True):
-        print("  no hybrid recipe was available; base representation only")
+        print("  no hybrid recipe was available; single representations only")
     inj = results.get('injury_carried_by_the_flagged_molecules') or {}
     for lvl, row in inj.items():
         if not row:
@@ -1176,10 +1256,12 @@ def _print_summary(results, metric_name):
         print(f"\n  level {lvl}:")
         for space, srow in lrow['per_space'].items():
             for detector, drow in srow['per_detector'].items():
-                det = drow.get('detection')
-                if det and np.isfinite(det.get('detection_average_precision',
-                                               float('nan'))):
-                    print(f"    {space}/{detector}: ranked the widened "
+                for mkey, det in (drow.get('detection_by_matrix')
+                                  or {}).items():
+                    if not (det and np.isfinite(det.get(
+                            'detection_average_precision', float('nan')))):
+                        continue
+                    print(f"    {mkey}/{detector}: ranked the widened "
                           f"molecules at average precision "
                           f"{det['detection_average_precision']:.3f}, over "
                           f"{det['detection_n_corrupted']:.0f} widened "
@@ -1252,9 +1334,6 @@ def main():
     parser.add_argument('--exp-folds', type=int, default=None,
                         help='Outer folds this experiment evaluates over. '
                              'Overrides the 1 or 5 --mode gives')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help='Which representation is the base space. Default: '
-                             "pick_noise_base_rep's, and it is recorded either way")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename, so two runs '
                              'of one condition on one dataset land on two files')
@@ -1277,8 +1356,6 @@ def main():
         kw['random_seeds'] = [int(x) for x in args.random_seeds.split(',')]
     if args.draws:
         kw['draws'] = [int(x) for x in args.draws.split(',')]
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
 
     res = run(data, config, args.output, args.dataset, **kw)
     # The condition changes what the run MEASURED while leaving the dataset and

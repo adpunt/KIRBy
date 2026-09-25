@@ -14,7 +14,7 @@ What has to be true for the numbers n27 writes to be readable:
      correct-label fit of the fold it ran on, never another fold.
   7. THE INJECTED VARIANCE GROWS WITH THE LEVEL, and the held-out labels are
      never touched.
-  8. Base-only and hybrid runs both finish, a classification label is refused,
+  8. Single-representation-only and hybrid runs both finish, a classification label is refused,
      and the CLI parses.
 """
 import sys
@@ -94,7 +94,7 @@ def run_it(data, name, recipe=no_recipe, **kw):
         n27.get_best_search_for_downstream = real
 
 
-CHEAP = dict(models=['rf'], base_rep='toy', shares=[0.25, 0.7, 0.9], repeats=2,
+CHEAP = dict(models=['rf'], base_reps={'rf': ['toy', 'second']}, shares=[0.25, 0.7, 0.9], repeats=2,
              levels=[0.5, 1.0], draws=[0], alphas=[0.0, 0.5, 1.0])
 
 
@@ -156,8 +156,11 @@ def test_run(domain, recipe, label):
     if recipe is not no_recipe:
         check(f'{label}: the hybrid space ran', 'hybrid' in spaces, str(spaces))
     else:
-        check(f'{label}: base only when the pool is empty',
-              spaces == ['base'], str(spaces))
+        check(f'{label}: single representations only when the pool is empty',
+              spaces == ['base_1', 'base_2'], str(spaces))
+    check(f'{label}: which representations is recorded',
+          res['base_reps_by_model'] == {'rf': ['toy', 'second']},
+          str(res.get('base_reps_by_model')))
 
     ref = res['per_fold']['reference']
     for sp in spaces:
@@ -184,14 +187,14 @@ def test_run(domain, recipe, label):
     check(f'{label}: every ratio is its numerator over its denominator', ok_ratio)
 
     # 7: injected variance grows with the level
-    blk = s['propagation']['base']['rf']['injected_by_level']
+    blk = s['propagation']['base_1']['rf']['injected_by_level']
     v05 = blk['0.5']['mean_training_label_variance_added']
     v10 = blk['1']['mean_training_label_variance_added']
     check(f'{label}: more variance injected at level 1.0 than at 0.5',
           v10 > v05, f'{v05:.4f} then {v10:.4f} label units squared')
 
     # 3 in the run: alpha 0 adds no variance and scores the reference
-    rel = s['propagation']['base']['rf']['relabelled_by_alpha']
+    rel = s['propagation']['base_1']['rf']['relabelled_by_alpha']
     r0 = rel['0']
     check(f'{label}: alpha 0 adds zero variance',
           r0['mean_training_label_variance_added'] == 0.0)
@@ -199,17 +202,17 @@ def test_run(domain, recipe, label):
           all(not np.isfinite(r['ratio']) for r in r0['per_pass']))
 
     # 2 in the run: shares keep that share
-    rc = res['per_fold']['removal_cost']['base']['0.7']['rf']['r0']
+    rc = res['per_fold']['removal_cost']['base_1']['0.7']['rf']['r0']
     kept = {v['training_molecules_kept'] / v['training_molecules']
             for v in rc.values()}
     check(f'{label}: 0.7 keeps 0.7 of each fold',
           all(abs(k - 0.7) < 0.01 for k in kept), str(sorted(kept)))
-    rcq = res['per_fold']['removal_cost']['base']['0.25']['rf']['r0']
+    rcq = res['per_fold']['removal_cost']['base_1']['0.25']['rf']['r0']
     kq = {v['training_molecules_kept'] / v['training_molecules']
           for v in rcq.values()}
     check(f'{label}: 0.25 keeps a quarter of each fold',
           all(abs(k - 0.25) < 0.01 for k in kq), str(sorted(kq)))
-    row = s['removal_cost']['base']['0.7']['rf']
+    row = s['removal_cost']['base_1']['0.7']['rf']
     check(f'{label}: one removal row per draw', row['draws_read'] == 2,
           f"{row['draws_read']} rows")
     check(f'{label}: the worst draw is no better than the best',
@@ -243,15 +246,16 @@ def test_cli():
     p = subprocess.run([sys.executable, n27.__file__, '--help'],
                        capture_output=True, text=True)
     for flag in ('--shares', '--repeats', '--levels', '--alphas', '--draws',
-                 '--base-rep', '--tag', '--parts'):
+                 '--tag', '--parts'):
         check(f'{flag} is a flag', flag in p.stdout)
+    check('--base-rep is gone', '--base-rep' not in p.stdout)
 
 
 if __name__ == '__main__':
     test_draws()
     test_move_and_sign()
-    test_run('molecular', no_recipe, 'rmse, base only')
-    test_run('antibody', no_recipe, 'spearman, base only')
+    test_run('molecular', no_recipe, 'rmse, single representations only')
+    test_run('antibody', no_recipe, 'spearman, single representations only')
     test_run('molecular', fake_recipe(['toy', 'second']), 'rmse, hybrid')
     test_labels_untouched()
     test_refuses_classification()

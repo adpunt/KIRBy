@@ -21,6 +21,12 @@ representation, 3 folds). This file ports them into the suite, adds the hybrid
 spaces, and adds the censored likelihood the research report of 2026-09-24
 proposed as its B4, and the residual winsorisation it proposed as its B5.
 
+THE SINGLE-REPRESENTATION COMPARISON is each downstream model's top 2 base
+representations by that model's own score in the stored search -- spaces
+base_1 and base_2 (_shared.noise_base_reps_by_model, owner's decision
+2026-09-25). Which representations those are is written to
+`base_reps_by_model`. A model the pool holds no search for has neither.
+
 WHAT THE INJECTOR DOES, READ IN THIS SESSION. `noiseInject/core.py:736-779`,
 reached through `noise_helpers.inject_train_labels`:
 
@@ -147,7 +153,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.dataset_policy import (
@@ -425,8 +432,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if run_aft:
         swaps[AFT_MODEL] = AFT_PARENT
 
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
     noise_groups = noise_groups_for(data)[0]
 
     results = {
@@ -449,7 +457,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'the clipped labels. rf_l1 and lightgbm_huber have no recipe of '
             'their own in the pool. xgboost_aft enters each label as '
             'exp(label - centre) and returns log(prediction) + centre.'),
-        'base_rep': base_rep_name,
         'arms': arm_names,
         'arm_to_beat': 'clipped',
         'winsor_c': winsor_c,
@@ -482,8 +489,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'clip_per_pass': {},
     }
 
-    sample_X = reps[base_rep_name]
-    splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
+                           mode=mode))
 
     # ── The recipe per downstream model, n23:733-904's pattern ──
     by_model, no_recipe = pool_recipe_per_downstream_model(
@@ -518,7 +525,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for r in recipes_by_model.get(_m, ()):
             if r['space'] not in _ordered:
                 _ordered.append(r['space'])
-    spaces = ('base',) + tuple(_ordered)
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces = tuple(
+        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, _k, downstream_models))
+
+    spaces = base_spaces + tuple(_ordered)
     results['hybrid_available'] = bool(_ordered)
     if _ordered:
         results['hybrid_recipe_by_model'] = convert_numpy({
@@ -540,11 +564,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         results['hybrid_unavailable_reason'] = (
             (f"the pool lookup RAISED {results['hybrid_lookup_error']}; the "
-             f"pool was never read. Every arm ran in the base representation.")
+             f"pool was never read. Every arm ran in the single "
+             f"representations only.")
             if results['hybrid_lookup_error'] else
             (f'no recipe came back from pool subset {POOL_SUBSET!r} for any '
-             f'downstream model. Every arm ran in the base representation.'))
-        print(f"  no hybrid recipe; base representation only")
+             f'downstream model. Every arm ran in the single '
+             f'representations only.'))
+        print(f"  no hybrid recipe; single representations only")
     results['spaces_run'] = list(spaces)
 
     passes = _levels_and_draws(dataset_name, levels=kwargs.get('levels'),
@@ -554,7 +580,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"{downstream_models}, swaps {swaps}")
     print(f"  levels {results['noise_levels']} (fraction clipped), "
           f"{len(passes)} (level, draw) passes, {len(arm_names)} label arms")
-    print(f"  base representation: {base_rep_name}")
+    print(f"  spaces {list(spaces)}")
 
     # acc[level][space][arm][model][pass] = score
     acc = {}
@@ -605,14 +631,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         for k, v in reps.items()}
 
             # {space: [(X_tr, X_va, models on it)]}, n23:960-1010's shape.
+            # base_k holds one matrix per distinct representation at rank k,
+            # shared by the models that rank it there.
             fold_spaces = {}
-            sc = StandardScaler()
-            fold_spaces['base'] = [(
-                sc.fit_transform(train_reps[base_rep_name]),
-                sc.transform(val_reps[base_rep_name]),
-                list(downstream_models))]
+            for _k in range(1, NOISE_BASE_REP_COUNT + 1):
+                _bsp = f'base_{_k}'
+                if _bsp not in spaces:
+                    continue
+                _bcells = []
+                for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                                 downstream_models).items():
+                    sc = StandardScaler()
+                    _bcells.append((sc.fit_transform(train_reps[_rn]),
+                                    sc.transform(val_reps[_rn]), list(_ms)))
+                fold_spaces[_bsp] = _bcells
             for _sp in spaces:
-                if _sp == 'base':
+                if _sp.startswith('base_'):
                     continue
                 _cells = []
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
@@ -877,8 +911,6 @@ def main():
                              f'{",".join(str(c) for c in WINSOR_C)})')
     parser.add_argument('--exp-folds', type=int, default=None,
                         help='Outer folds. Overrides the 1 or 5 --mode gives')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help="Base representation. Default: pick_noise_base_rep's")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename')
     args = parser.parse_args()
@@ -896,8 +928,6 @@ def main():
         kw['draws'] = [int(x) for x in args.draws.split(',')]
     if args.winsor_c:
         kw['winsor_c'] = [float(x) for x in args.winsor_c.split(',')]
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
 
     res = run(data, config, args.output, args.dataset, **kw)
     suffix = kw.get('noise_condition') or DEFAULT_NOISE_CONDITION
