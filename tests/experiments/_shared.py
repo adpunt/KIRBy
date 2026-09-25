@@ -431,7 +431,33 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 
         if compute_subset_fn is not None:
             print(f"    Computing {len(missing)} missing rep(s): {missing}")
-            new_reps = compute_subset_fn(missing)
+            # get_molecular_representations raises "No representations could be
+            # generated!" when every rep in the subset it was handed gets
+            # dropped. That is correct when it is building the whole pool and
+            # nothing survives, but here it is building only the MISSING subset
+            # while `reps` already holds everything that came from cache. A
+            # single undrawable rep in the subset then kills a run that has, in
+            # practice, all the representations it needs.
+            #
+            # Measured 2026-09-25: simopt on herg_ki and adme_mdr1 loaded 13 and
+            # 14 representations from cache, needed only `grover`, could not
+            # build it (GROVER repo not installed), and raised — while caco2,
+            # which needed nothing, succeeded. Two of three datasets lost to a
+            # rep none of them use.
+            #
+            # The drop-and-warn contract three lines below is what this path is
+            # supposed to follow, so follow it here too: a subset that produces
+            # nothing is a warning, not a failure, PROVIDED something was
+            # cached. With no cached reps either, the original error stands.
+            try:
+                new_reps = compute_subset_fn(missing)
+            except ValueError as _e:
+                if not reps:
+                    raise
+                print(f"    WARNING: none of the {len(missing)} missing rep(s) "
+                      f"{missing} could be generated ({_e}); continuing with "
+                      f"the {len(reps)} already cached.")
+                return reps
             cache_dir.mkdir(parents=True, exist_ok=True)
             _write_rep_identity_now(cache_dir, identity)
             for k, v in new_reps.items():
@@ -3893,6 +3919,16 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
     data = _load_data_impl(
         dataset_name, rep_preset=rep_preset, delta=delta, augment=augment,
         rep_names=rep_names, finetune=finetune)
+    # KIRBY_LOCAL_MAX_FEATURES_PER_REP: one place, so every experiment that
+    # loads through here sees the same matrices. Unset, this is a no-op. The
+    # columns kept are the highest-variance ones, chosen without the labels, so
+    # it is not supervised selection; no row is dropped.
+    try:
+        from experiments._local_grid import cap_rep_width
+        if data.get('reps'):
+            data['reps'] = cap_rep_width(data['reps'])
+    except ImportError:
+        pass
     return _finalize_load_data(data, dataset_name)
 
 
@@ -8800,6 +8836,13 @@ def get_config(args) -> dict:
 
     # n_splits for experiment CV: 1 for intermediary (quick check), 5 for full
     exp_folds = DEFAULT_N_FOLDS if args.mode == 'full' else 1
+    # KIRBY_LOCAL_FOLDS: the experiment's OWN outer CV, the same knob
+    # _local_grid applies to the search's inner folds. A condition, not a
+    # sample size -- every fold still sees every molecule. Only honoured under
+    # --mode full, so an intermediary run still means one split.
+    _lf = os.environ.get('KIRBY_LOCAL_FOLDS')
+    if _lf and args.mode == 'full':
+        exp_folds = int(_lf)
 
     config = {
         'n_splits': exp_folds,
