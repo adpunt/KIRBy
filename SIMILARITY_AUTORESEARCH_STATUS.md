@@ -393,19 +393,21 @@ one search configuration, distance weighted by lightgbm_gain throughout.
     deeplift          herg_ki   general_distance      0.1131    0.1422       -0.1942
     deeplift          adme_mdr1 general               0.1838    0.2407       -0.1078
     deeplift          adme_mdr1 general_distance      0.1839    0.2562       -0.0922
+    treeshap          caco2     general               0.3499    0.3669       +0.0210
+    treeshap          caco2     general_distance      0.3461    0.3636       +0.0176
     treeshap          herg_ki   general               0.3136    0.2791       -0.0573
     treeshap          herg_ki   general_distance      0.3128    0.2793       -0.0571
 
-The lightgbm_gain and deeplift rows are complete on all three datasets. The
-first treeshap cell landed 2026-09-25; its other two datasets are still running.
+8 of the 9 cells have landed; treeshap on adme_mdr1 is still running.
 
-On herg_ki, where all three methods now have a number, treeshap sits with
-lightgbm_gain and not with deeplift. Unweighted it reads 0.3136 and 0.3128
-against lightgbm_gain's 0.3067 and 0.3109, and deeplift's 0.1198 and 0.1131.
-Weighting moves it the same direction as lightgbm_gain too, down to 0.2791 and
-0.2793, where deeplift's rises. So the split on this dataset is deeplift
-against the two tree-based methods, not a spread across three. Whether that
-holds on caco2 and adme_mdr1 is not yet measured.
+The split is deeplift against the two tree-based methods, not a spread across
+three, and it now holds on both datasets where all three have a number.
+Unweighted, treeshap sits within 0.009 of lightgbm_gain in all four of those
+pairs -- caco2 0.3499 against 0.3586 and 0.3461 against 0.3466, herg_ki 0.3136
+against 0.3067 and 0.3128 against 0.3109 -- while deeplift reads 0.0702, 0.0917,
+0.1198 and 0.1131. treeshap also moves the same direction as lightgbm_gain when
+the features are weighted: up on caco2, down on herg_ki. deeplift rises on
+both.
 
 The lightgbm_gain row's sign matches the shipped row above on all three
 datasets: the hybrid beats the best single representation on caco2 and loses on
@@ -433,8 +435,8 @@ hurts on herg_ki, and splits on adme_mdr1, where general falls 0.3137 to 0.3071
 and general_distance rises 0.2892 to 0.3061. That split is why my earlier claim
 here, that both lineages agree inside each dataset, was wrong.
 
-These cells use the one-configuration search. 2 of the 9 build-importance cells
-are outstanding, treeshap on caco2 and adme_mdr1, and the 3 weighting cells have
+These cells use the one-configuration search. 1 of the 9 build-importance cells
+is outstanding, treeshap on adme_mdr1, and the 3 weighting cells have
 not started.
 
 **s04 — wins two of three once its levers open.** Held-out RMSE delta on cliff
