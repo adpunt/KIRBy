@@ -1233,82 +1233,38 @@ caco2 and adme_mdr1 still running.
 
 ## Open decisions for the owner
 
-1. **Cliff share.** `CLIFF_TARGET_PCT = 15.0`. It is the smallest share where
-   every held-out fold on all three datasets carries at least 30 cliff
-   molecules. At 10% herg_ki's thinnest fold is 19 and caco2's 23. At 20%
-   adme_mdr1's gap falls to 0.21 x the median absolute deviation. Even at 15%
-   adme_mdr1 needs a gap of 0.50 x MAD, which is a weak cliff — it has 2,318
-   scaffolds among 2,641 molecules.
-2. **The s02 headline cell is really a choice of comparator, and the held-out
-   folds are unanimous.** Read from the three result files 2026-09-23.
+Three of the four recorded here have been closed. What is left is below.
 
-   What weighting does to the comparator. Best single representation, the
-   similarity score the file calls `sac_rho`, higher better:
+1. **Cliff share.** `CLIFF_TARGET_PCT = 15.0`. The only one that is a judgement
+   rather than a defect. It is the smallest share where every held-out fold on
+   all three datasets carries at least 30 cliff molecules. At 10% herg_ki's
+   thinnest fold is 19 and caco2's 23. At 20% adme_mdr1's gap falls to 0.21x the
+   median absolute deviation. Even at 15% adme_mdr1 needs a gap of 0.50x MAD,
+   which is a weak cliff — it has 2,318 scaffolds among 2,641 molecules.
 
-       dataset      unweighted                weighted
-       caco2        top_torsion  +0.2273      ecfp4_count  +0.3460
-       herg_ki      pdv          +0.0886      ecfp4        +0.3364
-       adme_mdr1    atom_pair    +0.2799      atom_pair    +0.3484
+2. ✅ **CLOSED — s02's headline comparator was already weighted.** Checked in
+   the code 2026-09-25: `sac_delta_comparator` takes `best_rep_name_weighted`
+   when importance is available and falls back to unweighted only when it is
+   not, recording which in `kind`. All three stored results read
+   `kind=weighted`. This was listed as open by reading this section rather than
+   the code.
 
-   On herg_ki the weighted comparator is 3.8 times the unweighted one. So the
-   "largest delta" cell is largest because its comparator is weak, not because
-   the hybrid is strong there.
+3. ✅ **CLOSED — `baselines/` and `hybrid_evals/` are keyed by coefficient.**
+   Both filenames now carry `__dist-<coefficient>`, omitted for the default so
+   every existing file keeps hitting. The separate-`KIRBY_CACHE_DIR`-per-
+   coefficient workaround is no longer needed.
 
-   Held out, with the recipe reselected per fold and the comparator weighted,
-   hybrid minus best single:
+4. ✅ **CLOSED — s11 hunts the end of the label the assay says is good.**
+   `LABEL_BETTER_WHEN` now records it per dataset: herg_ki low, caco2 HIGH,
+   adme_mdr1 low. `KIRBY_S11_HUNT` overrides per run; an unlisted dataset falls
+   back to the old metric-direction behaviour and says so in the log.
 
-       dataset      delta      per-fold deltas
-       caco2      +0.0260      +0.0267 +0.0323 +0.0182 +0.0298 +0.0229
-       herg_ki    -0.0237      -0.0251 -0.0382 -0.0316 -0.0053 -0.0183
-       adme_mdr1  -0.0233      -0.0131 -0.0329 -0.0118 -0.0406 -0.0183
+   ⛔ This FLIPS caco2. Every stored s11 caco2 result was searching for the
+   LEAST permeable molecules, because RMSE is lower-is-better. herg_ki and
+   adme_mdr1 were coincidentally right — both assays want the low end.
 
-   Every one of the five folds agrees with its dataset's sign, on all three
-   datasets. The hybrid wins caco2 and loses the other two, and no fold
-   dissents.
-
-   Recommendation: report the weighted comparator. The hybrid arm is itself
-   importance-weighted, so an unweighted single representation differs from it
-   in two ways at once — the features and the weighting — and the unweighted
-   cell's larger delta is that second difference, not the first.
-3. **Keying `baselines/` and `hybrid_evals/` by coefficient.** The key is
-   (dataset, representation, model, metric, folds, seed). No coefficient. A
-   `readacross` baseline is a representation's score under a distance, so two
-   coefficients sharing a cache root read each other's numbers.
-
-   The cost of namespacing them was overstated here. Counted 2026-09-23:
-   `baselines/` holds 185 files and under 1 MB, `hybrid_evals/` is empty,
-   `fold_scores/` holds 16 files and 2 MB. Nothing outside this campaign reads
-   that root. Under the standing rule that a wiped cache is not a cost, there is
-   no obstacle left in the numbers — only the design question of whether the
-   coefficient belongs in the key.
-
-   ⛔ This was live, not theoretical. Six s06 runs were queued on 2026-09-23
-   under minkowski p=0.5 and euclidean while pointing at the root that already
-   held 60 `readacross` baselines from earlier runs. They were stopped before
-   any of them wrote a result. Each coefficient now has its own root:
-   `kirby_cache_minkowski`, `kirby_cache_euclidean`, `kirby_cache_manhattan`.
-   The original root is left alone because the coefficient its stored
-   `readacross` baselines were computed under is not recorded in their names,
-   and this campaign is known to have computed similarity numbers under
-   euclidean while the suite default is manhattan.
-4. **Which end of the label s11 hunts is decided by the wrong quantity.**
-   `get_domain_metric` returns whether the SCORING METRIC is better when lower.
-   For all three datasets that metric is RMSE, so it returns True on all three.
-   s11 then reads that flag to decide which end of the LABEL to search towards,
-   negating the labels at `compute_combined_objective` line 480 and in the loop
-   it feeds. So the search hunts the lowest label on all three datasets because
-   RMSE is lower-is-better.
-
-   Those are two different questions. An RMSE being better when small says
-   nothing about whether a large or small pKi is the molecule you want. The
-   rule lands differently per dataset by accident: on herg_ki the lowest pKi is
-   the weakest hERG binder, which is the molecule a project usually wants; on
-   caco2 the lowest value is the least permeable, which usually is not.
-
-   Nothing in the file records which end is desirable per dataset, so the flag
-   is the only thing deciding it. This needs a per-dataset statement of which
-   end is good, not a metric direction. Until then every s11 number is an
-   answer to "how fast can the surrogate find the smallest label".
+   ⛔ The three directions are read from the assays and are recorded nowhere
+   else in the repository. They need the owner's confirmation.
 
 ## Two things that change how the suite must be run
 
