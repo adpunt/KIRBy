@@ -9,7 +9,9 @@ What has to be true, on a toy dataset with known repeat noise:
      and a chosen molecule's label becomes the mean of its two.
   3. EACH RULE RANKS BY WHAT IT SAYS: disagreement puts the largest
      |label - prediction| first; sparsest puts the most isolated molecule first;
-     leverage counts reverse neighbours.
+     leverage counts reverse neighbours. The leverage rules give the same
+     order as the old variance_x_leverage rules, whose extra factor was the
+     same for every candidate.
   4. A RUN WRITES A PAIRED DIFFERENCE for every rule at every budget against
      every random draw, on the same (fold, seed) passes, plus both references
      and the tail scores.
@@ -73,11 +75,11 @@ def test_helpers():
     dis = np.array([9.0, 0.1, 5.0, 0.3])
     r = n36.rank_candidates('disagreement', cand, disagreement=dis,
                             leverage=np.ones(4), sparsity=np.zeros(4),
-                            s2e=0.3, random_seed=0)
+                            random_seed=0)
     check('disagreement ranks the largest first', list(r) == [2, 3, 1], str(r))
     spars = np.array([0.0, 7.0, 1.0, 3.0])
     r = n36.rank_candidates('sparsest', cand, disagreement=dis,
-                            leverage=np.ones(4), sparsity=spars, s2e=0.3,
+                            leverage=np.ones(4), sparsity=spars,
                             random_seed=0)
     check('sparsest ranks the most isolated first', list(r) == [1, 3, 2], str(r))
 
@@ -91,6 +93,41 @@ def test_helpers():
           lev[4] == 1.0, str(lev))
     check('leverage counts every neighbour slot once',
           lev.sum() == 5 + 5 * 2, str(lev))
+
+    check('the old rule names are gone',
+          'variance_x_leverage' not in ' '.join(n36.RULES)
+          and 'leverage' in n36.RULES
+          and 'leverage_x_disagreement' in n36.RULES, str(n36.RULES))
+
+    # The old rules, written out as they were before the rename, with the
+    # constant factor s2e/1 - s2e/2 still in and the same seeded tie-break.
+    def old_rank(rule, cand, dis, lev, s2e, seed):
+        tie = np.random.default_rng(int(seed)).random(len(cand))
+        score = (s2e / 1.0 - s2e / 2.0) * lev[cand]
+        if rule == 'variance_x_leverage_x_disagreement':
+            score = score * dis[cand]
+        return cand[np.lexsort((tie, -score))]
+
+    rng = np.random.default_rng(11)
+    same = []
+    for trial in range(200):
+        n = 60
+        cand = np.sort(rng.choice(n, size=35, replace=False))
+        # Integer leverage like neighbour_stats gives, so ties are common.
+        lev_t = 1.0 + rng.integers(0, 6, size=n).astype(float)
+        dis_t = np.abs(rng.normal(size=n))
+        s2e = float(rng.uniform(0.01, 3.0))
+        for old, new in (('variance_x_leverage', 'leverage'),
+                         ('variance_x_leverage_x_disagreement',
+                          'leverage_x_disagreement')):
+            a = old_rank(old, cand, dis_t, lev_t, s2e, trial)
+            b = n36.rank_candidates(new, cand, disagreement=dis_t,
+                                    leverage=lev_t, sparsity=np.zeros(n),
+                                    random_seed=trial)
+            same.append(np.array_equal(a, b))
+    check('leverage and leverage_x_disagreement give the old order exactly, '
+          '200 toy draws each', all(same),
+          f'{sum(same)} of {len(same)} orders identical')
 
 
 def test_run():

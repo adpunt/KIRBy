@@ -11,6 +11,9 @@ What has to be true before any number n34 writes can be read:
   3. WITH NO GROUP EFFECT, tau^2 falls toward its floor and a group of one keeps
      almost nothing.
   4. group_center_3plus LEAVES SMALL GROUPS ALONE.
+  4b. OFFSET RECOVERY IS READ ON GROUPS OF 3+ ONLY. Small groups built to
+     anti-correlate cannot move corr_groups_of_3_plus; they are counted as
+     excluded and appear only in corr_all_groups_contaminated.
   5. THE RECOVERY SHARE IS SIGNED BY THE METRIC AND REFUSED UNDER THE 2% FLOOR.
   6. A NON-GROUPED CONDITION, A CLASSIFICATION LABEL AND A DATASET WITHOUT
      SCAFFOLD GROUPS ARE SKIPPED WITH A REASON.
@@ -137,6 +140,43 @@ def test_offsets():
           np.all(c3[small] == 0) and np.allclose(c3[~small], gc[~small]))
 
 
+def test_recovery_masks_small_groups():
+    print("\noffset recovery reads groups of 3+ only:")
+    # 6 groups of 4 molecules where recovered tracks injected, then 10 groups
+    # of 1 and 5 groups of 2 where recovered is the negative of injected.
+    # If any small group leaked in, the 3+ correlation would drop below 1.
+    rng = np.random.default_rng(3)
+    g, y_clean, y_noisy, off = [], [], [], []
+    gid = 0
+    for size, n_groups, sign in ((4, 6, 1.0), (1, 10, -1.0), (2, 5, -1.0)):
+        for _ in range(n_groups):
+            b = rng.normal(0, 1.0)
+            for _ in range(size):
+                g.append(gid)
+                yc = rng.normal()
+                y_clean.append(yc)
+                y_noisy.append(yc + b)
+                off.append(sign * b)
+            gid += 1
+    g = np.array(g)
+    out = n34.offset_recovery(np.array(off), np.array(y_noisy),
+                              np.array(y_clean), g)
+    keys = {'corr_groups_of_3_plus', 'n_groups_of_3_plus',
+            'n_groups_excluded_under_3', 'min_group_size',
+            'corr_all_groups_contaminated', 'n_groups_all'}
+    check('4b. offset_recovery writes the new keys and not the old all-groups key',
+          set(out) == keys, str(sorted(out)))
+    check('4b. the 3+ correlation uses the 6 groups of 4 and excludes 15',
+          out['n_groups_of_3_plus'] == 6 and out['n_groups_excluded_under_3'] == 15
+          and out['n_groups_all'] == 21
+          and abs(out['corr_groups_of_3_plus'] - 1.0) < 1e-9,
+          f"3+ corr {out['corr_groups_of_3_plus']}, used "
+          f"{out['n_groups_of_3_plus']}, excluded {out['n_groups_excluded_under_3']}")
+    check('4b. the all-groups number is pulled down by the small groups',
+          out['corr_all_groups_contaminated'] < 0.5,
+          f"all-groups corr {out['corr_all_groups_contaminated']:.3f}")
+
+
 def test_share():
     print("\nthe recovery share:")
     s, _ = n34.recovery_share(0.5, 0.6, 0.55, True)
@@ -202,14 +242,30 @@ def test_full(recipe, label, domain='molecular'):
                  for r in lv for sp in r['per_space'].values())
     check(f'7. [{label}] offset recovery under grouped_shifted only',
           has_rec and no_rec)
+    rec_ok = True
+    for r in gp['grouped_shifted']['0.5']:
+        for sp in r['per_space'].values():
+            for arm_rec in sp['offset_recovery'].values():
+                if ('corr_all_groups' in arm_rec
+                        or 'corr_all_groups_contaminated' not in arm_rec
+                        or 'corr_groups_of_3_plus' not in arm_rec
+                        or arm_rec['n_groups_of_3_plus']
+                        + arm_rec['n_groups_excluded_under_3']
+                        != arm_rec['n_groups_all']):
+                    rec_ok = False
+    check(f'7. [{label}] recovery writes the 3+ correlation with used and '
+          f'excluded group counts', rec_ok)
     sh_rec = gp['grouped_shifted']['0.5'][0]['per_space']['base']
     print(f"      grouped_shifted fold 0 base: random intercept "
           f"{sh_rec['random_intercept']['em_rounds']} rounds, group of one keeps "
           f"{sh_rec['random_intercept']['share_a_group_of_one_keeps']:.3f}; "
-          f"recovery corr (all groups) group_center "
-          f"{sh_rec['offset_recovery']['group_center']['corr_all_groups']}, "
+          f"recovery corr (groups of 3+, "
+          f"{sh_rec['offset_recovery']['group_center']['n_groups_of_3_plus']} used, "
+          f"{sh_rec['offset_recovery']['group_center']['n_groups_excluded_under_3']} "
+          f"excluded) group_center "
+          f"{sh_rec['offset_recovery']['group_center']['corr_groups_of_3_plus']}, "
           f"random_intercept "
-          f"{sh_rec['offset_recovery']['random_intercept']['corr_all_groups']}")
+          f"{sh_rec['offset_recovery']['random_intercept']['corr_groups_of_3_plus']}")
     if recipe is not no_recipe:
         check(f'7. [{label}] a hybrid space ran', 'hybrid' in spaces, str(spaces))
     return res
@@ -243,6 +299,7 @@ def test_parser():
 
 if __name__ == '__main__':
     test_offsets()
+    test_recovery_masks_small_groups()
     test_share()
     test_skips()
     test_full(no_recipe, 'base only')

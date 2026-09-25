@@ -154,7 +154,11 @@ against itself without the change:
                               gradeable molecule's label rests on ONE
                               measurement, so its interval has zero width; the
                               others rest on all of theirs. A molecule measured
-                              once has zero width either way.
+                              once has zero width either way. In a `single`
+                              fold where EVERY training molecule has zero
+                              width the arm would repeat xgboost_aft_point, so
+                              it is not fitted there; `model_arm_skips` holds
+                              the reason and the measured count.
 
 WHERE THE HYBRID COMES IN, AND THE LIMIT ON IT. Every condition runs in one base
 representation and in one hybrid per family of stored search, each recipe coming
@@ -1154,6 +1158,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             noise_fits = {s: [] for s in spaces}
             # {space: {model arm: {fold key: score}}}
             arm_acc = {s: {a: {} for a in model_arms} for s in spaces}
+            # {model arm: {fold key: skip record}}. The same in every space:
+            # the interval bounds do not depend on the space.
+            arm_skips = {}
             folds_scored = 0
 
             splits = list(cv_split(ent_groups, n_folds, X_base_all,
@@ -1169,6 +1176,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 y_tr = y_train_all[tr]
                 y_va = y_grade_all[va_graded]
                 g_tr = ent_groups[tr] if ent_groups is not None else None
+
+                # Under `single` a gradeable molecule's interval is its one
+                # training measurement, zero width. If every training molecule
+                # of this fold has a zero-width interval, xgboost_interval_aft
+                # is handed exactly the bounds xgboost_aft_point is handed, and
+                # would only repeat its number at the cost of an xgboost fit per
+                # space. So it is not fitted in that fold; the reason and the
+                # count are written instead. The count is measured, not assumed:
+                # a molecule measured twice cannot be graded, keeps both
+                # measurements under `single`, and gives a real interval, and
+                # in any fold that has one the arm runs. `averaged` is not
+                # checked here and runs as before.
+                skip_interval_aft = False
+                if build == 'single' and 'xgboost_interval_aft' in model_arms:
+                    n_zero_width = int(
+                        (aft_hi_all[tr] <= aft_lo_all[tr]).sum())
+                    if n_zero_width == len(tr):
+                        skip_interval_aft = True
+                        arm_skips.setdefault('xgboost_interval_aft', {})[
+                            fold_key] = {
+                            'reason': (
+                                'every training molecule has a zero-width '
+                                'interval under the single build, so the '
+                                'bounds are those xgboost_aft_point is given '
+                                'and the fit would repeat it'),
+                            'n_training_molecules': int(len(tr)),
+                            'n_training_molecules_with_zero_width_interval':
+                                n_zero_width,
+                        }
 
                 # Every feature space, all built from this fold's training
                 # molecules only. One hybrid per family of stored search:
@@ -1328,6 +1364,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                          'xgboost_interval_aft'):
                                 if oof is None:
                                     continue
+                                if (arm == 'xgboost_interval_aft'
+                                        and skip_interval_aft):
+                                    continue
                                 sd = float(np.std(y_tr - oof))
                                 if arm == 'xgboost_aft_point':
                                     lo_b = hi_b = y_tr
@@ -1385,6 +1424,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         for c in CONDITIONS},
                 }
             build_block['n_folds_scored'] = folds_scored
+            build_block['model_arm_skips'] = arm_skips
             if errors:
                 build_block['_errors'] = errors
             draw_block['per_label_build'][build] = convert_numpy(build_block)
@@ -1564,12 +1604,20 @@ def _summarise_model_arms(results, label_builds, spaces, model_arms,
     """Each changed model arm against its own plain arm, paired per fold.
 
     ngboost_count_feature against ngboost_plain, gp_per_molecule_noise against
-    gp_plain. Never against a downstream model: those are different learners
+    gp_plain, xgboost_interval_aft against xgboost_aft_point. Folds where an
+    arm was deliberately not fitted (`model_arm_skips`) are counted in
+    `n_folds_skipped` and pair nothing. Never against a downstream model: those are different learners
     and the difference would be the learner, not the change.
     """
     out = {'pairs': dict(MODEL_ARM_PAIRS), 'per_label_build': {}}
     for build in label_builds:
         per_space = {}
+        # {arm: {fold key: skip record}}, over every draw. Space-independent.
+        skips = {}
+        for draw in results['per_draw'].values():
+            blk = draw['per_label_build'].get(build, {})
+            for a, by_fold in (blk.get('model_arm_skips') or {}).items():
+                skips.setdefault(a, {}).update(by_fold)
         for space in spaces:
             scores = {}
             for draw in results['per_draw'].values():
@@ -1606,6 +1654,10 @@ def _summarise_model_arms(results, label_builds, spaces, model_arms,
                     'spread_over_fold_gains': (float(gains.std())
                                                if gains.size else float('nan')),
                     'fold_gains': [float(x) for x in gains],
+                    # Folds where the arm was deliberately not fitted, and why.
+                    'n_folds_skipped': len(skips.get(arm, {})),
+                    'skip_reasons': sorted({v['reason'] for v in
+                                            skips.get(arm, {}).values()}),
                 }
             per_space[space] = rows
         out['per_label_build'][build] = per_space
@@ -1650,9 +1702,14 @@ def _print_summary(results, metric_name):
     for build, by_space in (ma.get('per_label_build') or {}).items():
         for space, rows in by_space.items():
             for arm, r in rows.items():
+                if r.get('n_folds_skipped'):
+                    print(f"  {build}/{space} {arm}: not fitted in "
+                          f"{r['n_folds_skipped']} folds: "
+                          f"{'; '.join(r['skip_reasons'])}")
                 if not r['n_folds_paired']:
-                    print(f"  {build}/{space} {arm}: no fold scored both it "
-                          f"and {r['against']}")
+                    if not r.get('n_folds_skipped'):
+                        print(f"  {build}/{space} {arm}: no fold scored both "
+                              f"it and {r['against']}")
                     continue
                 print(f"  {build}/{space} {arm} against {r['against']}: "
                       f"{r['arm_mean']:.4f} against {r['plain_mean']:.4f}, "

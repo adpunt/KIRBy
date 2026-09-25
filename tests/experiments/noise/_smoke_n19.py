@@ -522,10 +522,78 @@ def test_interval_aft():
           f'{pw.mean():.3f} vs {pred.mean():.3f}')
 
 
+def test_interval_aft_skip_under_single():
+    print("\ninterval AFT is not fitted where it would repeat the point arm:")
+    aft = ['xgboost_aft_point', 'xgboost_interval_aft']
+    # Every molecule measured 4 or more times, so every one is gradeable and
+    # every single label rests on one measurement: zero width everywhere.
+    data, ks, _ = count_carries_precision(n_ent=180, seed=6)
+    r = n19.run(data, {'n_splits': 3}, OUT, 'toy_aft_skip', models=['rf'],
+                base_rep='toy', n_draws=1, oof_splits=3, model_arms=aft,
+                label_builds=['single', 'averaged'])
+    check('it ran', 'summary' in r, str(r.get('skipped', ''))[:60])
+    if 'summary' not in r:
+        return
+    blk_s = r['per_draw']['0']['per_label_build']['single']
+    skips = blk_s.get('model_arm_skips', {}).get('xgboost_interval_aft', {})
+    check('single: a skip record for every fold scored',
+          len(skips) == blk_s['n_folds_scored'] == 3, f'{len(skips)} records')
+    check('single: each record carries a reason and the measured count, '
+          'which is every training molecule',
+          all(v.get('reason') and
+              v['n_training_molecules_with_zero_width_interval']
+              == v['n_training_molecules'] > 0 for v in skips.values()),
+          str([(v['n_training_molecules_with_zero_width_interval'],
+                v['n_training_molecules']) for v in skips.values()]))
+    arms_s = blk_s['per_space']['base']['model_arms']
+    check('single: the interval arm has no score, the point arm has all',
+          arms_s['xgboost_interval_aft']['n_folds'] == 0
+          and arms_s['xgboost_aft_point']['n_folds'] == 3)
+    row_s = r['summary']['model_arms']['per_label_build']['single']['base'][
+        'xgboost_interval_aft']
+    check('single: the summary pairs nothing and counts the skipped folds',
+          row_s['n_folds_paired'] == 0 and row_s['n_folds_skipped'] == 3
+          and not np.isfinite(row_s['mean_gain']), str(row_s)[:120])
+
+    blk_a = r['per_draw']['0']['per_label_build']['averaged']
+    check('averaged: no skip record',
+          not blk_a.get('model_arm_skips'), str(blk_a.get('model_arm_skips')))
+    row_a = r['summary']['model_arms']['per_label_build']['averaged']['base'][
+        'xgboost_interval_aft']
+    check('averaged: the interval arm is still fitted and paired on every fold',
+          row_a['n_folds_paired'] == 3 and row_a['n_folds_skipped'] == 0,
+          f"{row_a['n_folds_paired']} paired")
+
+    # Some molecules measured twice: they cannot be graded, keep both
+    # measurements under single, and give a real interval. The arm must run.
+    rng = np.random.default_rng(8)
+    n_ent = 180
+    X_ent = rng.normal(size=(n_ent, 4))
+    truth = X_ent @ rng.normal(size=4)
+    ks2 = rng.choice([2, 4, 8], size=n_ent, p=[.4, .3, .3])
+    data2 = _rows(X_ent, truth, np.full(n_ent, 1.0), ks2, rng)
+    r2 = n19.run(data2, {'n_splits': 3}, OUT, 'toy_aft_twice', models=['rf'],
+                 base_rep='toy', n_draws=1, oof_splits=3, model_arms=aft,
+                 label_builds=['single'])
+    check('it ran with molecules measured twice', 'summary' in r2,
+          str(r2.get('skipped', ''))[:60])
+    if 'summary' not in r2:
+        return
+    blk2 = r2['per_draw']['0']['per_label_build']['single']
+    row2 = r2['summary']['model_arms']['per_label_build']['single']['base'][
+        'xgboost_interval_aft']
+    check('single with real intervals: no skip, paired on every fold',
+          not blk2.get('model_arm_skips') and row2['n_folds_paired'] == 3,
+          f"{row2['n_folds_paired']} paired, "
+          f"{blk2['n_molecules_with_interval_width_above_zero']} molecules "
+          f"with a real interval")
+
+
 if __name__ == '__main__':
     test_interval_aft()
     test_fit_noise_variance()
     test_new_conditions_end_to_end()
+    test_interval_aft_skip_under_single()
     test_stats_line_up_with_n17()
     test_label_builds()
     test_variance_fill_and_calibration()

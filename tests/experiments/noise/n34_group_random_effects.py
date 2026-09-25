@@ -86,8 +86,11 @@ writes scalars only). So under `grouped_shifted` the injected offset of a group
 is RECOMPUTED here as the mean of (noisy - clean) over that group's training
 molecules. For a group of one that mean still contains the molecule's own
 per-molecule error, so it is the offset plus noise, not the offset. The
-correlation between recovered and injected offsets is written over all groups
-and over groups of 3 or more, for `group_center` and `random_intercept`.
+correlation between recovered and injected offsets is reported over groups of
+3 or more training molecules (`corr_groups_of_3_plus`), with the count of groups
+used and the count left out beside it, for `group_center` and
+`random_intercept`. The all-groups number is kept as
+`corr_all_groups_contaminated`: it is not the result.
 
 WHERE THE FEATURES COME FROM. The recipe per downstream model is read from the
 precomputed pool, searched on clean labels. Each fold rebuilds each hybrid once
@@ -255,7 +258,14 @@ def injected_offsets(y_noisy, y_clean, g):
 
 
 def offset_recovery(offset_rows, y_noisy, y_clean, g):
-    """Correlation of recovered per-group offsets with the recomputed injected ones."""
+    """Correlation of recovered per-group offsets with the recomputed injected ones.
+
+    The headline is `corr_groups_of_3_plus`: only groups with at least
+    MIN_GROUP_SIZE_FOR_CENTER training molecules. The injected offset is
+    recomputed as the group mean of (noisy - clean), so for a group of one or
+    two it still holds most of those molecules' own per-molecule error. Those
+    groups are counted in `n_groups_excluded_under_3` and left out.
+    """
     uniq, inj, counts = injected_offsets(y_noisy, y_clean, g)
     _, inv, _ = _group_index(g)
     rec = np.bincount(inv, weights=np.asarray(offset_rows, dtype=float)) / counts
@@ -266,10 +276,15 @@ def offset_recovery(offset_rows, y_noisy, y_clean, g):
         return float(np.corrcoef(inj[mask], rec[mask])[0, 1])
     big = counts >= MIN_GROUP_SIZE_FOR_CENTER
     return {
-        'corr_all_groups': _corr(np.ones(counts.size, dtype=bool)),
-        'n_groups': int(counts.size),
         'corr_groups_of_3_plus': _corr(big),
         'n_groups_of_3_plus': int(big.sum()),
+        'n_groups_excluded_under_3': int((~big).sum()),
+        'min_group_size': MIN_GROUP_SIZE_FOR_CENTER,
+        # Every group, including groups of one and two. For those the
+        # "injected" offset is the offset plus the molecule's own error, so
+        # this number is contaminated and is not the headline.
+        'corr_all_groups_contaminated': _corr(np.ones(counts.size, dtype=bool)),
+        'n_groups_all': int(counts.size),
     }
 
 
@@ -392,7 +407,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'The injector does not return its per-group offsets. The injected '
             'offset of a group is recomputed as the mean of (noisy - clean) over '
             'its training molecules, which for a group of one still holds that '
-            "molecule's own per-molecule error."),
+            "molecule's own per-molecule error. The recovery correlation is "
+            'therefore read on groups of 3 or more training molecules '
+            '(corr_groups_of_3_plus); corr_all_groups_contaminated includes '
+            'groups of one and two and is not the result.'),
         'features_are_fixed_note': (
             'Each hybrid is built once per pass and fold from the NOISY '
             'training labels and shared by every arm, clean included.'),
