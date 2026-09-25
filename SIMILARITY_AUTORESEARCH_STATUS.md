@@ -391,34 +391,39 @@ one search configuration, distance weighted by lightgbm_gain throughout.
     deeplift          caco2     general_distance      0.0917    0.1959       -0.1501
     deeplift          herg_ki   general               0.1198    0.1408       -0.1956
     deeplift          herg_ki   general_distance      0.1131    0.1422       -0.1942
+    deeplift          adme_mdr1 general               0.1838    0.2407       -0.1078
+    deeplift          adme_mdr1 general_distance      0.1839    0.2562       -0.0922
 
-The lightgbm_gain row is complete on all three datasets, and its sign matches
-the shipped row above on all three: the hybrid beats the best single
-representation on caco2 and loses on herg_ki and adme_mdr1. The shipped row
-came from a twelve-configuration search and these from one configuration, so
-the magnitudes are not comparable, but the direction survives the smaller
-search.
+Both rows are complete on all three datasets, 12 of the 18 landed cells.
 
-Which importance method builds the hybrid moves this correlation by more than
-anything else measured here. On caco2 the unweighted correlation is 0.3586
-when lightgbm_gain ranks the features and 0.0702 when deeplift does, a factor
-of five. On herg_ki it is 0.3067 against 0.1198, a factor of two and a half.
-Both lineages agree on both datasets. For comparison, weighting the features
-moves the same number by at most 0.04 under lightgbm_gain.
+The lightgbm_gain row's sign matches the shipped row above on all three
+datasets: the hybrid beats the best single representation on caco2 and loses on
+herg_ki and adme_mdr1. The shipped row came from a twelve-configuration search
+and these from one configuration, so the magnitudes are not comparable, but the
+direction survives the smaller search.
+
+Which importance method builds the hybrid moves the correlation by more than
+anything else measured here, and it moves it the same way in all six
+dataset-and-lineage pairs. Unweighted, lightgbm_gain first, deeplift second:
+
+    caco2     general           0.3586 vs 0.0702   5.11x
+    caco2     general_distance  0.3466 vs 0.0917   3.78x
+    herg_ki   general           0.3067 vs 0.1198   2.56x
+    herg_ki   general_distance  0.3109 vs 0.1131   2.75x
+    adme_mdr1 general           0.3137 vs 0.1838   1.71x
+    adme_mdr1 general_distance  0.2892 vs 0.1839   1.57x
+
+For scale, weighting the features moves the same number by at most 0.04 under
+lightgbm_gain.
 
 The two methods also disagree about whether weighting helps. Under deeplift it
-helps on both datasets, caco2 0.0702 to 0.1627 and herg_ki 0.1198 to 0.1408.
-Under lightgbm_gain it helps on caco2 and hurts on herg_ki.
+helps in all six pairs, by 0.05 to 0.09. Under lightgbm_gain it helps on caco2,
+hurts on herg_ki, and splits on adme_mdr1, where general falls 0.3137 to 0.3071
+and general_distance rises 0.2892 to 0.3061. That split is why my earlier claim
+here, that both lineages agree inside each dataset, was wrong.
 
-Correcting what I wrote from the first two cells: I said both lineages agree
-inside each dataset on whether weighting helps. That holds on caco2 and
-herg_ki and fails on adme_mdr1, where general falls 0.3137 to 0.3071 and
-general_distance rises 0.2892 to 0.3061. They still agree on the delta against
-the best single representation there, -0.0414 and -0.0424.
-
-These cells use the one-configuration search. 4 of the 9 build-importance cells
-are outstanding, all treeshap plus deeplift on adme_mdr1, and the 3 weighting
-cells have not started.
+These cells use the one-configuration search. 3 of the 9 build-importance cells
+are outstanding, all treeshap, and the 3 weighting cells have not started.
 
 **s04 — wins two of three once its levers open.** Held-out RMSE delta on cliff
 molecules, positive means the hybrid won:
