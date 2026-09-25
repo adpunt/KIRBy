@@ -275,11 +275,13 @@ REPAIR_OOF_SPLITS = 5
 GP_SMOOTH_MAX_ROWS = 1000
 
 # `prox_smooth` builds a molecules-by-molecules proximity, so its memory is
-# quadratic where every other cleanup's is linear. At 2000 molecules that is
-# 16 MB; at 10,000 it would be 400 MB. Refused above this rather than
-# subsampled, because a proximity over a subsample is a different quantity
-# from one over the fold -- the same argument GP_SMOOTH_MAX_ROWS carries.
-PROX_SMOOTH_MAX_ROWS = 2000
+# quadratic where every other cleanup's is linear: 16 MB at 2,000 training
+# molecules, 400 MB at 10,000, about 850 MB at nt_H3K4me3's 14,600. It used to
+# be refused above 2,000 molecules. Owner's decision 2026-09-25: the limit goes,
+# because the jobs have the memory and a refusal removes the cleanup from every
+# large dataset. Kept as a name only so old imports do not break; nothing
+# reads it.
+PROX_SMOOTH_MAX_ROWS = None
 
 # The smallest clean-to-noisy gap a recovery PERCENTAGE may divide by, as a
 # fraction of the clean score's own magnitude. Same rule and same number as
@@ -937,14 +939,6 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # about 0.8 MB; on a 10,000-molecule training block it would be 400 MB
         # and this cleanup should be refused rather than run.
         n_tr = len(y_tr)
-        if n_tr > PROX_SMOOTH_MAX_ROWS:
-            print(f"      prox_smooth: {n_tr} training molecules is over "
-                  f"PROX_SMOOTH_MAX_ROWS={PROX_SMOOTH_MAX_ROWS}; the proximity "
-                  f"is a square matrix and would need "
-                  f"{n_tr * n_tr * 4 / 1e6:.0f} MB. Refused rather than "
-                  f"subsampled -- a proximity over a subsample is a different "
-                  f"quantity from one over the fold.")
-            return None
         from kirby.utils.noise_estimation import (forest_leaf_ids,
                                                   forest_proximity_distance)
         threshold = np.percentile(noise_scores, flag_percentile)

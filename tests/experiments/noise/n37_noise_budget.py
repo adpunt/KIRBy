@@ -330,7 +330,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'simex_lambdas': list(simex_lambdas),
         'simex_draws': list(simex_draws),
         'hill_share': HILL_SHARE,
-        'proximity_row_cap': int(PROX_SMOOTH_MAX_ROWS),
+        'proximity_row_cap': PROX_SMOOTH_MAX_ROWS,
         'has_repeat_measurements': rep_groups is not None,
         'gamma_note': (
             'intercept of gamma_k on delta_k, k = 1..k_max nearest neighbours; '
@@ -544,7 +544,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if Xref_tr is None:
                 frec['gamma'][PROXIMITY_SPACE] = {
                     'refused': results['gamma_reference_rep_chosen_as']}
-            elif n_tr > PROX_SMOOTH_MAX_ROWS:
+            elif PROX_SMOOTH_MAX_ROWS is not None and n_tr > PROX_SMOOTH_MAX_ROWS:
                 frec['gamma'][PROXIMITY_SPACE] = {
                     'refused': (f'{n_tr} training rows is over '
                                 f'PROX_SMOOTH_MAX_ROWS={PROX_SMOOTH_MAX_ROWS}')}
