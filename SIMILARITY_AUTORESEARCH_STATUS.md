@@ -1256,6 +1256,25 @@ non-ok `result_status`, or anything under 500 bytes marks the job FAILED instead
 of DONE. An audit of all 83 outputs at the time found these two were the only
 false completions.
 
+## The supervisor gated on load; memory was the thing that mattered
+
+Three ceilings were tried — 60, 150, 260 — and each deferred every queued sweep
+cell for an hour or more against a machine that was two-thirds idle. Load on
+this laptop runs 130 to 450 because of other sessions, and these jobs pin
+lightgbm and torch to one thread each, so the figure is mostly other people's
+work.
+
+What has actually killed jobs here is memory: six were OOM-killed at three
+concurrent when swap was exhausted on 2026-09-21. Load has never killed one.
+
+Fixed 2026-09-25: the memory-pressure override is applied LAST, so it clears the
+load block as well as the swap block. Load is kept only as a tiebreak for when
+memory is also tight, and an absolute swap floor of 150MB still stands because
+below it a launch is an OOM whatever the pressure figure says.
+
+Effect: 9 forced, 9 launched, 14 jobs running at load 437 with 71 per cent of
+memory free. The 33 sweep cells had been stalled since they were queued.
+
 ## Open decisions for the owner
 
 Three of the four recorded here have been closed. What is left is below.
