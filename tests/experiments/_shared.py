@@ -4772,101 +4772,95 @@ def flatten_weights(fitted) -> np.ndarray:
     return np.concatenate(parts) if parts else np.array([])
 
 
-# Preference order for the single "plain base representation" control arm that
-# the noise experiments compare their treatments against. One per domain:
-# molecular, DTA/protein-descriptor, sequence.
-# The control arm of a noise experiment, in preference order. Every name here is
-# a PLAIN, unlearned encoding of the molecule or sequence -- a fingerprint, a
-# descriptor set, a substitution matrix, a one-hot. None is a learned embedding,
-# because the control is meant to be the representation a study did nothing to.
+# The single-representation comparison of every noise experiment: the top
+# NOISE_BASE_REP_COUNT base representations FOR EACH DOWNSTREAM MODEL, ranked by
+# that model's own score in the stored search -- the same rule c02 and the rest
+# of the study use (top_base_reps). Owner's decision 2026-09-25.
 #
-# `onehot` was added 2026-09-21. Before it, an antibody set holding none of the
-# first three fell through to whichever name sorted first among its ten, which
-# on flab_thermo_tresanco is `esm2_cdr` -- a learned embedding, and 8th of the
-# 10 by how well it predicts, at 0.391 spearman with a random forest against
-# 0.594 for the best. That is a control chosen by spelling.
+# ⛔ It replaced a fixed preference list of unlearned encodings
+# (ecfp4, blosum, onehot, ...) taken in list order regardless of score. An
+# earlier session introduced it without the owner's sign-off. On
+# flab_thermo_tresanco it made the comparison onehot -- 0.3471 spearman with rf,
+# the worst of the 10 representations -- while the hybrid drew from the best
+# three, so every hybrid-versus-base number on that dataset was strong
+# representations against the weakest one. Do not reintroduce a fixed list.
 #
-# ⛔ DO NOT put a learned embedding in this list, and do not order it by how
-# well the representations score. The molecular sets take `ecfp4` rather than
-# their best representation; the antibody sets take `onehot` on the same
-# principle. A control that is the best-scoring representation makes the
-# hybrid's margin over it the wrong comparison.
-NOISE_BASE_REP_PREFERENCE = (
-    # small molecules: a fingerprint, then a descriptor set
-    'ecfp4', 'pdv', 'maccs', 'avalon', 'atom_pair', 'top_torsion', 'mordred',
-    # sequences: a substitution matrix, a one-hot, a composition, a k-mer count
-    'blosum', 'onehot', 'aac', 'protein_kmer',
-    # nucleotide sequences: k-mer frequencies, longest first
-    'kmer6', 'kmer5', 'kmer4', 'kmer3', 'tetranuc_freq',
-    # drug-target pairs and reactions: the same fingerprints under their own names
-    'drug_ecfp4', 'drug_pdv', 'drug_maccs', 'drug_avalon', 'drug_mordred',
-    'reactant_ecfp4', 'cgr_morgan', 'diff_maccs', 'diff_avalon',
-    'reactant_mordred',
-)
+# The ranking is top_base_reps' default, rule='whole_dataset': each
+# representation's mean over the stored search's own folds, as everywhere else
+# in the study. That search saw every row, so which two representations are
+# picked was decided with the held-out molecules in view; the scores reported
+# for them are measured fresh on each fold.
+NOISE_BASE_REP_COUNT = 2
 
 
-def pick_noise_base_rep(reps, dataset_name=None, verbose=True):
-    """Choose the plain base representation a noise experiment uses as control.
+def noise_base_reps_by_model(searches_by_model, models, reps=None, n=None,
+                             dataset_name=None, verbose=True):
+    """The top-n single representations for each downstream model.
 
-    Was five copies of::
+    Args:
+        searches_by_model: {model: SearchResult or None}, the stored search the
+            pool returned for each model (noise_helpers.
+            pool_recipe_per_downstream_model gives it as by_model[m]['search']).
+        models: downstream model names, in the caller's order.
+        reps: the representations loaded for this run. A representation the
+            search ranked but this run did not load is skipped, and the next one
+            down is taken.
+        n: how many per model. Default NOISE_BASE_REP_COUNT.
 
-        for candidate in ['ecfp4', 'pdv', 'blosum']:
-            if candidate in reps: base = candidate; break
-        else: base = sorted(reps.keys())[0]
-
-    Two problems with the fallback. It is alphabetical, so WHICH rep becomes the
-    control depends on nothing but spelling; and it can select a structure-tuned
-    similarity recipe (`sim_*`), which is a TREATMENT built by the study — as
-    the control arm, silently. A recipe named 'sim_all' sorts ahead of 'smited',
-    so simply registering the recipes for a dataset could have swapped the
-    control out from under every noise result on it.
-
-    This keeps the documented preference order, refuses to fall back onto a
-    structure-tuned recipe, and says out loud which rep it picked and why.
-
-    Raises ValueError when nothing is eligible, rather than picking something
-    arbitrary: a noise experiment with no plain base representation has no
-    control arm, and should stop instead of reporting against a treatment.
+    Returns:
+        (by_model, missing)
+        by_model: {model: [rep at rank 1, rep at rank 2, ...]}, possibly shorter
+            than n when fewer representations carry a score for that model.
+        missing: {model: one sentence} for every model that got none -- it has
+            no single-representation comparison in this run, and says why.
+    Structure-tuned `sim_*` recipes are study treatments and never selected.
     """
-    for candidate in NOISE_BASE_REP_PREFERENCE:
-        if candidate in reps:
-            return candidate
+    n = NOISE_BASE_REP_COUNT if n is None else int(n)
+    by_model, missing = {}, {}
+    for m in models:
+        search = (searches_by_model or {}).get(m)
+        if search is None:
+            missing[m] = ('the pool returned no stored search for this model, '
+                          'so its single representations cannot be ranked')
+            continue
+        excl = [r for r in (getattr(search, 'baselines', {}) or {})
+                if str(r).startswith('sim_')]
+        try:
+            got = top_base_reps(search, m, n, only=(list(reps) if reps is not None
+                                                    else None),
+                                exclude_reps=excl, require_full=False,
+                                context={'dataset': dataset_name,
+                                         'purpose': 'noise single-rep comparison'})
+        except Exception as exc:
+            missing[m] = f'ranking failed: {type(exc).__name__}: {exc}'
+            continue
+        names = [e['rep'] for e in got.get('selected', [])]
+        if not names:
+            missing[m] = ('no representation carries a score for this model in '
+                          'the stored search')
+            continue
+        by_model[m] = names
+    if verbose:
+        for m in models:
+            print(f"  single-representation comparison for {m}: "
+                  + (', '.join(f'rank {i + 1} {r}' for i, r in
+                               enumerate(by_model[m]))
+                     if m in by_model else f'none -- {missing[m]}'))
+    return by_model, missing
 
-    # Structure-tuned similarity recipes are study treatments, not controls.
-    eligible = sorted(n for n in reps if not str(n).startswith('sim_'))
-    if not eligible:
-        raise ValueError(
-            f"pick_noise_base_rep: no eligible base representation for "
-            f"{dataset_name or '<dataset>'}. Preference order "
-            f"{NOISE_BASE_REP_PREFERENCE} is absent and every remaining rep "
-            f"({sorted(reps)}) is a structure-tuned sim_* recipe, which is a "
-            f"treatment in this study and must not become the control arm. "
-            f"Add a plain base representation to this dataset's rep list.")
 
-    # ⛔ THERE IS NO ALPHABETICAL FALLBACK ANY MORE. It used to take
-    # `eligible[0]`, so the control arm of every noise experiment on a dataset
-    # holding none of the preferred names was decided by spelling. On
-    # flab_thermo_tresanco that gave `esm2_cdr`, a learned embedding and 8th of
-    # the 10 representations by how well it predicts. It also put two recorded
-    # results for one dataset against different baselines -- 0.4590 and 0.5985
-    # spearman -- because one experiment took the fallback and another named
-    # `saprot` itself, and it confounded the largest disagreement in the suite,
-    # where two experiments measured the same axis in different representations
-    # and disagreed.
-    #
-    # Stopping is the honest move. A dataset with no plain encoding has no
-    # control arm, and the fix is to add one to its rep list, not to let the
-    # sort order choose.
-    raise ValueError(
-        f"pick_noise_base_rep: no plain control representation for "
-        f"{dataset_name or '<dataset>'}. None of {NOISE_BASE_REP_PREFERENCE} "
-        f"is in its rep list, and the remaining {len(eligible)} "
-        f"({eligible}) are learned embeddings or study treatments. A noise "
-        f"experiment needs a control that the study did nothing to. Add a "
-        f"plain encoding to this dataset's rep list -- `onehot` for a "
-        f"sequence set, `ecfp4` or `pdv` for a molecular one -- or name the "
-        f"control explicitly at the call site. Choosing whichever name sorts "
-        f"first is what this replaced.")
+def base_rank_groups(base_reps_by_model, rank, models):
+    """{rep: [models]} for the representations at `rank` (1-based).
+
+    Models whose rank-`rank` representation is the same share one feature
+    matrix. A model with fewer than `rank` representations is absent.
+    """
+    out = {}
+    for m in models:
+        names = base_reps_by_model.get(m) or []
+        if len(names) >= rank:
+            out.setdefault(names[rank - 1], []).append(m)
+    return out
 
 
 def flatten_fold_weights(feat_info) -> np.ndarray:

@@ -56,9 +56,11 @@ the first model in the list and every model was scored on its features.
 Until then this file read `sorted(reps)[0]` and every number in it came from
 whichever representation sorted first, with nothing in the output saying so.
 
-The base representation is still one matrix, now chosen by pick_noise_base_rep,
-but it is now written to `base_rep` and read against the hybrid rather than
-standing alone.
+THE SINGLE-REPRESENTATION COMPARISON is each downstream model's top 2 base
+representations by that model's own score in the stored search -- spaces
+`base_1` and `base_2` -- the same rule as the rest of the study
+(_shared.noise_base_reps_by_model, owner's decision 2026-09-25). Which
+representations those are is written to `base_reps_by_model`.
 
 THE HYBRID IS BUILT ON THE TRAINING MOLECULES OF A FOLD, AT THEIR UNCLEANED
 LABELS. It is built once per fold per downstream model and every cleanup, flag
@@ -71,10 +73,11 @@ The detector is re-run in each space. It reads features, so the molecules it
 flags in the hybrid are not the molecules it flags in the base representation --
 which is the whole reason a cleanup can move between the two.
 
-A RUN WITH NO RECIPE STILL PRODUCES EVERY BASE NUMBER. If the pool returns
-nothing, `hybrid_available` is written False, `spaces_run` says which space ran,
-and every cleanup is still measured in the base representation. Dropping the run
-would lose real answers because one of two spaces is missing.
+A MODEL THE POOL HOLDS NO SEARCH FOR HAS NO SPACE AT ALL. Its single
+representations are ranked from that stored search, so without it there is
+neither a hybrid nor a base_1/base_2 for that model. `base_reps_missing` and
+`hybrid_unavailable_by_model` say which models and why, and `spaces_run` says
+which spaces ran for the rest.
 
 NO ORACLE CAVEAT TO CARRY. n11, n12 and n13 record that their recipe was chosen
 on clean labels and their experiment then corrupts them. Nothing is corrupted
@@ -100,7 +103,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
-    pick_noise_base_rep,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
 )
 # One per-fold hybrid build, shared with n17 and n19. It lived in n19 until
 # 2026-09-17.
@@ -338,7 +341,10 @@ SHUFFLE_SEEDS = (0, 1, 2)
 # today still means what it meant. 'hybrid_similarity' is the geometry one,
 # taken from meta['by_objective']['similarity']['best_config'], and is absent
 # with a stated reason when that family has no entry.
-SPACES = ('base', 'hybrid', 'hybrid_similarity')
+# base_1 and base_2 are each downstream model's rank-1 and rank-2 single
+# representation (see the module docstring).
+BASE_SPACES = tuple(f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1))
+SPACES = BASE_SPACES + ('hybrid', 'hybrid_similarity')
 
 # Which searches the recipe may come from. Same as n02, n06, n07, n11, n12, n13,
 # n17 and n19 since 2026-09-12: a search whose features were chosen to predict
@@ -480,17 +486,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # An empty tuple switches the control off; None means the default.
     shuffle_seeds = list(SHUFFLE_SEEDS if kwargs.get('shuffle_seeds') is None
                          else kwargs['shuffle_seeds'])
-    # The base space exists to be the thing the hybrid is read against, and it
-    # is RECORDED rather than left implicit. Until 2026-09-17 it was the only
-    # space and the result file did not name it.
-    # pick_noise_base_rep, not sorted(reps)[0]. The alphabetical pick is the
-    # fallback that function was written to replace: it makes the control arm a
-    # matter of spelling, and it can hand the control slot to a structure-tuned
-    # sim_* recipe, which is a treatment this study built. n11, n17 and n21
-    # already call it; these four did not. Changed 2026-09-18.
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
-    X_source = reps[base_rep_name]
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
 
     # What this task type can actually run. The three model-based corrections
     # are not defined on a nominal class label, so on a classification dataset
@@ -503,7 +501,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'noise_regime': 'whatever_the_assay_carries',
         'noise_injection': 'none',
-        'base_rep': base_rep_name,
         'models': downstream_models,
         'cleanups': list(CLEANUPS),
         'cleanups_not_run': [c for c in ALL_CLEANUPS if c not in CLEANUPS],
@@ -565,11 +562,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "  error here to remove. This run is the control — a cleanup that\n"
               "  wins here is removing hard molecules, not wrong ones.")
 
-    splits = list(cv_split(groups, n_folds, X_source, labels, mode=mode))
+    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
+                           mode=mode))
     print(f"  {len(labels)} molecules, {len(splits)} folds, "
           f"models {downstream_models}")
     print(f"  flag rates {flag_rates}, detectors {detectors}")
-    print(f"  base representation: {base_rep_name}")
 
     # ── The hybrid recipe, fetched once PER DOWNSTREAM MODEL ──
     # The pool is keyed on the dataset as the precompute built it, so the lookup
@@ -641,33 +638,50 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if _bp_sim_m is not None:
             recipe_for_space_by_model[_m]['hybrid_similarity'] = _bp_sim_m
 
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces_run = tuple(
+        f'base_{k}' for k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, k, downstream_models))
+
     bp = None
     meta = None
     if not by_model:
         # Every cleanup still runs, in the base representation alone. Dropping
         # the run would lose every base-space number because one of two spaces
         # is missing.
-        spaces = ('base',)
+        spaces = base_spaces_run
         results['hybrid_available'] = False
         results['hybrid_lookup_error'] = _lookup_error
         results['hybrid_unavailable_reason'] = (
             (f'the recipe lookup RAISED -- {_lookup_error} -- so neither '
              f'hybrid space could be built. This is NOT a dataset the '
              f'precompute never covered: something is wrong with the stored '
-             f'search and it can be fixed. Every cleanup ran in the base '
-             f'representation only.')
+             f'search and it can be fixed. Every cleanup ran in the single '
+             f'representations only.')
             if _lookup_error else
             (f'no recipe came back from the precomputed pool for subset '
              f'{POOL_SUBSET!r} for any downstream model, so the hybrid space '
-             f'could not be built. Every cleanup ran in the base '
-             f'representation only.'))
+             f'could not be built. Every cleanup ran in the single '
+             f'representations only.'))
         print(f"  no hybrid recipe from pool subset {POOL_SUBSET} for any "
-              f"downstream model; base representation only")
+              f"downstream model; single representations only")
     else:
         # A space runs when at least one downstream model has a recipe for it,
         # and inside it only the models that do.
-        spaces = tuple(s for s in SPACES if s == 'base' or any(
-            s in _r for _r in recipe_for_space_by_model.values()))
+        spaces = tuple(s for s in SPACES if s in base_spaces_run or (
+            s not in BASE_SPACES and any(
+                s in _r for _r in recipe_for_space_by_model.values())))
         results['hybrid_available'] = True
         results['hybrid_lookup_error'] = _lookup_error
         results['hybrid_models_with_a_recipe'] = [
@@ -779,8 +793,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['spaces_run'] = list(spaces)
 
     # ── What each downstream model would have picked for itself ──
-    # Added 2026-09-18, ADDITIVE. Nothing above or below moves: `base_rep` is
-    # still the one pick_noise_base_rep names and every fold-win count in
+    # Added 2026-09-18, ADDITIVE. Nothing above or below moves: every
+    # fold-win count in
     # 'per_space' is still measured in the spaces 'spaces_run' names. These 4
     # keys sit beside them.
     #
@@ -892,8 +906,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         y_val = labels[val_idx]
 
         # ── The feature spaces for this fold ──
-        # The base representation is scaled on this fold's training molecules
-        # and is ONE matrix, shared by every downstream model.
+        # Each single-representation space holds one matrix per distinct
+        # representation at that rank, scaled on this fold's training
+        # molecules and shared by the models that rank it there.
         #
         # ⛔ A HYBRID SPACE IS ONE MATRIX PER DOWNSTREAM MODEL. Each model's
         # features are rebuilt from the recipe the search picked for THAT
@@ -911,12 +926,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # with no hybrid recipe still has to reach them.
         g_tr = (np.asarray(groups)[train_idx]
                 if groups is not None else None)
-        scaler = StandardScaler()
-        fold_spaces['base'] = [(
-            scaler.fit_transform(np.asarray(X_source[train_idx],
-                                            dtype=np.float64)),
-            scaler.transform(np.asarray(X_source[val_idx], dtype=np.float64)),
-            list(downstream_models))]
+        for _k, _bsp in enumerate(BASE_SPACES, start=1):
+            if _bsp not in spaces:
+                continue
+            _cells = []
+            for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                             downstream_models).items():
+                scaler = StandardScaler()
+                _cells.append((
+                    scaler.fit_transform(np.asarray(reps[_rn][train_idx],
+                                                    dtype=np.float64)),
+                    scaler.transform(np.asarray(reps[_rn][val_idx],
+                                                dtype=np.float64)),
+                    list(_ms)))
+            fold_spaces[_bsp] = _cells
         _tr_reps = {k: np.asarray(v[train_idx], dtype=np.float64)
                     for k, v in reps.items()}
         _va_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
@@ -925,7 +948,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # recipe on its own -- it reads the objective off the blueprint -- so
         # one call serves the predictive space and the similarity one.
         for _sp in spaces:
-            if _sp == 'base':
+            if _sp in BASE_SPACES:
                 continue
             # ONE BUILD PER DISTINCT RECIPE, NOT PER MODEL -- but only where
             # the model provably does not enter the build. Under a recipe from
@@ -1295,7 +1318,7 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name,
 
     # Does a cleanup sweep more settings where the features were chosen? Only
     # defined where both spaces ran.
-    if 'hybrid' in spaces and 'base' in spaces:
+    if 'hybrid' in spaces and any(s in spaces for s in BASE_SPACES):
         # One entry per space that ran, rather than the two this block used to
         # name. The third space -- the one whose features were chosen to make
         # the neighbour distance predictive -- would otherwise be absent from
@@ -1411,9 +1434,6 @@ def main():
         'N18: does cleaning help on the labels as they come')
     parser.add_argument('--flag-rates', type=str, default=None,
                         help='Comma-separated shares of rows to treat as suspect')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help='Which representation is the base space. Default: '
-                             'pick_noise_base_rep\'s, and it is recorded either way')
     parser.add_argument('--shuffle-seeds', type=str, default=None,
                         help='Comma-separated seeds for the shuffled-score '
                              'control. Default SHUFFLE_SEEDS; "" switches it off')
@@ -1423,8 +1443,6 @@ def main():
     kw = {}
     if args.flag_rates:
         kw['flag_rates'] = [float(x) for x in args.flag_rates.split(',')]
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
     if args.shuffle_seeds is not None:
         kw['shuffle_seeds'] = [int(x) for x in args.shuffle_seeds.split(',')
                                if x.strip()]
