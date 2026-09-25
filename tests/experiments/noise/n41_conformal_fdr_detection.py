@@ -50,7 +50,8 @@ little to outscore every calibration molecule, gets no flags at all. Every BH
 record writes this floor as `fewest_flags_bh_can_make`, so a zero is readable.
 
 THE TWO CALIBRATION SETS.
-  random    a random CALIBRATION_SHARE of the training fold. What any dataset has.
+  random_s<pct>  a random share of the training fold, one set per share in
+            CALIBRATION_SHARES (0.2 and 0.5). What any dataset has.
   trusted   herg_ic50 and bindingdb_kd only (any dataset with replicate groups):
             training molecules measured 3+ times whose spread across their own
             measurements -- the corrupted labels, what a user sees -- is in the
@@ -137,7 +138,13 @@ DEFAULT_NOISE_CONDITION = 'sparse_dprime_p05'
 
 NOISE_DRAWS = (0, 1, 2)
 BH_QS = (0.05, 0.1, 0.2)
-CALIBRATION_SHARE = 0.2
+# The random calibration set's share of the training fold, swept. Owner's
+# decision 2026-09-25: at 0.2 alone Benjamini-Hochberg can flag nothing or at
+# least ~(1 - s) / (s q) molecules, 40 at q = 0.1, more than the 2-10% the
+# sparse conditions move on many folds. 0.5 brings that to 10 at q = 0.1 and
+# tests half the fold. Each share is its own calibration set, named
+# random_s<percent>.
+CALIBRATION_SHARES = (0.2, 0.5)
 MIN_CALIBRATION = 20
 TRUSTED_MIN_MEASUREMENTS = 3
 SIGMA_FLOOR_OF_MEDIAN = 0.1
@@ -196,6 +203,11 @@ def rescaled_residual(X, y, groups, p, oof_splits, floor_of_median=SIGMA_FLOOR_O
     floor = max(floor_of_median * float(np.median(a)), 1e-9)
     sigma = np.clip(sigma, floor, None)
     return a / sigma, sigma
+
+
+def random_cal_name(share):
+    """'random_s20' for a share of 0.2."""
+    return f'random_s{int(round(100 * float(share)))}'
 
 
 def random_calibration(n, share, seed):
@@ -435,7 +447,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     oof_splits = int(kwargs.get('oof_splits', OOF_SPLITS))
 
     rep_groups = build_replicate_groups(data)
-    cals = ['random'] + (['trusted'] if rep_groups is not None else [])
+    cals = [random_cal_name(s) for s in CALIBRATION_SHARES] + (
+        ['trusted'] if rep_groups is not None else [])
     arm_names = build_arm_names(cals, qs, seeds)
 
     downstream_models = list(
@@ -476,7 +489,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'detectors': detectors,
         'bh_qs': qs,
         'calibration_sets': cals,
-        'calibration_share': CALIBRATION_SHARE,
+        'calibration_shares': list(CALIBRATION_SHARES),
         'min_calibration': MIN_CALIBRATION,
         'trusted_rule': (f'molecules measured {TRUSTED_MIN_MEASUREMENTS}+ times '
                          f'in the training fold whose spread across their own '
@@ -621,9 +634,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             fold_rec['training_molecules'] = n_tr
 
             # ── Calibration sets, shared by every space ──
-            cal_masks = {'random': random_calibration(
-                n_tr, CALIBRATION_SHARE,
-                replicate_seed('cal', lvl_key, draw, fold_i, n_tr))}
+            cal_masks = {random_cal_name(sh): random_calibration(
+                n_tr, sh,
+                replicate_seed('cal', lvl_key, draw, fold_i, n_tr, sh))
+                for sh in CALIBRATION_SHARES}
             if 'trusted' in cals:
                 tmask, trec = trusted_calibration(
                     y0, np.asarray(rep_groups)[train_idx])
