@@ -84,6 +84,7 @@ LINKS=4
 SPEED=""          # empty = let run_precompute_dataset.sh choose per dataset
 PRUNING="calibrated"
 DRY_RUN=false
+YES=false         # --yes: submit without the y/N prompt
 DOMAIN="all"
 EXPLICIT=""
 SKIP=""
@@ -148,6 +149,7 @@ last_link() { printf '%s\n' "$LINK_TABLE" | awk -v d="$1" '$1==d {print $2; exit
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run)          DRY_RUN=true; shift ;;
+        --yes)              YES=true; shift ;;
         --domain)           DOMAIN=$2; shift 2 ;;
         --datasets)         EXPLICIT=$2; shift 2 ;;
         --skip)             SKIP=$2; shift 2 ;;
@@ -259,8 +261,19 @@ if [ "$DRY_RUN" = true ]; then
     exit 0
 fi
 
-read -r -p "Submit $((N_PRE + N_EXP + N_FED + N_OPIG)) jobs? [y/N] " REPLY
-[[ "$REPLY" == "y" || "$REPLY" == "Y" ]] || { echo "Aborted."; exit 0; }
+# ⛔ A PASTED BLOCK ANSWERS THIS PROMPT WITH ITS NEXT LINE. On 2026-09-24 a
+# four-command paste fed the second command to the first prompt: 21 datasets
+# printed "Aborted." and nothing was submitted, with no error. Use --yes when
+# pasting more than one command.
+if [ "$YES" != true ]; then
+    read -r -p "Submit $((N_PRE + N_EXP + N_FED + N_OPIG)) jobs? [y/N] " REPLY
+    if [[ "$REPLY" != "y" && "$REPLY" != "Y" ]]; then
+        echo ""
+        echo "⛔ ABORTED -- NOTHING WAS SUBMITTED for: $DATASETS"
+        echo "   (the prompt read '${REPLY}'. Pass --yes to skip the prompt.)"
+        exit 1
+    fi
+fi
 
 # ── submit ──────────────────────────────────────────────────────────────
 N_OK=0
