@@ -468,6 +468,17 @@ def compute_qed_scores(smiles_list):
     return np.array(scores, dtype=np.float64)
 
 
+# Which end of each dataset's label is the molecule a project wants. This is a
+# property of the ASSAY and has nothing to do with the scoring metric's
+# direction — see the note at the y_bo assignment for why the two were conflated
+# and what it cost.
+LABEL_BETTER_WHEN = {
+    'herg_ki':   'low',   # pKi against hERG: low pKi = weak binder = low cardiotoxicity
+    'caco2':     'high',  # apparent permeability: high = more permeable
+    'adme_mdr1': 'low',   # MDR1/P-gp efflux ratio: low = less effluxed
+}
+
+
 def compute_combined_objective(y, qed_scores, lower_is_better=False):
     """Geometric mean of normalized label and QED for multi-objective BO.
 
@@ -1100,14 +1111,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # needing to know about negation. display_sign stays 1.0 at display sites.
     display_sign = 1.0
 
-    # For BO we always MAXIMIZE. If the task's primary metric is lower-is-better
-    # (e.g., RMSE), negate targets so BO maximizes -RMSE.
-    if lower_is_better:
+    # Which END OF THE LABEL this search hunts.
+    #
+    # ⛔ This used to read `lower_is_better`, which is whether the SCORING
+    # METRIC is better when small. All three local datasets score with RMSE, so
+    # it was True on all three and the search hunted the smallest label
+    # everywhere — because RMSE is lower-is-better, not because a small label is
+    # the molecule anyone wants. Two different questions answered by one flag.
+    #
+    # LABEL_BETTER_WHEN records the real answer per dataset. It is a property of
+    # the assay, not of the metric:
+    #   herg_ki    pKi against hERG. A LOW pKi is a weak hERG binder, which is
+    #              the low-cardiotoxicity molecule a project wants.
+    #   caco2      apparent permeability. HIGH is more permeable.
+    #   adme_mdr1  MDR1/P-gp efflux ratio. LOW is less effluxed.
+    # KIRBY_S11_HUNT overrides for one run ('low' or 'high'); an unlisted
+    # dataset falls back to the old metric-direction behaviour and says so, so
+    # nothing silently changes meaning.
+    _hunt_env = os.environ.get('KIRBY_S11_HUNT', '').strip().lower()
+    _hunt = LABEL_BETTER_WHEN.get(dataset_name)
+    if _hunt_env in ('low', 'high'):
+        _hunt, _src = _hunt_env, 'KIRBY_S11_HUNT'
+    elif _hunt:
+        _src = 'LABEL_BETTER_WHEN'
+    else:
+        _hunt, _src = ('low' if lower_is_better else 'high'), \
+                      'metric direction (NO label direction recorded for this dataset)'
+    if _hunt == 'low':
         y_bo = -labels.copy()
-        print(f"  Metric: {metric_name} (lower is better) -> negating for BO maximization")
     else:
         y_bo = labels.copy()
-        print(f"  Metric: {metric_name} (higher is better) -> direct maximization")
+    print(f"  Hunting the {_hunt.upper()} end of the label, from {_src}"
+          f"  (scoring metric: {metric_name}, "
+          f"{'lower' if lower_is_better else 'higher'} is better)")
+    results_hunt = {'end': _hunt, 'source': _src}
 
     # Budget checkpoints for metric computation
     budget_checkpoints = [b for b in [25, 50, 100, 200] if b <= max_iterations]
