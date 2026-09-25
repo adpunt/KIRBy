@@ -1101,7 +1101,16 @@ def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
 
 # Similarity-specific extra params (layered on top of the DEFAULT_* config)
 SIMILARITY_EXTRA = {
-    'weight_methods': ['lightgbm_gain'],
+    # Which importance method weights the features INSIDE the distance s02
+    # scores. This is not KIRBY_LOCAL_IMPORTANCE, which picks the method the
+    # hybrid search uses to rank features while it spends the budget -- that
+    # one changes how the hybrid is built, this one changes how the distance
+    # is weighted. Like k_values below, this key sits in the config every
+    # similarity run is built from, so it always won and s02 only ever
+    # measured lightgbm_gain. The env var now wins when it is set.
+    'weight_methods': ([v.strip() for v in
+                        os.environ.get('KIRBY_S02_WEIGHT_METHODS', '').split(',')
+                        if v.strip()] or ['lightgbm_gain']),
     # s05's neighbour counts. This sits in the config every similarity run is
     # built from, so it was always present and always won over
     # KIRBY_S05_K_VALUES -- naming the env var changed nothing and said nothing.
