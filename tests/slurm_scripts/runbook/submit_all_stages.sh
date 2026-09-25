@@ -31,7 +31,7 @@
 #
 # OPTIONS
 #   --trial "A B"            stage 1 and 2 datasets (required)
-#   --fed-trial "A B"        stage 2 federated datasets (default: caco2)
+#   --fed-datasets "A B"     stage 2 federated datasets (default: caco2); --fed-trial is the same
 #   --full "A B ..."         stage 3 and 4 datasets (default: every dataset in
 #                            DATASET_REPS except chembl_qsar and davis)
 #   --fed-full "A B"         stage 3 federated datasets (default: lhasa_herg caco2 logd,
@@ -56,7 +56,7 @@ STAGES="1 2 3 4"; SIM=""; MAXC=40; ACCOUNT=""; HOLD4=true; DRY=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --trial)               TRIAL=$2; shift 2 ;;
-        --fed-trial)           FED_TRIAL=$2; shift 2 ;;
+        --fed-trial|--fed-datasets) FED_TRIAL=$2; shift 2 ;;
         --full)                FULL=$2; shift 2 ;;
         --fed-full)            FED_FULL=$2; shift 2 ;;
         --stages)              STAGES=$2; shift 2 ;;
