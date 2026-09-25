@@ -387,27 +387,50 @@ one search configuration, distance weighted by lightgbm_gain throughout.
     lightgbm_gain     herg_ki   general_distance      0.3109    0.2713       -0.0651
     lightgbm_gain     adme_mdr1 general               0.3137    0.3071       -0.0414
     lightgbm_gain     adme_mdr1 general_distance      0.2892    0.3061       -0.0424
+    treeshap          caco2     general               0.3499    0.3669       +0.0210
+    treeshap          caco2     general_distance      0.3461    0.3636       +0.0176
+    treeshap          herg_ki   general               0.3136    0.2791       -0.0573
+    treeshap          herg_ki   general_distance      0.3128    0.2793       -0.0571
+    treeshap          adme_mdr1 general               0.3041    0.3085       -0.0400
+    treeshap          adme_mdr1 general_distance      0.2758    0.3021       -0.0463
     deeplift          caco2     general               0.0702    0.1627       -0.1833
     deeplift          caco2     general_distance      0.0917    0.1959       -0.1501
     deeplift          herg_ki   general               0.1198    0.1408       -0.1956
     deeplift          herg_ki   general_distance      0.1131    0.1422       -0.1942
     deeplift          adme_mdr1 general               0.1838    0.2407       -0.1078
     deeplift          adme_mdr1 general_distance      0.1839    0.2562       -0.0922
-    treeshap          caco2     general               0.3499    0.3669       +0.0210
-    treeshap          caco2     general_distance      0.3461    0.3636       +0.0176
-    treeshap          herg_ki   general               0.3136    0.2791       -0.0573
-    treeshap          herg_ki   general_distance      0.3128    0.2793       -0.0571
 
-8 of the 9 cells have landed; treeshap on adme_mdr1 is still running.
+COMPLETE 2026-09-25: all 9 cells, 3 methods x 3 datasets, both lineages.
 
-The split is deeplift against the two tree-based methods, not a spread across
-three, and it now holds on both datasets where all three have a number.
-Unweighted, treeshap sits within 0.009 of lightgbm_gain in all four of those
-pairs -- caco2 0.3499 against 0.3586 and 0.3461 against 0.3466, herg_ki 0.3136
-against 0.3067 and 0.3128 against 0.3109 -- while deeplift reads 0.0702, 0.0917,
-0.1198 and 0.1131. treeshap also moves the same direction as lightgbm_gain when
-the features are weighted: up on caco2, down on herg_ki. deeplift rises on
-both.
+**The two tree-based methods agree and deeplift does not.** Unweighted,
+treeshap sits within 0.014 of lightgbm_gain in all six dataset-and-lineage
+pairs; the largest gap is adme_mdr1 general_distance, 0.2892 against 0.2758.
+deeplift is below both in all six, by a factor of 1.57 on adme_mdr1
+general_distance up to 5.11 on caco2 general:
+
+    caco2     general           lgbm 0.3586  treeshap 0.3499  deeplift 0.0702
+    caco2     general_distance  lgbm 0.3466  treeshap 0.3461  deeplift 0.0917
+    herg_ki   general           lgbm 0.3067  treeshap 0.3136  deeplift 0.1198
+    herg_ki   general_distance  lgbm 0.3109  treeshap 0.3128  deeplift 0.1131
+    adme_mdr1 general           lgbm 0.3137  treeshap 0.3041  deeplift 0.1838
+    adme_mdr1 general_distance  lgbm 0.2892  treeshap 0.2758  deeplift 0.1839
+
+For scale, weighting the features moves the same number by at most 0.04 under
+lightgbm_gain. So which method ranks the features while the search spends the
+budget matters more than whether the distance is weighted at all.
+
+**Whether weighting helps depends on the dataset, not the method.** All three
+methods rise on caco2. All three fall on herg_ki except deeplift, which rises.
+On adme_mdr1 deeplift and treeshap rise in both lineages and lightgbm_gain
+falls in one and rises in the other. Correcting what I wrote from the first
+treeshap cell: I said treeshap moves the same direction as lightgbm_gain. That
+holds on caco2 and herg_ki and fails on adme_mdr1 general, where lightgbm_gain
+falls 0.3137 to 0.3071 and treeshap rises 0.3041 to 0.3085.
+
+**Against the best single representation, the winner is dataset-dependent.**
+lightgbm_gain is best on caco2, +0.0244. treeshap is best on herg_ki, -0.0573
+against -0.0671, and on adme_mdr1 general, -0.0400 against -0.0414. deeplift is
+worst everywhere, -0.09 to -0.20.
 
 The lightgbm_gain row's sign matches the shipped row above on all three
 datasets: the hybrid beats the best single representation on caco2 and loses on
@@ -415,29 +438,9 @@ herg_ki and adme_mdr1. The shipped row came from a twelve-configuration search
 and these from one configuration, so the magnitudes are not comparable, but the
 direction survives the smaller search.
 
-Which importance method builds the hybrid moves the correlation by more than
-anything else measured here, and it moves it the same way in all six
-dataset-and-lineage pairs. Unweighted, lightgbm_gain first, deeplift second:
-
-    caco2     general           0.3586 vs 0.0702   5.11x
-    caco2     general_distance  0.3466 vs 0.0917   3.78x
-    herg_ki   general           0.3067 vs 0.1198   2.56x
-    herg_ki   general_distance  0.3109 vs 0.1131   2.75x
-    adme_mdr1 general           0.3137 vs 0.1838   1.71x
-    adme_mdr1 general_distance  0.2892 vs 0.1839   1.57x
-
-For scale, weighting the features moves the same number by at most 0.04 under
-lightgbm_gain.
-
-The two methods also disagree about whether weighting helps. Under deeplift it
-helps in all six pairs, by 0.05 to 0.09. Under lightgbm_gain it helps on caco2,
-hurts on herg_ki, and splits on adme_mdr1, where general falls 0.3137 to 0.3071
-and general_distance rises 0.2892 to 0.3061. That split is why my earlier claim
-here, that both lineages agree inside each dataset, was wrong.
-
-These cells use the one-configuration search. 1 of the 9 build-importance cells
-is outstanding, treeshap on adme_mdr1, and the 3 weighting cells have
-not started.
+These cells use the one-configuration search. The 3 weighting cells, which vary
+which method weights the distance rather than which builds the hybrid, have not
+started.
 
 **s04 — wins two of three once its levers open.** Held-out RMSE delta on cliff
 molecules, positive means the hybrid won:
