@@ -1137,8 +1137,54 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
                   f"delta_paired={_blk['delta_paired']:+.4f} "
                   f"over {_blk['n_paired_folds']} folds)")
 
+    # Re-point the headline to the start that collapsed LESS.
+    #
+    # `ls_reported` was ls_starts[0], which is 'fixed'. Measured 2026-09-23 on
+    # the first complete run: under 'fixed' three of adme_mdr1's seven
+    # representations became CONSTANT PREDICTORS — prediction spreads of
+    # 1.11e-149, 4.93e-161 and 1.64e-83 across held-out folds — and all three
+    # reported 0.7939, which is what a constant predictor scores there. Every
+    # consumer reading `per_rep` without also reading `per_rep_by_lengthscale`
+    # was therefore carrying collapsed arms.
+    #
+    # A fold whose weighted prediction spread is below 1e-6 predicted one number
+    # for every held-out molecule. Whichever start produces fewer such folds
+    # wins the headline; ties keep ls_starts[0], so nothing moves when both
+    # starts are healthy. KIRBY_S10_GP_REPORT forces a start by name.
+    def _n_constant(start):
+        n = 0
+        for _r, _b in (results['per_rep_by_lengthscale'].get(start) or {}).items():
+            for _f in (_b.get('weighted_fits') or []):
+                if _f and _f.get('pred_sd') is not None and _f['pred_sd'] < 1e-6:
+                    n += 1
+        return n
+    _forced = os.environ.get('KIRBY_S10_GP_REPORT', '').strip()
+    _counts = {st: _n_constant(st) for st in ls_starts}
+    if _forced in ls_starts:
+        _best, _why = _forced, 'KIRBY_S10_GP_REPORT'
+    else:
+        _best = min(ls_starts, key=lambda st: (_counts[st], ls_starts.index(st)))
+        _why = 'fewest constant-predictor folds'
+    results['lengthscale_reported_basis'] = {
+        'chosen': _best, 'chosen_by': _why,
+        'constant_predictor_folds': _counts,
+        'note': ("A fold whose weighted GP predicted one number for every "
+                 "held-out molecule, counted per start. per_rep and the "
+                 "unsuffixed hybrid blocks report `chosen`; every start is "
+                 "under per_rep_by_lengthscale either way.")}
+    if _best != ls_reported:
+        print(f"    headline start moved {ls_reported} -> {_best} "
+              f"(constant-predictor folds {_counts})")
+        ls_reported = _best
+        results['lengthscale_reported'] = _best
+        for _rep_name in list(results['per_rep']):
+            _src = (results['per_rep_by_lengthscale'].get(_best) or {}).get(_rep_name)
+            if _src is not None:
+                results['per_rep'][_rep_name] = copy.deepcopy(_src)
+
     _store_per_rep(results, per_rep_cache, 'weighted_gp',
-                   extra_keys=('per_rep_by_lengthscale',))
+                   extra_keys=('per_rep_by_lengthscale',
+                               'lengthscale_reported_basis'))
 
     # Hybrid evaluation — one arm per swept number of features.
     if fold_blueprints:
