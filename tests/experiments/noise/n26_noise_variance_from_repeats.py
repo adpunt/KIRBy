@@ -48,6 +48,9 @@ WHAT IS COMPUTED.
      noise variance of a training label:
        reliability     1 - sL2 / Var(mean label). The share of the label
                        variance that is not noise.
+       r2_over_reliability  the model's out-of-fold R2 divided by the
+                       reliability, per reliability estimate (added
+                       2026-09-25): the R2 corrected for attenuation.
        r2_threshold    1 - sL2 / Var(true label), with
                        Var(true label) = Var(mean label) - sL2. A model whose
                        R2 is below this has an out-of-fold error larger than the
@@ -262,6 +265,13 @@ def fit_gamma(r2, inv_k):
     except Exception as exc:
         return {'slope_s2e': float('nan'), 'intercept_s2u': float('nan'),
                 'failed': f'{type(exc).__name__}: {exc}'}
+
+
+def _ratio(a, b):
+    """a / b, NaN when either is not finite or b is not positive."""
+    if not (np.isfinite(a) and np.isfinite(b)) or b <= 0:
+        return float('nan')
+    return float(a / b)
 
 
 def reliability_from(s2e, mean_inv_k, var_y):
@@ -590,18 +600,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'binned': fit_binned(r2, kk),
                     'gamma': fit_gamma(r2, ik)}
             var_here = float(np.var(y[have]))
+            r2_model = (float(1.0 - np.mean(r2) / var_here) if var_here > 0
+                        else float('nan'))
+            rel_fit = {f: reliability_from(fits[f]['slope_s2e'], mean_inv_k, var_y)
+                       for f in fits}
             srow[mname] = {
                 'molecules_with_a_prediction': int(have.sum()),
                 'fold_scores': fold_scores[space][mname],
-                'model_r2_against_the_mean_label': (
-                    float(1.0 - np.mean(r2) / var_here) if var_here > 0
-                    else float('nan')),
+                'model_r2_against_the_mean_label': r2_model,
+                # ADDED 2026-09-25 (third research report, A6): the model's R2
+                # divided by the reliability of the label it is scored on, so
+                # datasets with noisier labels are not read as worse models.
+                # One per reliability estimate; the reliability is on the
+                # mean label, which is what the model is scored against.
+                'r2_over_reliability': {
+                    'direct': _ratio(r2_model, results['direct']['reliability']
+                                     ['reliability']),
+                    **{f: _ratio(r2_model, rel_fit[f]['reliability'])
+                       for f in rel_fit}},
                 'mean_squared_residual': float(np.mean(r2)),
                 'error_by_count': error_by_count(res, kk),
                 'fits': fits,
-                'reliability_by_fit': {
-                    f: reliability_from(fits[f]['slope_s2e'], mean_inv_k, var_y)
-                    for f in fits},
+                'reliability_by_fit': rel_fit,
             }
         results['per_space'][space] = srow
 

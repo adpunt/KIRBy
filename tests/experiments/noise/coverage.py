@@ -95,6 +95,11 @@ KIND = {
     'n34': ('method', 'a shrunk random offset per scaffold group, against subtracting each group mean'),
     'n35': ('investigation', 'how far apart the labels of near-identical molecules are, and downweighting pairs that disagree'),
     'n36': ('method', 'which molecules to give a second measurement, by five rules'),
+    'n37': ('investigation', 'how large the label noise is from nearest neighbours, against the model error, with extra-noise extrapolation and residual tails'),
+    'n38': ('method', 'noise sized by the model\'s own error: detection against d-prime, and five responses with random-flag twins'),
+    'n39': ('method', 'simulated sources with correlated errors and offsets: offset removal and weights that allow for the correlation'),
+    'n40': ('method', 'retuned hyperparameters, seed averaging, stacking, and a GP with a noise term, chosen by cross-validation or Mallows Cp'),
+    'n41': ('method', 'conformal p-values with a controlled false-flag rate, isolation forest, LOF, seed disagreement and cleanlab'),
 }
 
 

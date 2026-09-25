@@ -318,6 +318,43 @@ def ridge_offsets(residual, rec_doc, eligible, component, alpha=RIDGE_ALPHA,
     return out
 
 
+def offset_level_correlation(offsets, level_rec, rec_doc, eligible, component):
+    """Does a document's offset depend on how active its molecules are?
+
+    ADDED 2026-09-25 from the third research report (A5): error that depends on
+    the true value biases slopes, and the check it names is the source
+    difference regressed on the level. Here a document's level is the mean
+    out-of-fold prediction over its measurements (`level_rec`), not the mean of
+    its own labels, which would contain the offset being tested. Both the
+    offsets and the levels are centred within each connected group, because the
+    offsets are only defined up to a shift per group.
+
+    Returns Pearson and Spearman correlations over eligible documents, and the
+    least-squares slope of offset on level (label units per label unit).
+    """
+    from scipy.stats import pearsonr, spearmanr
+    level_rec = np.asarray(level_rec, dtype=float)
+    rec_doc = np.asarray(rec_doc)
+    docs = [int(d) for d in eligible
+            if np.isfinite(offsets.get(int(d), np.nan)) and np.any(rec_doc == d)]
+    if len(docs) < 3:
+        return {'n_documents': len(docs), 'pearson': float('nan'),
+                'spearman': float('nan'), 'slope': float('nan')}
+    lev = np.array([level_rec[rec_doc == d].mean() for d in docs])
+    off = np.array([offsets[d] for d in docs], dtype=float)
+    comp = np.array([component[d] for d in docs])
+    for c in np.unique(comp):
+        on = comp == c
+        lev[on] -= lev[on].mean()
+    if np.std(lev) == 0 or np.std(off) == 0:
+        return {'n_documents': len(docs), 'pearson': float('nan'),
+                'spearman': float('nan'), 'slope': float('nan')}
+    return {'n_documents': len(docs),
+            'pearson': float(pearsonr(lev, off)[0]),
+            'spearman': float(spearmanr(lev, off)[0]),
+            'slope': float(np.polyfit(lev, off, 1)[0])}
+
+
 def offsets_per_record(offsets, rec_doc):
     """The offset each measurement carries; 0 where its document has none."""
     return np.array([offsets.get(int(d), 0.0) if np.isfinite(
@@ -774,6 +811,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 f'{FLIP_SHARE_REPORTED:g}_of_resamples':
                     int((fl > FLIP_SHARE_REPORTED).sum()),
                 'documents_with_a_flip_share': int(fl.size),
+                'offset_against_document_level': offset_level_correlation(
+                    offsets, y_rec_tr - resid, rec_doc_tr, eligible, component),
             }
             b_rec = offsets_per_record(offsets, rec_doc_tr)
             var_trace = []

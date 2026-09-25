@@ -135,6 +135,8 @@ setup(
         # already has for the KIRBy pull itself.
         "noise": [
             "noiseInject @ git+ssh://git@github.com/adpunt/noise_inject.git",
+            # regression label-error score, a detector in n32 and n41
+            "cleanlab>=2.6",
         ],
 
         # Feature importance / interpretability

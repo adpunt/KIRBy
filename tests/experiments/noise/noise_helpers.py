@@ -119,6 +119,17 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n34',   # a random offset per scaffold group instead of subtracting its mean
     'n35',   # label disagreement between near-identical molecules
     'n36',   # which molecules to measure a second time
+    # n37-n41 added 2026-09-25 from a third outside report, on noise spread over
+    # every label against rare large errors. n40 and n41 take a condition. n38
+    # sweeps the conditions sized by the model's own error (RELATIVE_CONDITIONS),
+    # which are not in the registry, so like n31 it runs only in the job with no
+    # condition. n37 is diagnostics on clean labels; n39 injects its own
+    # simulated sources.
+    'n37',   # how large the label noise is against the model error
+    'n38',   # noise sized by the model's error, not by the label spread
+    'n39',   # repeat measurements from sources whose errors are correlated
+    'n40',   # retuned models, seed averaging, stacking, a GP with a noise term
+    'n41',   # flags with a controlled false-flag rate, and three more detectors
     # n06 runs LAST, and that is load-bearing: its headline is the rank
     # correlation between its own ordering of the noise estimators and the
     # ordering n11 and n13 measured under injected noise, and it reads those
@@ -528,11 +539,51 @@ def _already_there(dataset_name, y_clean, spec):
 SHIFT_ONLY_CONDITIONS = {'shift_only_p05': 0.05, 'shift_only_p10': 0.10}
 SHIFT_ONLY_DELTAS_SD = (0.5, 1.0, 2.0)
 
+# ADDED 2026-09-25 for n38-n41, from the third research report. Conditions sized
+# by the MODEL'S error on this fold, not by the label SD: `resid_sd` is the SD of
+# lightgbm's out-of-fold residual on the clean training labels, base space, and
+# the caller writes it beside every result. Kept out of the NoiseInject registry
+# for the same reason as SHIFT_ONLY_CONDITIONS.
+#
+#   dense_oofmse         every training label gets N(0, level * resid_sd^2).
+#                        Level = the injected variance as a share of OOF MSE.
+#   sparse_dprime_pXX    a share XX% of training molecules moved by level
+#                        residual SDs, sign drawn at random per molecule.
+#   sparse_dprime_up_pXX the same, every one moved up.
+#   hetero_seen          every label gets noise whose SD follows the molecule's
+#                        heavy-atom count, a quantity the representation sees.
+#   hetero_hidden        every label gets noise whose SD is a per-molecule
+#                        lognormal draw, which nothing the model has can see.
+#                        Both hetero conditions are scaled so the mean injected
+#                        variance is level * resid_sd^2, the same as dense_oofmse.
+#
+# Not the removed value-dependent conditions (noise_spec.py, "refuted on 16,844
+# repeats"): nothing here depends on the label's own value.
+RELATIVE_SPARSE_SHARES = {'p02': 0.02, 'p05': 0.05, 'p10': 0.10}
+RELATIVE_CONDITIONS = (
+    ('dense_oofmse',)
+    + tuple(f'sparse_dprime_{k}' for k in RELATIVE_SPARSE_SHARES)
+    + tuple(f'sparse_dprime_up_{k}' for k in RELATIVE_SPARSE_SHARES)
+    + ('hetero_seen', 'hetero_hidden'))
+RELATIVE_DENSE_LEVELS = (0.1, 0.3, 1.0)     # share of OOF MSE
+RELATIVE_DPRIME_LEVELS = (1.0, 2.0, 4.0)    # residual SDs
+
+
+def relative_levels(condition):
+    """The level grid of a RELATIVE_CONDITIONS member, 0 included."""
+    if condition not in RELATIVE_CONDITIONS:
+        raise ValueError(f'relative_levels: unknown condition {condition!r}')
+    grid = (RELATIVE_DPRIME_LEVELS if condition.startswith('sparse_dprime')
+            else RELATIVE_DENSE_LEVELS)
+    return (0.0,) + tuple(grid)
+
+
 DETECTION_IS_DEFINED = ('outlier_p01', 'outlier_p05', 'outlier_p10',
                         'outlier_only_p01', 'outlier_only_p05',
                         'outlier_only_p10',
                         'grouped_wider', 'censoring',
-                        'shift_only_p05', 'shift_only_p10')
+                        'shift_only_p05', 'shift_only_p10') \
+    + tuple(c for c in RELATIVE_CONDITIONS if c.startswith('sparse_dprime'))
 
 # ADDED 2026-09-23. The three `outlier_only_*` conditions leave the unselected
 # molecules' labels bit-identical, where the three `outlier_*` conditions widen
@@ -591,6 +642,167 @@ def inject_shift_train_labels(y_all, *, train_idx, condition, delta_sd, seed):
         'shift_label_units': shift, 'label_sd': label_sd,
         'n_moved': int(moved.sum()), 'n_training': int(n_train), 'seed': int(seed),
     }
+
+
+def heavy_atom_counts(smiles):
+    """Heavy-atom count per SMILES; NaN where RDKit cannot parse it."""
+    import numpy as np
+    from rdkit import Chem
+    out = np.full(len(smiles), np.nan)
+    for i, s in enumerate(smiles):
+        m = Chem.MolFromSmiles(str(s)) if s is not None else None
+        if m is not None:
+            out[i] = m.GetNumHeavyAtoms()
+    return out
+
+
+def oof_residual_sd(X, y, groups=None, n_splits=5, seed=0):
+    """SD of lightgbm's out-of-fold residual on (X, y): the unit of RELATIVE_CONDITIONS.
+
+    Scaffold groups are respected when given, as everywhere else in the suite.
+    Returns (resid_sd, oof_prediction).
+    """
+    import numpy as np
+    from sklearn.model_selection import GroupKFold, KFold
+    from kirby.find_best_hybrid import get_model
+    y = np.asarray(y, dtype=float).ravel()
+    n_splits = max(2, min(n_splits, len(y)))
+    if groups is not None and len(np.unique(groups)) >= n_splits:
+        splits = GroupKFold(n_splits=n_splits).split(X, y, groups)
+    else:
+        splits = KFold(n_splits=n_splits, shuffle=True,
+                       random_state=seed).split(X, y)
+    p = np.zeros_like(y)
+    for tr, va in splits:
+        m = get_model('lightgbm', 'regression')
+        m.fit(X[tr], y[tr])
+        p[va] = m.predict(X[va])
+    return float(np.std(y - p)), p
+
+
+def inject_relative_train_labels(y_all, *, train_idx, condition, level, seed,
+                                 resid_sd, heavy_atoms=None):
+    """Inject a RELATIVE_CONDITIONS member into one fold's training labels.
+
+    y_all        the FULL clean label column
+    train_idx    this fold's training rows
+    level        share of OOF MSE (dense_oofmse, hetero_*) or residual SDs
+                 (sparse_dprime_*)
+    seed         the draw; the same seed picks the same molecules in every arm
+    resid_sd     oof_residual_sd on this fold's clean training labels
+    heavy_atoms  heavy-atom count per training molecule; hetero_seen only
+
+    Returns (y_noisy_train, moved_mask_train, provenance), the same shape as
+    inject_train_labels. Under the conditions that move every label the mask
+    is all True, and detection_scores returns None for them.
+    """
+    import numpy as np
+    if condition not in RELATIVE_CONDITIONS:
+        raise ValueError(f'inject_relative_train_labels: unknown condition {condition!r}')
+    y_all = np.asarray(y_all, dtype=float).ravel()
+    train_idx = np.asarray(train_idx)
+    n = len(train_idx)
+    y_train = y_all[train_idx].copy()
+    rng = np.random.RandomState(int(seed))
+    level = float(level)
+    prov = {'condition': condition, 'level': level, 'resid_sd': float(resid_sd),
+            'n_training': int(n), 'seed': int(seed)}
+    moved = np.zeros(n, dtype=bool)
+    if level == 0.0:
+        prov['n_moved'] = 0
+        return y_train, moved, prov
+
+    if condition.startswith('sparse_dprime'):
+        one_way = condition.startswith('sparse_dprime_up_')
+        share = RELATIVE_SPARSE_SHARES[condition.rsplit('_', 1)[1]]
+        n_move = int(round(share * n))
+        if n_move > 0:
+            moved[rng.choice(n, size=n_move, replace=False)] = True
+        sign = (np.ones(n) if one_way
+                else rng.choice([-1.0, 1.0], size=n))
+        shift = level * float(resid_sd)
+        y_train[moved] += sign[moved] * shift
+        prov.update({'share': share, 'one_direction': one_way,
+                     'shift_label_units': shift, 'n_moved': int(moved.sum()),
+                     'n_up': int((moved & (sign > 0)).sum())})
+        return y_train, moved, prov
+
+    target_var = level * float(resid_sd) ** 2
+    if condition == 'dense_oofmse':
+        sd = np.full(n, np.sqrt(target_var))
+    elif condition == 'hetero_seen':
+        if heavy_atoms is None:
+            raise ValueError('hetero_seen needs heavy_atoms for the training molecules')
+        h = np.asarray(heavy_atoms, dtype=float).copy()
+        h[~np.isfinite(h)] = np.nanmedian(h)
+        sd = h / np.sqrt(np.mean(h ** 2)) * np.sqrt(target_var)
+    else:  # hetero_hidden
+        g = rng.lognormal(0.0, 1.0, size=n)
+        sd = g / np.sqrt(np.mean(g ** 2)) * np.sqrt(target_var)
+    e = rng.normal(size=n) * sd
+    y_train += e
+    moved[:] = True
+    prov.update({'injected_variance_target': target_var,
+                 'injected_variance_realised': float(np.mean(e ** 2)),
+                 'sd_min': float(sd.min()), 'sd_max': float(sd.max()),
+                 'n_moved': int(n)})
+    return y_train, moved, prov
+
+
+def cleanlab_suspicion(X, y, model_name='lightgbm', seed=0, cv_n_folds=5):
+    """cleanlab's regression label-quality score, turned into a suspicion score.
+
+    cleanlab.regression.learn.CleanLearning (Zhou, Mueller et al., arXiv:2305.16583)
+    scores each label from an out-of-fold residual scaled by estimated aleatoric
+    and epistemic uncertainty; its own bootstrap refits give the epistemic part.
+    Its internal folds are random, not scaffold-grouped: it is a detector run on
+    one training fold, and the held-out fold never reaches it.
+
+    Returns 1 - label_quality per molecule, so higher is more suspicious.
+    """
+    import numpy as np
+    from cleanlab.regression.learn import CleanLearning
+    from kirby.find_best_hybrid import get_model
+    cl = CleanLearning(get_model(model_name, 'regression'),
+                       cv_n_folds=cv_n_folds, seed=int(seed), verbose=False)
+    issues = cl.find_label_issues(np.asarray(X), np.asarray(y, dtype=float).ravel())
+    return 1.0 - issues['label_quality'].to_numpy(dtype=float)
+
+
+def gamma_test(D, y, k_max=10):
+    """Gamma test (Stefansson, Koncar & Jones 1997): noise variance from neighbours.
+
+    D      square distance matrix between the molecules (diagonal ignored)
+    y      their labels
+    For each k = 1..k_max, delta_k = mean over molecules of the mean SQUARED
+    distance to their k nearest neighbours, gamma_k = mean of half the squared
+    label difference to the same neighbours. A straight line gamma = A + B*delta
+    through the k_max points; the intercept A estimates the label-noise variance.
+    It also holds variation the features cannot resolve, so it is an upper bound.
+
+    Differs from n35's close_pairs estimate: per-molecule neighbours rather than
+    the closest share of all pairs, squared distance, and k_max points.
+    """
+    import numpy as np
+    D = np.asarray(D, dtype=float).copy()
+    y = np.asarray(y, dtype=float).ravel()
+    n = len(y)
+    k_max = int(min(k_max, n - 1))
+    if k_max < 2:
+        return None
+    np.fill_diagonal(D, np.inf)
+    idx = np.argsort(D, axis=1)[:, :k_max]
+    d_sorted = np.take_along_axis(D, idx, axis=1)
+    dy2 = 0.5 * (y[idx] - y[:, None]) ** 2
+    delta = np.array([np.mean(d_sorted[:, k] ** 2) for k in range(k_max)])
+    gamma = np.array([np.mean(dy2[:, k]) for k in range(k_max)])
+    # the k-th neighbour's statistics, per Jones' formulation (not the running mean)
+    B, A = np.polyfit(delta, gamma, 1)
+    var_y = float(np.var(y))
+    return {'intercept': float(A), 'slope': float(B), 'k_max': k_max,
+            'delta': delta.tolist(), 'gamma': gamma.tolist(),
+            'v_ratio': float(A / var_y) if var_y > 0 else None,
+            'var_y': var_y, 'n': int(n)}
 
 
 def detection_is_defined(condition) -> bool:
@@ -1207,6 +1419,11 @@ def _import_experiment(exp_id: str):
         'n34': 'n34_group_random_effects',
         'n35': 'n35_near_duplicate_disagreement',
         'n36': 'n36_remeasure_priority',
+        'n37': 'n37_noise_budget',
+        'n38': 'n38_noise_relative_to_model_error',
+        'n39': 'n39_correlated_sources',
+        'n40': 'n40_model_side_regularisation',
+        'n41': 'n41_conformal_fdr_detection',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -1248,6 +1465,11 @@ def _experiment_full_name(exp_id: str) -> str:
         'n34': 'n34_group_random_effects',
         'n35': 'n35_near_duplicate_disagreement',
         'n36': 'n36_remeasure_priority',
+        'n37': 'n37_noise_budget',
+        'n38': 'n38_noise_relative_to_model_error',
+        'n39': 'n39_correlated_sources',
+        'n40': 'n40_model_side_regularisation',
+        'n41': 'n41_conformal_fdr_detection',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -1276,8 +1498,11 @@ def _experiment_full_name(exp_id: str) -> str:
 # every label moves; n34 writes a skip under any condition but the two grouped
 # ones. n31, n35 and n36 are left out for the reasons given at their entries in
 # SINGLE_DATASET_EXPERIMENTS.
+# n40 and n41 joined 2026-09-25. n41 writes a skip under a condition where every
+# label moves, as n32 does. n37, n38 and n39 are left out for the reasons at
+# their entries in SINGLE_DATASET_EXPERIMENTS.
 HONOURS_NOISE_CONDITION = {'n07', 'n09', 'n11', 'n12', 'n16', 'n20', 'n21', 'n23',
-                           'n32', 'n33', 'n34'}
+                           'n32', 'n33', 'n34', 'n40', 'n41'}
 SWEEPS_ALL_CONDITIONS = {'n13'}
 
 
