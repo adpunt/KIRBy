@@ -238,6 +238,15 @@ def test_full_runs():
               for c in RC}
     check('8e2. the larger calibration share lowers the fewest flags BH can make',
           floors[RC[-1]] < floors[RC[0]], str(floors))
+    orc = [r for q in n41.BH_QS
+           for r in bh4[f'{n41.ORACLE_CAL_NAME}_q{q:g}']['passes']]
+    check('8e3. the oracle calibration set holds no moved molecule',
+          orc and all(r['moved_molecules_in_calibration'] == 0 for r in orc))
+    o1 = bh4[f'{n41.ORACLE_CAL_NAME}_q0.1']['passes']
+    check('8e4. with the oracle set, BH flags moved molecules at level 4',
+          any(r['molecules_flagged'] > 0 for r in o1),
+          '; '.join(f"{r['molecules_flagged']} flagged, precision "
+                    f"{r['precision']}" for r in o1))
     recs = res['fold_records']['4']
     check('8f. the residual SD the shift was sized by is written per fold',
           all(r.get('resid_sd_label_units', 0) > 0 for r in recs))
