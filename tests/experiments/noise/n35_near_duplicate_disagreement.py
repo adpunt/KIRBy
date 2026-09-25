@@ -458,7 +458,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'flag_rule': (f'|dy| > {FLAG_MULTIPLIER:.4f} * sigma, sigma^2 the '
                       f'closest-bin estimate in the same distance space'),
         'downweight': DOWNWEIGHT,
-        'proximity_row_cap': int(PROX_SMOOTH_MAX_ROWS),
+        'proximity_row_cap': PROX_SMOOTH_MAX_ROWS,
         'has_repeat_measurements': rep_groups is not None,
         'estimate_note': (
             'closest_bin_estimate is mean(dy^2)/2 over the closest fifth of the '
@@ -668,7 +668,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if not run_proximity:
                     return None
                 pkey = f'{PROXIMITY_SPACE}:{cell_key}'
-                if n_tr > PROX_SMOOTH_MAX_ROWS:
+                if PROX_SMOOTH_MAX_ROWS is not None and n_tr > PROX_SMOOTH_MAX_ROWS:
                     prec['per_space'][pkey] = {
                         'refused': (f'{n_tr} training rows is over '
                                     f'PROX_SMOOTH_MAX_ROWS='
