@@ -49,9 +49,20 @@ q = 0.1. A condition that moves fewer molecules than that, or moves them by too
 little to outscore every calibration molecule, gets no flags at all. Every BH
 record writes this floor as `fewest_flags_bh_can_make`, so a zero is readable.
 
-THE TWO CALIBRATION SETS.
+THE CALIBRATION SETS.
   random_s<pct>  a random share of the training fold, one set per share in
-            CALIBRATION_SHARES (0.2 and 0.5). What any dataset has.
+            CALIBRATION_SHARES (0.2 and 0.5). What any dataset has. It holds
+            wrong labels in the same share as the rest of the fold, and a wrong
+            label is flagged only if it outscores nearly every calibration
+            molecule, the wrong ones included -- so on the smoke's data it
+            flagged nothing at either share.
+  oracle_clean   ORACLE, no real user has it. ORACLE_CALIBRATION_SHARE of the
+            training fold drawn only from molecules the injection did not move.
+            Owner's decision 2026-09-25: the report's method assumes a clean
+            calibration set, and without this one it is tested fairly only on
+            the two datasets with repeat measurements. It measures how well the
+            flagging could work if a clean set existed: a ceiling, not an arm to
+            recommend.
   trusted   herg_ic50 and bindingdb_kd only (any dataset with replicate groups):
             training molecules measured 3+ times whose spread across their own
             measurements -- the corrupted labels, what a user sees -- is in the
@@ -145,6 +156,9 @@ BH_QS = (0.05, 0.1, 0.2)
 # tests half the fold. Each share is its own calibration set, named
 # random_s<percent>.
 CALIBRATION_SHARES = (0.2, 0.5)
+# The oracle set's share of the training fold, capped at the molecules left unmoved.
+ORACLE_CALIBRATION_SHARE = 0.5
+ORACLE_CAL_NAME = 'oracle_clean'
 MIN_CALIBRATION = 20
 TRUSTED_MIN_MEASUREMENTS = 3
 SIGMA_FLOOR_OF_MEDIAN = 0.1
@@ -216,6 +230,22 @@ def random_calibration(n, share, seed):
     if k > 0:
         rng = np.random.default_rng(int(seed))
         cal[rng.choice(n, k, replace=False)] = True
+    return cal
+
+
+def oracle_calibration(moved, share, seed):
+    """A random `share` of the rows, drawn only from rows NOT in `moved`.
+
+    ORACLE: it reads the injection's own mask. Capped at the number unmoved.
+    """
+    moved = np.asarray(moved, dtype=bool)
+    n = moved.size
+    free = np.flatnonzero(~moved)
+    k = min(int(round(share * n)), free.size)
+    cal = np.zeros(n, dtype=bool)
+    if k > 0:
+        rng = np.random.default_rng(int(seed))
+        cal[rng.choice(free, k, replace=False)] = True
     return cal
 
 
@@ -447,7 +477,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     oof_splits = int(kwargs.get('oof_splits', OOF_SPLITS))
 
     rep_groups = build_replicate_groups(data)
-    cals = [random_cal_name(s) for s in CALIBRATION_SHARES] + (
+    cals = [random_cal_name(s) for s in CALIBRATION_SHARES] + [ORACLE_CAL_NAME] + (
         ['trusted'] if rep_groups is not None else [])
     arm_names = build_arm_names(cals, qs, seeds)
 
@@ -490,6 +520,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'bh_qs': qs,
         'calibration_sets': cals,
         'calibration_shares': list(CALIBRATION_SHARES),
+        'oracle_calibration_share': ORACLE_CALIBRATION_SHARE,
+        'oracle_calibration_note': (
+            f'{ORACLE_CAL_NAME} is drawn only from molecules the injection did '
+            'not move. No real user has it; it is the ceiling of the flagging.'),
         'min_calibration': MIN_CALIBRATION,
         'trusted_rule': (f'molecules measured {TRUSTED_MIN_MEASUREMENTS}+ times '
                          f'in the training fold whose spread across their own '
@@ -638,6 +672,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 n_tr, sh,
                 replicate_seed('cal', lvl_key, draw, fold_i, n_tr, sh))
                 for sh in CALIBRATION_SHARES}
+            cal_masks[ORACLE_CAL_NAME] = oracle_calibration(
+                cmask, ORACLE_CALIBRATION_SHARE,
+                replicate_seed('oracle_cal', lvl_key, draw, fold_i, n_tr))
             if 'trusted' in cals:
                 tmask, trec = trusted_calibration(
                     y0, np.asarray(rep_groups)[train_idx])
