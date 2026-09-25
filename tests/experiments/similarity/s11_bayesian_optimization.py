@@ -386,14 +386,31 @@ SURROGATE_MODELS = {
 }
 
 
-def _hybrid_build_model():
+def _hybrid_build_model(n_features=None):
     """The estimator build_fold_hybrid scores its accept/reject test with.
 
     The same RBF GP the BO loop fits, with the kernel hyperparameters left
     unoptimised — the build fits it once per candidate allocation, and the
     restarts are what make that expensive.
+
+    The length scale starts where the data is. build_fold_hybrid fits this on
+    STANDARDISED features, and the typical distance between two z-scored points
+    in n dimensions is about sqrt(2n): 10 at 50 features, 64 at 2048. Starting
+    at 1.0 puts the kernel far below every distance it will see, and a fit that
+    starts there frequently stays there — measured on caco2 ecfp4 at 300
+    training molecules, where the length scale never moved off 1 and the GP
+    returned a near-constant prediction.
+
+    This estimator is handed no features, so the scale is taken from the feature
+    COUNT the caller is building to. Unknown count falls back to 1.0, which is
+    what this returned before, so nothing moves when the caller cannot say.
     """
-    kernel = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(noise_level=0.1)
+    if n_features and n_features > 0:
+        ls = float(np.sqrt(2.0 * n_features))
+        rbf = RBF(length_scale=ls, length_scale_bounds=(ls / 100.0, ls * 100.0))
+    else:
+        rbf = RBF(length_scale=1.0)
+    kernel = ConstantKernel(1.0) * rbf + WhiteKernel(noise_level=0.1)
     return GaussianProcessRegressor(
         kernel=kernel, n_restarts_optimizer=0, alpha=1e-6,
         normalize_y=True, random_state=42)
@@ -1104,7 +1121,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         """(model, metric_fn, lower_is_better) for a hybrid build."""
         if _geometry_recipe:
             return None, None, None
-        return _hybrid_build_model(), metric_fn, lower_is_better
+        return _hybrid_build_model(target_dim), metric_fn, lower_is_better
     # BO maximizes -metric when lower_is_better, so curves & AUC are over the
     # negated objective. We sign-flip the AUC at STORAGE time below so that
     # JSON consumers read auc_mean in the natural metric direction without
