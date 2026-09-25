@@ -287,17 +287,17 @@ queued — the owner capped local compute and the current queue is still drainin
 | exp | kind | smoke tested / debugged | methods to optimise | optimisation done |
 |---|---|---|---|---|
 | s01 | investigation | yes, 3/3 datasets | no — it is the comparator s02 is measured against | n/a |
-| s02 | method | yes, 3/3 | yes | **yes** — 20 cells per dataset, all three complete |
+| s02 | method | yes, 3/3 | yes | **NO — 6 cells, not the 20 claimed.** 1 weight method x 2 lineages x 3 budgets; `weight_methods` has one value |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
 | s04 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the 4-rep pool understated the HYBRID, not the comparator |
 | s05 | method | yes, 3/3 | yes | **SWEPT 2026-09-24** — 24 cells: 2 voting x 4 exponents x 3 datasets, k swept within |
-| s06 | method | yes, 3/3 twice | yes | **yes** — four levers, 2,628 cells per dataset, all three complete |
+| s06 | method | yes, 3/3 twice | yes | **yes** — 4 levers, 2,628 cells; comparator re-pointed 2026-09-25 to the quantity s06 measures |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
-| s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **yes** — kNN, GP and q-RASAR all scored; the GP's length-scale start is an arm |
-| s11 | method | yes, 3/3 at two budgets | yes | **UNBLOCKED 2026-09-24** — torch thread cap + per-condition checkpoint; all 11 arms complete on 2 datasets |
+| s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **partial** — 3 levers swept (k, q-RASAR k, length-scale start); exponent, voting, weight convention, normalize_y each at ONE value. Headline no longer reports the collapsed arm (2026-09-25) |
+| s11 | method | yes, 3/3 at two budgets | yes | **UNBLOCKED 2026-09-24** — all 11 arms, 3 datasets, matched pairs. Length-scale start swept; label direction fixed 2026-09-25 (caco2 was hunting the WRONG end) |
 | s12 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the hybrid's margin roughly doubles on all three |
-| s13 | method | yes, 3/3 | yes | **retrieval SWEPT 2026-09-24** — neighbour count (9 cells) and coefficient (12 cells); clustering still undefined on a reseed |
+| s13 | method | yes, 3/3 | yes | **retrieval SWEPT** — neighbour count (9 cells) + coefficient (12 cells). Clustering undefined on a reseed |
 
 ## minkowski p=0.5 is queued, not cut
 
@@ -1230,6 +1230,31 @@ are not comparable across rows either.
 **s10 at its own measured-best settings, herg_ki.** Distance voting, exponent
 0.25, neighbour counts 5 to 25. The hybrid's delta: GP -0.2938, SVR +0.0010.
 caco2 and adme_mdr1 still running.
+
+## The standalone: two of three datasets were lost to one uninstallable rep
+
+`similarity_optimized_hybrid` is the script nothing had ever run before this
+campaign. Its first full attempt finished caco2 and FAILED on herg_ki and
+adme_mdr1 with "No representations could be generated!" — each writing a 76 or
+78 byte error file that the supervisor counted as a completed job.
+
+The cause was not in the standalone. `_cache_rep_dict` hands
+`get_molecular_representations` only the MISSING subset while the reps already
+loaded from cache sit in `reps`. herg_ki and adme_mdr1 had 13 and 14
+representations cached, needed only `grover`, could not build it (GROVER repo
+not installed) and the builder raised on an empty subset. caco2 needed nothing,
+so it survived. Two datasets lost to a representation none of them use.
+
+Fixed 2026-09-25: the subset boundary now follows the drop-and-warn contract the
+function three lines below already claims — warn and continue when something was
+cached, raise unchanged when nothing was. Both re-runs fired the warning once
+and are 52 minutes into real work, where they previously died within minutes.
+
+⛔ The supervisor's completion test was "the output file exists", which is how a
+76-byte error object passed as success. It now reads the file: an error key, a
+non-ok `result_status`, or anything under 500 bytes marks the job FAILED instead
+of DONE. An audit of all 83 outputs at the time found these two were the only
+false completions.
 
 ## Open decisions for the owner
 
