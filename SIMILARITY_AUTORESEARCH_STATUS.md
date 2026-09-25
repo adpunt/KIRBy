@@ -1272,6 +1272,33 @@ uniform against distance voting, and the neighbour list — so nothing here can 
 attributed to the exponent. The within-run pattern across k is clean, because
 inside one run only k varies.
 
+## The s10 exponent-and-voting sweep: the control cell is exact, and k=7 replicates
+
+First of 24 cells landed 2026-09-25: uniform voting at importance exponent 0 on
+herg_ki. The result stamps `importance_exponent: 0.0` and `knn_vote: uniform`
+into `weighting_settings`, so the two levers reach the code and a stored number
+now says what weighting produced it. rmse in pKi, lower better:
+
+    k    unweighted   weighted     delta
+    5        0.6182     0.6182    +0.0000
+    7        0.6175     0.6175    +0.0000
+    10       0.6265     0.6265    +0.0000
+    15       0.6376     0.6376    +0.0000
+    25       0.6632     0.6632    +0.0000
+
+Exponent 0 makes every feature weigh 1 and uniform voting applies no weighting
+either, so the weighted and unweighted arms are the same computation. The delta
+is 0.0000 at all five neighbour counts, which is what that cell exists to show.
+The three uniform-exponent-0 cells are controls on the wiring, not measurements
+of weighting.
+
+What they do measure is the unweighted baseline, and it puts k=7 first of the
+five counts at 0.6175, ahead of 5 at 0.6182, 10 at 0.6265, 15 at 0.6376 and 25
+at 0.6632. That is the same ordering the two earlier s10 herg_ki runs found and
+the same winner the s05 sweep found independently, under a different search
+configuration here, so the absolute numbers differ from the 0.6257 recorded
+below and the ranking does not.
+
 ## The s05 sweep, COMPLETE: 24 of 24 cells
 
 Two voting schemes x four importance exponents x three datasets, with neighbour
