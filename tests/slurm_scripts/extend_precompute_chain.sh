@@ -45,6 +45,15 @@
 #                   experiments search them at fast too, so a full-speed link
 #                   computes 8,160 configurations nothing will read.
 #   --partition P   default medium,long
+#   --account A     default: copied off a queued pc_ job. Fair share is per
+#                   CLUSTER and per account, so the right answer differs by
+#                   login node. Measured 2026-09-24, FairShare (higher is
+#                   better priority): htc stat-cadd 0.0491, htc stat-ecr
+#                   0.0360, arc stat-cadd 0.0326, arc stat-ecr 0.0195. The
+#                   /data/stat-ecr paths are a filesystem and have nothing to
+#                   do with which account is billed. Re-measure before trusting
+#                   those numbers:
+#                     sshare -M arc,htc -u $USER -o Cluster,Account,User,FairShare
 #   --datasets "A B"  only these. Default: every dataset with a pc_ job queued
 #   --no-repoint    leave the experiment jobs pointed at the link they were
 #                   submitted against. BY DEFAULT they are repointed at the new
@@ -59,6 +68,7 @@ PARTITION="medium,long"
 LINKS=1
 PRUNING="${KIRBY_PRUNING:-calibrated}"
 SPEED=""          # empty = the dataset's class in run_precompute_dataset.sh
+ACCOUNT_OVERRIDE=""   # empty = copy the account off a queued pc_ job
 EXPLICIT=""
 REPOINT=true
 GO=false
@@ -70,6 +80,7 @@ while [[ $# -gt 0 ]]; do
         --partition) PARTITION=$2; shift 2 ;;
         --datasets)  EXPLICIT=$2; shift 2 ;;
         --pruning)   PRUNING=$2; shift 2 ;;
+        --account)   ACCOUNT_OVERRIDE=$2; shift 2 ;;
         --speed)     SPEED=$2; shift 2 ;;
         --repoint)   REPOINT=true; shift ;;
         --no-repoint) REPOINT=false; shift ;;
@@ -84,8 +95,12 @@ QUEUE=$(squeue -u "$USER" -h -o "%i|%j|%T|%a" 2>/dev/null)
 
 # The account every precompute was submitted under. Taken from the queue rather
 # than guessed, so the new links land in the same fair-share pool.
-ACCOUNT=$(printf '%s\n' "$QUEUE" | awk -F'|' '$2 ~ /^pc_/ {print $4; exit}')
-[ -n "$ACCOUNT" ] || { echo "No pc_ job queued, so no account to copy. Aborting."; exit 1; }
+if [ -n "$ACCOUNT_OVERRIDE" ]; then
+    ACCOUNT="$ACCOUNT_OVERRIDE"
+else
+    ACCOUNT=$(printf '%s\n' "$QUEUE" | awk -F'|' '$2 ~ /^pc_/ {print $4; exit}')
+fi
+[ -n "$ACCOUNT" ] || { echo "No pc_ job queued and no --account given. Aborting."; exit 1; }
 
 # ── which datasets ──────────────────────────────────────────────────────
 # A precompute job is pc_<dataset>_<link> (this year) or pc_<dataset>_general_...
