@@ -358,28 +358,47 @@ best single representation:
     manhattan, 1 (shipped)     -0.0237  +0.0260   -0.0233
     euclidean, 0               +0.1891  +0.1283   +0.0453
 
-**s02 weight-method sweep, 2 of 9 cells landed 2026-09-25.** The file's
-`weight_methods` carried one value, so which importance method does the
-weighting had never been varied. Nine cells now run it at three methods
-(lightgbm_gain, deeplift, treeshap) across the three datasets. Both
-lightgbm_gain cells are in. The number is the Spearman correlation between the
-distance separating a pair of molecules and the absolute difference in their
-activities, over 5000 sampled pairs; higher is better. Seven representations,
-budget 100 features, one search configuration.
+**s02 — the nine cells I queued sweep the build, not the weighting; corrected
+2026-09-25.** I recorded these earlier as a weight-method sweep. That was
+wrong. The nine cells set `KIRBY_LOCAL_IMPORTANCE`, which picks the method the
+hybrid search uses to rank features while it spends the budget. It changes how
+the hybrid is built. The method that weights features inside the distance s02
+scores is `weight_methods`, a different thing, and it stayed on lightgbm_gain
+in every one of them. The landed deeplift cell shows it: its `weight_methods`
+block still reads lightgbm_gain.
 
-    lightgbm_gain   lineage  hybrid unweighted  hybrid weighted   weighted minus
-                                                                 best single rep
-    caco2           rf              0.3586           0.3704          +0.0244
-    caco2           knn             0.3466           0.3656          +0.0197
-    herg_ki         rf              0.3067           0.2693          -0.0671
-    herg_ki         knn             0.3109           0.2713          -0.0651
+Why it could not vary: `SIMILARITY_EXTRA` carried `weight_methods:
+['lightgbm_gain']`, and that key sits in the config every similarity run is
+built from, so it always won. The plumbing handing it to s02 was already
+correct. This is the same trap `k_values` was in. `KIRBY_S02_WEIGHT_METHODS`
+now resolves it; three jobs are queued that compute all three methods against
+one hybrid per dataset, which compares them on identical features.
 
-Weighting features by importance raises the correlation on caco2 and lowers it
-on herg_ki. The two lineages agree in sign and to within 0.005 inside each
-dataset, so the disagreement is between the datasets, not between lineages.
+The number below is the Spearman correlation between the distance separating a
+pair of molecules and the absolute difference in their activities, over 5000
+sampled pairs; higher is better. Seven representations, budget 100 features,
+one search configuration, distance weighted by lightgbm_gain throughout.
+
+    build importance  dataset   lineage           unweighted  weighted   weighted minus
+                                                                         best single rep
+    lightgbm_gain     caco2     general               0.3586    0.3704       +0.0244
+    lightgbm_gain     caco2     general_distance      0.3466    0.3656       +0.0197
+    lightgbm_gain     herg_ki   general               0.3067    0.2693       -0.0671
+    lightgbm_gain     herg_ki   general_distance      0.3109    0.2713       -0.0651
+    deeplift          herg_ki   general               0.1198    0.1408       -0.1956
+    deeplift          herg_ki   general_distance      0.1131    0.1422       -0.1942
+
+Two things the three landed cells say. Weighting raises the correlation on
+caco2 and lowers it on herg_ki, and both lineages agree in sign and to within
+0.005 inside each dataset, so that split is between the datasets. And building
+the hybrid with deeplift instead of lightgbm_gain more than halves the
+correlation on herg_ki, 0.3067 to 0.1198 unweighted, which is a far larger
+move than the weighting makes.
+
 These cells use the one-configuration search; the stored run above used twelve,
-so the nine cells are comparable to each other and not to the shipped row.
-deeplift and treeshap have never produced an s02 number; 7 cells outstanding.
+so they are comparable to each other and not to the shipped row. 6 of the 9
+build-importance cells are outstanding, and the 3 weighting cells have not
+started.
 
 **s04 — wins two of three once its levers open.** Held-out RMSE delta on cliff
 molecules, positive means the hybrid won:
