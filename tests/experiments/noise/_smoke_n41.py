@@ -37,6 +37,7 @@ import tempfile
 import numpy as np
 
 import experiments.noise.n41_conformal_fdr_detection as n41
+RC = [n41.random_cal_name(s) for s in n41.CALIBRATION_SHARES]
 from experiments.noise.noise_helpers import cleanlab_suspicion
 from kirby.find_best_hybrid import Blueprint
 
@@ -130,20 +131,22 @@ def test_pvalues_and_bh():
 def test_null():
     print("\nthe null:")
     rng = np.random.default_rng(1)
-    shares = {q: [] for q in n41.BH_QS}
+    shares = {(sh, q): [] for sh in n41.CALIBRATION_SHARES for q in n41.BH_QS}
     for d in range(400):
         s = np.abs(rng.standard_t(4, size=200))
-        cal = n41.random_calibration(200, n41.CALIBRATION_SHARE, d)
-        pv = n41.conformal_pvalues(s[cal], s[~cal])
-        for q in n41.BH_QS:
-            flags = np.zeros(200, dtype=bool)
-            flags[np.flatnonzero(~cal)[n41.benjamini_hochberg(pv, q)]] = True
-            shares[q].append(n41.bh_record(flags, np.zeros(200, bool),
-                                           cal)['false_flag_share'])
-    means = {q: float(np.mean(v)) for q, v in shares.items()}
+        for sh in n41.CALIBRATION_SHARES:
+            cal = n41.random_calibration(200, sh, d)
+            pv = n41.conformal_pvalues(s[cal], s[~cal])
+            for q in n41.BH_QS:
+                flags = np.zeros(200, dtype=bool)
+                flags[np.flatnonzero(~cal)[n41.benjamini_hochberg(pv, q)]] = True
+                shares[(sh, q)].append(n41.bh_record(
+                    flags, np.zeros(200, bool), cal)['false_flag_share'])
+    means = {k: float(np.mean(v)) for k, v in shares.items()}
     check('2. with nothing moved the false-flag share averages at or under q',
-          all(means[q] <= q + 0.02 for q in means),
-          ', '.join(f'q {q:g}: {m:.3f}' for q, m in means.items()))
+          all(means[k] <= k[1] + 0.02 for k in means),
+          ', '.join(f'share {k[0]:g} q {k[1]:g}: {m:.3f}'
+                    for k, m in means.items()))
 
 
 def test_parts():
@@ -219,27 +222,32 @@ def test_full_runs():
     bh0 = res['bh']['0']['base']
     bh4 = res['bh']['4']['base']
     check('8d. BH records are written at level 0 and at level 4, for every q',
-          all(f'random_q{q:g}' in bh0 and f'random_q{q:g}' in bh4
-              for q in n41.BH_QS))
+          all(f'{c}_q{q:g}' in bh0 and f'{c}_q{q:g}' in bh4
+              for c in RC for q in n41.BH_QS))
     ok, info = True, []
-    for q in n41.BH_QS:
-        for r in bh4[f'random_q{q:g}']['passes']:
+    for c, q in [(c, q) for c in RC for q in n41.BH_QS]:
+        for r in bh4[f'{c}_q{q:g}']['passes']:
             fl = r['fewest_flags_bh_can_make']
             ok &= fl is not None and (r['molecules_flagged'] == 0
                                       or r['molecules_flagged'] >= fl)
-            info.append(f"q {q:g}: {r['molecules_flagged']} flagged, floor {fl}")
+            info.append(f"{c} q {q:g}: {r['molecules_flagged']} flagged, "
+                        f"floor {fl}")
     check('8e. every BH record writes its floor, and flags nothing or at least '
           'the floor', ok, '; '.join(info[::3]))
+    floors = {c: bh4[f'{c}_q0.1']['passes'][0]['fewest_flags_bh_can_make']
+              for c in RC}
+    check('8e2. the larger calibration share lowers the fewest flags BH can make',
+          floors[RC[-1]] < floors[RC[0]], str(floors))
     recs = res['fold_records']['4']
     check('8f. the residual SD the shift was sized by is written per fold',
           all(r.get('resid_sd_label_units', 0) > 0 for r in recs))
-    tails = res['tails']['4']['base']['remove_random_q0.1']['rf']
+    tails = res['tails']['4']['base'][f'remove_{RC[0]}_q0.1']['rf']
     check('8g. tail scores are written for every scored pass',
           len(tails) == 3 and all('tail_rmse_top' in v for v in tails.values()))
     s = res['summary']['per_level']['4']['base']['rf']['per_arm']
     check('8h. every flag arm is paired against its two random twins',
-          all(len(s[f'{a}_random_q{q:g}']['vs_random_flags']) == 2
-              for a in n41.ACTIONS for q in n41.BH_QS))
+          all(len(s[f'{a}_{c}_q{q:g}']['vs_random_flags']) == 2
+              for a in n41.ACTIONS for c in RC for q in n41.BH_QS))
     z = res['per_level']['0']['base']
     check('8i. an arm with no flags carries no_cleaning\'s score, not a gap',
           all(set(z[a]['rf']) == set(z['no_cleaning']['rf']) for a in res['arms']
@@ -260,7 +268,7 @@ def test_full_runs():
                    detectors=['rescaled_residual'])
     check('10. with a recipe the hybrid space is built and scored',
           'hybrid' in res_h['spaces_run']
-          and 'winsorise_random_q0.1' in res_h['per_level']['1']['hybrid'])
+          and f'winsorise_{RC[0]}_q0.1' in res_h['per_level']['1']['hybrid'])
 
 
 def test_guards():
