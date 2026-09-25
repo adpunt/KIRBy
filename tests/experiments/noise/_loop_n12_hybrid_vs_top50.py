@@ -101,6 +101,13 @@ def main():
     p.add_argument('--out', default=OUT)
     p.add_argument('--folds', type=int, default=FOLDS)
     p.add_argument('--seeds', default=','.join(str(s) for s in NOISE_SEEDS))
+    p.add_argument('--base-rep', required=True,
+                   help=('the single representation to compare against. '
+                         'Required: the fixed preference list that used to '
+                         'choose it was deleted 2026-09-25; the noise '
+                         'experiments now compare against each downstream '
+                         "model's top 2 single representations by its "
+                         'stored score'))
     a = p.parse_args()
     seeds = [int(s) for s in a.seeds.split(',')]
 
@@ -117,7 +124,7 @@ def main():
     DP.CENSORING_LEVELS_DETECT = (LEVEL,)
 
     from experiments._shared import (
-        load_data, cv_split, pick_noise_base_rep, get_domain_metric,
+        load_data, cv_split, get_domain_metric,
         get_model_factories, get_best_search_for_downstream,
         pool_recipes_by_family, POOL_SUBSETS, convert_numpy,
     )
@@ -142,7 +149,10 @@ def main():
     task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    base_rep_name = pick_noise_base_rep(reps, DATASET)
+    base_rep_name = a.base_rep
+    if base_rep_name not in reps:
+        raise SystemExit(f'--base-rep {base_rep_name!r} is not among the loaded '
+                         f'representations {sorted(reps)}')
     full_width = int(reps[base_rep_name].shape[1])
     print(f'loaded {len(labels)} molecules in {time.time() - t0:.1f}s; base '
           f'representation {base_rep_name}, {full_width} features; '

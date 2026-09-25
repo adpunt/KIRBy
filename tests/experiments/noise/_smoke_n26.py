@@ -102,7 +102,8 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n26.get_best_search_for_downstream
     n26.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', {m: ['toy', 'second']
+                                    for m in kw.get('models', ['rf'])})
         return n26.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n26.get_best_search_for_downstream = real
@@ -148,17 +149,27 @@ def test_direct_icc_split():
 
 
 def test_run():
-    print("a run, base only:")
+    print("a run, single representations only:")
     data = make_data(seed=2)
     res = run_it(data, 'toy_base', models=['rf'],
                  injected_variances=[0.2, 1.0], n_split_half_repeats=3)
-    check('only the base space ran', res['spaces_run'] == ['base'],
-          str(res['spaces_run']))
-    row = res['per_space']['base']['rf']
+    check('only the two single-representation spaces ran',
+          res['spaces_run'] == ['base_1', 'base_2'], str(res['spaces_run']))
+    check('which representations they are is recorded',
+          res['base_reps_by_model'] == {'rf': ['toy', 'second']},
+          str(res['base_reps_by_model']))
+    row = res['per_space']['base_1']['rf']
     n_mol = len(np.unique(data['replicate_groups']))
     check('every molecule has an out-of-fold prediction',
           row['molecules_with_a_prediction'] == n_mol,
           f"{row['molecules_with_a_prediction']} of {n_mol}")
+    check('base_2 is a different feature space from base_1',
+          res['per_space']['base_2']['rf']['mean_squared_residual']
+          != row['mean_squared_residual'])
+    check('the estimator check used rf in its rank-1 representation',
+          res['estimator_check']['space'] == 'base_1'
+          and res['estimator_check']['rep'] == 'toy',
+          str({k: res['estimator_check'].get(k) for k in ('space', 'rep')}))
     check('three folds scored', len(row['fold_scores']) == 3)
     bins = row['error_by_count']
     check('error-by-count bins hold every molecule',
@@ -189,6 +200,16 @@ def test_run():
     check('the slope spread across spaces is written',
           'rf' in res['slope_across_spaces'])
 
+    print("no stored search and no representations given:")
+    res = run_it(data, 'toy_no_search', recipe=fake_recipe(['toy', 'second']),
+                 models=['rf'], injected_variances=[0.2],
+                 n_split_half_repeats=2, base_reps=None)
+    check('no single-representation space, and the reason is recorded',
+          not any(s.startswith('base_') for s in res['spaces_run'])
+          and 'rf' in res['base_reps_missing'],
+          f"{res['spaces_run']}, {res['base_reps_missing']}")
+    check('the hybrid still ran', 'hybrid' in res['spaces_run'])
+
     print("a dataset with no repeats:")
     flat = make_data(seed=3)
     flat.pop('replicate_groups')
@@ -203,8 +224,9 @@ def test_help():
                        capture_output=True, text=True)
     check('--help exits 0', p.returncode == 0, p.stderr[-300:])
     for flag in ('--n-split-half-repeats', '--injected-variances',
-                 '--base-rep', '--tag'):
+                 '--tag'):
         check(f'{flag} is offered', flag in p.stdout)
+    check('--base-rep is gone', '--base-rep' not in p.stdout)
 
 
 if __name__ == '__main__':

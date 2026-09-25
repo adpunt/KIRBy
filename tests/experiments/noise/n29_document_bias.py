@@ -121,8 +121,8 @@ residuals of each resample, with no model refit. Per document, the share of
 resamples in which its offset changes sign is written, with how many documents
 exceed FLIP_SHARE_REPORTED.
 
-THE CHECK WITH KNOWN BIASES. On fold 0, in the base space, with the first
-downstream model: an offset is drawn for every document from a normal
+THE CHECK WITH KNOWN BIASES. On fold 0, in space base_1, with the first
+downstream model in its rank-1 single representation: an offset is drawn for every document from a normal
 distribution. Its variance is that of the offsets fitted on the real labels.
 It is added to every measurement, and the four arms are run again. Held-out
 molecules are graded against the mean of their measurements WITHOUT the added
@@ -130,7 +130,10 @@ offset. Written: the correlation between the added offsets and the fitted ones,
 and each arm's score. This checks whether the fit can recover offsets of the
 size it reported. It is not a result about the real labels.
 
-WHERE THE HYBRID COMES IN. Every arm runs in the base representation and in one
+WHERE THE HYBRID COMES IN. Every arm runs in each downstream model's top 2
+single representations -- spaces base_1 and base_2, ranked by that model's own
+score in the stored search (_shared.noise_base_reps_by_model, owner's decision
+2026-09-25; which ones is written to `base_reps_by_model`) -- and in one
 hybrid per family of stored search, 'hybrid' and 'hybrid_similarity', rebuilt
 per fold through `hybrid_for_fold`. The recipe is looked up per downstream
 model, as n23 does since 2026-09-23. The hybrid is built on the training
@@ -156,7 +159,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
@@ -604,9 +608,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     ent_groups = np.asarray(row_groups)[stats['row_index']]
     ent_reps = {k: np.asarray(v[stats['row_index']], dtype=np.float64)
                 for k, v in reps.items()}
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
-    splits = list(cv_split(ent_groups, n_folds, ent_reps[base_rep_name],
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
+    splits = list(cv_split(ent_groups, n_folds, next(iter(ent_reps.values())),
                            y_mean))
     largest_train = max(int(np.isin(rec_mol, tr).sum()) for tr, _ in splits)
 
@@ -621,14 +626,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     print(f"  {len(labels)} measurements, {n_mol} molecules, "
           f"{len(doc_names)} documents, {len(splits)} folds")
-    print(f"  models {downstream_models}; base representation {base_rep_name}")
+    print(f"  models {downstream_models}")
 
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'noise_injection': 'none in the main arms',
         'models': downstream_models,
-        'base_rep': base_rep_name,
         'arms': list(ARMS),
         'arm_to_beat': ARM_TO_BEAT,
         'n_iter': n_iter,
@@ -674,8 +678,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         downstream_models)
     results['hybrid_unavailable_by_model'] = {
         m: d['why'] for m, d in no_recipe.items()}
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+
     recipe_for_space_by_model, hybrid_unavailable = {}, {}
-    spaces = ['base']
+    spaces = [f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+              if base_rank_groups(base_by_model, _k, downstream_models)]
     space_info = {}
     for m in downstream_models:
         rs, unav = pool_recipes_by_family(
@@ -760,13 +779,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ent_va = {k: v[va] for k, v in ent_reps.items()}
 
         # (space, X_tr_ent, X_va_ent, models)
+        # base_k: one matrix per distinct representation at rank k, shared by
+        # the models that rank it there.
         cells = []
-        sc = StandardScaler()
-        cells.append(('base', sc.fit_transform(ent_tr[base_rep_name]),
-                      sc.transform(ent_va[base_rep_name]),
-                      list(downstream_models)))
+        for _k in range(1, NOISE_BASE_REP_COUNT + 1):
+            if f'base_{_k}' not in spaces:
+                continue
+            for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                             downstream_models).items():
+                sc = StandardScaler()
+                cells.append((f'base_{_k}', sc.fit_transform(ent_tr[_rn]),
+                              sc.transform(ent_va[_rn]), list(_ms)))
         for sp in spaces:
-            if sp == 'base':
+            if sp.startswith('base_'):
                 continue
             for bp_m, mnames, shareable in group_models_by_recipe(
                     {m: recipe_for_space_by_model.get(m, {}).get(sp)
@@ -876,8 +901,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                          .setdefault(arm, {}).setdefault(m, {}))[fk] = float(
                             metric_fn(y_va_all[isolated], pred[isolated]))
 
-            # ── The check with known biases: fold 0, base, first model ──
-            if fold_i == 0 and space == 'base' and vals.size >= 2:
+            # ── The check with known biases: fold 0, base_1, first model ──
+            # In the first model's rank-1 single representation.
+            if (fold_i == 0 and space == 'base_1'
+                    and downstream_models[0] in cell_models
+                    and vals.size >= 2):
                 results['known_bias_check'] = convert_numpy(_known_bias_check(
                     labels, rec_mol, rec_doc, doc_names, tr, va, rec_tr,
                     rec_mol_local, X_tr_e, X_va_e, g_rec_tr, eligible,
@@ -885,6 +913,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     model_factories[downstream_models[0]],
                     downstream_models[0], metric_fn, n_iter, alpha,
                     oof_splits))
+                results['known_bias_check']['rep'] = (
+                    base_by_model[downstream_models[0]][0])
 
         results['per_fold'][fk] = convert_numpy(fold_block)
         print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
@@ -945,9 +975,10 @@ def _known_bias_check(labels, rec_mol, rec_doc, doc_names, tr, va, rec_tr,
                 else float('nan'))
 
     return {
-        'what_it_is': ('a check with known biases, on fold 0, in the base '
-                       'space, with one downstream model. Not a result about '
-                       'the real labels.'),
+        'what_it_is': ('a check with known biases, on fold 0, in space '
+                       'base_1 (the model\'s rank-1 single representation), '
+                       'with one downstream model. Not a result about the '
+                       'real labels.'),
         'model': model_name,
         'added_offset_sd': float(np.sqrt(var_b)),
         'added_offset_sd_units': 'pIC50',
@@ -1031,7 +1062,8 @@ def _print_summary(results, metric_name):
                           f"{c['spread_over_fold_gains']:.4f}){mark}")
     kb = results.get('known_bias_check')
     if kb:
-        print(f"\n  check with known biases ({kb['model']}, fold 0, base): "
+        print(f"\n  check with known biases ({kb['model']}, fold 0, base_1 "
+              f"{kb.get('rep')}): "
               f"added offsets sd {kb['added_offset_sd']:.4f} pIC50 over "
               f"{kb['documents_compared']} documents; pearson added vs fitted "
               f"{kb['pearson_added_vs_fitted']:.3f}, vs fitted minus real "
@@ -1049,9 +1081,6 @@ def main():
     parser.add_argument('--n-bootstrap', type=int, default=None,
                         help=f'Resamples for the sign-flip count '
                              f'(default {N_BOOTSTRAP})')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help="The base space's representation. Default: "
-                             "pick_noise_base_rep's")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename')
     args = parser.parse_args()
@@ -1064,8 +1093,6 @@ def main():
         kw['ridge_alpha'] = args.ridge_alpha
     if args.n_bootstrap is not None:
         kw['n_bootstrap'] = args.n_bootstrap
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
     res = run(data, config, args.output, args.dataset, **kw)
     save_experiment_results(res, args.output, 'n29_document_bias',
                             args.dataset, filename_suffix=args.tag)

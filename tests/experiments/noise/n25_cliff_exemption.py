@@ -106,7 +106,8 @@ condition this question needs. --noise-condition takes any of
 noise_helpers.DETECTION_IS_DEFINED.
 
 WHAT THE RUN KNOWS BECAUSE IT INJECTED. Two counts that need no model fit and
-are the premise of the whole file, recorded per (pass, space, detector):
+are the premise of the whole file, recorded per (pass, feature matrix,
+detector):
   * of the molecules the detector ranks most suspicious -- as many of them as
     the draw actually corrupted -- how many are cliff molecules whose label
     never moved. Those are the molecules this exemption exists to protect.
@@ -135,6 +136,26 @@ of the difference the headline counts. It does NOT cancel out of the absolute
 scores printed beside it, which are one draw and should be read as one.
 --noise-seeds runs more and multiplies every model fit by how many.
 
+THE FEATURE SPACES ARE PER DOWNSTREAM MODEL. The pool is asked for each
+model's own stored search (noise_helpers.pool_recipe_per_downstream_model), and
+each model's hybrid is rebuilt from the recipe searched for IT. The
+single-representation comparison is each model's top 2 base representations by
+its own score in that stored search -- spaces base_1 and base_2
+(_shared.noise_base_reps_by_model); which ones is written to
+`base_reps_by_model`. A model the pool holds no search for has no space at all,
+and `base_reps_missing` and `hybrid_unavailable_by_model` say why. Owner's
+decision, 2026-09-25. Until then the pool was asked for the first model only,
+every model was scored in that model's hybrid, and the base space was one
+representation shared by every model.
+
+The detectors, the out-of-fold and Gaussian-process targets, the suspicion
+counts and the molecules-spared counts all live inside a feature matrix, so
+they are computed once per DISTINCT matrix: once where every model shares one,
+once per model where they do not. `feature_matrices` names the matrix each
+model was scored in -- the space where every model shares it,
+'<space>/<first model on it>' where it does not -- and the per-matrix records
+are keyed by that name.
+
 WHAT THIS CANNOT SAY. Nothing here shows that the exempted molecules are on
 real cliffs -- the structure reference says they are structurally similar to a
 molecule of very different activity, which is what a cliff and a pair of
@@ -149,6 +170,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import functools
 import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -157,7 +179,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS_NOISE,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from experiments.dataset_policy import (
@@ -166,6 +189,7 @@ from experiments.dataset_policy import (
 from experiments.noise.noise_helpers import (
     inject_train_labels, noise_spec_for, detection_scores,
     DETECTION_IS_DEFINED, hybrid_for_fold,
+    pool_recipe_per_downstream_model, group_models_by_recipe,
 )
 # The cleanups, the detector and the two baselines are n07's, called rather
 # than copied. `cleaned_training_set` is the shared dispatcher n17 and n18 also
@@ -350,7 +374,10 @@ NOISE_CONDITION = 'outlier_only_p05'
 # One draw. See the module docstring for why, and --noise-seeds for more.
 NOISE_SEEDS = (0,)
 
-SPACES = ('base', 'hybrid', 'hybrid_similarity')
+# base_1 and base_2 are each downstream model's rank-1 and rank-2 single
+# representation (see the module docstring).
+BASE_SPACES = tuple(f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1))
+SPACES = BASE_SPACES + ('hybrid', 'hybrid_similarity')
 POOL_SUBSET = 'predictive_and_similarity'
 
 # n01's activity cutoff, in median absolute deviations of this dataset's own
@@ -786,9 +813,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     levels = [float(x) for x in (kwargs.get('levels')
                                  or [reference_noise_level(dataset_name)])]
     CLEANUPS = cleanups_for(is_clf, kwargs.get('cleanups'))
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
-    X_source = reps[base_rep_name]
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
 
     # ── The exempt set is built PER FOLD, from what the method can see ─────
     # It used to be built once here, from the clean label column, across every
@@ -845,7 +872,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'within a pair, per pass.'),
         'arms': list(ARMS),
         'pass_is': 'one (fold, noise draw)',
-        'base_rep': base_rep_name,
         'models': downstream_models,
         'cleanups': list(CLEANUPS),
         'cleanups_not_run': [c for c in ALL_CLEANUPS if c not in CLEANUPS],
@@ -885,128 +911,152 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'in every space.'),
         'hybrid_sees_cleaned_labels': False,
         'hybrid_sees_cleaned_labels_note': (
-            "The hybrid is built once per (fold, draw) from that fold's "
+            "Each downstream model's hybrid is built once per (fold, draw), "
+            "from that model's own recipe, on that fold's "
             'training molecules at their CORRUPTED labels, which is what a '
             'practitioner holds. No cleanup and no exemption reaches the '
             'feature ranking or the budget split.'),
         'per_space': {},
     }
 
-    splits = list(cv_split(groups, n_folds, X_source, labels, mode=mode))
+    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
+                           mode=mode))
     print(f"  {len(labels)} molecules, {len(splits)} folds, "
           f"models {downstream_models}")
     print(f"  condition {condition}, levels {levels}, draws {seeds}")
     print(f"  detectors {detectors}, flag rates {flag_rates}")
     print(f"  cleanups ({len(CLEANUPS)}): {list(CLEANUPS)}")
-    print(f"  base representation: {base_rep_name}")
 
-    # ── The hybrid recipes, fetched once ────────────────────────────────────
-    bp = None
-    bp_sim = None
-    search = None
-    _lookup_error = None
-    try:
-        search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model=downstream_models[0], budget=None,
-            augmentations=augmentations, dataset_name=dataset_name,
-            task_type=task_type, data=data, pool_subset=POOL_SUBSET)
-        bp = meta['best_config']['blueprint'] if meta else None
-    except Exception as exc:
-        meta = None
-        _lookup_error = f"{type(exc).__name__}: {exc}"
-        print(f"  hybrid recipe lookup failed: {_lookup_error}")
+    # ── The hybrid recipes, fetched once PER DOWNSTREAM MODEL ──────────────
+    # ⛔ UNTIL 2026-09-25 THIS WAS ONE RECIPE, SEARCHED FOR downstream_models[0],
+    # AND EVERY MODEL WAS SCORED IN IT. A difference between two models was
+    # partly a difference between an estimator and another estimator's
+    # feature space. n17, n18 and n23 moved to one recipe per model on
+    # 2026-09-23; this file stayed on one because per-model spaces multiply the
+    # hybrid builds, the detector fits and the correction targets -- they are
+    # all fitted inside the feature matrix -- by the number of distinct
+    # matrices. The owner decided on 2026-09-25 to go per model, matching
+    # every other noise experiment, and accepted those extra fits. No axis was
+    # cut to pay for them.
+    by_model, no_recipe = pool_recipe_per_downstream_model(
+        functools.partial(
+            get_best_search_for_downstream, reps, labels, groups,
+            budget=None, augmentations=augmentations,
+            dataset_name=dataset_name, task_type=task_type, data=data,
+            pool_subset=POOL_SUBSET),
+        downstream_models)
+    _raised = [d['lookup_error'] for d in no_recipe.values()
+               if d['lookup_error']]
+    _lookup_error = _raised[0] if _raised else None
+    results['hybrid_lookup_error'] = _lookup_error
+    results['hybrid_unavailable_by_model'] = {
+        m: d['why'] for m, d in no_recipe.items()}
 
-    if bp is None:
-        spaces = ('base',)
+    # {model: {space: recipe}}. The geometry recipe is taken by name from the
+    # similarity family's own winner, as n18 does.
+    recipe_for_space_by_model = {}
+    hybrid_record = {}
+    hybrid_similarity_unavailable = {}
+    for _m, _got in by_model.items():
+        _meta_m = _got['meta'] or {}
+        _by_obj = _meta_m.get('by_objective') or {}
+        _sim = _by_obj.get('similarity')
+        _bp_sim_m = ((_sim or {}).get('best_config') or {}).get('blueprint')
+        recipe_for_space_by_model[_m] = {'hybrid': _got['blueprint']}
+        hybrid_record[_m] = {
+            'hybrid': {
+                'family': _meta_m.get('objective'),
+                'pool_subset': _meta_m.get('pool_subset'),
+                'budget': getattr(_got['blueprint'], 'budget', None),
+                'reps': sorted(getattr(_got['blueprint'], 'reps', []) or []),
+            }}
+        if _bp_sim_m is not None:
+            recipe_for_space_by_model[_m]['hybrid_similarity'] = _bp_sim_m
+            hybrid_record[_m]['hybrid_similarity'] = {
+                'budget': getattr(_bp_sim_m, 'budget', None),
+                'reps': sorted(getattr(_bp_sim_m, 'reps', []) or []),
+            }
+        else:
+            hybrid_similarity_unavailable[_m] = (
+                'the pool held no search under objective=similarity for this '
+                'model, so the space whose features were chosen to make the '
+                'neighbour distance predictive could not be built for it.'
+                if 'similarity' not in _by_obj else
+                'the similarity family was in the pool but its winning '
+                'configuration carried no blueprint.')
+        print(f"  {_m} / hybrid: {len(hybrid_record[_m]['hybrid']['reps'])} "
+              f"representations, budget "
+              f"{hybrid_record[_m]['hybrid']['budget']}, searched under "
+              f"objective {_meta_m.get('objective')}")
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces_run = tuple(
+        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, _k, downstream_models))
+
+    spaces = tuple(s_ for s_ in SPACES if s_ in base_spaces_run or (
+        s_ not in BASE_SPACES and any(
+            s_ in _r for _r in recipe_for_space_by_model.values())))
+    if not recipe_for_space_by_model:
         results['hybrid_available'] = False
-        results['hybrid_lookup_error'] = _lookup_error
         results['hybrid_unavailable_reason'] = (
             (f'the recipe lookup RAISED -- {_lookup_error} -- so neither hybrid '
              f'space could be built. This is NOT a dataset the precompute never '
              f'covered: something is wrong with the stored search and it can be '
-             f'fixed. Every arm ran in the base representation only.')
+             f'fixed. Every arm ran in the single representations only.')
             if _lookup_error else
             (f'no recipe came back from the precomputed pool for subset '
-             f'{POOL_SUBSET!r}. Every arm ran in the base representation only.'))
+             f'{POOL_SUBSET!r} for any downstream model. Every arm ran in the '
+             f'single representations only.'))
         print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
-              f"base representation only")
+              f"single representations only")
     else:
-        spaces = tuple(SPACES)
         results['hybrid_available'] = True
-        # ⛔ ONE RECIPE, SEARCHED FOR ONE DOWNSTREAM MODEL, AND EVERY MODEL IS
-        # SCORED IN IT. The pool is asked for downstream_models[0] and the
-        # hybrid features that recipe chooses are the features all of the
-        # models are fitted on, so a difference between two models here is
-        # partly a difference between an estimator and another estimator's
-        # feature space. n17, n18 and n23 did the same thing and were changed
-        # on 2026-09-23 to ask the pool once per model, through
-        # noise_helpers.pool_recipe_per_downstream_model.
-        #
-        # THIS FILE HAS NOT MOVED, AND THE REASON IS COST, WHICH IS THE OWNER'S
-        # CALL AND NOT MINE. Here the feature space does not only choose the
-        # features: it is where the detector finds every molecule's neighbours
-        # and where the out-of-fold and Gaussian-process targets are fitted. So
-        # one recipe per model multiplies the hybrid builds, the detector fits
-        # and the correction targets by the number of downstream models -- five
-        # in a default run -- on top of a file that already fits three arms.
-        # The pool lookups themselves are free; the per-fold work is not.
-        results['hybrid_recipe_searched_for_model'] = downstream_models[0]
-        results['hybrid_recipe_is_one_model_s'] = True
-        results['hybrid_recipe_note'] = (
-            f'The hybrid recipe was searched for {downstream_models[0]!r} and '
-            f'every downstream model is scored in the features it chose. '
-            f'noise_helpers.pool_recipe_per_downstream_model gives each model '
-            f'its own recipe; here that would multiply the hybrid builds, the '
-            f'detector fits and the correction targets by '
-            f'{len(downstream_models)}, so it is a decision rather than a '
-            f'default.')
-        results['hybrid_family'] = meta['objective']
-        results['hybrid_pool_subset'] = meta['pool_subset']
-        results['hybrid_budget'] = getattr(bp, 'budget', None)
-        results['hybrid_reps'] = sorted(getattr(bp, 'reps', []) or [])
-        _by_obj = meta.get('by_objective') or {}
-        _sim = _by_obj.get('similarity')
-        bp_sim = (_sim or {}).get('best_config', {}).get('blueprint')
-        print(f"  hybrid recipe: {len(results['hybrid_reps'])} representations, "
-              f"budget {results['hybrid_budget']}, searched under objective "
-              f"{meta['objective']}")
-        if bp_sim is None:
-            spaces = tuple(x for x in spaces if x != 'hybrid_similarity')
-            results['hybrid_similarity_available'] = False
-            results['hybrid_similarity_unavailable_reason'] = (
-                'the pool held no search under objective=similarity for this '
-                'dataset, so the space whose features were chosen to make the '
-                'neighbour distance predictive could not be built. Every arm '
-                'still ran in the other spaces.'
-                if 'similarity' not in _by_obj else
-                'the similarity family was in the pool but its winning '
-                'configuration carried no blueprint.')
-            print(f"  {results['hybrid_similarity_unavailable_reason']}")
-        else:
-            results['hybrid_similarity_available'] = True
-            results['hybrid_similarity_budget'] = getattr(bp_sim, 'budget', None)
-            results['hybrid_similarity_reps'] = sorted(
-                getattr(bp_sim, 'reps', []) or [])
+        results['hybrid_recipe_by_model'] = convert_numpy(hybrid_record)
+        results['hybrid_similarity_available'] = 'hybrid_similarity' in spaces
+        results['hybrid_similarity_unavailable_by_model'] = (
+            hybrid_similarity_unavailable)
+        for _m, _why in hybrid_similarity_unavailable.items():
+            print(f"  no hybrid_similarity space for {_m}: {_why}")
+        if 'hybrid_similarity' in spaces:
             results['hybrid_similarity_note'] = (
                 "Its features were chosen so that the distance they define "
                 "predicts each molecule's activity from its five nearest "
                 "neighbours -- the same quantity every neighbour-based detector "
                 "in this file reads.")
     results['spaces_run'] = list(spaces)
+    print(f"  spaces {list(spaces)}")
 
     # What each downstream model would have picked for itself. 0 new model fits:
-    # every one of these reads rows the search already stored.
+    # every one of these reads rows the search already stored -- each model's
+    # own stored search.
     results['top2_base_reps'] = {}
     results['top2_hybrids'] = {}
     results['top2_pairs_by_model'] = {}
     results['hybrid_deltas_by_model'] = {}
-    if search is None:
+    _searches = {m: d['search'] for m, d in by_model.items()
+                 if d['search'] is not None}
+    if not _searches:
         results['top2_unavailable_reason'] = (
-            'the pool returned no SearchResult, so there are no stored rows to '
-            'rank. Every number in this file stands.')
+            'the pool returned no SearchResult for any downstream model, so '
+            'there are no stored rows to rank. Every number in this file '
+            'stands.')
     else:
         for _m in downstream_models:
+            search = _searches.get(_m)
+            if search is None:
+                continue
             try:
                 results['top2_base_reps'][_m] = top_base_reps(
                     search, _m, 2, require_full=False)
@@ -1027,9 +1077,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 except Exception as _e:
                     print(f"  hybrid deltas for {_m} unavailable: "
                           f"{type(_e).__name__}: {_e}")
+        # select_model_rep_pairs reads every model out of ONE SearchResult, so
+        # it is given the one the pool returned for the model named in
+        # 'top2_pairs_search_of_model', as n18 does.
+        _grid_model = next(m for m in downstream_models if m in _searches)
+        results['top2_pairs_search_of_model'] = _grid_model
         try:
             results['top2_pairs_by_model'] = _drop_blueprint(
-                select_model_rep_pairs(search, models=list(downstream_models),
+                select_model_rep_pairs(_searches[_grid_model],
+                                       models=list(downstream_models),
                                        n_base=2, n_hybrids=2,
                                        require_full=False))
         except Exception as _e:
@@ -1060,16 +1116,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     base_noisy = {s: {m: {} for m in downstream_models} for s in spaces}
     base_clean = {s: {m: {} for m in downstream_models} for s in spaces}
     arm_score = {}      # [space][det][rate][model][cleanup][arm][pass] = score
-    spared = {}         # [space][det][rate][cleanup][pass] = counts
-    det_rows = {s: {d: {} for d in detectors} for s in spaces}
-    premise = {s: {d: {} for d in detectors} for s in spaces}
+    # The three below live inside a feature matrix, so they are keyed by the
+    # matrix's name, not the space: [matrix][det]...
+    spared = {}         # [matrix][det][rate][cleanup][pass] = counts
+    det_rows = {}       # [matrix][det][pass]
+    premise = {}        # [matrix][det][pass]
+    matrix_of = {}      # [space][model] = the matrix it was scored in
     for s in spaces:
         arm_score[s] = {d: {str(r): {m: {c: {a: {} for a in ARMS}
                                          for c in CLEANUPS}
                                      for m in downstream_models}
                             for r in flag_rates} for d in detectors}
-        spared[s] = {d: {str(r): {c: {} for c in CLEANUPS}
-                         for r in flag_rates} for d in detectors}
     hybrid_failures = []
     provenance = {}
     fold_cliff_counts = []
@@ -1135,139 +1192,172 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         int(np.asarray(cliff_mask)[train_idx].sum()),
                 })
 
-                # ── The feature spaces for this pass ────────────────────────
+                # ── The feature matrices for this pass ──────────────────────
+                # {space: [(X_tr, X_va, models scored on it)]}. base_k holds
+                # one matrix per distinct representation at rank k, shared by
+                # the models that rank it there; a hybrid space one matrix per
+                # distinct recipe, n23's layout.
                 fold_spaces = {}
-                scaler = StandardScaler()
-                fold_spaces['base'] = (
-                    scaler.fit_transform(np.asarray(X_source[train_idx],
-                                                    dtype=np.float64)),
-                    scaler.transform(np.asarray(X_source[val_idx],
-                                                dtype=np.float64)))
-                for _sp, _bp in (('hybrid', bp), ('hybrid_similarity', bp_sim)):
-                    if _sp not in spaces or _bp is None:
+                for _k in range(1, NOISE_BASE_REP_COUNT + 1):
+                    _bsp = f'base_{_k}'
+                    if _bsp not in spaces:
                         continue
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        _tr_reps, _va_reps, y_noisy, _bp, g_tr,
-                        model_factories[downstream_models[0]](),
-                        metric_fn, lower_is_better,
-                        augmentations_train=_tr_augs,
-                        augmentations_val=_va_augs)
-                    if X_tr_h is None:
-                        hybrid_failures.append({'pass': pass_key, 'space': _sp})
-                    else:
+                    _bcells = []
+                    for _rn, _ms in base_rank_groups(
+                            base_by_model, _k, downstream_models).items():
+                        scaler = StandardScaler()
+                        _bcells.append((
+                            scaler.fit_transform(_tr_reps[_rn]),
+                            scaler.transform(_va_reps[_rn]), list(_ms)))
+                    fold_spaces[_bsp] = _bcells
+                for _sp in spaces:
+                    if _sp in BASE_SPACES:
+                        continue
+                    _cells = []
+                    for _bp_m, _mnames, _shareable in group_models_by_recipe(
+                            {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
+                             for _m in downstream_models}, downstream_models):
+                        X_tr_h, X_va_h = hybrid_for_fold(
+                            _tr_reps, _va_reps, y_noisy, _bp_m, g_tr,
+                            None if _shareable
+                            else model_factories[_mnames[0]](),
+                            metric_fn, lower_is_better,
+                            augmentations_train=_tr_augs,
+                            augmentations_val=_va_augs)
+                        if X_tr_h is None:
+                            hybrid_failures.append({'pass': pass_key,
+                                                    'space': _sp,
+                                                    'models': list(_mnames)})
+                            continue
                         sc_h = StandardScaler()
-                        fold_spaces[_sp] = (sc_h.fit_transform(X_tr_h),
-                                            sc_h.transform(X_va_h))
+                        _cells.append((sc_h.fit_transform(X_tr_h),
+                                       sc_h.transform(X_va_h), list(_mnames)))
+                    if _cells:
+                        fold_spaces[_sp] = _cells
 
                 for space in spaces:
-                    if space not in fold_spaces:
-                        continue
-                    X_tr_s, X_va_s = fold_spaces[space]
+                    for X_tr_s, X_va_s, cell_models in fold_spaces.get(
+                            space, ()):
+                        # One feature matrix. Its name: the space where every
+                        # model shares it, the space and its first model where
+                        # it does not.
+                        ckey = (space
+                                if cell_models == list(downstream_models)
+                                else f'{space}/{cell_models[0]}')
+                        matrix_of.setdefault(space, {}).update(
+                            {_m: ckey for _m in cell_models})
 
-                    # The model-based corrections' targets, once per (pass,
-                    # space). They depend on the features, the labels and the
-                    # groups and on nothing else -- not the suspicion score,
-                    # not the strength, not which model is about to be fitted.
-                    _targets = correction_targets(
-                        X_tr_s, y_noisy, groups=g_tr,
-                        want=targets_needed(CLEANUPS))
+                        # The model-based corrections' targets, once per (pass,
+                        # matrix). They depend on the features, the labels and the
+                        # groups and on nothing else -- not the suspicion score,
+                        # not the strength, not which model is about to be fitted.
+                        _targets = correction_targets(
+                            X_tr_s, y_noisy, groups=g_tr,
+                            want=targets_needed(CLEANUPS))
 
-                    for mname in downstream_models:
-                        # The score to beat: the same corrupted labels, no
-                        # cleaning. One fit per (pass, space, model), shared by
-                        # every cleanup, setting, detector and arm.
-                        sc = _evaluate_fold(
-                            X_tr_s, X_va_s, y_noisy, y_val, 'noisy_baseline',
-                            0.0, model_factories[mname], metric_fn,
-                            is_clf=is_clf, metric_name=metric_name,
-                            dataset_name=dataset_name, precomputed_y_tr=y_noisy)
-                        base_noisy[space][mname][pass_key] = (
-                            float(sc) if sc is not None else float('nan'))
-                        # The ceiling: the labels before anything was injected.
-                        # Nothing can be cleaned back past it.
-                        sc = _evaluate_fold(
-                            X_tr_s, X_va_s, y_clean_train, y_val, 'no_noise',
-                            0.0, model_factories[mname], metric_fn,
-                            is_clf=is_clf, metric_name=metric_name,
-                            dataset_name=dataset_name)
-                        base_clean[space][mname][pass_key] = (
-                            float(sc) if sc is not None else float('nan'))
+                        for mname in cell_models:
+                            # The score to beat: the same corrupted labels, no
+                            # cleaning. One fit per (pass, matrix, model), shared by
+                            # every cleanup, setting, detector and arm.
+                            sc = _evaluate_fold(
+                                X_tr_s, X_va_s, y_noisy, y_val, 'noisy_baseline',
+                                0.0, model_factories[mname], metric_fn,
+                                is_clf=is_clf, metric_name=metric_name,
+                                dataset_name=dataset_name, precomputed_y_tr=y_noisy)
+                            base_noisy[space][mname][pass_key] = (
+                                float(sc) if sc is not None else float('nan'))
+                            # The ceiling: the labels before anything was injected.
+                            # Nothing can be cleaned back past it.
+                            sc = _evaluate_fold(
+                                X_tr_s, X_va_s, y_clean_train, y_val, 'no_noise',
+                                0.0, model_factories[mname], metric_fn,
+                                is_clf=is_clf, metric_name=metric_name,
+                                dataset_name=dataset_name)
+                            base_clean[space][mname][pass_key] = (
+                                float(sc) if sc is not None else float('nan'))
 
-                    for detector in detectors:
-                        try:
-                            scores = _compute_noise_scores(
-                                X_tr_s, y_noisy, is_clf=is_clf,
-                                detector=detector, groups=g_tr)
-                        except Exception as exc:
-                            print(f"      {detector} refused: "
-                                  f"{type(exc).__name__}: {exc}")
-                            scores = None
-                        if scores is None:
-                            continue
-                        scores = np.asarray(scores, dtype=float)
+                        for detector in detectors:
+                            try:
+                                scores = _compute_noise_scores(
+                                    X_tr_s, y_noisy, is_clf=is_clf,
+                                    detector=detector, groups=g_tr)
+                            except Exception as exc:
+                                print(f"      {detector} refused: "
+                                      f"{type(exc).__name__}: {exc}")
+                                scores = None
+                            if scores is None:
+                                continue
+                            scores = np.asarray(scores, dtype=float)
 
-                        det = detection_scores(corrupt_mask, scores, condition)
-                        if det is not None:
-                            det_rows[space][detector][pass_key] = det
-                        pr = _cliff_suspicion_counts(scores, corrupt_mask,
-                                                     cliff_train)
-                        if pr is not None:
-                            premise[space][detector][pass_key] = pr
+                            det = detection_scores(corrupt_mask, scores, condition)
+                            if det is not None:
+                                det_rows.setdefault(ckey, {}).setdefault(
+                                    detector, {})[pass_key] = det
+                            pr = _cliff_suspicion_counts(scores, corrupt_mask,
+                                                         cliff_train)
+                            if pr is not None:
+                                premise.setdefault(ckey, {}).setdefault(
+                                    detector, {})[pass_key] = pr
 
-                        for slot, rate in enumerate(flag_rates):
-                            rk = str(rate)
-                            for cleanup in CLEANUPS:
-                                axis, vals = setting_axis(cleanup, is_clf)
-                                if slot >= len(vals):
-                                    # Fewer settings than slots: quantile_clip
-                                    # reads neither axis, so a second row here
-                                    # would be the same column fitted again.
-                                    continue
-                                strength = (None if axis == 'flag_rate'
-                                            else vals[slot])
-                                try:
-                                    plain = cleaned_training_set(
-                                        cleanup, X_tr_s, y_noisy, scores, rate,
-                                        is_clf=is_clf, groups=g_tr,
-                                        strength=strength, targets=_targets)
-                                except Exception as exc:
-                                    print(f"      {cleanup} declined: "
-                                          f"{type(exc).__name__}: {exc}")
-                                    plain = None
-                                if plain is None:
-                                    # `remove` left under ten training
-                                    # molecules, or a target could not be
-                                    # built. The whole pair is dropped, so the
-                                    # comparison is never half-scored.
-                                    continue
+                            for slot, rate in enumerate(flag_rates):
+                                rk = str(rate)
+                                for cleanup in CLEANUPS:
+                                    axis, vals = setting_axis(cleanup, is_clf)
+                                    if slot >= len(vals):
+                                        # Fewer settings than slots: quantile_clip
+                                        # reads neither axis, so a second row here
+                                        # would be the same column fitted again.
+                                        continue
+                                    strength = (None if axis == 'flag_rate'
+                                                else vals[slot])
+                                    try:
+                                        plain = cleaned_training_set(
+                                            cleanup, X_tr_s, y_noisy, scores, rate,
+                                            is_clf=is_clf, groups=g_tr,
+                                            strength=strength, targets=_targets)
+                                    except Exception as exc:
+                                        print(f"      {cleanup} declined: "
+                                              f"{type(exc).__name__}: {exc}")
+                                        plain = None
+                                    if plain is None:
+                                        # `remove` left under ten training
+                                        # molecules, or a target could not be
+                                        # built. The whole pair is dropped, so the
+                                        # comparison is never half-scored.
+                                        continue
 
-                                cliff_arm = put_back(plain, cliff_train,
-                                                     X_tr_s, y_noisy)
-                                rand_arm = put_back(plain, rand_train,
-                                                    X_tr_s, y_noisy)
-                                spared[space][detector][rk][cleanup][pass_key] = {
-                                    'n_training_molecules': n_train,
-                                    'n_cliff_molecules_in_training':
-                                        int(cliff_train.sum()),
-                                    'n_cliff_molecules_spared': n_spared(
-                                        plain, cliff_arm, cliff_train, y_noisy),
-                                    'n_random_control_molecules': int(n_rand),
-                                    'n_random_molecules_spared': n_spared(
-                                        plain, rand_arm, rand_train, y_noisy),
-                                    'setting_axis': axis,
-                                    'setting': (rate if axis == 'flag_rate'
-                                                else strength),
-                                }
-                                for mname in downstream_models:
-                                    for arm, cleaned in (('plain', plain),
-                                                         ('cliff_exempt', cliff_arm),
-                                                         ('random_exempt', rand_arm)):
-                                        arm_score[space][detector][rk][mname][
-                                            cleanup][arm][pass_key] = _fit_score(
-                                                cleaned, X_va_s, y_val,
-                                                model_factories[mname],
-                                                metric_fn, metric_name,
-                                                label=f'{cleanup}/{arm}/{mname}')
+                                    cliff_arm = put_back(plain, cliff_train,
+                                                         X_tr_s, y_noisy)
+                                    rand_arm = put_back(plain, rand_train,
+                                                        X_tr_s, y_noisy)
+                                    _spared_cell = (
+                                        spared.setdefault(ckey, {})
+                                        .setdefault(detector, {})
+                                        .setdefault(rk, {})
+                                        .setdefault(cleanup, {}))
+                                    _spared_cell[pass_key] = {
+                                        'n_training_molecules': n_train,
+                                        'n_cliff_molecules_in_training':
+                                            int(cliff_train.sum()),
+                                        'n_cliff_molecules_spared': n_spared(
+                                            plain, cliff_arm, cliff_train, y_noisy),
+                                        'n_random_control_molecules': int(n_rand),
+                                        'n_random_molecules_spared': n_spared(
+                                            plain, rand_arm, rand_train, y_noisy),
+                                        'setting_axis': axis,
+                                        'setting': (rate if axis == 'flag_rate'
+                                                    else strength),
+                                    }
+                                    for mname in cell_models:
+                                        for arm, cleaned in (('plain', plain),
+                                                             ('cliff_exempt', cliff_arm),
+                                                             ('random_exempt', rand_arm)):
+                                            arm_score[space][detector][rk][mname][
+                                                cleanup][arm][pass_key] = _fit_score(
+                                                    cleaned, X_va_s, y_val,
+                                                    model_factories[mname],
+                                                    metric_fn, metric_name,
+                                                    label=f'{cleanup}/{arm}/{mname}')
                 print(f"    {pass_key} done [{time.time() - t0:.0f}s]")
 
     if hybrid_failures:
@@ -1276,6 +1366,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"{len(hybrid_failures)} (pass, space) pairs; the spaces that "
               f"built keep their numbers")
 
+    results['feature_matrices'] = convert_numpy(matrix_of)
     results['noise_provenance'] = provenance
     results['per_pass_counts'] = convert_numpy(fold_cliff_counts)
 
@@ -1296,8 +1387,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             by_rate = {}
             for rate in flag_rates:
                 rk = str(rate)
-                block = {'per_model': {}, 'molecules_spared': convert_numpy(
-                    spared[space][detector][rk])}
+                block = {'per_model': {},
+                         'molecules_spared_by_matrix': convert_numpy({
+                             k: spared.get(k, {}).get(detector, {}).get(rk, {})
+                             for k in sorted(set(
+                                 matrix_of.get(space, {}).values()))})}
                 for m in downstream_models:
                     row = {}
                     for cleanup in CLEANUPS:
@@ -1327,8 +1421,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                      for k in keys]
                             gains = np.array([g for g in gains
                                               if np.isfinite(g)], dtype=float)
-                            sp = [spared[space][detector][rk][cleanup].get(k, {})
-                                  for k in keys]
+                            _sp_m = (spared.get(matrix_of.get(space, {})
+                                                .get(m), {})
+                                     .get(detector, {}).get(rk, {})
+                                     .get(cleanup, {}))
+                            sp = [_sp_m.get(k, {}) for k in keys]
                             spared_key = ('n_cliff_molecules_spared'
                                           if arm == 'cliff_exempt'
                                           else 'n_random_molecules_spared')
@@ -1369,9 +1466,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 by_rate[rk] = convert_numpy(block)
             space_block['per_detector'][detector] = {
                 'per_setting_slot': by_rate,
-                'detection': convert_numpy(det_rows[space][detector]),
-                'cliff_molecules_among_the_suspicious': convert_numpy(
-                    premise[space][detector]),
+                'detection_by_matrix': convert_numpy({
+                    k: det_rows.get(k, {}).get(detector, {})
+                    for k in sorted(set(matrix_of.get(space, {}).values()))}),
+                'cliff_molecules_among_the_suspicious_by_matrix': convert_numpy({
+                    k: premise.get(k, {}).get(detector, {})
+                    for k in sorted(set(matrix_of.get(space, {}).values()))}),
             }
         results['per_space'][space] = space_block
 
@@ -1389,8 +1489,8 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name,
     """How many settings each exemption won a majority of passes in, per space.
 
     One setting is one (detector, setting slot, model). Every count is taken
-    inside ONE space: a setting that won in the base representation and lost in
-    the hybrid is two readings, not an average.
+    inside ONE space: a setting that won in a single representation and lost
+    in the hybrid is two readings, not an average.
     """
     out = {'metric': metric_name,
            'headline': 'passes won by the exempt arm over the plain arm',
@@ -1557,9 +1657,6 @@ def main():
     parser.add_argument('--flag-rates', type=str, default=None,
                         help='Comma-separated shares of training molecules '
                              'treated as suspect')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help='Which representation is the base space. Default: '
-                             "pick_noise_base_rep's, and it is recorded either way")
     parser.add_argument('--detectors', type=str, default=None,
                         help='Comma-separated detector names')
     parser.add_argument('--cleanups', type=str, default=None,
@@ -1605,8 +1702,6 @@ def main():
     }
     if args.flag_rates:
         kw['flag_rates'] = [float(x) for x in args.flag_rates.split(',')]
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
     if args.detectors:
         kw['detectors'] = args.detectors.split(',')
     if args.cleanups:

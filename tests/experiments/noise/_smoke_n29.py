@@ -106,6 +106,8 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n29.get_best_search_for_downstream
     n29.get_best_search_for_downstream = recipe
     try:
+        kw.setdefault('base_reps', {m: ['ecfp4', 'second']
+                                    for m in kw.get('models', ['rf'])})
         return n29.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n29.get_best_search_for_downstream = real
@@ -239,9 +241,16 @@ def test_run():
     data, _, _, _ = make_data(seed=2)
     res = run_it(data, 'toy_docs', models=['rf', 'lightgbm', 'xgboost'],
                  n_bootstrap=20, oof_splits=3)
-    sc = res['scores']['all']['base']
+    check("both single-representation spaces ran, and are named",
+          res['spaces_run'] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {
+              m: ['ecfp4', 'second'] for m in ('rf', 'lightgbm', 'xgboost')},
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
+    check("base_2 is scored", 'mean_label' in res['scores']['all'].get(
+        'base_2', {}))
+    sc = res['scores']['all']['base_1']
     label_arms = [a for a in n29.ARMS if a != 'within_document_rank']
-    check("every label arm scored for every model in the base space",
+    check("every label arm scored for every model in base_1",
           all(len(sc[a][m]) == 3 for a in label_arms
               for m in ('rf', 'lightgbm', 'xgboost')),
           str({a: {m: len(v) for m, v in sc[a].items()} for a in sc}))
@@ -252,22 +261,25 @@ def test_run():
     fb0 = res['per_fold']['f0']
     check("quantile-map counts and random-effect variances written per fold",
           'document_quantile_map' in fb0
-          and 'random_effect' in fb0['per_space']['base']
-          and 'within_document_rank' in fb0['per_space']['base'],
-          str(list(fb0['per_space']['base'])))
+          and 'random_effect' in fb0['per_space']['base_1']
+          and 'within_document_rank' in fb0['per_space']['base_1'],
+          str(list(fb0['per_space']['base_1'])))
     ok = all(fb['held_out_molecules_isolated'] <= fb['held_out_molecules']
              and fb['documents_given_an_offset'] <= fb['training_documents']
              for fb in res['per_fold'].values())
     check("counts bounded by what exists", ok)
     kb = res.get('known_bias_check') or {}
+    check("the check with known biases ran in rf's rank-1 representation",
+          kb.get('model') == 'rf' and kb.get('rep') == 'ecfp4',
+          f"{kb.get('model')}, {kb.get('rep')}")
     check("the check with known biases ran and recovers them",
           kb.get('pearson_added_vs_fitted_minus_real', 0) > 0.5,
           f"{kb.get('pearson_added_vs_fitted_minus_real')}")
-    s = res['summary']['per_view']['all']['base']['rf']['per_arm']
+    s = res['summary']['per_view']['all']['base_1']['rf']['per_arm']
     check("summary pairs every label arm against mean_label for rf",
           set(s) == set(n29.ARMS) - {'mean_label', 'within_document_rank'}
           and all(v['n_folds_paired'] == 3 for v in s.values()), str(set(s)))
-    sx = res['summary']['per_view']['all']['base']['xgboost']['per_arm']
+    sx = res['summary']['per_view']['all']['base_1']['xgboost']['per_arm']
     check("summary pairs within_document_rank against xgboost's mean_label",
           sx.get('within_document_rank', {}).get('n_folds_paired') == 3)
 
@@ -306,8 +318,9 @@ def test_help():
                          capture_output=True, text=True)
     check("--help lists the flags",
           all(f in out.stdout for f in ('--n-iter', '--ridge-alpha',
-                                        '--n-bootstrap', '--base-rep', '--tag')),
+                                        '--n-bootstrap', '--tag')),
           out.stderr[-300:])
+    check("--base-rep is gone", '--base-rep' not in out.stdout)
 
 
 if __name__ == '__main__':

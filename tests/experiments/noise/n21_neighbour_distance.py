@@ -11,7 +11,7 @@ beside them.
 
 FIVE DISTANCES.
 
-  plain                the base representation as it is, z-scored.
+  plain                the single representation as it is, z-scored.
   importance-weighted  each feature multiplied by its importance raised to an
                        exponent, then z-scored first. n12's space.
   forest proximity     how often two molecules land in the same leaf of a
@@ -80,6 +80,21 @@ matrix. `_smoke_n21.py` asserts the transcription reproduces both classes to
 the last bit on a feature space, under both metrics and both task types, so the
 two copies cannot drift apart unnoticed.
 
+WHICH SINGLE REPRESENTATION. The plain, importance-weighted and forest
+distances are built on one representation, and every repaired fit is scored on
+it. That representation is no longer one fixed pick: it is the top 2 base
+representations by the score of the FIRST downstream model in the stored search
+(_shared.noise_base_reps_by_model, owner's decision 2026-09-25). The first
+downstream model because it is the one this file fetches the stored search and
+the hybrid recipe for, and builds the hybrid with. The distances are not per
+downstream model, so a per-model ranking would multiply every space by the
+number of models; that is not done here. Everything built on the single
+representation runs once per rank, under `base_1/...` and `base_2/...` space
+keys; `base_reps_used` names the two, and `base_reps_by_model` records every
+model's own ranking beside it. The hybrid distances do not depend on it, but
+their repaired fits are scored on it, so they appear under both prefixes with
+identical detection numbers.
+
 `--distance-metric` does not reach this experiment. Every neighbour call here
 names its metric, because the metric is a swept axis.
 
@@ -106,7 +121,8 @@ from experiments.noise.noise_helpers import (
 from kirby.noise_spec import GROUPED_STRATEGIES
 from experiments.noise.n07_remediation import _predict_for_metric
 from experiments._shared import (
-    pick_noise_base_rep, load_data, get_config, create_experiment_parser,
+    noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, cv_split, get_domain_metric,
     get_model_factories, DOWNSTREAM_MODELS_NOISE, build_fold_hybrid,
     get_best_search_for_downstream, make_nearest_neighbors,
@@ -158,7 +174,7 @@ NOISE_CONDITION = 'outlier_p10'
 NOISE_SEEDS = (0, 1, 2)
 
 # The forest whose leaves the proximity distance is read off. Fitted on the
-# fold's TRAINING molecules only, on the z-scored base representation, against
+# fold's TRAINING molecules only, on the z-scored single representation, against
 # the CORRUPTED training labels -- a practitioner holds no others.
 #
 # min_samples_leaf is 5 rather than sklearn's 1 because a fully grown forest
@@ -446,7 +462,7 @@ def space_specs(importance_methods, metrics, exponents,
             'importance_exponent': None,
             'convention_matches_metric': None,
             'what_it_is': (
-                f'the base representation, z-scored, under a {m} distance'),
+                f'the single representation, z-scored, under a {m} distance'),
         }
     for imp in importance_methods:
         for e in exponents:
@@ -459,7 +475,7 @@ def space_specs(importance_methods, metrics, exponents,
                     'convention_matches_metric': bool(
                         EXPONENT_MATCHED_TO_METRIC.get(m) == float(e)),
                     'what_it_is': (
-                        f'the base representation, z-scored, each feature then '
+                        f'the single representation, z-scored, each feature then '
                         f'multiplied by its {imp} importance raised to {e:g}, '
                         f'under a {m} distance'),
                 }
@@ -514,9 +530,12 @@ def plain_reference_for(spec, metrics):
     written.
     """
     m = spec.get('distance_metric')
+    # Inside the same single-representation space: 'base_1/...' is compared
+    # against 'base_1/plain|...'.
+    pre = f"{spec['base_space']}/" if spec.get('base_space') else ''
     if m is None:
-        return [f'plain|{x}' for x in metrics]
-    return [f'plain|{m}']
+        return [f'{pre}plain|{x}' for x in metrics]
+    return [f'{pre}plain|{m}']
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +727,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS_NOISE)}, got "
             f"{sorted(model_factories)}.")
 
-    base_rep_name = pick_noise_base_rep(reps, dataset_name)
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
     noise_groups, _n_groups, _largest = noise_groups_for(data)
 
     # The hybrid recipe, once, from the precomputed pool. n12's call, including
@@ -721,20 +742,28 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # dropped at the end of the try below, and the only way to report a second
     # base representation or a second hybrid recipe was a second pool lookup,
     # which on a cold cache is a full search. Held, it costs 0 model fits.
-    # Stays None under --no-hybrid, where no pool lookup happens at all.
+    # The same search ranks the single representations, so under --no-hybrid
+    # it is still looked up unless the caller named them (`base_reps`).
     pool_search = None
     hybrid_meta = {'present': False, 'blueprint_is_clean_label': True}
-    if not include_hybrid:
-        hybrid_meta['absent_because'] = 'include_hybrid=False was passed'
-    else:
+    _lookup_error = None
+    meta = None
+    if include_hybrid or base_reps_override is None:
         try:
-            search, meta = get_best_search_for_downstream(
+            pool_search, meta = get_best_search_for_downstream(
                 reps, labels, groups,
                 downstream_model=downstream_models[0], budget=None,
                 augmentations=augmentations, dataset_name=dataset_name,
                 task_type=task_type, data=data,
                 pool_subset='predictive_and_similarity')
-            pool_search = search
+        except Exception as exc:
+            _lookup_error = f'{type(exc).__name__}: {exc}'
+    if not include_hybrid:
+        hybrid_meta['absent_because'] = 'include_hybrid=False was passed'
+    elif _lookup_error is not None:
+        hybrid_meta['absent_because'] = _lookup_error
+    else:
+        try:
             bp = meta['best_config']['blueprint'] if meta else None
             # The geometry family's own winner, taken by NAME. The pool returns
             # one family by preference and names the rest under by_objective,
@@ -782,8 +811,46 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'the corrupted labels. n12 does the same and carries the same caveat: '
         'the hybrid distance is a best case, not a leak-free comparison.')
 
-    specs = space_specs(importance_methods, metrics, exponents,
-                        include_hybrid=hybrid_meta['present'])
+    # ── The single representations: the first downstream model's top 2 ──
+    # See the module docstring for why the first model's ranking and not each
+    # model's. Every model's ranking is still recorded.
+    rank_owner = downstream_models[0]
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: pool_search for m in downstream_models}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    _owner_reps = base_by_model.get(rank_owner) or []
+    base_used = {f'base_{k}': _owner_reps[k - 1]
+                 for k in range(1, NOISE_BASE_REP_COUNT + 1)
+                 if len(_owner_reps) >= k}
+    if not base_used:
+        _why = (base_missing.get(rank_owner)
+                or f'{rank_owner} carries no single representation')
+        if _lookup_error:
+            _why = f'the stored-search lookup raised {_lookup_error}; {_why}'
+        print(f"  NOT RUN: no single representation for {rank_owner}: {_why}")
+        return {'skipped': 'no_single_representation',
+                'skipped_because': _why,
+                'noise_condition': condition,
+                'base_reps_by_model': base_by_model,
+                'base_reps_missing': base_missing,
+                'hybrid': hybrid_meta}
+
+    # Every space under each single-representation rank. The hybrid spaces
+    # detect the same way under both prefixes; only their repaired fits,
+    # which are scored on the single representation, differ.
+    _specs_one = space_specs(importance_methods, metrics, exponents,
+                             include_hybrid=hybrid_meta['present'])
+    specs = {}
+    for _b, _rn in base_used.items():
+        for _key, _spec in _specs_one.items():
+            specs[f'{_b}/{_key}'] = dict(_spec, base_space=_b,
+                                         single_representation=_rn)
 
     sample_X = next(iter(reps.values()))
     splits = list(cv_split(groups, n_folds, sample_X, labels))
@@ -794,7 +861,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Dataset: {dataset_name}, {len(labels)} molecules, "
           f"{len(splits)} folds")
     print(f"  Metric: {metric_name} (lower is better: {lower_is_better})")
-    print(f"  Base representation: {base_rep_name}")
+    print(f"  Single representations, {rank_owner}'s top "
+          f"{NOISE_BASE_REP_COUNT}: "
+          + ', '.join(f'{b} {rn}' for b, rn in base_used.items()))
     print(f"  Noise: {condition}, levels {levels}, draws {seeds}")
     if levels_dropped:
         for lvl, why in levels_dropped.items():
@@ -804,7 +873,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Detectors {detectors}, k values {k_values}")
     print(f"  Models scored: {downstream_models}")
     print(f"  {n_fits} model fits for the repair figure "
-          f"({n_passes} passes x {len(specs)} spaces x {len(detectors)} "
+          f"({n_passes} passes x {len(specs)} spaces over "
+          f"{len(base_used)} single representations x {len(detectors)} "
           f"detectors x {len(k_values)} k values x "
           f"{len(downstream_models)} models). The detection figure costs no "
           f"fit at all.")
@@ -812,7 +882,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
-        'base_rep': base_rep_name,
+        'base_reps_used': dict(base_used),
+        'base_reps_ranked_by_model': rank_owner,
+        'base_reps_by_model': base_by_model,
+        'base_reps_missing': base_missing,
+        'base_reps_note': (
+            f"base_1 and base_2 are {rank_owner}'s rank-1 and rank-2 single "
+            f'representations by its score in the stored search, the model '
+            f'whose search and recipe this file uses. Every space key starts '
+            f'with the one it was built on or scored on. base_reps_by_model '
+            f"is every model's own ranking, recorded and not used."),
         'noise_condition': condition,
         'levels': levels,
         'levels_dropped': levels_dropped,
@@ -838,8 +917,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             f'({WEIGHT_METHOD}, strength {WEIGHT_STRENGTH}), which is n12\'s.'),
         'spaces': specs,
         'forest': dict(forest_kw, fitted_on=(
-            'the fold\'s training molecules only, on the base representation '
-            'after z-scoring, against the corrupted training labels'),
+            'the fold\'s training molecules only, on the single '
+            'representation after z-scoring, against the corrupted training '
+            'labels'),
             distance='one minus the share of trees in which two molecules '
                      'land in the same leaf'),
         'hybrid': hybrid_meta,
@@ -847,9 +927,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'weight_method': WEIGHT_METHOD,
         'evaluation_features': (
             'every space is scored after repair on the SAME features -- the '
-            'plain base representation, z-scored. Only the weights differ, so '
-            'the difference between two spaces is the distance and nothing '
-            'else.'),
+            'plain single representation its key starts with, z-scored. Only '
+            'the weights differ, so the difference between two spaces under '
+            'one prefix is the distance and nothing else.'),
         'exclude_groups': (
             'not used, matching n12, so a molecule may take a repeat '
             'measurement of itself as a neighbour on any dataset that holds '
@@ -863,8 +943,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  === level {lvl_key} ===")
         t_level = time.time()
 
-        clean = {m: {} for m in downstream_models}
-        noisy = {m: {} for m in downstream_models}
+        # {base space: {model: {fold or pass key: score}}}
+        clean = {b: {m: {} for m in downstream_models} for b in base_used}
+        noisy = {b: {m: {} for m in downstream_models} for b in base_used}
         # {space: {f'{detector}_k{k}|{pass_key}': average precision}}
         det_ap = {s: {} for s in specs}
         det_pk = {s: {} for s in specs}
@@ -877,13 +958,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
         for fold_i, (train_idx, val_idx) in enumerate(splits):
             y_val = labels[val_idx]
-            X_base_raw = reps[base_rep_name][train_idx]
-            X_eval_raw = reps[base_rep_name][val_idx]
-            scaler = StandardScaler()
-            X_base_std = scaler.fit_transform(
-                np.asarray(X_base_raw, dtype=np.float64))
-            X_eval_std = scaler.transform(
-                np.asarray(X_eval_raw, dtype=np.float64))
+            # {base space: (raw training, z-scored training, z-scored held out)}
+            base_mats = {}
+            for _b, _rn in base_used.items():
+                _raw = reps[_rn][train_idx]
+                scaler = StandardScaler()
+                base_mats[_b] = (
+                    _raw,
+                    scaler.fit_transform(np.asarray(_raw, dtype=np.float64)),
+                    scaler.transform(np.asarray(reps[_rn][val_idx],
+                                                dtype=np.float64)))
 
             train_reps = {k: v[train_idx] for k, v in reps.items()}
             val_reps = {k: v[val_idx] for k, v in reps.items()}
@@ -896,16 +980,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             # The clean reference has no noise in it, so it is the same on all
             # three draws of a fold. Fitted once.
             fold_key0 = f'f{fold_i}'
-            for mn in downstream_models:
-                try:
-                    mdl = model_factories[mn]()
-                    mdl.fit(X_base_std, labels[train_idx])
-                    clean[mn][fold_key0] = float(metric_fn(
-                        y_val, _predict_for_metric(mdl, X_eval_std,
-                                                   metric_name)))
-                except Exception as exc:
-                    errors[f'{fold_key0}|clean|{mn}'] = \
-                        f'{type(exc).__name__}: {exc}'
+            for _b, (_raw, X_base_std, X_eval_std) in base_mats.items():
+                for mn in downstream_models:
+                    try:
+                        mdl = model_factories[mn]()
+                        mdl.fit(X_base_std, labels[train_idx])
+                        clean[_b][mn][fold_key0] = float(metric_fn(
+                            y_val, _predict_for_metric(mdl, X_eval_std,
+                                                       metric_name)))
+                    except Exception as exc:
+                        errors[f'{_b}|{fold_key0}|clean|{mn}'] = \
+                            f'{type(exc).__name__}: {exc}'
 
             for seed in seeds:
                 pass_key = f'f{fold_i}s{seed}'
@@ -918,16 +1003,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 counts['n_corrupted'].append(int(np.sum(cmask)))
                 counts['n_training'].append(int(cmask.size))
 
-                for mn in downstream_models:
-                    try:
-                        mdl = model_factories[mn]()
-                        mdl.fit(X_base_std, y_noisy)
-                        noisy[mn][pass_key] = float(metric_fn(
-                            y_val, _predict_for_metric(mdl, X_eval_std,
-                                                       metric_name)))
-                    except Exception as exc:
-                        errors[f'{pass_key}|noisy|{mn}'] = \
-                            f'{type(exc).__name__}: {exc}'
+                for _b, (_raw, X_base_std, X_eval_std) in base_mats.items():
+                    for mn in downstream_models:
+                        try:
+                            mdl = model_factories[mn]()
+                            mdl.fit(X_base_std, y_noisy)
+                            noisy[_b][mn][pass_key] = float(metric_fn(
+                                y_val, _predict_for_metric(mdl, X_eval_std,
+                                                           metric_name)))
+                        except Exception as exc:
+                            errors[f'{_b}|{pass_key}|noisy|{mn}'] = \
+                                f'{type(exc).__name__}: {exc}'
 
                 # Both recipes, rebuilt on this fold under the corrupted
                 # labels. hybrid_for_fold reads the objective off the
@@ -950,69 +1036,91 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     else:
                         hybrid_sim_X = _X
 
-                built, zero_imp = _spaces_for_pass(
-                    X_base_raw, X_base_std, y_noisy, is_clf, specs,
-                    importance_methods, forest_kw, hybrid_X, errors, pass_key,
-                    hybrid_sim_X=hybrid_sim_X)
-                for key in zero_imp:
-                    zero_imp_builds[key] = zero_imp_builds.get(key, 0) + 1
-
-                for space_key, (kind, payload, space_metric) in built.items():
-                    for k in k_values:
-                        k_eff = int(min(k, len(y_noisy) - 1))
-                        if k_eff < 1:
-                            errors[f'{pass_key}|{space_key}|k{k}'] = \
-                                'fewer than two training molecules'
-                            continue
-                        try:
-                            if kind == 'features':
-                                nbrs = neighbours_in_space(
-                                    payload, k_eff, space_metric)
-                            else:
-                                nbrs = neighbours_in_distance_matrix(
-                                    payload, k_eff)
-                        except Exception as exc:
-                            errors[f'{pass_key}|{space_key}|k{k}|neighbours'] \
-                                = f'{type(exc).__name__}: {exc}'
-                            continue
-
-                        for detector in detectors:
-                            est_key = f'{detector}_k{k}'
+                # The hybrid distances do not depend on the single
+                # representation, so their neighbours are found once per pass
+                # and reused under the second prefix. {(unprefixed key, k):
+                # neighbour indices}
+                hybrid_nbrs = {}
+                for _b, (X_base_raw, X_base_std, X_eval_std) in \
+                        base_mats.items():
+                    _built1, _zero1 = _spaces_for_pass(
+                        X_base_raw, X_base_std, y_noisy, is_clf, _specs_one,
+                        importance_methods, forest_kw, hybrid_X, errors,
+                        f'{_b}|{pass_key}', hybrid_sim_X=hybrid_sim_X)
+                    for key in _zero1:
+                        _pk = f'{_b}/{key}'
+                        zero_imp_builds[_pk] = zero_imp_builds.get(_pk, 0) + 1
+                    for key1, (kind, payload, space_metric) in _built1.items():
+                        space_key = f'{_b}/{key1}'
+                        _is_hybrid = _specs_one[key1]['family'].startswith(
+                            'hybrid')
+                        for k in k_values:
+                            k_eff = int(min(k, len(y_noisy) - 1))
+                            if k_eff < 1:
+                                errors[f'{pass_key}|{space_key}|k{k}'] = \
+                                    'fewer than two training molecules'
+                                continue
                             try:
-                                scores = suspicion_from_neighbours(
-                                    nbrs, y_noisy, detector, is_clf)
+                                if _is_hybrid and (key1, k) in hybrid_nbrs:
+                                    nbrs = hybrid_nbrs[(key1, k)]
+                                elif kind == 'features':
+                                    nbrs = neighbours_in_space(
+                                        payload, k_eff, space_metric)
+                                else:
+                                    nbrs = neighbours_in_distance_matrix(
+                                        payload, k_eff)
+                                if _is_hybrid:
+                                    hybrid_nbrs[(key1, k)] = nbrs
                             except Exception as exc:
-                                errors[f'{pass_key}|{space_key}|{est_key}'] = \
+                                errors[f'{pass_key}|{space_key}|k{k}|'
+                                       f'neighbours'] = \
                                     f'{type(exc).__name__}: {exc}'
                                 continue
 
-                            det = detection_scores(cmask, scores, condition)
-                            if det is not None:
-                                det_ap[space_key][f'{est_key}|{pass_key}'] = \
-                                    det['detection_average_precision']
-                                det_pk[space_key][f'{est_key}|{pass_key}'] = \
-                                    det['detection_precision_at_k']
-
-                            try:
-                                weights = weights_from_scores(
-                                    scores, strength=WEIGHT_STRENGTH,
-                                    method=WEIGHT_METHOD)
-                            except Exception as exc:
-                                errors[f'{pass_key}|{space_key}|{est_key}|weights'] \
-                                    = f'{type(exc).__name__}: {exc}'
-                                continue
-                            for mn in downstream_models:
-                                cell = f'{mn}|{est_key}|{pass_key}'
+                            for detector in detectors:
+                                est_key = f'{detector}_k{k}'
                                 try:
-                                    mdl = model_factories[mn]()
-                                    mdl.fit(X_base_std, y_noisy,
-                                            sample_weight=weights)
-                                    rep_score[space_key][cell] = float(
-                                        metric_fn(y_val, _predict_for_metric(
-                                            mdl, X_eval_std, metric_name)))
+                                    scores = suspicion_from_neighbours(
+                                        nbrs, y_noisy, detector, is_clf)
                                 except Exception as exc:
-                                    errors[f'{space_key}|{cell}'] = \
+                                    errors[f'{pass_key}|{space_key}|'
+                                           f'{est_key}'] = \
                                         f'{type(exc).__name__}: {exc}'
+                                    continue
+
+                                det = detection_scores(cmask, scores,
+                                                       condition)
+                                if det is not None:
+                                    det_ap[space_key][
+                                        f'{est_key}|{pass_key}'] = \
+                                        det['detection_average_precision']
+                                    det_pk[space_key][
+                                        f'{est_key}|{pass_key}'] = \
+                                        det['detection_precision_at_k']
+
+                                try:
+                                    weights = weights_from_scores(
+                                        scores, strength=WEIGHT_STRENGTH,
+                                        method=WEIGHT_METHOD)
+                                except Exception as exc:
+                                    errors[f'{pass_key}|{space_key}|'
+                                           f'{est_key}|weights'] = \
+                                        f'{type(exc).__name__}: {exc}'
+                                    continue
+                                for mn in downstream_models:
+                                    cell = f'{mn}|{est_key}|{pass_key}'
+                                    try:
+                                        mdl = model_factories[mn]()
+                                        mdl.fit(X_base_std, y_noisy,
+                                                sample_weight=weights)
+                                        rep_score[space_key][cell] = float(
+                                            metric_fn(y_val,
+                                                      _predict_for_metric(
+                                                          mdl, X_eval_std,
+                                                          metric_name)))
+                                    except Exception as exc:
+                                        errors[f'{space_key}|{cell}'] = \
+                                            f'{type(exc).__name__}: {exc}'
 
             print(f"    level {lvl_key} fold {fold_i} done, "
                   f"{len(errors)} failures so far [{time.time() - t0:.0f}s]")
@@ -1020,7 +1128,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         results['per_level'][lvl_key] = convert_numpy(_level_block(
             specs, downstream_models, detectors, k_values, seeds,
             clean, noisy, det_ap, det_pk, rep_score, zero_imp_builds,
-            counts, errors, provenance, lower_is_better))
+            counts, errors, provenance, lower_is_better, base_used))
         print(f"    [{time.time() - t_level:.0f}s]")
 
     # ── the top 2, added beside what is already reported ───────────────────
@@ -1030,18 +1138,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # over every level, fold, draw, detector and k value, and 'per_level' and
     # 'summary' hold the numbers they held before this block existed.
     #
-    # WHAT THESE ARE A RANKING OF, AND WHAT THEY ARE NOT. They read the pool
-    # search the hybrid recipe came from. n21 does not build its distances from
-    # that search: `base_rep` is picked by name at pick_noise_base_rep above,
-    # and the 8 importance-weighted spaces, the forest proximity and every
-    # repaired fit are all computed on that one representation. So these keys
-    # say what the pool search scored each representation at, per downstream
-    # model, and they do not change which representation n21 measured.
+    # WHAT THESE ARE A RANKING OF. They read the pool search the hybrid recipe
+    # came from, the same search `base_reps_used` was ranked from. The
+    # importance-weighted spaces, the forest proximity and every repaired fit
+    # are computed on the first downstream model's top 2 of these; the other
+    # models' rows are recorded and not measured in.
     #
-    # What was absent without them: the file named one base representation and
-    # one hybrid recipe and reported no score for any other, so a reader could
-    # not tell a comparator ahead by a clear margin from one ahead in the
-    # fourth decimal.
+    # What was absent without them: the file reported no score for any other
+    # representation or recipe, so a reader could not tell a comparator ahead
+    # by a clear margin from one ahead in the fourth decimal.
     #
     # 0 new model fits. All four helpers read rows the search already holds in
     # search.baselines and search.all_results.
@@ -1110,10 +1215,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['top2_read_from'] = (
         'the pool search that chose the hybrid recipe, fetched once for '
         f'downstream model {downstream_models[0]}. The distances n21 measured '
-        f'are built on {base_rep_name}, which was picked by name and not by '
-        'this ranking.'
+        f'are built on {downstream_models[0]}\'s top 2 by this ranking: '
+        + ', '.join(f'{b} {rn}' for b, rn in base_used.items()) + '.'
         if pool_search is not None else
-        'no pool search was held: ' + str(hybrid_meta.get('absent_because')))
+        'no pool search was held: ' + str(hybrid_meta.get('absent_because')
+                                          or _lookup_error))
 
     results['summary'] = _summarise(results, specs, metrics, detectors,
                                     k_values, importance_methods, exponents,
@@ -1131,36 +1237,55 @@ def _mean(values):
 
 def _level_block(specs, models, detectors, k_values, seeds, clean, noisy,
                  det_ap, det_pk, rep_score, zero_imp_builds, counts, errors,
-                 provenance, lower_is_better):
+                 provenance, lower_is_better, base_used):
     """One level's readings, per space.
 
     `clean_score_by_model` is one number per model, averaged over folds; the
     clean fit carries no noise so it is fitted once per fold, not once per draw.
     `noisy_score_by_model` is averaged over (fold, draw). The gap between them
-    is what a repair has to put back.
+    is what a repair has to put back. All three are per single representation,
+    under 'per_base'; the top-level copies are base_1's, the shape
+    noise_ceiling_analyse._read_n21 reads.
     """
-    clean_by_model = {m: _mean(clean[m].values()) for m in models}
-    noisy_by_model = {m: _mean(noisy[m].values()) for m in models}
-    gap_by_model = {}
-    for m in models:
-        c, nz = clean_by_model[m], noisy_by_model[m]
-        if np.isfinite(c) and np.isfinite(nz):
-            gap_by_model[m] = float((nz - c) if lower_is_better else (c - nz))
-        else:
-            gap_by_model[m] = float('nan')
+    per_base = {}
+    for b, rn in base_used.items():
+        clean_by_model = {m: _mean(clean[b][m].values()) for m in models}
+        noisy_by_model = {m: _mean(noisy[b][m].values()) for m in models}
+        gap_by_model = {}
+        for m in models:
+            c, nz = clean_by_model[m], noisy_by_model[m]
+            if np.isfinite(c) and np.isfinite(nz):
+                gap_by_model[m] = float((nz - c) if lower_is_better
+                                        else (c - nz))
+            else:
+                gap_by_model[m] = float('nan')
+        per_base[b] = {'single_representation': rn,
+                       'clean_score_by_model': clean_by_model,
+                       'noisy_score_by_model': noisy_by_model,
+                       'gap_by_model': gap_by_model}
+    _first = per_base[next(iter(base_used))]
 
     block = {
         'molecules_corrupted_mean': _mean(counts['n_corrupted']),
         'molecules_in_training_fold_mean': _mean(counts['n_training']),
-        'clean_score_by_model': clean_by_model,
-        'noisy_score_by_model': noisy_by_model,
-        'gap_by_model': gap_by_model,
+        'clean_score_by_model': _first['clean_score_by_model'],
+        'noisy_score_by_model': _first['noisy_score_by_model'],
+        'gap_by_model': _first['gap_by_model'],
+        'per_base': per_base,
+        'by_model_scores_note': (
+            'clean_score_by_model, noisy_score_by_model and gap_by_model at '
+            'this level are base_1\'s; per_base holds each single '
+            'representation\'s own.'),
         'gap_note': ('clean minus corrupted, signed so a positive gap always '
                      'means the injected noise cost the model something'),
         'per_space': {},
     }
 
     for space_key in specs:
+        _pb = per_base[specs[space_key]['base_space']]
+        clean_by_model = _pb['clean_score_by_model']
+        noisy_by_model = _pb['noisy_score_by_model']
+        gap_by_model = _pb['gap_by_model']
         ap = det_ap.get(space_key, {})
         pk = det_pk.get(space_key, {})
         rs = rep_score.get(space_key, {})
@@ -1322,41 +1447,43 @@ def _summarise(results, specs, metrics, detectors, k_values,
                 }
 
         # The convention question: at one metric and one importance method,
-        # which exponent finds the corrupted molecules better.
+        # which exponent finds the corrupted molecules better. Asked inside
+        # each single representation.
         convention = {}
-        for imp in importance_methods:
-            for m in metrics:
-                keys = [f'imp_pow{e:g}|{imp}|{m}' for e in exponents]
-                if not all(kk in ap for kk in keys):
-                    continue
-                matched = EXPONENT_MATCHED_TO_METRIC.get(m)
-                best, best_ap = None, float('-inf')
-                for e, kk in zip(exponents, keys):
-                    v = block['per_space'][kk][
+        _bases = list(dict.fromkeys(sp['base_space'] for sp in specs.values()))
+        for _b, imp, m in ((bb, i, mm) for bb in _bases
+                           for i in importance_methods for mm in metrics):
+            keys = [f'{_b}/imp_pow{e:g}|{imp}|{m}' for e in exponents]
+            if not all(kk in ap for kk in keys):
+                continue
+            matched = EXPONENT_MATCHED_TO_METRIC.get(m)
+            best, best_ap = None, float('-inf')
+            for e, kk in zip(exponents, keys):
+                v = block['per_space'][kk][
+                    'detection_average_precision_mean']
+                if np.isfinite(v) and v > best_ap:
+                    best_ap, best = v, float(e)
+            row = {
+                'exponent_matched_to_this_metric': matched,
+                'exponent_with_the_higher_average_precision': best,
+                'average_precision_by_exponent': {
+                    f'{e:g}': block['per_space'][kk][
                         'detection_average_precision_mean']
-                    if np.isfinite(v) and v > best_ap:
-                        best_ap, best = v, float(e)
-                row = {
-                    'exponent_matched_to_this_metric': matched,
-                    'exponent_with_the_higher_average_precision': best,
-                    'average_precision_by_exponent': {
-                        f'{e:g}': block['per_space'][kk][
-                            'detection_average_precision_mean']
-                        for e, kk in zip(exponents, keys)},
+                    for e, kk in zip(exponents, keys)},
+            }
+            if len(exponents) == 2:
+                a_key = f'{_b}/imp_pow{exponents[0]:g}|{imp}|{m}'
+                b_key = f'{_b}/imp_pow{exponents[1]:g}|{imp}|{m}'
+                row[f'{exponents[0]:g} against {exponents[1]:g}'] = {
+                    'detection_average_precision': _compare(
+                        ap[a_key], ap[b_key], True, ap_cell),
+                    'repair_score': _compare(
+                        rp[a_key], rp[b_key], not lower_is_better,
+                        rep_cell),
                 }
-                if len(exponents) == 2:
-                    a_key = f'imp_pow{exponents[0]:g}|{imp}|{m}'
-                    b_key = f'imp_pow{exponents[1]:g}|{imp}|{m}'
-                    row[f'{exponents[0]:g} against {exponents[1]:g}'] = {
-                        'detection_average_precision': _compare(
-                            ap[a_key], ap[b_key], True, ap_cell),
-                        'repair_score': _compare(
-                            rp[a_key], rp[b_key], not lower_is_better,
-                            rep_cell),
-                    }
-                if matched is not None and best is not None:
-                    row['the_matched_exponent_won'] = bool(best == matched)
-                convention[f'{imp}|{m}'] = row
+            if matched is not None and best is not None:
+                row['the_matched_exponent_won'] = bool(best == matched)
+            convention[f'{_b}/{imp}|{m}'] = row
 
         ranked = sorted(
             ((s, block['per_space'][s]['detection_average_precision_mean'])
@@ -1438,7 +1565,9 @@ def main():
                         default=FOREST_MIN_SAMPLES_LEAF)
     parser.add_argument('--no-hybrid', action='store_true',
                         help='Skip the hybrid distance. The other three still '
-                             'run and the result file says why it is absent.')
+                             'run and the result file says why it is absent. '
+                             'The stored search is still looked up, because '
+                             'it ranks the single representations.')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)

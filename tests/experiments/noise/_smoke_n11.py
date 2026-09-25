@@ -64,8 +64,9 @@ def _tiny_data(n=120, d=8, seed=0):
     noise conditions are never reachable from here -- which is what we want, the
     injector under test is the plain Gaussian one.
 
-    'blosum' is one of the names pick_noise_base_rep prefers, so the control
-    representation is decided here rather than alphabetically.
+    The fixed preference list was deleted 2026-09-25 (owner's decision): the
+    single representations are each downstream model's top 2 by its stored
+    score. _fake_pool's search ranks 'blosum' first and 'other' second for rf.
     """
     rng = np.random.RandomState(seed)
     X = rng.randn(n, d)
@@ -110,7 +111,15 @@ def _fake_pool(*_a, **_kw):
             },
         },
     }
-    return object(), meta
+    return _SEARCH, meta
+
+
+# The stored search n11 ranks the single representations from. rf ranks
+# 'blosum' first and 'other' second.
+_SEARCH = types.SimpleNamespace(
+    metric_name='spearman', lower_is_better=False,
+    baselines={'blosum': {'rf': 0.60}, 'other': {'rf': 0.10}},
+    baseline_fold_scores={})
 
 
 def _spearman(a, b):
@@ -211,8 +220,25 @@ def test_run_produces_cells():
     check('every cell names its model and its remediation',
           all(rv.get('model') and rv.get('remediation') for _, _, _, rv in cells))
     spaces = {sp for sp, _, _, _ in cells}
-    check('the control representation has its own space',
-          'blosum_raw' in spaces, str(sorted(spaces)))
+    check("rf's top 2 by its stored score are blosum then other",
+          res.get('base_reps_by_model') == {'rf': ['blosum', 'other']},
+          str(res.get('base_reps_by_model')))
+    check('each of the two single representations is a detection space',
+          {'base_1_blosum', 'base_2_other'} <= spaces, str(sorted(spaces)))
+    check('neither is also scored as a plain capped space for rf',
+          'blosum' not in spaces and 'other' not in spaces, str(sorted(spaces)))
+    units = {rv['model'] for _, _, _, rv in cells}
+    check('every repaired fit is done on both single representations',
+          units == {'rf@base_1', 'rf@base_2'}, str(sorted(units)))
+    hyb = [rv for sp, _, _, rv in cells if sp.startswith('hybrid_')]
+    check('including the rows whose noise was found in the hybrid space',
+          {rv['fitted_on_representation'] for rv in hyb} == {'blosum', 'other'},
+          str(sorted({rv['fitted_on_representation'] for rv in hyb})))
+    check('one clean-to-noisy gap per model per rank',
+          set(sr['gap_by_model']) == {'rf@base_1', 'rf@base_2'}
+          and sr['clean_score_by_model']['rf@base_1']
+          != sr['clean_score_by_model']['rf@base_2'],
+          str(sr['gap_by_model']))
     check('the pool family got a space of its own',
           any(s.startswith('hybrid_predictive') for s in spaces),
           str(sorted(spaces)))
@@ -236,12 +262,13 @@ def test_models_come_from_config():
         res = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None, 'smoke_n11',
                       sigmas=[0.5], noise_seeds=[0])
     sr = res['per_sigma']['0.5']
-    models = {rv['model'] for _, _, _, rv in _cells(sr)}
+    models = {rv['downstream_model'] for _, _, _, rv in _cells(sr)}
     check('only the one model config asked for was fitted',
           models == {'rf'}, str(sorted(models)))
-    check('the clean and noisy references are that same one model',
-          set(sr['clean_score_by_model']) == {'rf'}
-          and set(sr['noisy_score_by_model']) == {'rf'},
+    check('the clean and noisy references are that same one model, once per '
+          'single representation',
+          set(sr['clean_score_by_model']) == {'rf@base_1', 'rf@base_2'}
+          and set(sr['noisy_score_by_model']) == {'rf@base_1', 'rf@base_2'},
           f"clean={sorted(sr['clean_score_by_model'])}")
 
 
@@ -397,17 +424,25 @@ def test_empty_pool_keeps_the_cross():
         return None, None
 
     data = _tiny_data()
+    # With no stored search there is nothing to rank the single
+    # representations by, so the caller names them.
     with _Patched('spearman', _spearman, False,
                   estimators=['neighbor_residual'], pool=_no_pool):
         res = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None,
-                      'smoke_n11', sigmas=[0.5], noise_seeds=[0])
+                      'smoke_n11', sigmas=[0.5], noise_seeds=[0],
+                      base_reps={'rf': ['blosum', 'other']})
+        bare = n11._run_one_condition(data, {'n_splits': 2, 'models': ['rf']}, None,
+                       'smoke_n11', sigmas=[0.5], noise_seeds=[0])
+    check('with no search and no names given, it says why nothing ran',
+          bare.get('error') == 'no_single_representation'
+          and 'rf' in bare.get('base_reps_missing', {}), str(bare)[:160])
     check('no early return', 'error' not in res, res.get('error', ''))
     sr = res.get('per_sigma', {}).get('0.5', {})
     cells = _cells(sr)
     check('the estimator x correction cross still produced scored cells',
           len(cells) > 0, f'{len(cells)} cells')
     spaces = {sp for sp, _, _, _ in cells}
-    check('every space is a plain representation, none is a hybrid',
+    check('every space is a representation, none is a hybrid',
           spaces and not any(s.startswith('hybrid_') for s in spaces),
           str(sorted(spaces)))
     arm = (res.get('pool_selection') or {}).get('hybrid_arm') or {}

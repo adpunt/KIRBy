@@ -22,7 +22,11 @@ WHAT IT REPORTS, in order of what it is for:
      row count, which counts one group's ground truth once per repeat.
   3. The hybrid minus the single representation, per estimator: does an
      estimator agree better in a space whose features were chosen, than in one
-     that had no choice made for it.
+     that had no choice made for it. The single representations are rf's top 2
+     by rf's score in the stored search the hybrid recipe came from, as spaces
+     `base_1` and `base_2` (owner's decision 2026-09-25). Where that search
+     gives no rf ranking, both spaces are skipped and `base_reps_missing` says
+     why; there is no fallback list.
 
 WHICH HYBRID RECIPES IT MAY PICK. 2026-09-12, the owner's decision: n06's pool
 subset includes similarity hybrids. The stored searches the recipe is picked
@@ -71,8 +75,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_best_search_for_downstream, build_fold_hybrid, make_cv_splitter,
-    extract_top3_base_reps, pick_noise_base_rep, get_domain_metric,
-    POOL_SUBSETS,
+    extract_top3_base_reps, get_domain_metric,
+    POOL_SUBSETS, noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
 )
 from kirby.utils.noise_estimation import get_noise_estimator, ESTIMATOR_REGISTRY
 
@@ -290,7 +294,8 @@ def _blueprint_for(reps, labels, groups, data, dataset_name, task_type,
     """The recipe the pool picked, and which pool entry it came from.
 
     Returns (blueprint, aug_condition, metadata, search) or
-    (None, None, reason, None).
+    (None, None, reason, search). The search is returned even when no recipe
+    came back, because the single representations are ranked from it.
 
     2026-09-12, the owner's decision: n06's pool subset includes similarity
     hybrids. `pool_subset='predictive_and_similarity'` lets the pool draw on
@@ -321,10 +326,10 @@ def _blueprint_for(reps, labels, groups, data, dataset_name, task_type,
     except Exception as exc:
         return None, None, f'{type(exc).__name__}: {exc}', None
     if not meta:
-        return None, None, 'no pool candidate produced a result for rf', None
+        return None, None, 'no pool candidate produced a result for rf', search
     bp = meta.get('best_config', {}).get('blueprint')
     if bp is None:
-        return None, None, 'the winning pool entry carries no blueprint', None
+        return None, None, 'the winning pool entry carries no blueprint', search
     return bp, meta.get('aug_condition', 'uncapped'), meta, search
 
 
@@ -615,11 +620,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {results['transfer_cannot_be_computed']}")
 
     # ── feature spaces ──
-    # The comparator is ONE base representation, never every representation
+    # The comparators are single representations, never every representation
     # glued together: a concatenation is not a baseline in this project. Which
-    # one: the best single representation in the same pool lookup that chose
-    # the hybrid's recipe, so the comparator and the hybrid are ranked on one
-    # set of folds.
+    # ones: rf's top 2 in the same pool lookup that chose the hybrid's recipe,
+    # as spaces base_1 and base_2 (owner's decision 2026-09-25).
     budget = kwargs.get('budget')
     spaces = {}
     space_provenance = {}
@@ -711,7 +715,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'chosen ONCE, by a search over every row — the budget, the '
                     'allocation method, the importance scorer and which '
                     'representations are in the pool are not re-chosen per '
-                    'fold. The comparator representation was picked off the '
+                    'fold. The comparator representations were ranked in the '
                     'same pool lookup. So the recipe is common to every fold, '
                     'and only the features it selects are per fold.'),
                 'tier': o_tier, 'aug_condition': o_aug,
@@ -736,55 +740,63 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             space_provenance[name] = {'unavailable': (
                 f'the {o} family is not in the pool subset {pool_subset}')}
 
-    base_rep = None
+    # ── the single-representation comparison: rf's top 2 ──
+    # Owner's decision 2026-09-25: rf's rank-1 and rank-2 single
+    # representations by rf's score in the stored search the pool returned,
+    # as spaces base_1 and base_2. No fallback list: where that search gives
+    # no rf ranking -- no search at all, or a similarity-objective search that
+    # fitted no rf -- the single-representation spaces are skipped and the
+    # reason is written to base_reps_missing.
     if search is not None:
         try:
             top3 = extract_top3_base_reps(search)
             if top3:
                 results['top3_base_reps'] = [(n, sc) for n, sc in top3]
-                if top3[0][0] in reps:
-                    base_rep = top3[0][0]
         except Exception as exc:
-            print(f"  no base-representation ranking off the search "
+            print(f"  no top-3 listing off the search "
                   f"({type(exc).__name__}: {exc})")
-    # Which search the comparator was ranked in is now worth saying, because
-    # the pool subset can return a recipe from either family (2026-09-12
-    # decision). `search` is whichever family the pool returned, so on a
-    # similarity winner the representations behind the comparator were ranked
-    # by the neighbour correlation and no model was fitted. Written out rather
-    # than left as the old claim that it is always a random forest.
-    if base_rep is None:
-        base_rep = pick_noise_base_rep(reps, dataset_name)
-        ranked_in = ('a fixed preference order; the pool search gave no usable '
-                     'ranking of the single representations')
-        print(f"  comparator: {base_rep} (preference order; the search gave "
-              f"no usable ranking)")
-    elif winner_family == 'similarity':
-        ranked_in = (
-            'the best single representation in the same search that chose the '
-            'hybrid recipe. That search ran under the similarity objective and '
-            'fits no downstream model, so the representations were ranked by '
-            f"{results.get('hybrid_metric')} — each molecule's activity "
-            'predicted from its five nearest neighbours — not by a random '
-            'forest.')
-        print(f"  comparator: {base_rep} (best single representation in the "
-              f"similarity search the pool returned)")
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {'rf': search}, ['rf'], reps=reps, dataset_name=dataset_name)
     else:
-        ranked_in = (
-            'the best single representation under a random forest in the same '
-            'search that chose the hybrid recipe, so both arms are ranked by '
-            'one model on one set of folds')
-        print(f"  comparator: {base_rep} (best single representation by rf)")
-    spaces[base_rep] = ('base', None, None)
-    space_provenance[base_rep] = {
-        'features_chosen_by': 'nothing — every feature of one representation',
-        'which_representation': ranked_in,
-        'ranked_in_which_search_family': winner_family,
-        'scaling': 'z-scored inside each fold on that fold\'s training rows, '
-                   'the same treatment the hybrid arm gets',
-    }
-    results['comparator_space'] = base_rep
+        base_by_model = {}
+        base_missing = {'rf': (
+            f'the pool lookup returned no stored search ({pool_failure}), so '
+            f'there is no rf ranking of the single representations')}
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces = {}
+    for _k, _rn in enumerate(base_by_model.get('rf', [])
+                             [:NOISE_BASE_REP_COUNT], start=1):
+        base_spaces[f'base_{_k}'] = _rn
+    ranked_in = (
+        f"rf's rank-{{k}} single representation by rf's score in the stored "
+        f"search the pool returned (built under the {winner_family} "
+        f"objective), the same search that chose the hybrid recipe")
+    for _sp, _rn in base_spaces.items():
+        spaces[_sp] = ('base', _rn, None)
+        space_provenance[_sp] = {
+            'representation': _rn,
+            'features_chosen_by': 'nothing — every feature of one '
+                                  'representation',
+            'which_representation': ranked_in.format(k=_sp.split('_')[1]),
+            'ranked_in_which_search_family': winner_family,
+            'scaling': 'z-scored inside each fold on that fold\'s training '
+                       'rows, the same treatment the hybrid arm gets',
+        }
+        print(f"  {_sp}: {_rn} (rf's rank {_sp.split('_')[1]})")
+    if not base_spaces:
+        print(f"  no single-representation space: {base_missing.get('rf')}")
+    results['comparator_spaces'] = list(base_spaces)
     results['space_provenance'] = convert_numpy(space_provenance)
+
+    if not spaces:
+        reason = ('no feature space to score in: no hybrid recipe came back '
+                  f'({pool_failure}) and no single representation was ranked '
+                  f'({base_missing.get("rf")})')
+        print(f"  SKIP: {reason}")
+        results.update({'skipped': True, 'reason': reason,
+                        'policy': 'no_feature_space'})
+        return results
 
     # ── score every molecule, inside its own fold ──
     splitter, use_groups = make_cv_splitter(N_FOLDS, search_groups,
@@ -818,7 +830,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # training rows only. Scaling the comparator once over every row and the
     # hybrid per fold would put a difference in treatment inside the
     # subtraction between them.
-    base_matrix = _clean_matrix(reps[base_rep])
+    base_matrices = {sp: _clean_matrix(reps[rn])
+                     for sp, rn in base_spaces.items()}
 
     scores = {s: {e: np.full(n_samples, np.nan) for e in estimators}
               for s in spaces}
@@ -848,7 +861,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"({type(exc).__name__}: {exc})")
                     continue
             else:
-                X_tr, X_va = base_matrix[train_idx], base_matrix[val_idx]
+                X_tr = base_matrices[space_name][train_idx]
+                X_va = base_matrices[space_name][val_idx]
 
             # Both arms, one rule: z-scored on this fold's training rows.
             scaler = StandardScaler().fit(X_tr)
@@ -976,27 +990,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'notes': gt.notes,
             'per_space': convert_numpy(per_space),
         }
-        # The hybrid minus the single representation, per estimator. Both
+        # The hybrid minus each single representation, per estimator. Both
         # numbers were already written before 2026-09-11 and never subtracted.
-        deltas = {}
-        for space_name in spaces:
-            if space_name == base_rep:
-                continue
-            row = {}
-            for est_name in estimators:
-                hi = per_space[space_name][est_name].get('value')
-                lo = per_space[base_rep][est_name].get('value')
-                row[est_name] = (None if hi is None or lo is None
-                                 else float(hi - lo))
-            deltas[space_name] = row
-        results['ground_truth'][gt.provider]['minus_comparator'] = {
-            'comparator_space': base_rep,
-            'per_space': convert_numpy(deltas),
-            'what_this_is': (f'the {gt.statistic} in that space minus the '
-                             f'{gt.statistic} in {base_rep}, per estimator; '
-                             f'positive means the estimator agrees better '
-                             f'where the features were chosen'),
-        }
+        # One block per single-representation space (base_1, base_2).
+        minus = {}
+        for base_sp, base_rn in base_spaces.items():
+            deltas = {}
+            for space_name in spaces:
+                if space_name in base_spaces:
+                    continue
+                row = {}
+                for est_name in estimators:
+                    hi = per_space[space_name][est_name].get('value')
+                    lo = per_space[base_sp][est_name].get('value')
+                    row[est_name] = (None if hi is None or lo is None
+                                     else float(hi - lo))
+                deltas[space_name] = row
+            minus[base_sp] = {
+                'comparator_space': base_sp,
+                'comparator_representation': base_rn,
+                'per_space': convert_numpy(deltas),
+                'what_this_is': (f'the {gt.statistic} in that space minus the '
+                                 f'{gt.statistic} in {base_sp} ({base_rn}), per '
+                                 f'estimator; positive means the estimator '
+                                 f'agrees better where the features were '
+                                 f'chosen'),
+            }
+        results['ground_truth'][gt.provider]['minus_comparator'] = minus
         if not headline:
             headline = {s: {e: per_space[s][e].get('value')
                             for e in estimators} for s in spaces}

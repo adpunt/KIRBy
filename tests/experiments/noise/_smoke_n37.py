@@ -11,7 +11,8 @@ What has to be true before any number n37 writes can be read:
      depend on the prediction, and well above 0 when it does. No p-value key.
   4. SIMEX EXTRAPOLATION of an exactly linear curve lands on the line's value
      at lambda = -1.
-  5. A FULL RUN, base only: every fold has a base intercept, the check rises
+  5. A FULL RUN, single representations only (base_1 'toy', base_2 'second'
+     for every model): every fold has an intercept in each, the check rises
      with the level and tracks the injected variance, every model is scored,
      SIMEX runs, the out-of-fold tails are written, no errors.
   6. A FULL RUN with a hybrid recipe and repeat measurements: the hybrid space
@@ -95,11 +96,15 @@ def no_recipe(*a, **k):
     return None, None
 
 
+BASE_REPS = {m: ['toy', 'second'] for m in n37.DOWNSTREAM_MODELS}
+
+
 def run_it(data, name, recipe=no_recipe, **kw):
     real = n37.get_best_search_for_downstream
     n37.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        # Every model's top 2 single representations, given directly.
+        kw.setdefault('base_reps', BASE_REPS)
         kw.setdefault('models', ['rf', 'lightgbm'])
         return n37.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
@@ -156,8 +161,8 @@ def test_runs():
     r = run_it(data, 'toy_base', levels=[0.0, 0.5, 1.0], simex_draws=[0, 1])
     pf = r['per_fold']
     check('5a. every fold has a base intercept and every model is scored',
-          len(pf) == 3 and all('intercept' in f['gamma']['base'] for f in pf)
-          and all(set(f['model_error']['base']) == {'rf', 'lightgbm'} for f in pf))
+          len(pf) == 3 and all('intercept' in f['gamma']['base_1'] for f in pf)
+          and all(set(f['model_error']['base_1']) == {'rf', 'lightgbm'} for f in pf))
     ch = r['check']
     rise5, inj5 = ch['0.5']['intercept_rise_mean'], ch['0.5']['realised_injected_variance_mean']
     rise1, inj1 = ch['1']['intercept_rise_mean'], ch['1']['realised_injected_variance_mean']
@@ -166,17 +171,31 @@ def test_runs():
           and abs(rise5 - inj5) < 0.35 * inj5,
           f'level 0.5: rise {rise5:.4f} vs {inj5:.4f}; level 1: rise '
           f'{rise1:.4f} vs {inj1:.4f}')
-    sx = pf[0]['simex']['base']['rf']
+    sx = pf[0]['simex']['base_1']['rf']
     check('5c. SIMEX ran: 4 lambda points, both extrapolations',
           len(sx['lambdas']) == 4 and 'linear' in sx and 'quadratic' in sx,
           f"mse {[round(v, 4) for v in sx['mse']]}")
-    o = r['out_of_fold']['base']['lightgbm']
+    o = r['out_of_fold']['base_1']['lightgbm']
     check('5d. out-of-fold tails and spread regression written over every molecule',
           o['tails']['n'] == 180 and 'student_t_nu' in o['tails']
           and 'r_squared' in o['spread_on_prediction'])
     check('5e. forest-proximity intercept written',
           'intercept' in pf[0]['gamma'].get('forest_proximity', {}))
     check('5f. no errors', not r.get('_errors'), str(r.get('_errors', ''))[:300])
+    check('5g. base_2 has its own intercept and scores; each model\'s pair '
+          'and the reference representation are named',
+          r['spaces_run'] == ['base_1', 'base_2']
+          and all('intercept' in f['gamma']['base_2'] for f in pf)
+          and all(set(f['model_error']['base_2']) == {'rf', 'lightgbm'}
+                  for f in pf)
+          and r['base_reps_by_model'] == {m: ['toy', 'second']
+                                          for m in ['rf', 'lightgbm']}
+          and r['gamma_reference_rep'] == 'toy'
+          and r['gamma_reference_space'] == 'base_1'
+          and 'base_rep' not in r
+          and all(f['model_error']['base_2']['rf']['gamma_reference_over_mse']
+                  is not None for f in pf),
+          f"{r['spaces_run']}, reference {r.get('gamma_reference_rep')}")
 
     dr = make_data(replicates=True, seed=2)
     rr = run_it(dr, 'toy_rep', recipe=fake_recipe(['toy', 'second']),
@@ -185,7 +204,7 @@ def test_runs():
     check('6a. the hybrid space is scored and has its own intercept',
           'hybrid' in f0['model_error'] and 'intercept' in f0['gamma'].get('hybrid', {}),
           str(list(f0['model_error'])))
-    me = f0['model_error']['base']['lightgbm']
+    me = f0['model_error']['base_1']['lightgbm']
     check('6b. repeat-measurement variance and its ratio to the MSE written',
           'repeat_noise_variance_training' in f0
           and me.get('repeat_variance_over_mse') is not None
@@ -193,12 +212,12 @@ def test_runs():
           f"s2e {f0['repeat_noise_variance_training']['s2e']:.4f} (true 0.09)")
     check('6c. count-and-spread regression written',
           'spread_on_prediction_count_and_spread'
-          in rr['out_of_fold']['base']['lightgbm'])
+          in rr['out_of_fold']['base_1']['lightgbm'])
     check('6d. no errors', not rr.get('_errors'), str(rr.get('_errors', ''))[:300])
 
     dc = make_data()
     dc['task_type'] = 'classification'
-    rc = n37.run(dc, {'n_splits': 3}, OUT, 'toy_clf', base_rep='toy')
+    rc = n37.run(dc, {'n_splits': 3}, OUT, 'toy_clf', base_reps=BASE_REPS)
     check('7. classification skipped with its reason',
           rc.get('skipped') == 'not_regression')
 
@@ -210,9 +229,10 @@ def test_parser():
                          capture_output=True, text=True).stdout
     flags = ('--levels', '--draws', '--simex-lambdas', '--simex-draws',
              '--k-max', '--skip-proximity', '--skip-simex', '--exp-folds',
-             '--base-rep', '--tag')
+             '--tag')
     missing = [f for f in flags if f not in out]
     check('8. every flag is in --help', not missing, f'missing {missing}')
+    check('8b. --base-rep is gone', out and '--base-rep' not in out)
 
 
 if __name__ == '__main__':

@@ -12,7 +12,7 @@ What has to be true before any number n33 writes can be read:
   4. s IS THE RESIDUAL SD ON NORMAL RESIDUALS, and kurtosis is 3 there.
   5. EVERY LOSS SWAP FITS AND PREDICTS ON THE LABEL SCALE, including the two
      that start from the median.
-  6. A FULL RUN in the base space writes every label arm, every swap and the
+  6. A FULL RUN in the base_1 space writes every label arm, every swap and the
      NGBoost pair, a record per pass with the kurtosis, and tail scores.
   7. WITH A RECIPE, the hybrid space is built and the swaps are fitted in it.
   8. THE SWEEP WRITES ONE FILE PER CONDITION and a second call skips it.
@@ -89,7 +89,9 @@ def run_one(data, name, recipe=no_recipe, **kw):
     real = n33.get_best_search_for_downstream
     n33.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', {
+            m: ['toy', 'second']
+            for m in (kw.get('models') or n33.DOWNSTREAM_MODELS)})
         return n33._run_one_condition(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n33.get_best_search_for_downstream = real
@@ -185,7 +187,15 @@ def test_full_runs():
     models = ['rf', 'xgboost', 'lightgbm', 'dnn']
     res = run_one(make_data(), 'toy', models=models, levels=[0.0, 0.5],
                   draws=[0], noise_condition='laplace')
-    lv = res['per_level']['0.5']['base']
+    check('6-. spaces base_1 and base_2 ran, and the representations are '
+          'named', res['spaces_run'] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second']
+                                            for m in models}
+          and 'base_rep' not in res,
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
+    check('6-b. base_2 is scored for every model',
+          set(res['per_level']['0.5']['base_2']['noisy']) >= set(models))
+    lv = res['per_level']['0.5']['base_1']
     missing = [a for a in res['arms'] if a not in lv]
     check('6. every label arm is scored at level 0.5', not missing,
           f'missing {missing}; errors {list(res.get("_errors", {}))[:3]}'
@@ -204,21 +214,21 @@ def test_full_runs():
     recs = res['per_pass']['0.5']
     check('6d. one record per pass, with s and the kurtosis',
           len(recs) == 3 and all(
-              np.isfinite(r['per_space']['base']['residual_kurtosis'])
-              and r['per_space']['base']['robust_scale_s_label_units'] > 0
+              np.isfinite(r['per_space']['base_1']['residual_kurtosis'])
+              and r['per_space']['base_1']['robust_scale_s_label_units'] > 0
               for r in recs))
-    t = res['tails_per_level']['0.5']['base']['yeo_johnson']['rf']
+    t = res['tails_per_level']['0.5']['base_1']['yeo_johnson']['rf']
     check('6e. tail scores are written beside each score',
           all(v and 'tail_rmse_top' in v for v in t.values()))
-    sw = res['summary']['per_level']['0.5']['base']['model_swaps']
+    sw = res['summary']['per_level']['0.5']['base_1']['model_swaps']
     check('6f. each swap is paired against its parent',
           sw.get('lightgbm_tukey', {}).get('replaces') == 'lightgbm'
           and sw.get('ngboost_t', {}).get('replaces') == 'ngboost_normal'
           and sw['rf_l1']['vs_parent_on_noisy']['n_passes_paired'] == 3)
     check('6g. at level 0.0 one draw ran and clean equals noisy',
-          all(np.isclose(res['per_level']['0']['base']['clean']['rf'][k],
-                         res['per_level']['0']['base']['noisy']['rf'][k])
-              for k in res['per_level']['0']['base']['noisy']['rf']))
+          all(np.isclose(res['per_level']['0']['base_1']['clean']['rf'][k],
+                         res['per_level']['0']['base_1']['noisy']['rf'][k])
+              for k in res['per_level']['0']['base_1']['noisy']['rf']))
     check('6h. no errors', not res.get('_errors'),
           str(list(res.get('_errors', {}).items())[:3]))
 
@@ -238,10 +248,10 @@ def test_full_runs():
     check('9. the metric direction is read off the dataset',
           res['metric'] == 'rmse' and res['lower_is_better']
           and res_s['metric'] == 'spearman' and not res_s['lower_is_better'])
-    e = res_s['summary']['per_level']['0.5']['base']['per_model']['rf'][
+    e = res_s['summary']['per_level']['0.5']['base_1']['per_model']['rf'][
         'per_arm']['clean']['vs_noisy']
-    b = res_s['per_level']['0.5']['base']['noisy']['rf']
-    g = res_s['per_level']['0.5']['base']['clean']['rf']
+    b = res_s['per_level']['0.5']['base_1']['noisy']['rf']
+    g = res_s['per_level']['0.5']['base_1']['clean']['rf']
     k = sorted(set(b) & set(g))
     check('9b. a spearman gain is arm minus noisy',
           np.isclose(e['mean_gain'], np.mean([g[x] - b[x] for x in k])))
@@ -253,7 +263,8 @@ def test_sweep():
     n33.get_best_search_for_downstream = no_recipe
     try:
         kw = dict(models=['rf'], levels=[0.5], draws=[0], skip_ngboost=True,
-                  label_arms=['yeo_johnson'], base_rep='toy',
+                  label_arms=['yeo_johnson'],
+                  base_reps={'rf': ['toy', 'second']},
                   noise_conditions=['gaussian', 'laplace'], swaps=['rf_l1'])
         idx = n33.run(make_data(), {'n_splits': 3}, OUT, 'toy_sweep', **dict(kw))
         again = n33.run(make_data(), {'n_splits': 3}, OUT, 'toy_sweep', **dict(kw))
@@ -282,12 +293,12 @@ def test_the_command_line():
                                       'n33_robust_training.py'), '--help'],
         capture_output=True, text=True)
     wanted = ('--dataset', '--noise-condition', '--levels', '--draws',
-              '--huber-c', '--skip-ngboost', '--models', '--exp-folds',
-              '--base-rep')
+              '--huber-c', '--skip-ngboost', '--models', '--exp-folds')
     missing = [f for f in wanted if f not in out.stdout]
     check('11. the parser lists every flag',
           out.returncode == 0 and not missing,
           f'missing {missing}' if missing else f'{len(wanted)} flags present')
+    check('11b. --base-rep is gone', '--base-rep' not in out.stdout)
 
 
 if __name__ == '__main__':

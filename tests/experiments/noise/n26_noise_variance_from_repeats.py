@@ -70,8 +70,8 @@ WHAT IS COMPUTED.
 A CHECK OF THE ESTIMATOR, NOT A RESULT. The report states it found no paper
 using the 1/k regression and asks that it be checked first. So noise of known
 variance s2_inj / k is added to each molecule's mean label. The out-of-fold
-prediction is refitted for the first downstream model in the base
-representation, and the ols slope is refitted. What is written is the change in
+prediction is refitted for the first downstream model in its rank-1 single
+representation (space base_1), and the ols slope is refitted. What is written is the change in
 slope against the injected s2_inj. If the estimator works, the two are close.
 This arm says nothing about the real noise.
 
@@ -83,8 +83,11 @@ molecules whose repeats are all identical is written, because those repeats
 push the direct s2e toward zero.
 
 WHERE THE HYBRID COMES IN. Each downstream model's out-of-fold prediction is
-made in the base representation and in one hybrid per family of stored search,
-each recipe the one the pool picked FOR that model. The hybrid is rebuilt per
+made in its top 2 single representations -- spaces base_1 and base_2, ranked
+by that model's own score in the stored search (_shared.noise_base_reps_by_model,
+owner's decision 2026-09-25) -- and in one hybrid per family of stored search,
+each recipe the one the pool picked FOR that model. A model the pool holds no
+search for has neither. The hybrid is rebuilt per
 fold on the training molecules' mean labels, as n19 and n23 do. The model error
 s2u depends on the feature space. The noise variance s2e should not. How far the
 fitted slopes move between spaces is written as a spread.
@@ -112,7 +115,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
@@ -354,7 +358,7 @@ def _fit_predict(factory, X_tr, y_tr, X_va):
 
 
 def _oof_base_one_model(factory, X_base, y, splits):
-    """Out-of-fold prediction in the base representation, one model."""
+    """Out-of-fold prediction in one single representation, one model."""
     oof = np.full(len(y), np.nan)
     for tr, va in splits:
         sc = StandardScaler()
@@ -433,8 +437,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
             f"{sorted(model_factories)}.")
 
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
 
     direct = direct_noise_variance(values)
     counts = {int(c): int((stats['n_measurements'] >= c).sum())
@@ -456,7 +461,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'training_label': 'the mean of all of a molecule\'s measurements',
         'residual_units': 'label units; squared residuals in label units squared',
         'models': downstream_models,
-        'base_rep': base_rep_name,
         'feasibility': {
             'n_measurements': int(len(labels)),
             'n_molecules': n_ent,
@@ -515,20 +519,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             }
         for _sp, _why in _unavail.items():
             hybrid_unavailable.setdefault(_sp, {})[_m] = _why
-    spaces = ('base',) + tuple(ordered_spaces)
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces = tuple(
+        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, _k, downstream_models))
+
+    spaces = base_spaces + tuple(ordered_spaces)
     results['spaces_run'] = list(spaces)
-    results['hybrid_available'] = len(spaces) > 1
+    results['hybrid_available'] = len(ordered_spaces) > 0
     results['hybrid_spaces_unavailable'] = hybrid_unavailable
     results['hybrid_recipe_by_model'] = convert_numpy(recipe_record)
     results['features_note'] = (
         'Each hybrid is rebuilt per fold on the training molecules\' mean '
         'labels, from the recipe the pool picked for that downstream model. '
-        'The base representation is one matrix shared by every model.')
-    print(f"  base representation: {base_rep_name}; spaces {list(spaces)}")
+        'Each single-representation space (base_1, base_2) holds one matrix '
+        'per distinct representation at that rank, shared by the models that '
+        'rank it there.')
+    print(f"  spaces {list(spaces)}")
 
-    X_base = ent_reps[base_rep_name]
-    splits = list(cv_split(ent_groups, n_folds, X_base, y,
-                           task_type='regression'))
+    splits = list(cv_split(ent_groups, n_folds, next(iter(ent_reps.values())),
+                           y, task_type='regression'))
 
     # oof[space][model] = one prediction per molecule
     oof = {s: {m: np.full(n_ent, np.nan) for m in downstream_models}
@@ -545,12 +567,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # {space: [(X_tr, X_va, models scored on it)]}
         fold_spaces = {}
-        sc = StandardScaler()
-        fold_spaces['base'] = [(sc.fit_transform(X_base[tr]),
-                                sc.transform(X_base[va]),
-                                list(downstream_models))]
+        for _k in range(1, NOISE_BASE_REP_COUNT + 1):
+            _bsp = f'base_{_k}'
+            if _bsp not in spaces:
+                continue
+            _bcells = []
+            for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                             downstream_models).items():
+                sc = StandardScaler()
+                _bcells.append((sc.fit_transform(ent_reps[_rn][tr]),
+                                sc.transform(ent_reps[_rn][va]), list(_ms)))
+            fold_spaces[_bsp] = _bcells
         for _sp in spaces:
-            if _sp == 'base':
+            if _sp.startswith('base_'):
                 continue
             _cells = []
             for _bp, _mnames, _shareable in group_models_by_recipe(
@@ -642,12 +671,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── The estimator check ──
     check_model = downstream_models[0]
-    base_oof = oof['base'][check_model]
-    check = {'model': check_model, 'space': 'base',
+    check_rep = (base_by_model.get(check_model) or [None])[0]
+    base_oof = (oof['base_1'][check_model] if 'base_1' in oof
+                else np.full(n_ent, np.nan))
+    check = {'model': check_model, 'space': 'base_1', 'rep': check_rep,
              'what_it_is': ('a check of the 1/count regression, not a '
                             'measurement of the real noise'),
              'per_injected_variance': {}}
-    if np.isfinite(base_oof).all():
+    if check_rep is not None and np.isfinite(base_oof).all():
+        X_base = ent_reps[check_rep]
         s0 = fit_ols((y - base_oof) ** 2, inv_k)['slope_s2e']
         check['slope_without_injection'] = s0
         rng = np.random.default_rng(12345)
@@ -667,7 +699,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     f'{type(exc).__name__}: {exc}')
     else:
         check['failed'] = ('the first model has no out-of-fold prediction for '
-                           'every molecule in the base representation')
+                           'every molecule in its rank-1 single '
+                           'representation'
+                           + ('' if check_rep is not None else
+                              f" -- it has none: "
+                              f"{base_missing.get(check_model)}"))
     results['estimator_check'] = check
 
     if errors:
@@ -709,7 +745,8 @@ def _print_summary(results):
                   f"{f['ols']['intercept_s2u']:.4f}")
     chk = results['estimator_check']
     for key, row in chk.get('per_injected_variance', {}).items():
-        print(f"  estimator check ({chk['model']}, base): injected {key}, "
+        print(f"  estimator check ({chk['model']}, base_1 {chk.get('rep')}): "
+              f"injected {key}, "
               f"slope moved {row['slope_change']:+.4f}")
 
 
@@ -725,9 +762,6 @@ def main():
                         help='Comma-separated noise variances, label units '
                              'squared, for the estimator check (default '
                              f'{",".join(str(v) for v in INJECTED_VARIANCES)})')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help="Which representation is the base space. Default: "
-                             "pick_noise_base_rep's")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename')
     args = parser.parse_args()
@@ -737,8 +771,6 @@ def main():
     if args.injected_variances:
         kw['injected_variances'] = [
             float(x) for x in args.injected_variances.split(',')]
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
     if args.tag:
         kw['tag'] = args.tag
     run(data, config, args.output, args.dataset, **kw)

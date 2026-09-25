@@ -17,7 +17,7 @@ What has to be true before any number n30 writes can be read:
      track the labels in their own units, not log units and not shifted.
   7. THE RECOVERY SHARE IS SIGNED BY THE METRIC AND REFUSED UNDER THE 2% FLOOR.
   8. A CONDITION OTHER THAN censoring, AND A CLASSIFICATION LABEL, ARE REFUSED.
-  9. A FULL RUN, base only and with a hybrid recipe, writes every arm, every
+  9. A FULL RUN, single representations only and with a hybrid recipe, writes every arm, every
      swap, and a clip record per pass. Under spearman the direction flips.
  10. The parser lists every flag.
 """
@@ -84,7 +84,8 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n30.get_best_search_for_downstream
     n30.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', {m: ['toy', 'second']
+                                    for m in kw.get('models', ['rf'])})
         return n30.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n30.get_best_search_for_downstream = real
@@ -198,7 +199,14 @@ def test_full_runs():
     print("\nfull runs:")
     models = ['rf', 'xgboost', 'lightgbm']
     res = run_it(make_data(), 'toy', models=models, levels=[0.0, 0.25])
-    lv = res['per_level']['0.25']['base']
+    check('9. both single-representation spaces ran, and are named',
+          res['spaces_run'] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second']
+                                            for m in models},
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
+    check('9. base_2 is scored too', 'clipped' in
+          res['per_level']['0.25'].get('base_2', {}))
+    lv = res['per_level']['0.25']['base_1']
     missing = [a for a in res['arms'] if a not in lv]
     check('9. every label arm is scored at fraction 0.25', not missing,
           f'missing {missing}' if missing else f"{len(res['arms'])} arms")
@@ -206,7 +214,7 @@ def test_full_runs():
              if s in lv['clipped']]
     check('9b. every model swap is scored on the clipped labels',
           len(swaps) == 3, f'{swaps}')
-    l0 = res['per_level']['0']['base']
+    l0 = res['per_level']['0']['base_1']
     check('9c. at fraction 0.0 the lift and drop arms are absent, not zero',
           all(a not in l0 for a in n30.NEEDS_A_LIMIT)
           and 'winsor_c1' in l0)
@@ -215,11 +223,11 @@ def test_full_runs():
           len(recs) == 3 and all(r['limit'] is not None
                                   and r['molecules_at_the_limit'] > 0
                                   for r in recs))
-    sw = res['summary']['per_level']['0.25']['base']['model_swaps']
+    sw = res['summary']['per_level']['0.25']['base_1']['model_swaps']
     check('9e. xgboost_aft is paired against xgboost on the constant lift too',
           'vs_parent_on_constant_lift' in sw.get('xgboost_aft', {}))
     n_pass = sum(v['vs_clipped']['n_passes_paired'] for v in
-                 res['summary']['per_level']['0.25']['base']['per_model'][
+                 res['summary']['per_level']['0.25']['base_1']['per_model'][
                      'rf']['per_arm'].values())
     check('9f. paired counts are bounded by the passes that ran',
           n_pass <= 3 * len(res['arms']))
@@ -236,21 +244,21 @@ def test_full_runs():
 
     res_s = run_it(make_data(domain='antibody'), 'toy_ab', models=['rf'],
                    levels=[0.25], skip_aft=True)
-    rmse_row = res['summary']['per_level']['0.25']['base']['per_model']['rf']
-    sp_row = res_s['summary']['per_level']['0.25']['base']['per_model']['rf']
+    rmse_row = res['summary']['per_level']['0.25']['base_1']['per_model']['rf']
+    sp_row = res_s['summary']['per_level']['0.25']['base_1']['per_model']['rf']
     check('9i. the metric direction is read off the dataset',
           res['metric'] == 'rmse' and res['lower_is_better']
           and res_s['metric'] == 'spearman' and not res_s['lower_is_better'])
     # Under spearman, positive gain means the arm's correlation is higher.
     e = sp_row['per_arm']['clean']['vs_clipped']
-    b = res_s['per_level']['0.25']['base']['clipped']['rf']
-    g = res_s['per_level']['0.25']['base']['clean']['rf']
+    b = res_s['per_level']['0.25']['base_1']['clipped']['rf']
+    g = res_s['per_level']['0.25']['base_1']['clean']['rf']
     k = sorted(set(b) & set(g))
     check('9j. a spearman gain is arm minus clipped',
           np.isclose(e['mean_gain'], np.mean([g[x] - b[x] for x in k])))
     e2 = rmse_row['per_arm']['clean']['vs_clipped']
-    b2 = res['per_level']['0.25']['base']['clipped']['rf']
-    g2 = res['per_level']['0.25']['base']['clean']['rf']
+    b2 = res['per_level']['0.25']['base_1']['clipped']['rf']
+    g2 = res['per_level']['0.25']['base_1']['clean']['rf']
     k2 = sorted(set(b2) & set(g2))
     check('9k. an rmse gain is clipped minus arm',
           np.isclose(e2['mean_gain'], np.mean([b2[x] - g2[x] for x in k2])))
@@ -264,11 +272,12 @@ def test_the_command_line():
                                       'n30_censored_likelihood.py'), '--help'],
         capture_output=True, text=True)
     wanted = ('--dataset', '--noise-condition', '--levels', '--draws',
-              '--winsor-c', '--models', '--exp-folds', '--base-rep', '--tag')
+              '--winsor-c', '--models', '--exp-folds', '--tag')
     missing = [f for f in wanted if f not in out.stdout]
     check('10. the parser lists every flag',
           out.returncode == 0 and not missing,
           f'missing {missing}' if missing else f'{len(wanted)} flags present')
+    check('10b. --base-rep is gone', '--base-rep' not in out.stdout)
 
 
 if __name__ == '__main__':

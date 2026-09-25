@@ -59,8 +59,11 @@ a + b/k, so the fitted n19 weight and the rho-aware weight differ in how a and b
 are estimated, not in what they target. The oracle arms show how much a WRONG
 rho costs when every variance is known.
 
-THE ARMS. All five downstream models, in the base representation and each
-hybrid space. Paired against `plain_mean`.
+THE ARMS. All five downstream models, in each model's top 2 single
+representations -- spaces base_1 and base_2, ranked by that model's own score in
+the stored search (_shared.noise_base_reps_by_model, owner's decision
+2026-09-25) -- and in each hybrid space. A model the pool holds no search for
+has neither. Paired against `plain_mean`.
 
   clean                          fitted on the clean labels. The reference the
                                  recovery share divides by. Not a method.
@@ -150,7 +153,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.dataset_policy import noise_levels, REFERENCE_ERROR_LABEL_UNITS
@@ -529,8 +533,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if not downstream_models:
         raise RuntimeError(f"n39: no downstream model could be built from "
                            f"{kwargs.get('models') or DOWNSTREAM_MODELS}.")
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
 
     count_dists = list(kwargs.get('count_distributions') or COUNT_DISTRIBUTIONS)
     shares_by_cd, shares_src = {}, {}
@@ -547,7 +552,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'models': downstream_models,
-        'base_rep': base_rep_name,
         'arms': list(ARMS),
         'arm_to_beat': ARM_TO_BEAT,
         'n_sources': N_SOURCES,
@@ -585,8 +589,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         'number is confined to this dataset.'),
     }
 
-    splits = list(cv_split(ent_groups, n_folds, ent_reps[base_rep_name], y_ent,
-                           mode=mode))
+    splits = list(cv_split(ent_groups, n_folds, next(iter(ent_reps.values())),
+                           y_ent, mode=mode))
 
     by_model, no_recipe = pool_recipe_per_downstream_model(
         functools.partial(
@@ -615,7 +619,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for r in recipes_by_model.get(_m, ()):
             if r['space'] not in _ordered:
                 _ordered.append(r['space'])
-    spaces = ('base',) + tuple(_ordered)
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces = tuple(
+        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, _k, downstream_models))
+    spaces = base_spaces + tuple(_ordered)
     results['hybrid_available'] = bool(_ordered)
     if _ordered:
         results['hybrid_recipe_by_model'] = convert_numpy({
@@ -629,13 +649,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             } for r in rs}
             for m, rs in recipes_by_model.items() if rs})
     else:
-        print("  no hybrid recipe; base representation only")
+        print("  no hybrid recipe; single representations only")
     results['spaces_run'] = list(spaces)
     results['passes'] = [f'{cond_key(cd, r, t)}|{l:g}|d{d}'
                          for cd, l, r, t, d in passes]
     print(f"  {n_ent} molecules, {len(splits)} folds, models {downstream_models}")
     print(f"  {len(passes)} passes (count distribution x level x rho x tau x "
-          f"draw); base representation {base_rep_name}")
+          f"draw); spaces {list(spaces)}")
 
     errors = {}
 
@@ -644,12 +664,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         val_reps = {k: v[val_idx] for k, v in ent_reps.items()}
         g_tr = ent_groups[train_idx] if ent_groups is not None else None
         out = {}
-        sc = StandardScaler()
-        out['base'] = [(sc.fit_transform(train_reps[base_rep_name]),
-                        sc.transform(val_reps[base_rep_name]),
-                        list(downstream_models))]
+        # Each single-representation space holds one matrix per distinct
+        # representation at that rank, shared by the models that rank it there.
+        for _sp in base_spaces:
+            _k = int(_sp.split('_')[1])
+            _bcells = []
+            for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                             downstream_models).items():
+                sc = StandardScaler()
+                _bcells.append((sc.fit_transform(train_reps[_rn]),
+                                sc.transform(val_reps[_rn]), list(_ms)))
+            out[_sp] = _bcells
         for _sp in spaces:
-            if _sp == 'base':
+            if _sp in base_spaces:
                 continue
             cells = []
             for _bp_m, _mnames, _shareable in group_models_by_recipe(
@@ -971,8 +998,6 @@ def main():
                         help='Labels each hybrid is built from (default clean)')
     parser.add_argument('--exp-folds', type=int, default=None,
                         help='Outer folds. Overrides the 1 or 5 --mode gives')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help="Base representation. Default: pick_noise_base_rep's")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename')
     args = parser.parse_args()
@@ -996,8 +1021,6 @@ def main():
         kw['offset_method'] = args.offset_method
     if args.hybrid_labels:
         kw['hybrid_labels'] = args.hybrid_labels
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
 
     res = run(data, config, args.output, args.dataset, **kw)
     suffix = 'sources' + (f'_{args.tag}' if args.tag else '')

@@ -228,19 +228,26 @@ def test_outlier_only_leaves_the_rest_alone():
 # ── 5-8: the run ───────────────────────────────────────────────────────────
 
 def test_run_base_only():
-    print("\nthe run, base representation only:")
+    print("\nthe run, single representations only:")
     data = make_data(n=240, seed=1)
     r = run_it(data, 'toy_n25', models=['rf'],
                detectors=['neighbor_residual'],
                cleanups=['remove', 'downweight', 'knn_smooth'],
-               flag_rates=[0.10], base_rep='toy')
+               flag_rates=[0.10], base_reps={'rf': ['toy', 'second']})
 
     check('the run is not dropped', 'summary' in r)
     check('it records that no hybrid was available, and why',
           r['hybrid_available'] is False
           and 'precomputed pool' in r['hybrid_unavailable_reason'])
-    check('the base representation ran', r['spaces_run'] == ['base'],
-          str(r['spaces_run']))
+    check('both single-representation spaces ran',
+          r['spaces_run'] == ['base_1', 'base_2'], str(r['spaces_run']))
+    check('which representations they are is recorded',
+          r['base_reps_by_model'] == {'rf': ['toy', 'second']},
+          str(r.get('base_reps_by_model')))
+    check('one model means one matrix per space, named by the space',
+          r['feature_matrices'] == {'base_1': {'rf': 'base_1'},
+                                    'base_2': {'rf': 'base_2'}},
+          str(r.get('feature_matrices')))
     check('the three arms are named', list(r['arms']) ==
           ['plain', 'cliff_exempt', 'random_exempt'], str(r['arms']))
     check('the condition and the draw are recorded',
@@ -274,7 +281,7 @@ def test_run_base_only():
           str([(c['n_cliff_molecules_in_training'],
                 c['n_random_control_molecules']) for c in counts]))
 
-    blk = (r['per_space']['base']['per_detector']['neighbor_residual']
+    blk = (r['per_space']['base_1']['per_detector']['neighbor_residual']
            ['per_setting_slot']['0.1'])
     row = blk['per_model']['rf']
     check('every cleanup carries a pair count',
@@ -294,7 +301,7 @@ def test_run_base_only():
               'rewrites_the_label'},
           str({c: cell['what_the_cleanup_does'] for c, cell in row.items()}))
 
-    sp = blk['molecules_spared']
+    sp = blk['molecules_spared_by_matrix']['base_1']
     print("\n  molecules each cleanup actually spared, per pass:")
     for c in sorted(sp):
         for pk in sorted(sp[c]):
@@ -307,8 +314,8 @@ def test_run_base_only():
           all(e['n_cliff_molecules_spared'] <= e['n_cliff_molecules_in_training']
               for c in sp for e in sp[c].values()))
 
-    prem = (r['per_space']['base']['per_detector']['neighbor_residual']
-            ['cliff_molecules_among_the_suspicious'])
+    prem = (r['per_space']['base_1']['per_detector']['neighbor_residual']
+            ['cliff_molecules_among_the_suspicious_by_matrix']['base_1'])
     check('the premise is counted on every pass', len(prem) == 3,
           f'{len(prem)} passes')
     print("\n  of the molecules the detector calls most suspicious:")
@@ -323,7 +330,7 @@ def test_run_base_only():
           all(p['n_uncorrupted_cliff_molecules_among_the_most_suspicious']
               <= p['n_most_suspicious_molecules_taken'] for p in prem.values()))
 
-    s = r['summary']['per_space']['base']
+    s = r['summary']['per_space']['base_1']
     check('the summary counts settings, and a degenerate pair is counted apart',
           all('settings_where_nothing_was_spared' in v
               for v in s['per_cleanup'].values() if v.get('settings_scored')))
@@ -342,20 +349,83 @@ def test_hybrid_space():
     data = make_data(n=200, seed=2)
     r = run_it(data, 'toy_n25_hybrid', recipe=fake_recipe(sorted(data['reps'])),
                models=['rf'], detectors=['neighbor_residual'],
-               cleanups=['knn_smooth'], flag_rates=[0.10], base_rep='toy')
-    check('both spaces ran', r['spaces_run'] == ['base', 'hybrid'],
+               cleanups=['knn_smooth'], flag_rates=[0.10],
+               base_reps={'rf': ['toy', 'second']})
+    check('every space ran', r['spaces_run'] == ['base_1', 'base_2', 'hybrid'],
           str(r['spaces_run']))
     got = {}
     for space in r['spaces_run']:
         got[space] = (r['per_space'][space]
                       ['per_model_no_cleaning_mean']['rf'])
     check('the two spaces are genuinely different feature spaces',
-          abs(got['base'] - got['hybrid']) > 1e-9,
+          abs(got['base_1'] - got['hybrid']) > 1e-9,
           str({k: round(v, 6) for k, v in got.items()}))
     check('the clean-label ceiling is recorded beside the corrupted score',
           all(np.isfinite(r['per_space'][s]
                           ['per_model_clean_label_ceiling_mean']['rf'])
               for s in r['spaces_run']))
+
+
+def test_per_model_spaces():
+    """Each model in its own spaces. Owner's decision 2026-09-25."""
+    print("\neach model in its own spaces:")
+    asked = []
+
+    def lookup(*a, downstream_model=None, **k):
+        asked.append(downstream_model)
+        reps_, budget = {'rf': (['toy', 'second'], 4),
+                         'lightgbm': (['toy'], 3)}[downstream_model]
+        return fake_recipe(reps_, budget)()
+
+    data = make_data(n=200, seed=4)
+    r = run_it(data, 'toy_n25_per_model', recipe=lookup,
+               models=['rf', 'lightgbm'], detectors=['neighbor_residual'],
+               cleanups=['knn_smooth'], flag_rates=[0.10],
+               base_reps={'rf': ['toy', 'second'],
+                          'lightgbm': ['second', 'toy']})
+    check('the pool was asked once per downstream model',
+          sorted(asked) == ['lightgbm', 'rf'], str(asked))
+    check('every space ran', r['spaces_run'] == ['base_1', 'base_2', 'hybrid'],
+          str(r['spaces_run']))
+    check('each model carries its own recipe',
+          r['hybrid_recipe_by_model']['rf']['hybrid']['budget'] == 4
+          and r['hybrid_recipe_by_model']['lightgbm']['hybrid']['budget'] == 3,
+          str(r.get('hybrid_recipe_by_model')))
+    want = {sp: {m: f'{sp}/{m}' for m in ('rf', 'lightgbm')}
+            for sp in r['spaces_run']}
+    check('each model was scored in its own matrix in every space',
+          r['feature_matrices'] == want, str(r.get('feature_matrices')))
+    det = (r['per_space']['base_1']['per_detector']['neighbor_residual']
+           ['detection_by_matrix'])
+    check('the detector ran once per matrix',
+          set(det) == {'base_1/rf', 'base_1/lightgbm'}
+          and all(len(v) == 3 for v in det.values()),
+          str({k: len(v) for k, v in det.items()}))
+    ok = all(np.isfinite(r['per_space'][sp]['per_model_no_cleaning_mean'][m])
+             for sp in r['spaces_run'] for m in ('rf', 'lightgbm'))
+    check('every model has a score in every space', ok)
+    row = (r['per_space']['hybrid']['per_detector']['neighbor_residual']
+           ['per_setting_slot']['0.1']['per_model'])
+    check('both models carry the paired arms in the hybrid',
+          all(row.get(m, {}).get('knn_smooth', {}).get('cliff_exempt', {})
+              .get('passes_scored', 0) > 0 for m in ('rf', 'lightgbm')),
+          str({m: row.get(m, {}).get('knn_smooth', {}).get('cliff_exempt', {})
+               .get('passes_scored') for m in ('rf', 'lightgbm')}))
+
+
+def test_no_stored_search_means_no_space():
+    print("\nno stored search and no representations given:")
+    data = make_data(n=120, seed=5)
+    r = run_it(data, 'toy_n25_nothing', models=['rf'],
+               detectors=['neighbor_residual'], cleanups=['knn_smooth'],
+               flag_rates=[0.10])
+    check('no space ran, and the reason is recorded',
+          r['spaces_run'] == [] and 'rf' in r['base_reps_missing'],
+          f"{r['spaces_run']}, {r.get('base_reps_missing')}")
+    import experiments._shared as S
+    check('the fixed preference list is gone',
+          not hasattr(S, 'NOISE_BASE_REP_PREFERENCE')
+          and not hasattr(S, 'pick_noise_base_rep'))
 
 
 def test_refuses_a_condition_with_no_correct_labels():
@@ -364,7 +434,8 @@ def test_refuses_a_condition_with_no_correct_labels():
     try:
         run_it(data, 'toy_n25_bad', models=['rf'],
                detectors=['neighbor_residual'], cleanups=['remove'],
-               flag_rates=[0.10], base_rep='toy', noise_condition='gaussian')
+               flag_rates=[0.10], base_reps={'rf': ['toy']},
+               noise_condition='gaussian')
         check('gaussian is refused', False, 'it ran')
     except ValueError as exc:
         check('gaussian is refused, and the reason names the premise',
@@ -430,6 +501,8 @@ if __name__ == '__main__':
     test_outlier_only_leaves_the_rest_alone()
     test_run_base_only()
     test_hybrid_space()
+    test_per_model_spaces()
+    test_no_stored_search_means_no_space()
     test_refuses_a_condition_with_no_correct_labels()
     test_the_exempt_set_is_built_from_what_the_method_can_see()
     print("\n" + "=" * 60)

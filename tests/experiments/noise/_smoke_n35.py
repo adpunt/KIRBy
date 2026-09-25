@@ -15,10 +15,10 @@ What has to be true before any number n35 writes can be read:
   5. THE POOLED REPLICATE VARIANCE matches a hand computation.
   6. CLIFF COUNTING on real SMILES: a similar pair with a large label gap is a
      cliff; a dissimilar one is not.
-  7. A FULL RUN, base only and with a hybrid recipe, fingerprint and continuous
-     base, with repeat measurements: every arm and every level scored, tail
+  7. A FULL RUN, single representations only (base_1 'toy', base_2 'second')
+     and with a hybrid recipe, fingerprint and continuous representations, with repeat measurements: every arm and every level scored, tail
      scores written, same- and different-molecule pairs split, the check block
-     filled, and the base rise tracks the injected variance.
+     filled, and the base_1 rise tracks the injected variance.
   8. A classification label is skipped with its reason.
   9. The parser lists every flag.
 """
@@ -105,8 +105,8 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n35.get_best_search_for_downstream
     n35.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
         kw.setdefault('models', ['rf', 'lightgbm'])
+        kw.setdefault('base_reps', {m: ['toy', 'second'] for m in kw['models']})
         return n35.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n35.get_best_search_for_downstream = real
@@ -189,36 +189,60 @@ def test_runs():
     data = make_data(binary=False)
     r = run_it(data, 'toy_cont', levels=[0.0, 0.5])
     lv = r['per_level']
-    ok = all(arm in lv[l]['base'] for l in ('0', '0.5')
+    ok = all(arm in lv[l]['base_1'] for l in ('0', '0.5')
              for arm in ('untouched', 'downweight_pairs_this_space',
                          'downweight_pairs_forest_proximity'))
-    n_scores = sum(len(v) for v in lv['0']['base']['untouched'].values())
+    n_scores = sum(len(v) for v in lv['0']['base_1']['untouched'].values())
     check('7a. continuous base: every arm at every level, 3 folds x 2 models',
           ok and n_scores == 6, f'{n_scores} untouched scores at level 0')
-    t = r['tails_per_level']['0']['base']['untouched']['rf']
+    t = r['tails_per_level']['0']['base_1']['untouched']['rf']
     check('7b. tail scores written per pass',
           len(t) == 3 and all('calibration_slope' in v for v in t.values()))
-    ch = r['check'].get('base', {}).get('0.5')
+    ch = r['check'].get('base_1', {}).get('0.5')
     check('7c. the check block holds the base rise beside the injected variance',
           ch is not None and len(ch['folds']) == 3
           and np.isfinite(ch['estimate_rise_mean']),
           (f"rise {ch['estimate_rise_mean']:.3f}, injected "
            f"{ch['realised_injected_variance_mean']:.3f}") if ch else '')
-    check('7d. base distance is Euclidean on a continuous base',
-          r['base_distance'].startswith('euclidean') and not r['_errors']
-          if '_errors' in r else r['base_distance'].startswith('euclidean'),
-          str(r.get('_errors', ''))[:300])
+    check('7d. distance is Euclidean on a continuous representation',
+          r['base_distance_by_rep']['toy'].startswith('euclidean')
+          and not r.get('_errors'), str(r.get('_errors', ''))[:300])
+    check('7d-2. spaces base_1 and base_2 ran, representations named',
+          r['spaces_run'] == ['base_1', 'base_2']
+          and r['base_reps_by_model'] == {m: ['toy', 'second']
+                                          for m in ('rf', 'lightgbm')}
+          and 'base_rep' not in r,
+          f"{r['spaces_run']}, {r.get('base_reps_by_model')}")
+    ok2 = all(arm in lv[l]['base_2'] for l in ('0', '0.5')
+              for arm in ('untouched', 'downweight_pairs_this_space',
+                          'downweight_pairs_forest_proximity'))
+    check('7d-3. base_2 scores every arm at every level', ok2)
+    ch2 = r['check'].get('base_2', {}).get('0.5')
+    check('7d-4. the check holds a base_2 row too',
+          ch2 is not None and len(ch2['folds']) == 3)
+    pp = r['pairs_per_pass']['0'][0]['per_space']
+    check('7d-5. one forest proximity per feature matrix',
+          {'forest_proximity:base_1', 'forest_proximity:base_2'} <= set(pp)
+          and 'forest_proximity' not in pp, str(sorted(pp)))
 
     datab = make_data(binary=True, replicates=True, seed=2)
     rb = run_it(datab, 'toy_bin', recipe=fake_recipe(['toy', 'second']),
                 levels=[0.0, 0.5])
-    check('7e. binary base uses Tanimoto', rb['base_distance'] == 'tanimoto')
+    check('7e. a binary representation uses Tanimoto, a continuous one does not',
+          rb['base_distance_by_rep'] == {
+              'toy': 'tanimoto',
+              'second': 'euclidean_on_standardised_features'},
+          str(rb['base_distance_by_rep']))
+    check('7e-2. the hybrid has its own forest proximity',
+          any(k.startswith('forest_proximity:hybrid')
+              for k in rb['pairs_per_pass']['0'][0]['per_space']),
+          str(sorted(rb['pairs_per_pass']['0'][0]['per_space'])))
     check('7f. a hybrid space ran with every arm',
           'hybrid' in rb['per_level']['0']
           and 'downweight_pairs_this_space' in rb['per_level']['0']['hybrid'],
           str(list(rb['per_level']['0'])))
     rec = rb['pairs_per_pass']['0'][0]
-    b = rec['per_space']['base']
+    b = rec['per_space']['base_1']
     check('7g. repeat measurements: same- and different-molecule pairs split, '
           'pooled replicate variance written',
           'same_molecule_pairs' in b and 'different_molecule_pairs' in b
@@ -234,7 +258,8 @@ def test_runs():
 
     dc = make_data()
     dc['task_type'] = 'classification'
-    rc = n35.run(dc, {'n_splits': 3}, OUT, 'toy_clf', base_rep='toy')
+    rc = n35.run(dc, {'n_splits': 3}, OUT, 'toy_clf',
+                 base_reps={'rf': ['toy', 'second']})
     check('8. classification skipped with its reason',
           rc.get('skipped') == 'not_regression')
 
@@ -245,9 +270,10 @@ def test_parser():
     out = subprocess.run([sys.executable, n35.__file__, '--help'],
                          capture_output=True, text=True).stdout
     flags = ('--levels', '--draws', '--skip-proximity', '--skip-cliffs',
-             '--exp-folds', '--base-rep', '--tag')
+             '--exp-folds', '--tag')
     missing = [f for f in flags if f not in out]
     check('9. every flag is in --help', not missing, f'missing {missing}')
+    check('9b. --base-rep is gone', '--base-rep' not in out)
 
 
 if __name__ == '__main__':

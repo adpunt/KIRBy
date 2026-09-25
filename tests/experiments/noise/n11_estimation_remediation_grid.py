@@ -50,6 +50,26 @@ Each config: estimate noise scores, apply remediation (smoothing, weighting or
 the quantile clip), fit every downstream model on the repaired training labels,
 compute recovery rate.
 
+THE SINGLE REPRESENTATIONS, owner's decision 2026-09-25. Each downstream
+model's top 2 single representations, ranked by that model's own score in the
+stored search (_shared.noise_base_reps_by_model), do two jobs:
+
+  * EVALUATION. Every repaired fit of a model is done twice, once on its rank-1
+    representation and once on its rank-2 one -- including the rows where the
+    noise was detected in a hybrid space. Each (model, rank) pair is an
+    evaluation unit keyed '<model>@base_<k>' ('rf@base_1'), and it carries its
+    own clean score, noisy score and clean-to-noisy gap, so the recovery
+    denominator is one per model per rank. Every '*_by_model' field and every
+    remediation key's model half is keyed by that unit.
+  * DETECTION. Each model's rank-k representation is an estimation space named
+    'base_<k>_<rep>', uncapped and given the two added smoothing targets. Its
+    rows are fitted only for the models that rank that representation k-th; a
+    representation shared by several models at the same rank is built once. A
+    representation that is not one of a model's top 2 stays an estimation space
+    for that model under its plain name, capped as before.
+
+Which representations those are is written to 'base_reps_by_model'.
+
 WHERE A LABEL IS MOVED TO, added 2026-09-17. Until then every smoothing row
 aimed at whatever target its own estimator carried — a neighbour mean for the
 kNN estimators, the model's own prediction for the rest, which is the same
@@ -84,7 +104,7 @@ from kirby.noise_spec import GROUPED_STRATEGIES
 from experiments.noise.noise_helpers import (
     inject_train_labels, noise_spec_for, detection_scores, sweep_conditions, conditions_for_task)
 from experiments._shared import (
-    pick_noise_base_rep,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
@@ -312,10 +332,11 @@ def _get_correction_target(estimator):
 
 
 def _build_estimation_spaces(train_reps, y_train, augmentations,
-                             hybrid_recipes,
+                             hybrid_recipes, base_spaces,
                              dataset_name=None, groups=None,
-                             build_errors=None):
-    """Build estimation spaces: base rep + one hybrid per pool family.
+                             build_errors=None, all_models=None):
+    """Build estimation spaces: each model's top-2 single representations,
+    one hybrid per pool family, and every other representation.
 
     Args:
         train_reps: {rep_name: X_train} already sliced to fold.
@@ -325,8 +346,13 @@ def _build_estimation_spaces(train_reps, y_train, augmentations,
             family, as built in run(). Each entry carries 'space' (the name the
             space gets), 'objective' ('predictive' or 'similarity') and
             'blueprint'.
+        base_spaces: {space name: (rep name, [models])}, one entry per
+            (rank, representation) of the downstream models' top 2, as built in
+            run(). Each is scaled on this fold's training rows and NOT capped.
 
-    Returns (spaces_dict, base_rep_name).
+    Returns (spaces_dict, models_by_space). models_by_space names, for every
+    space that is not open to the whole roster, the models whose rows are
+    fitted in it. A space absent from it is open to every model.
 
     2026-09-12, owner's decision: n11's pool subset includes similarity
     hybrids. This argument was a single blueprint `bp` and built one hybrid
@@ -336,16 +362,14 @@ def _build_estimation_spaces(train_reps, y_train, augmentations,
     blueprint and the objective differ between them.
     """
     spaces = {}
+    models_by_space = {}
 
-    # Control arm = one plain base representation. Shared helper: it will
-    # NOT fall back onto a structure-tuned sim_* recipe, which is a study
-    # treatment and must never become the thing treatments are measured
-    # against. See _shared.pick_noise_base_rep.
-    base_rep_name = pick_noise_base_rep(train_reps, dataset_name)
-
-    X_base = train_reps[base_rep_name]
-    scaler = StandardScaler()
-    spaces[f'{base_rep_name}_raw'] = scaler.fit_transform(X_base)
+    # Each model's own top-2 single representations, one space per (rank,
+    # representation), shared by the models that rank it there. Uncapped.
+    for _sp, (_rn, _ms) in base_spaces.items():
+        scaler = StandardScaler()
+        spaces[_sp] = scaler.fit_transform(train_reps[_rn])
+        models_by_space[_sp] = list(_ms)
 
     # One hybrid space per family the pool holds. The space name carries the
     # family and the blueprint's own budget (the name was hardcoded 'hybrid_100'
@@ -392,17 +416,25 @@ def _build_estimation_spaces(train_reps, y_train, augmentations,
                 if _e['first_error'] is None:
                     _e['first_error'] = f'{type(e).__name__}: {e}'
 
-    # All other base rep spaces. Skip the canonical base rep itself — it's
-    # already added above as f'{base_rep_name}_raw'. Adding it twice (under
-    # both names, with different scaling/capping treatments) inflates the
-    # "best space" win count and double-charges per-sigma config counts.
+    # Every other representation, capped. A model whose top 2 includes a
+    # representation already has it above as a base_<k> space, so its rows are
+    # not fitted here a second time -- two copies with different scaling and
+    # capping would inflate the "best space" win count and double-charge the
+    # per-level config counts. The other models still get it here.
+    _models_all = sorted({m for _, _ms in base_spaces.values() for m in _ms}
+                         | set(all_models or []))
     for rep_name, X_rep in train_reps.items():
-        if rep_name == base_rep_name:
+        _has_it = {m for _rn, _ms in base_spaces.values() if _rn == rep_name
+                   for m in _ms}
+        if _models_all and _has_it >= set(_models_all):
             continue
         scaler = StandardScaler()
         spaces[rep_name] = cap_dimensions(scaler.fit_transform(X_rep))[0]
+        if _has_it:
+            models_by_space[rep_name] = [m for m in _models_all
+                                         if m not in _has_it]
 
-    return spaces, base_rep_name
+    return spaces, models_by_space
 
 
 def _resolve_estimators():
@@ -458,8 +490,13 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                          model_factories, metric_fn, n_samples,
                          is_clf=False, groups=None,
                          corrupted_mask=None, noise_condition=None,
-                         extra_targets=None):
+                         extra_targets=None, eval_by_model=None):
     """Run full alpha × remediation grid for one estimator config.
+
+    eval_by_model: {model key: (X_train, X_val)} -- the features each entry of
+    model_factories is fitted and scored on. run() passes one pair per
+    evaluation unit ('<model>@base_<k>'), so each unit is fitted on its own
+    single representation. None fits every entry on X_eval_train/X_eval_val.
 
     extra_targets: {name: per-training-row array} — smoothing targets computed
     outside this function, once per (fold, draw, space), and reused by every
@@ -524,6 +561,11 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
 
     target, target_source = _get_correction_target(estimator)
     results = {}
+
+    def _xy(mn):
+        if eval_by_model is not None:
+            return eval_by_model[mn]
+        return X_eval_train, X_eval_val
     # Grade the estimator on FINDING the corrupted molecules, not only on the score
     # after repair. Until 2026-09-12 every detector here was graded only after repair.
     if corrupted_mask is not None:
@@ -548,8 +590,9 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                 key = f'{mn}|{wm}_{alpha}'
                 try:
                     model = mf()
-                    model.fit(X_eval_train, y_noisy, sample_weight=weights)
-                    y_pred = model.predict(X_eval_val)
+                    _xtr, _xva = _xy(mn)
+                    model.fit(_xtr, y_noisy, sample_weight=weights)
+                    y_pred = model.predict(_xva)
                     results[key] = float(metric_fn(y_val, y_pred))
                 except Exception as exc:
                     failure_log[key] = f'{type(exc).__name__}: {exc}'
@@ -584,8 +627,9 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                         key = f'{mn}|{_prefix}{sm}_{alpha}'
                         try:
                             model = mf()
-                            model.fit(X_eval_train, y_smoothed)
-                            y_pred = model.predict(X_eval_val)
+                            _xtr, _xva = _xy(mn)
+                            model.fit(_xtr, y_smoothed)
+                            y_pred = model.predict(_xva)
                             results[key] = float(metric_fn(y_val, y_pred))
                         except Exception as exc:
                             failure_log[key] = f'{type(exc).__name__}: {exc}'
@@ -616,8 +660,9 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                     key = f'{mn}|quantile_clip_{alpha}'
                     try:
                         model = mf()
-                        model.fit(X_eval_train, y_clipped)
-                        y_pred = model.predict(X_eval_val)
+                        _xtr, _xva = _xy(mn)
+                        model.fit(_xtr, y_clipped)
+                        y_pred = model.predict(_xva)
                         results[key] = float(metric_fn(y_val, y_pred))
                     except Exception as exc:
                         failure_log[key] = f'{type(exc).__name__}: {exc}'
@@ -717,12 +762,6 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                               if e not in IS_CLF_AWARE_ESTIMATORS]
         available_estimators = [e for e in available_estimators
                                 if e in IS_CLF_AWARE_ESTIMATORS]
-
-    # Control arm = one plain base representation. Shared helper: it will
-    # NOT fall back onto a structure-tuned sim_* recipe, which is a study
-    # treatment and must never become the thing treatments are measured
-    # against. See _shared.pick_noise_base_rep.
-    base_rep_name = pick_noise_base_rep(reps, dataset_name)
 
     print(f"  Dataset: {dataset_name} ({n_samples} samples)")
     print(f"  Metric: {metric_name}")
@@ -857,6 +896,47 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
               f"tier {_r['tier']}/{_r['aug_condition']}, search score "
               f"{_r['search_score_mean']} in {_r['search_metric_name']!r}")
 
+    # ── Each downstream model's top-2 single representations ──
+    # Ranked by that model's own score in the stored search fetched above (the
+    # rf one: its baselines carry a score under every downstream model it
+    # scored). A `base_reps` kwarg ({model: [reps]}) overrides the ranking, for
+    # a smoke or a direct caller. A model with none has no evaluation features
+    # and is left out of the run, with the reason in 'base_reps_missing'.
+    _base_override = kwargs.get('base_reps')
+    if _base_override is not None:
+        base_by_model = {m: list(_base_override[m])[:NOISE_BASE_REP_COUNT]
+                         for m in downstream_models if _base_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: search for m in downstream_models}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    eval_models = [m for m in downstream_models if m in base_by_model]
+    # Evaluation units: one per (model, rank). '<model>@base_<k>'.
+    eval_units = {f'{m}@base_{k}': (m, k, rn)
+                  for m in eval_models
+                  for k, rn in enumerate(base_by_model[m], start=1)}
+    unit_factories = {u: model_factories[m] for u, (m, _k, _rn)
+                      in eval_units.items()}
+    # Detection spaces from the same ranking: {space: (rep, [models])}.
+    base_spaces = {}
+    for _k in range(1, NOISE_BASE_REP_COUNT + 1):
+        for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                         eval_models).items():
+            base_spaces[f'base_{_k}_{_rn}'] = (_rn, list(_ms))
+    for _u, (_m, _k, _rn) in eval_units.items():
+        print(f"  evaluation unit {_u}: {_m} fitted on {_rn}")
+    for _m, _why in base_missing.items():
+        print(f"  {_m}: no single representation, left out -- {_why}")
+    if not eval_units:
+        print("  no downstream model has a single representation to be "
+              "fitted on, so nothing can be scored")
+        return {'error': 'no_single_representation',
+                'metric': metric_name,
+                'base_reps_by_model': base_by_model,
+                'base_reps_missing': base_missing}
+
     # 2026-09-12: per-space build failures, filled by _build_estimation_spaces.
     hybrid_build_errors = {}
     # 2026-09-17: the first failure per (space, target) for the two smoothing
@@ -868,14 +948,28 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # Gaussian-process smoothing target is the same O(n^3) fit that flag exists
     # to drop, so it has to see the flag too.
     light_estimators = os.environ.get('KIRBY_NOISE_LIGHT_ESTIMATORS') == '1'
-    # The spaces the two added targets are built in: every hybrid, plus the one
-    # representation n11 uses as its control. See the note at the build site.
-    extra_target_spaces = ({f'{base_rep_name}_raw'}
+    # The spaces the two added targets are built in: every hybrid, plus each
+    # model's top-2 single representations. See the note at the build site.
+    extra_target_spaces = (set(base_spaces)
                            | {_r['space'] for _r in hybrid_recipes})
 
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
+        # Each downstream model's top 2 single representations, from its own
+        # score in the stored search. Every repaired fit is done once on each;
+        # see the module docstring.
+        'base_reps_by_model': base_by_model,
+        'base_reps_missing': base_missing,
+        'base_reps_search_model': 'rf',
+        'evaluation_units': {u: {'model': m, 'rank': k, 'representation': rn}
+                             for u, (m, k, rn) in eval_units.items()},
+        'evaluation_unit_key': (
+            "'<model>@base_<k>': that model fitted on its rank-k single "
+            "representation. Every *_by_model field and the model half of every "
+            "remediation key is keyed by it."),
+        'base_detection_spaces': {sp: {'representation': rn, 'models': ms}
+                                  for sp, (rn, ms) in base_spaces.items()},
         'estimators': available_estimators,
         # 2026-09-17: the smoothing targets that do not come from an estimator.
         # Each one is swept over the same methods and alphas as the estimator's
@@ -899,8 +993,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'extra_target_errors': extra_target_errors,
         # USER DECISION 2026-09-17: which spaces the two added targets are built
         # in. Building one costs five model fits, so they are built in the
-        # hybrid feature sets and in the control representation only, not in
-        # every representation the dataset has. A smoothing row carrying a
+        # hybrid feature sets and in each model's top-2 single representations
+        # only, not in every representation the dataset has. A smoothing row carrying a
         # target name appears under these spaces and nowhere else.
         'extra_target_spaces': sorted(extra_target_spaces),
         # FIX 4f: regression-only estimators dropped on classification, with the
@@ -930,10 +1024,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
 
-        clean_scores = {m: [] for m in downstream_models}
-        # One list per model name, for both references. Recovery is a fraction of
-        # THIS model's clean-to-noisy gap, so the two references cannot be shared.
-        noisy_scores = {m: [] for m in downstream_models}
+        clean_scores = {u: [] for u in eval_units}
+        # One list per evaluation unit, for both references. Recovery is a
+        # fraction of THIS unit's clean-to-noisy gap -- one model on one of its
+        # two single representations -- so the references cannot be shared.
+        noisy_scores = {u: [] for u in eval_units}
         # {space: {est_key: {remed_key: [scores]}}}
         grid_acc = {}
         # The same numbers again, kept fold by fold, so the winning config can be
@@ -943,9 +1038,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         #   clean_by_fold[fold] = score           (noise-independent, one per fold)
         #   noisy_by_fold[fold] = [score, ...]    (one per noise seed)
         #   denoised_by_fold[space][est][remed][fold] = [score, ...]
-        clean_by_fold = {m: {} for m in downstream_models}
-        noisy_by_fold = {m: {} for m in downstream_models}
-        denoised_by_fold = {m: {} for m in downstream_models}
+        clean_by_fold = {u: {} for u in eval_units}
+        noisy_by_fold = {u: {} for u in eval_units}
+        denoised_by_fold = {u: {} for u in eval_units}
 
         fold_idx = 0
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
@@ -956,19 +1051,26 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
 
-            X_eval_train = reps[base_rep_name][train_idx]
-            X_eval_val = reps[base_rep_name][val_idx]
-            scaler_eval = StandardScaler()
-            X_eval_train_s = scaler_eval.fit_transform(X_eval_train)
-            X_eval_val_s = scaler_eval.transform(X_eval_val)
+            # The evaluation features, one scaled pair per single
+            # representation any unit is fitted on, shared by those units.
+            _eval_by_rep = {}
+            for _u, (_m, _k, _rn) in eval_units.items():
+                if _rn not in _eval_by_rep:
+                    scaler_eval = StandardScaler()
+                    _eval_by_rep[_rn] = (
+                        scaler_eval.fit_transform(reps[_rn][train_idx]),
+                        scaler_eval.transform(reps[_rn][val_idx]))
+            eval_by_unit = {_u: _eval_by_rep[_rn]
+                            for _u, (_m, _k, _rn) in eval_units.items()}
 
-            # Clean baseline (noise-independent — compute once per fold per model)
-            for _mn in downstream_models:
-                _mdl = model_factories[_mn]()
-                _mdl.fit(X_eval_train_s, y_train_clean)
-                _clean_f = float(metric_fn(y_val, _mdl.predict(X_eval_val_s)))
-                clean_scores[_mn].append(_clean_f)
-                clean_by_fold[_mn][fold_idx] = _clean_f
+            # Clean baseline (noise-independent — compute once per fold per unit)
+            for _u in eval_units:
+                _xtr, _xva = eval_by_unit[_u]
+                _mdl = unit_factories[_u]()
+                _mdl.fit(_xtr, y_train_clean)
+                _clean_f = float(metric_fn(y_val, _mdl.predict(_xva)))
+                clean_scores[_u].append(_clean_f)
+                clean_by_fold[_u][fold_idx] = _clean_f
 
             train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
 
@@ -991,23 +1093,35 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # 'hybrid_sim' is gone — the distance-based arm is built here,
                 # in this loop, on the same budget, the same fold and the same
                 # importance machinery as the prediction arm.
-                spaces, _brn = _build_estimation_spaces(
+                spaces, models_by_space = _build_estimation_spaces(
                     train_reps_fold, y_noisy, train_augs, hybrid_recipes,
+                    base_spaces,
                     dataset_name=dataset_name,
                     groups=(groups[train_idx] if groups is not None else None),
                     build_errors=hybrid_build_errors,
+                    all_models=eval_models,
                 )
 
-                for _mn in downstream_models:
-                    _mdl = model_factories[_mn]()
-                    _mdl.fit(X_eval_train_s, y_noisy)
-                    _noisy_fs = float(metric_fn(y_val, _mdl.predict(X_eval_val_s)))
-                    noisy_scores[_mn].append(_noisy_fs)
-                    noisy_by_fold[_mn].setdefault(fold_idx, []).append(_noisy_fs)
+                for _u in eval_units:
+                    _xtr, _xva = eval_by_unit[_u]
+                    _mdl = unit_factories[_u]()
+                    _mdl.fit(_xtr, y_noisy)
+                    _noisy_fs = float(metric_fn(y_val, _mdl.predict(_xva)))
+                    noisy_scores[_u].append(_noisy_fs)
+                    noisy_by_fold[_u].setdefault(fold_idx, []).append(_noisy_fs)
 
                 for space_name, X_space in spaces.items():
                     if space_name not in grid_acc:
                         grid_acc[space_name] = {}
+                    # The units fitted on this space's suspicion scores: every
+                    # unit of every model the space is open to, on both of
+                    # that model's single representations.
+                    _open = models_by_space.get(space_name)
+                    _space_units = {u: f for u, f in unit_factories.items()
+                                    if _open is None
+                                    or eval_units[u][0] in _open}
+                    if not _space_units:
+                        continue
 
                     # The two smoothing targets that do not belong to any one
                     # estimator, built once for this (fold, draw, space) and
@@ -1022,8 +1136,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     # five model fits -- a LightGBM pass and a Gaussian-process
                     # pass -- and n11 holds one space per representation the
                     # dataset has, each at its full width. They are built in the
-                    # hybrid feature sets and in the one representation n11 uses
-                    # as its control, and nowhere else. Which spaces got them is
+                    # hybrid feature sets and in each model's top-2 single
+                    # representations, and nowhere else. Which spaces got them is
                     # written to results['extra_target_spaces'], so an absent row
                     # reads as a decision rather than as a failure. The clip is
                     # not affected: it costs no extra fit beyond the
@@ -1091,13 +1205,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             grid_result = _run_estimator_grid(
                                 est_name, metric_var,
                                 X_space, y_noisy,
-                                X_eval_train_s, X_eval_val_s, y_val,
-                                model_factories, metric_fn, n_samples,
+                                None, None, y_val,
+                                _space_units, metric_fn, n_samples,
                                 is_clf=is_clf,
                                 groups=groups[train_idx],
                                 corrupted_mask=_cmask,
                                 noise_condition=noise_condition,
                                 extra_targets=extra_targets,
+                                eval_by_model=eval_by_unit,
                             )
 
                             if est_key not in grid_acc[space_name]:
@@ -1149,12 +1264,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # random forest's damage.
         clean_by_model = {m: float(np.mean(v)) for m, v in clean_scores.items() if v}
         noisy_by_model = {m: float(np.mean(v)) for m, v in noisy_scores.items() if v}
-        _models_scored = [m for m in downstream_models
-                          if m in clean_by_model and m in noisy_by_model]
+        _models_scored = [u for u in eval_units
+                          if u in clean_by_model and u in noisy_by_model]
         if not _models_scored:
             raise RuntimeError(
-                f"n11: no model produced both a clean and a noisy reference score at "
-                f"level {sigma}. Asked for {downstream_models}.")
+                f"n11: no evaluation unit produced both a clean and a noisy "
+                f"reference score at level {sigma}. Units: {list(eval_units)}.")
         gap_by_model = {}
         gap_floor_by_model = {}
         for _m in _models_scored:
@@ -1223,7 +1338,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             'recovery': recovery,
                             # Named, not only encoded in the key, so no reader has
                             # to split a string to know which model this is.
+                            # 'model' is the evaluation unit ('rf@base_1');
+                            # the two fields after it split it.
                             'model': _mn,
+                            'downstream_model': eval_units[_mn][0],
+                            'fitted_on': f'base_{eval_units[_mn][1]}',
+                            'fitted_on_representation': eval_units[_mn][2],
                             'remediation': remed_key.split('|', 1)[-1],
                         }
                 if est_agg:
@@ -1299,9 +1419,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     #   folds, in the dataset's own metric. Every one of them is in that metric
     #   whichever family built the space.
     #
-    #   Every space shares ONE denominator. `gap` is clean minus noisy on the
-    #   base representation's evaluation model, computed once per sigma, and
-    #   every space's recovery divides by that same number. So a recovery in a
+    #   Every space shares ONE denominator per evaluation unit. The gap is
+    #   clean minus noisy for one model fitted on one of its two single
+    #   representations, computed once per sigma, and every space's recovery
+    #   for that unit divides by that same number. So a recovery in a
     #   similarity-built space and a recovery in a prediction-built space are
     #   the same quantity over the same bottom, and the two can be read against
     #   each other. (The gap is refused below GAP_MIN_FRAC of the clean score's
@@ -1579,7 +1700,7 @@ def _compute_summary(results):
             for fam, by_a in setting_recoveries.items()
         }
 
-        # Per-space recovery (base rep vs hybrid). This is the hybrid-vs-base
+        # Per-space recovery (single representations vs hybrid). This is the hybrid-vs-base
         # comparison. It is ORACLE-BIASED — the hybrid recipe was selected on
         # CLEAN labels (see run(): get_best_search_for_downstream on clean
         # labels, reused per fold under noise). Hybrid spaces are therefore

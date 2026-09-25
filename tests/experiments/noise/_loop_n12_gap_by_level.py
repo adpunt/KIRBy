@@ -63,13 +63,20 @@ def main():
     p.add_argument('--seeds', default='0')
     p.add_argument('--models', default='rf,lightgbm')
     p.add_argument('--out', default=OUT)
+    p.add_argument('--base-rep', required=True,
+                   help=('the single representation to compare against. '
+                         'Required: the fixed preference list that used to '
+                         'choose it was deleted 2026-09-25; the noise '
+                         'experiments now compare against each downstream '
+                         "model's top 2 single representations by its "
+                         'stored score'))
     a = p.parse_args()
     levels = [float(x) for x in a.levels.split(',')]
     seeds = [int(s) for s in a.seeds.split(',')]
     models = [m.strip() for m in a.models.split(',')]
 
     from experiments._shared import (
-        load_data, cv_split, pick_noise_base_rep, get_domain_metric,
+        load_data, cv_split, get_domain_metric,
         get_model_factories,
     )
     from experiments.complexity.complexity_helpers import DATASET_REPS
@@ -87,7 +94,10 @@ def main():
     reps, labels, groups = data['reps'], data['labels'], data['groups']
     is_clf = data['task_type'] == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    base_rep_name = pick_noise_base_rep(reps, a.dataset)
+    base_rep_name = a.base_rep
+    if base_rep_name not in reps:
+        raise SystemExit(f'--base-rep {base_rep_name!r} is not among the loaded '
+                         f'representations {sorted(reps)}')
     mf = get_model_factories(models, task_type=data['task_type'],
                              n_samples=len(labels))
     models = [m for m in models if m in mf]

@@ -63,13 +63,20 @@ TWO REFERENCES, NOT RULES.
                      measurements. What a loader normally hands you.
 A rule's gain over random is read beside the whole gap between the two.
 
-WHERE THE HYBRID COMES IN. Each downstream model runs in the base
-representation and in one hybrid per family of stored search, each recipe the
+WHERE THE HYBRID COMES IN. Each downstream model runs in its own top 2 single
+representations and in one hybrid per family of stored search, each recipe the
 one the pool picked FOR that model, as n23 and n26 do. The hybrid is rebuilt per
 (fold, seed) on the zero-budget training labels, and every rule and budget
 shares it. So the only thing differing between two rules is which candidates got
 a second measurement. Whether a hybrid rebuilt on the re-measured labels picks
 other features is not asked here.
+
+THE SINGLE-REPRESENTATION COMPARISON is each downstream model's top 2 base
+representations by that model's own score in the stored search -- spaces
+`base_1` and `base_2` -- the same rule as the rest of the study
+(_shared.noise_base_reps_by_model, owner's decision 2026-09-25). Which
+representations those are is written to `base_reps_by_model`; a model the pool
+holds no stored search for has none, and `base_reps_missing` says why.
 
 THE HEADLINE IS NOT A MEAN. Every (space, model, budget, rule) writes its paired
 per-(fold, seed) difference against each random draw. Nothing is averaged across
@@ -96,7 +103,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
@@ -117,6 +125,9 @@ SPACE_FOR_FAMILY = {
     'predictive': 'hybrid',
     'similarity': 'hybrid_similarity',
 }
+# base_1 and base_2 are each downstream model's rank-1 and rank-2 single
+# representation (see the module docstring).
+BASE_SPACES = tuple(f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1))
 
 # The share of the candidates (training molecules measured 2+ times) that get
 # their second measurement.
@@ -299,8 +310,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
             f"{sorted(model_factories)}.")
 
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
 
     results = {
         'metric': metric_name,
@@ -309,7 +321,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'noise_injection': 'none',
         'grading_label': 'the mean of ALL a held-out molecule\'s measurements',
         'models': downstream_models,
-        'base_rep': base_rep_name,
         'rules': rules,
         'budget_shares': budgets,
         'budget_unit': ('share of the training molecules measured twice or '
@@ -371,16 +382,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             }
         for _sp, _why in _unavail.items():
             hybrid_unavailable.setdefault(_sp, {})[_m] = _why
-    spaces = ('base',) + tuple(ordered_spaces)
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces_run = tuple(
+        f'base_{k}' for k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, k, downstream_models))
+
+    spaces = base_spaces_run + tuple(ordered_spaces)
     results['spaces_run'] = list(spaces)
-    results['hybrid_available'] = len(spaces) > 1
+    results['hybrid_available'] = bool(ordered_spaces)
     results['hybrid_spaces_unavailable'] = hybrid_unavailable
     results['hybrid_recipe_by_model'] = convert_numpy(recipe_record)
-    print(f"  base representation: {base_rep_name}; spaces {list(spaces)}")
+    print(f"  spaces {list(spaces)}")
 
-    X_base = ent_reps[base_rep_name]
-    splits = list(cv_split(ent_groups, n_folds, X_base, y_mean_all,
-                           task_type='regression'))
+    splits = list(cv_split(ent_groups, n_folds, next(iter(ent_reps.values())),
+                           y_mean_all, task_type='regression'))
 
     # scores[space][model][arm][pass_key] = {'score': ..., tail ...}
     # arm is 'zero_budget', 'all_measurements', or f'{budget}|{rule}|{r}'. r is
@@ -410,13 +437,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             start_tr, spare_tr = start_all[tr], spare_all[tr]
 
             # {space: [(X_tr, X_va, models)]}, built on the zero-budget labels.
+            # Each single-representation space holds one matrix per distinct
+            # representation at that rank, shared by the models that rank it
+            # there.
             fold_spaces = {}
-            sc = StandardScaler()
-            fold_spaces['base'] = [(sc.fit_transform(X_base[tr]),
-                                    sc.transform(X_base[va]),
-                                    list(downstream_models))]
+            for _k, _bsp in enumerate(BASE_SPACES, start=1):
+                if _bsp not in spaces:
+                    continue
+                _bcells = []
+                for _rn, _ms in base_rank_groups(base_by_model, _k,
+                                                 downstream_models).items():
+                    sc = StandardScaler()
+                    _bcells.append((sc.fit_transform(train_reps[_rn]),
+                                    sc.transform(val_reps[_rn]), list(_ms)))
+                fold_spaces[_bsp] = _bcells
             for _sp in spaces:
-                if _sp == 'base':
+                if _sp in BASE_SPACES:
                     continue
                 _cells = []
                 for _bp, _mnames, _shareable in group_models_by_recipe(
@@ -438,13 +474,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for space in spaces:
                 for X_tr_s, X_va_s, cell_models in fold_spaces.get(space, ()):
+                    _ekey = (space if cell_models == list(downstream_models)
+                             else f'{space}/{cell_models[0]}')
                     # What every rule reads, once per cell.
                     try:
                         oof = oof_predict(X_tr_s, start_tr, g_tr,
                                           n_splits=oof_splits, seed=seed)
                         disagreement = np.abs(start_tr - oof)
                     except Exception as exc:
-                        errors[f'{space}|{pass_key}|oof'] = (
+                        errors[f'{_ekey}|{pass_key}|oof'] = (
                             f'{type(exc).__name__}: {exc}')
                         disagreement = None
                     leverage, sparsity = neighbour_stats(X_tr_s)
@@ -597,9 +635,6 @@ def main():
                         help='Random allocations each rule is paired against')
     parser.add_argument('--oof-splits', type=int, default=OOF_SPLITS,
                         help='Inner folds for the disagreement rule')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help="Which representation is the base space. Default: "
-                             "pick_noise_base_rep's")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename')
     args = parser.parse_args()
@@ -610,8 +645,6 @@ def main():
         kw['budget_shares'] = [float(x) for x in args.budget_shares.split(',')]
     if args.seeds:
         kw['seeds'] = [int(x) for x in args.seeds.split(',')]
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
     if args.tag:
         kw['tag'] = args.tag
     run(data, config, args.output, args.dataset, **kw)

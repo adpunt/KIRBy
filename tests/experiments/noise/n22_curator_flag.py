@@ -53,10 +53,13 @@ molecule counts once and is flagged if any of its records is, and the
 suspicion score is that molecule's largest. Both are in the file, each saying
 what one row of it counts.
 
-TWO FEATURE SPACES, the same pair n06 uses. One single representation, chosen
-as the best in the pool lookup that chose the hybrid recipe — never a
-concatenation of everything, which is not a baseline in this project. And the
-hybrid built from that same pool. Features are chosen inside each fold on the
+THE FEATURE SPACES ARE n06's. Two single representations, `base_1` and
+`base_2`: rf's top 2 by rf's score in the stored search the pool lookup
+returned, the lookup that chose the hybrid recipe (owner's decision
+2026-09-25) — never a concatenation of everything, which is not a baseline in
+this project. Where that search gives no rf ranking, both are skipped and
+`base_reps_missing` says why; there is no fallback list. And the hybrid built
+from that same pool. Features are chosen inside each fold on the
 other folds' rows, and a record keeps a score only in the fold that held it
 out.
 
@@ -104,8 +107,9 @@ from experiments._shared import (  # noqa: E402
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     make_cv_splitter,
-    extract_top3_base_reps, pick_noise_base_rep, get_domain_metric,
+    extract_top3_base_reps, get_domain_metric,
     POOL_SUBSETS, DOWNSTREAM_MODELS,
+    noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
 )
 from kirby.utils.noise_estimation import get_noise_estimator  # noqa: E402
@@ -386,7 +390,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'files cannot drift')
     print(f"  {len(estimators)} detectors: {', '.join(estimators)}")
 
-    # ── feature spaces: one single representation and the hybrid ──
+    # ── feature spaces: rf's top 2 single representations and the hybrid ──
     budget = kwargs.get('budget')
     spaces = {}
     space_provenance = {}
@@ -453,51 +457,70 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             space_provenance[name] = {'unavailable': (
                 f'the {o} family is not in the pool subset {pool_subset}')}
 
-    base_rep = None
+    # rf's rank-1 and rank-2 single representations by rf's score in the
+    # stored search the pool returned, as spaces base_1 and base_2 (owner's
+    # decision 2026-09-25). No fallback list: with no rf ranking the
+    # single-representation spaces are skipped and the reason is written.
     if search is not None:
         try:
             top3 = extract_top3_base_reps(search)
             if top3:
                 results['top3_base_reps'] = [(n, sc) for n, sc in top3]
-                if top3[0][0] in reps:
-                    base_rep = top3[0][0]
         except Exception as exc:
-            print(f"  no base-representation ranking off the search "
+            print(f"  no top-3 listing off the search "
                   f"({type(exc).__name__}: {exc})")
-    if base_rep is None:
-        base_rep = pick_noise_base_rep(reps, dataset_name)
-        ranked_in = ('a fixed preference order; the pool search gave no '
-                     'usable ranking of the single representations')
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {'rf': search}, ['rf'], reps=reps, dataset_name=dataset_name)
     else:
-        ranked_in = ('the best single representation in the same search that '
-                     'chose the hybrid recipe, so both arms are ranked on one '
-                     'set of folds')
-    print(f"  comparator representation: {base_rep}")
-    spaces[base_rep] = ('base', None, None)
-    space_provenance[base_rep] = {
-        'features_chosen_by': 'nothing — every feature of one representation',
-        'which_representation': ranked_in,
-        'scaling': "z-scored inside each fold on that fold's training rows, "
-                   "the same treatment the hybrid arm gets",
-    }
-    results['comparator_space'] = base_rep
+        base_by_model = {}
+        base_missing = {'rf': (
+            f'the pool lookup returned no stored search ({pool_failure}), so '
+            f'there is no rf ranking of the single representations')}
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces = {}
+    for _k, _rn in enumerate(base_by_model.get('rf', [])
+                             [:NOISE_BASE_REP_COUNT], start=1):
+        base_spaces[f'base_{_k}'] = _rn
+    for _sp, _rn in base_spaces.items():
+        spaces[_sp] = ('base', _rn, None)
+        space_provenance[_sp] = {
+            'representation': _rn,
+            'features_chosen_by': 'nothing — every feature of one '
+                                  'representation',
+            'which_representation': (
+                f"rf's rank-{_sp.split('_')[1]} single representation by rf's "
+                f"score in the stored search the pool returned (built under "
+                f"the {winner_family} objective), the same search that chose "
+                f"the hybrid recipe"),
+            'scaling': "z-scored inside each fold on that fold's training rows, "
+                       "the same treatment the hybrid arm gets",
+        }
+        print(f"  {_sp}: {_rn} (rf's rank {_sp.split('_')[1]})")
+    if not base_spaces:
+        print(f"  no single-representation space: {base_missing.get('rf')}")
+    results['comparator_spaces'] = list(base_spaces)
     results['space_provenance'] = convert_numpy(space_provenance)
+
+    if not spaces:
+        reason = ('no feature space to score in: no hybrid recipe came back '
+                  f'({pool_failure}) and no single representation was ranked '
+                  f'({base_missing.get("rf")})')
+        print(f"  SKIP: {reason}")
+        results.update({'skipped': True, 'reason': reason,
+                        'policy': 'no_feature_space'})
+        return results
 
     # ── the top 2, added beside what is already reported ───────────────────
     # Added 2026-09-18, owner's instruction: the top 2 rows everywhere as an
-    # extra, changing nothing that is already reported. Nothing above moves.
-    # 'comparator_space' is still the first of 'top3_base_reps', the hybrid
-    # arms are still one recipe per objective family, and every average
-    # precision below is computed in exactly the spaces it was computed in
-    # before this block existed.
+    # extra, changing nothing that is already reported. It reads rankings only;
+    # the spaces the detectors run in are base_1, base_2 and the hybrid arms
+    # above.
     #
-    # What was absent without it: 'top3_base_reps' is one ranking by rf
-    # (extract_top3_base_reps defaults to 'rf'), rounded to 4 decimals, and the
-    # file reported no score for any other downstream model. A tie at the top
-    # of that rf ranking changes the comparator representation and every
-    # average precision in the file with it, and nothing recorded how close
-    # rank 2 sat or how the other 4 downstream models ranked the same
-    # representations.
+    # What it adds: rf's ranking alone decides base_1 and base_2, and the
+    # file would otherwise report no score for any other downstream model, how
+    # close the ranks sat, or how the other 4 downstream models ranked the
+    # same representations.
     #
     # 0 new model fits, and no detector fits either. All four helpers read rows
     # the pool search already holds in search.baselines and search.all_results.
@@ -582,7 +605,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  {len(folds)} folds, scaffold-grouped, so a molecule's repeats "
           f"never sit on both sides")
 
-    base_matrix = _clean_matrix(reps[base_rep])
+    base_matrices = {sp: _clean_matrix(reps[rn])
+                     for sp, rn in base_spaces.items()}
     scores = {s: {e: np.full(n_samples, np.nan) for e in estimators}
               for s in spaces}
     failures = {s: {} for s in spaces}
@@ -607,7 +631,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"({type(exc).__name__}: {exc})")
                     continue
             else:
-                X_tr, X_va = base_matrix[train_idx], base_matrix[val_idx]
+                X_tr = base_matrices[space_name][train_idx]
+                X_va = base_matrices[space_name][val_idx]
 
             scaler = StandardScaler().fit(X_tr)
             X_tr, X_va = scaler.transform(X_tr), scaler.transform(X_va)
@@ -722,24 +747,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         per_space[space_name] = per_est
     results['per_space'] = convert_numpy(per_space)
 
-    # ── the hybrid minus the single representation, per detector ──
+    # ── the hybrid minus each single representation, per detector ──
+    # One block per single-representation space (base_1, base_2), each keyed
+    # by hybrid space.
     hybrid_spaces = [s for s, (k, _b, _a) in spaces.items() if k == 'hybrid']
     delta = {}
-    for hs in hybrid_spaces:
-        d = {}
-        for est_name in estimators:
-            a = (per_space[hs][est_name]['records'] or {}).get(
-                'detection_average_precision')
-            b = (per_space[base_rep][est_name]['records'] or {}).get(
-                'detection_average_precision')
-            if a is None or b is None or not (np.isfinite(a)
-                                              and np.isfinite(b)):
-                continue
-            d[est_name] = {
-                'average_precision_in_the_hybrid': float(a),
-                f'average_precision_in_{base_rep}': float(b),
-                'difference': float(a - b)}
-        delta[hs] = d
+    for base_sp, base_rn in base_spaces.items():
+        per_hybrid = {}
+        for hs in hybrid_spaces:
+            d = {}
+            for est_name in estimators:
+                a = (per_space[hs][est_name]['records'] or {}).get(
+                    'detection_average_precision')
+                b = (per_space[base_sp][est_name]['records'] or {}).get(
+                    'detection_average_precision')
+                if a is None or b is None or not (np.isfinite(a)
+                                                  and np.isfinite(b)):
+                    continue
+                d[est_name] = {
+                    'average_precision_in_the_hybrid': float(a),
+                    f'average_precision_in_{base_rn}': float(b),
+                    'difference': float(a - b)}
+            per_hybrid[hs] = d
+        delta[base_sp] = {'comparator_representation': base_rn,
+                          'per_hybrid_space': per_hybrid}
     results['hybrid_minus_single_representation'] = convert_numpy(delta)
     results['hybrid_minus_single_representation_note'] = (
         'both numbers are average precision against the curator flag over '

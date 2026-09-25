@@ -72,10 +72,17 @@ def main():
     p.add_argument('--folds', type=int, default=3)
     p.add_argument('--seeds', default='0')
     p.add_argument('--out', default=OUT)
+    p.add_argument('--base-rep', required=True,
+                   help=('the single representation to compare against. '
+                         'Required: the fixed preference list that used to '
+                         'choose it was deleted 2026-09-25; the noise '
+                         'experiments now compare against each downstream '
+                         "model's top 2 single representations by its "
+                         'stored score'))
     a = p.parse_args()
     seeds = [int(s) for s in a.seeds.split(',')]
 
-    from experiments._shared import load_data, cv_split, pick_noise_base_rep
+    from experiments._shared import load_data, cv_split
     from experiments.complexity.complexity_helpers import DATASET_REPS
     from experiments.dataset_policy import noise_groups_for
     from experiments.noise.noise_helpers import (
@@ -93,7 +100,10 @@ def main():
             data['reps'][r] = np.nan_to_num(X, nan=0.0)
     reps, labels, groups = data['reps'], data['labels'], data['groups']
     is_clf = data['task_type'] == 'classification'
-    base_rep_name = pick_noise_base_rep(reps, a.dataset)
+    base_rep_name = a.base_rep
+    if base_rep_name not in reps:
+        raise SystemExit(f'--base-rep {base_rep_name!r} is not among the loaded '
+                         f'representations {sorted(reps)}')
     full_width = reps[base_rep_name].shape[1]
     print(f'{len(labels)} molecules, base representation {base_rep_name}, '
           f'{full_width} features, neighbours found under '

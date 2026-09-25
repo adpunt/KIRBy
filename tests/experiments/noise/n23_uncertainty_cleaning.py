@@ -165,9 +165,19 @@ BOTH REGIMES.
   as_they_come  nothing is corrupted. n18's regime. A win is a win on the data
                 as it arrived, and there is no list to be right about.
 
-WHAT THIS DOES NOT ASK. The features are fixed. One base representation and one
-hybrid per family of stored search the pool holds, each built once per fold on
-the fold's training molecules at their UNCLEANED labels. There are two
+WHAT THIS DOES NOT ASK. The features are fixed. Two single-representation
+spaces and one hybrid per family of stored search the pool holds, each built
+once per fold on the fold's training molecules at their UNCLEANED labels.
+
+THE SINGLE-REPRESENTATION COMPARISON is each downstream model's top 2 base
+representations by that model's own score in the stored search -- spaces
+`base_1` and `base_2` -- the same rule as the rest of the study
+(_shared.noise_base_reps_by_model, owner's decision 2026-09-25). Which
+representations those are is written to `base_reps_by_model`. A model the pool
+holds no stored search for has no single-representation space either, and
+`base_reps_missing` says why.
+
+There are two hybrid
 families: a search that chose its features to predict the label ('hybrid') and
 one that chose them so that each molecule's activity is predicted by its five
 nearest neighbours in the distance those features define
@@ -203,7 +213,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream, make_nearest_neighbors,
-    pick_noise_base_rep,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     # One feature space per search family the pool holds, added 2026-09-19.
     # n11's loop, in one place. See SPACE_FOR_FAMILY below.
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
@@ -343,6 +353,9 @@ POOL_SUBSET = 'predictive_and_similarity'
 # 'hybrid' is still the predictive recipe, so every number reported before
 # 2026-09-19 still means what it meant.
 HYBRID_SPACE = 'hybrid'
+# base_1 and base_2 are each downstream model's rank-1 and rank-2 single
+# representation (see the module docstring).
+BASE_SPACES = tuple(f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1))
 SPACE_FOR_FAMILY = {
     'predictive': HYBRID_SPACE,
     'similarity': 'hybrid_similarity',
@@ -588,13 +601,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             f"{list(kwargs.get('models') or DOWNSTREAM_MODELS)}, got "
             f"{sorted(model_factories)}.")
 
-    # pick_noise_base_rep, not sorted(reps)[0]. The alphabetical pick is the
-    # fallback that function was written to replace: it makes the control arm a
-    # matter of spelling, and it can hand the control slot to a structure-tuned
-    # sim_* recipe, which is a treatment this study built. n11, n17 and n21
-    # already call it; these four did not. Changed 2026-09-18.
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from each model's stored search, below.
+    base_reps_override = kwargs.get('base_reps')
     noise_groups = noise_groups_for(data)[0]
 
     # ⛔ A GROUPED CONDITION NEEDS SCAFFOLD GROUPS, AND AN ANTIBODY SET HAS NONE.
@@ -641,7 +650,6 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'arms': [a[0] for a in arms],
         'arm_to_beat': 'none',
         'models': downstream_models,
-        'base_rep': base_rep_name,
         'estimator_folds': est_folds,
         'neighbour_k': neighbour_k,
         'claim_scope': (
@@ -775,23 +783,39 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['hybrid_spaces_unavailable'] = hybrid_unavailable
     results['hybrid_lookup_error'] = results_hybrid_lookup_error
 
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces_run = tuple(
+        f'base_{k}' for k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, k, downstream_models))
+
     _first = next((m for m in downstream_models
                    if recipe_for_space_by_model.get(m)), None)
     bp = None
     if _first is None:
-        spaces = ('base',)
+        spaces = base_spaces_run
         results['hybrid_available'] = False
         results['hybrid_unavailable_reason'] = (
             (f'the pool lookup RAISED {results_hybrid_lookup_error} — the pool '
              f'was never read, so this is not a statement about what it holds. '
-             f'Every arm ran in the base representation only.')
+             f'Every arm ran in the single representations only.')
             if results_hybrid_lookup_error else
             (f'no recipe came back from the pool subset {POOL_SUBSET!r} for '
-             'any downstream model, so every arm ran in the base '
-             'representation only. Dropping the run '
+             'any downstream model, so every arm ran in the single '
+             'representations only. Dropping the run '
              'would lose real answers because one of several spaces is missing.'))
         print(f"  no hybrid recipe from pool subset {POOL_SUBSET}; "
-              f"base representation only")
+              f"single representations only")
     else:
         # A space runs when at least one downstream model has a recipe for it,
         # in the order the pool reported them.
@@ -800,7 +824,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             for r in recipes_by_model.get(_m, ()):
                 if r['space'] not in _ordered:
                     _ordered.append(r['space'])
-        spaces = ('base',) + tuple(_ordered)
+        spaces = base_spaces_run + tuple(_ordered)
         hybrid_recipes = recipes_by_model[_first]
         _meta = by_model[_first]['meta']
         bp = by_model[_first]['blueprint']
@@ -889,19 +913,23 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     print(f"  sources {list(sources)}")
     print(f"  {len(arms)} arms: 1 to beat, {len(drop_shares)} drop, "
           f"{len(move_methods) * len(move_strengths)} move")
-    # How many feature matrices one fold holds: the base representation, plus
-    # one per (hybrid space, downstream model with a recipe for it). The
-    # uncertainty estimate is computed on each of them, so this is what the
-    # estimate count is a multiple of.
-    _matrices_per_fold = 1 + sum(
-        1 for _sp in spaces if _sp != 'base'
+    # How many feature matrices one fold holds: one per distinct representation
+    # at each single-representation rank, plus one per (hybrid space,
+    # downstream model with a recipe for it). The uncertainty estimate is
+    # computed on each of them, so this is what the estimate count is a
+    # multiple of.
+    _matrices_per_fold = sum(
+        len(base_rank_groups(base_by_model, _k, downstream_models))
+        for _k in range(1, NOISE_BASE_REP_COUNT + 1)) + sum(
+        1 for _sp in spaces if _sp not in BASE_SPACES
         for _m in downstream_models
         if _sp in recipe_for_space_by_model.get(_m, {}))
     print(f"  {n_passes} (level, draw) passes over {len(regimes)} regimes; "
           f"{_matrices_per_fold} feature "
           f"{'matrix' if _matrices_per_fold == 1 else 'matrices'} per fold "
-          f"({len(spaces)} spaces, one matrix per downstream model in each "
-          f"hybrid space); "
+          f"({len(spaces)} spaces, one matrix per distinct representation in "
+          f"each single-representation space and one per downstream model in "
+          f"each hybrid space); "
           f"{n_passes * len(splits) * len(sources) * _matrices_per_fold} "
           f"uncertainty estimates")
 
@@ -961,8 +989,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
                 # The feature spaces, all built from this fold's training
                 # molecules at their UNCLEANED labels and shared by every arm.
-                # The base representation is ONE matrix that every downstream
-                # model is scored on. A hybrid space is one matrix PER
+                # A single-representation space (base_1, base_2) holds one
+                # matrix per distinct representation at that rank, shared by
+                # the downstream models that rank it there. A hybrid space is
+                # one matrix PER
                 # downstream model: that model's own recipe, rebuilt with that
                 # model in the accept/reject test. Until 2026-09-23 it was one
                 # matrix built from downstream_models[0]'s recipe, and every
@@ -971,18 +1001,24 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # {space: [(training matrix, held-out matrix, the models
                 # scored on it)]}.
                 fold_spaces = {}
-                sc = StandardScaler()
-                fold_spaces['base'] = [(
-                    sc.fit_transform(train_reps[base_rep_name]),
-                    sc.transform(val_reps[base_rep_name]),
-                    list(downstream_models))]
+                for _k, _bsp in enumerate(BASE_SPACES, start=1):
+                    if _bsp not in spaces:
+                        continue
+                    _bcells = []
+                    for _rn, _ms in base_rank_groups(
+                            base_by_model, _k, downstream_models).items():
+                        sc = StandardScaler()
+                        _bcells.append((sc.fit_transform(train_reps[_rn]),
+                                        sc.transform(val_reps[_rn]),
+                                        list(_ms)))
+                    fold_spaces[_bsp] = _bcells
                 # One build per (family the pool holds, downstream model).
                 # hybrid_for_fold reads the objective off the recipe and drops
                 # the model, the metric and its direction under a geometry
                 # recipe, where build_fold_hybrid refuses the pair, so one call
                 # serves both families.
                 for _sp in spaces:
-                    if _sp == 'base':
+                    if _sp in BASE_SPACES:
                         continue
                     # ONE BUILD PER DISTINCT RECIPE, not per model. A model
                     # with no recipe in this family still gets no matrix rather
@@ -1009,9 +1045,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     if _cells:
                         fold_spaces[_sp] = _cells
 
-                # One pass per (space, feature matrix): once for the base
-                # representation, once per downstream model in each hybrid
-                # space.
+                # One pass per (space, feature matrix): once per distinct
+                # representation in each single-representation space, once per
+                # downstream model in each hybrid space.
                 for space, (X_tr_s, X_va_s, cell_models) in (
                         (_sp, _cell) for _sp in spaces
                         for _cell in fold_spaces.get(_sp, ())):
@@ -1043,11 +1079,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             det = detection_scores(cmask, scores,
                                                    spec.strategy)
                             if det is not None:
-                                # Under the downstream model whose recipe
-                                # chose these features. In the base
-                                # representation every model shares one matrix,
-                                # so the same reading is written under each of
-                                # them; in a hybrid space they are different
+                                # Under each downstream model this matrix was
+                                # built for. Models sharing one representation
+                                # in a single-representation space share one
+                                # matrix, so the same reading is written under
+                                # each of them; otherwise they are different
                                 # feature spaces and different readings.
                                 for _dm in cell_models:
                                     (detection_acc
@@ -1119,10 +1155,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         for lvl, by_sp in detection_acc.items()})
     results['detection_note'] = (
         'One reading per (noise level, feature space, downstream model, '
-        'uncertainty source). In the base representation every downstream '
-        'model shares one feature matrix, so its readings are identical '
-        'across models; in a hybrid space each model has its own features and '
-        'its own reading.')
+        'uncertainty source). In base_1 and base_2 the downstream models that '
+        'rank the same representation there share one feature matrix, so '
+        'their readings are identical; in a hybrid space each model has its '
+        'own features and its own reading.')
     results['target_source_by_source'] = {k: sorted(v)
                                           for k, v in target_src.items()}
     # Summed over the folds of one (level, space, source, arm), so every count
@@ -1325,7 +1361,7 @@ def _print_summary(results, metric_name):
     print("\n" + "=" * 70)
     print(f"SUMMARY ({metric_name}; paired per fold against no cleaning)")
     if not results.get('hybrid_available', True):
-        print("  no hybrid recipe was available; base representation only")
+        print("  no hybrid recipe was available; single representations only")
     secs = results.get('estimator_seconds_by_source') or {}
     if secs:
         print("  seconds per uncertainty estimate: "
