@@ -14,7 +14,7 @@ file tests the model-side ones, paired per pass against the same model at its
 fixed default settings.
 
 THE CONDITIONS. `gaussian` from the registry, and `dense_oofmse` from
-noise_helpers.RELATIVE_CONDITIONS (noise variance a share of lightgbm's
+noiseInject.RELATIVE_CONDITIONS (noise variance a share of lightgbm's
 out-of-fold MSE on this fold's clean training labels, in `resid_sd_rep`; see
 THE FEATURE SPACES). Swept through
 noise_helpers.sweep_conditions, one file per condition; a job can name any other

@@ -539,32 +539,24 @@ def _already_there(dataset_name, y_clean, spec):
 SHIFT_ONLY_CONDITIONS = {'shift_only_p05': 0.05, 'shift_only_p10': 0.10}
 SHIFT_ONLY_DELTAS_SD = (0.5, 1.0, 2.0)
 
-# ADDED 2026-09-25 for n38-n41, from the third research report. Conditions sized
-# by the MODEL'S error on this fold, not by the label SD: `resid_sd` is the SD of
-# lightgbm's out-of-fold residual on the clean training labels, base space, and
-# the caller writes it beside every result. Kept out of the NoiseInject registry
-# for the same reason as SHIFT_ONLY_CONDITIONS.
+# ADDED 2026-09-25 for n38-n41, from the third research report; MOVED into
+# noiseInject 2026-09-25 (noiseInject/relative.py, RelativeNoiseInjector). The
+# conditions and their draws live there; what stays here is KIRBy's: the unit
+# `resid_sd` (oof_residual_sd below, the SD of lightgbm's out-of-fold residual on
+# the clean training labels, base space, written beside every result) and the
+# level grids the experiments sweep.
 #
 #   dense_oofmse         every training label gets N(0, level * resid_sd^2).
-#                        Level = the injected variance as a share of OOF MSE.
-#   sparse_dprime_pXX    a share XX% of training molecules moved by level
-#                        residual SDs, sign drawn at random per molecule.
+#   sparse_dprime_pXX    XX% of training molecules moved by level * resid_sd,
+#                        sign drawn at random per molecule.
 #   sparse_dprime_up_pXX the same, every one moved up.
-#   hetero_seen          every label gets noise whose SD follows the molecule's
-#                        heavy-atom count, a quantity the representation sees.
-#   hetero_hidden        every label gets noise whose SD is a per-molecule
-#                        lognormal draw, which nothing the model has can see.
-#                        Both hetero conditions are scaled so the mean injected
-#                        variance is level * resid_sd^2, the same as dense_oofmse.
-#
-# Not the removed value-dependent conditions (noise_spec.py, "refuted on 16,844
-# repeats"): nothing here depends on the label's own value.
-RELATIVE_SPARSE_SHARES = {'p02': 0.02, 'p05': 0.05, 'p10': 0.10}
-RELATIVE_CONDITIONS = (
-    ('dense_oofmse',)
-    + tuple(f'sparse_dprime_{k}' for k in RELATIVE_SPARSE_SHARES)
-    + tuple(f'sparse_dprime_up_{k}' for k in RELATIVE_SPARSE_SHARES)
-    + ('hetero_seen', 'hetero_hidden'))
+#   hetero_seen          noise SD follows the molecule's heavy-atom count.
+#   hetero_hidden        noise SD is a per-molecule lognormal draw.
+#                        Both hetero conditions: mean injected variance is
+#                        level * resid_sd^2, the same as dense_oofmse.
+from noiseInject import (  # noqa: E402
+    RELATIVE_CONDITIONS, RELATIVE_SPARSE_SHARES, RelativeNoiseInjector,
+)
 RELATIVE_DENSE_LEVELS = (0.1, 0.3, 1.0)     # share of OOF MSE
 RELATIVE_DPRIME_LEVELS = (1.0, 2.0, 4.0)    # residual SDs
 
@@ -682,71 +674,23 @@ def oof_residual_sd(X, y, groups=None, n_splits=5, seed=0):
 
 def inject_relative_train_labels(y_all, *, train_idx, condition, level, seed,
                                  resid_sd, heavy_atoms=None):
-    """Inject a RELATIVE_CONDITIONS member into one fold's training labels.
+    """One fold's training labels through noiseInject's RelativeNoiseInjector.
 
-    y_all        the FULL clean label column
-    train_idx    this fold's training rows
-    level        share of OOF MSE (dense_oofmse, hetero_*) or residual SDs
-                 (sparse_dprime_*)
-    seed         the draw; the same seed picks the same molecules in every arm
-    resid_sd     oof_residual_sd on this fold's clean training labels
-    heavy_atoms  heavy-atom count per training molecule; hetero_seen only
-
-    Returns (y_noisy_train, moved_mask_train, provenance), the same shape as
-    inject_train_labels. Under the conditions that move every label the mask
-    is all True, and detection_scores returns None for them.
+    Thin plumbing shared by n38, n40 and n41: slices the fold's training rows
+    out of the FULL clean label column, injects `condition` at `level` in units
+    of `resid_sd`, and returns (y_noisy_train, moved_mask_train, provenance) --
+    the same shape as inject_train_labels. `seed` is noiseInject's random_state
+    (its selection seed defaults to it). heavy_atoms: one per training
+    molecule, hetero_seen only.
     """
     import numpy as np
-    if condition not in RELATIVE_CONDITIONS:
-        raise ValueError(f'inject_relative_train_labels: unknown condition {condition!r}')
-    y_all = np.asarray(y_all, dtype=float).ravel()
-    train_idx = np.asarray(train_idx)
-    n = len(train_idx)
-    y_train = y_all[train_idx].copy()
-    rng = np.random.RandomState(int(seed))
-    level = float(level)
-    prov = {'condition': condition, 'level': level, 'resid_sd': float(resid_sd),
-            'n_training': int(n), 'seed': int(seed)}
-    moved = np.zeros(n, dtype=bool)
-    if level == 0.0:
-        prov['n_moved'] = 0
-        return y_train, moved, prov
-
-    if condition.startswith('sparse_dprime'):
-        one_way = condition.startswith('sparse_dprime_up_')
-        share = RELATIVE_SPARSE_SHARES[condition.rsplit('_', 1)[1]]
-        n_move = int(round(share * n))
-        if n_move > 0:
-            moved[rng.choice(n, size=n_move, replace=False)] = True
-        sign = (np.ones(n) if one_way
-                else rng.choice([-1.0, 1.0], size=n))
-        shift = level * float(resid_sd)
-        y_train[moved] += sign[moved] * shift
-        prov.update({'share': share, 'one_direction': one_way,
-                     'shift_label_units': shift, 'n_moved': int(moved.sum()),
-                     'n_up': int((moved & (sign > 0)).sum())})
-        return y_train, moved, prov
-
-    target_var = level * float(resid_sd) ** 2
-    if condition == 'dense_oofmse':
-        sd = np.full(n, np.sqrt(target_var))
-    elif condition == 'hetero_seen':
-        if heavy_atoms is None:
-            raise ValueError('hetero_seen needs heavy_atoms for the training molecules')
-        h = np.asarray(heavy_atoms, dtype=float).copy()
-        h[~np.isfinite(h)] = np.nanmedian(h)
-        sd = h / np.sqrt(np.mean(h ** 2)) * np.sqrt(target_var)
-    else:  # hetero_hidden
-        g = rng.lognormal(0.0, 1.0, size=n)
-        sd = g / np.sqrt(np.mean(g ** 2)) * np.sqrt(target_var)
-    e = rng.normal(size=n) * sd
-    y_train += e
-    moved[:] = True
-    prov.update({'injected_variance_target': target_var,
-                 'injected_variance_realised': float(np.mean(e ** 2)),
-                 'sd_min': float(sd.min()), 'sd_max': float(sd.max()),
-                 'n_moved': int(n)})
-    return y_train, moved, prov
+    y_train = np.asarray(y_all, dtype=float).ravel()[np.asarray(train_idx)]
+    res = RelativeNoiseInjector.from_condition(
+        condition, random_state=int(seed)).inject_verbose(
+            y_train, level=level, unit=resid_sd, heavy_atoms=heavy_atoms)
+    prov = res.as_row()
+    prov['resid_sd'] = float(resid_sd)
+    return res.y_noisy, res.moved_mask, prov
 
 
 def cleanlab_suspicion(X, y, model_name='lightgbm', seed=0, cv_n_folds=5):

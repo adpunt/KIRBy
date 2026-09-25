@@ -21,8 +21,8 @@ What already existed, read 2026-09-25: every NoiseInject condition is dosed in
 label SDs (src/kirby/noise_spec.py); n31's shift_only_* moves 5 or 10% UP by
 0.5, 1 or 2 LABEL SDs. Nothing was sized by the model's error.
 
-THE CONDITIONS are noise_helpers.RELATIVE_CONDITIONS, injected by
-inject_relative_train_labels. Their unit, resid_sd, is the SD of lightgbm's
+THE CONDITIONS are noiseInject.RELATIVE_CONDITIONS, drawn by noiseInject's
+RelativeNoiseInjector through noise_helpers.inject_relative_train_labels. Their unit, resid_sd, is the SD of lightgbm's
 out-of-fold residual (noise_helpers.oof_residual_sd) on THIS fold's clean
 training labels, in ONE representation, `resid_sd_rep` (see THE FEATURE
 SPACES), scaffold-grouped. It is written per fold and per label base, beside
