@@ -112,7 +112,8 @@ from experiments.noise.noise_helpers import (hybrid_for_fold,
 # the labels exactly as the loader produced them. So the same code runs, over the
 # real labels, with nothing corrupted.
 from experiments.noise.n07_remediation import (_evaluate_fold, targets_needed,
-                                               correction_targets)
+                                               correction_targets,
+                                               SCORE_FREE_CLEANUPS)
 from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
 
 # The cleanup applied to the training rows. 'no_cleaning' is the score to beat.
@@ -292,6 +293,27 @@ def setting_axis(cleanup, is_clf):
 DETECTORS = ('neighbor_residual', 'cross_val')
 DETECTOR_K = 10
 
+# ⛔ THE SHUFFLED-SCORE CONTROL, added 2026-09-25. Every cleanup is run a second
+# time with the detector's suspicion scores dealt to the training molecules in
+# a random order. Same scores, same flag rate, same strength -- so `remove`
+# deletes the same NUMBER of molecules, `downweight` hands out the same SET of
+# row weights, the smoothers move labels by the same set of amounts -- but to
+# molecules the detector did not pick.
+#
+# Why it is needed: on flab_thermo_tresanco in the hybrid space every cleanup's
+# mean gain over its settings was positive (downweight +0.0128 spearman over 30
+# settings, remove +0.0149 over 15; loop_n18/D2, 2026-09-21), and on the same
+# dataset deleting 45 RANDOM molecules moved spearman by -0.0628 to +0.0688
+# (loop_n23/random_drop_probe.json). Without this control a gain cannot be told
+# apart from "perturbing the training set of this model helps". The only
+# random-drop control before this lived outside the suite
+# (loop_n18/random_drop_probe.py) and ran on herg_ki and caco2 only.
+#
+# Each seed is reported on its own; no mean across seeds is written.
+# Score-free cleanups (n07.SCORE_FREE_CLEANUPS, e.g. quantile_clip) read no
+# score, so shuffling changes nothing for them and they are not re-run.
+SHUFFLE_SEEDS = (0, 1, 2)
+
 # Which feature space each cleanup is measured in.
 #
 # ⛔ THE THIRD ONE IS THE POINT, AND IT WAS MISSING. This file asks the pool
@@ -455,6 +477,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     flag_rates = list(kwargs.get('flag_rates') or FLAG_RATES)
     detectors = list(kwargs.get('detectors') or DETECTORS)
+    # An empty tuple switches the control off; None means the default.
+    shuffle_seeds = list(SHUFFLE_SEEDS if kwargs.get('shuffle_seeds') is None
+                         else kwargs['shuffle_seeds'])
     # The base space exists to be the thing the hybrid is read against, and it
     # is RECORDED rather than left implicit. Until 2026-09-17 it was the only
     # space and the result file did not name it.
@@ -497,6 +522,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'every row says which axis it sits on under swept_axis and where '
             'under setting. swept_axis_per_cleanup lists both.'),
         'detectors': detectors,
+        'shuffle_seeds': shuffle_seeds,
+        'shuffled_control_note': (
+            'per_space[space]["shuffled_control"] holds every cleanup re-run '
+            'with the suspicion scores permuted across the training molecules: '
+            'the same number removed, the same set of weights, the same set of '
+            'label moves, dealt to molecules the detector did not pick. '
+            'real_minus_shuffled is signed so positive means the detector\'s '
+            'own ranking beat the random one. Each seed is its own row. '
+            'Score-free cleanups are not re-run: shuffling changes nothing '
+            'for them.'),
         'claim_scope': (
             'No noise is injected. The uncleaned model trains on the labels as '
             'the loader produced them. Every score is measured against held-out '
@@ -841,6 +876,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # would have said five folds ran where one did.
     folds_ran = {s: {d: {r: set() for r in flag_rates} for d in detectors}
                  for s in spaces}
+    # The shuffled-score control, per seed. Kept out of `acc` so that every
+    # count in per_detector and in the summary still means the real detector.
+    ctrl_cleanups = tuple(c for c in CLEANUPS if c not in SCORE_FREE_CLEANUPS)
+    acc_ctrl = {s: {d: {k: {r: {m: {c: [] for c in ctrl_cleanups}
+                                for m in downstream_models}
+                            for r in flag_rates}
+                        for k in shuffle_seeds}
+                    for d in detectors} for s in spaces}
     hybrid_failures = []
 
     t0 = time.time()
@@ -968,7 +1011,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     precomputed_y_tr=y_train)
                 base_score[mname] = float(sc) if sc is not None else float('nan')
 
-            for detector in detectors:
+            def _cleaned_score(cleanup, rate, slot, mname, scores):
+                """Held-out score after `cleanup` driven by `scores`, or None
+                when this cleanup has no setting at this slot."""
+                _axis, _vals = setting_axis(cleanup, is_clf)
+                if slot >= len(_vals):
+                    return None
+                _strength = None if _axis == 'flag_rate' else _vals[slot]
+                sc = _evaluate_fold(
+                    X_tr_s, X_va_s, y_train, y_val, cleanup, rate,
+                    model_factories[mname], metric_fn,
+                    is_clf=is_clf, metric_name=metric_name,
+                    dataset_name=dataset_name,
+                    precomputed_y_tr=y_train, noise_scores=scores,
+                    strength=_strength, targets=_targets,
+                    train_groups=g_tr)
+                return float(sc) if sc is not None else float('nan')
+
+            for det_i, detector in enumerate(detectors):
                 # Re-run per space. The detector reads features, so the
                 # molecules it flags in the hybrid are not the ones it flags in
                 # the base representation.
@@ -976,6 +1036,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     groups=g_tr)
                 if scores is None:
                     continue
+                # The control: the same scores, dealt at random. Seeded on
+                # (seed, fold, space, detector) so a re-run reproduces it and
+                # two spaces or detectors never share a permutation.
+                for seed in shuffle_seeds:
+                    _perm = np.random.default_rng(
+                        [int(seed), int(fold_i), SPACES.index(space),
+                         det_i]).permutation(len(scores))
+                    _shuf = np.asarray(scores)[_perm]
+                    for slot, rate in enumerate(flag_rates):
+                        for mname in cell_models:
+                            for cleanup in ctrl_cleanups:
+                                sc = _cleaned_score(cleanup, rate, slot,
+                                                    mname, _shuf)
+                                if sc is not None:
+                                    acc_ctrl[space][detector][seed][rate][
+                                        mname][cleanup].append(sc)
                 for slot, rate in enumerate(flag_rates):
                     folds_ran[space][detector][rate].add(int(fold_i))
                     for mname in cell_models:
@@ -1086,9 +1162,66 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 space_block[detector][str(rate)] = convert_numpy(block)
         results['per_space'][space] = {'per_detector': space_block}
 
+        # ── The shuffled-score control, paired fold by fold ──
+        # {detector: {rate: {model: {cleanup: {seed: row}}}}}. Each row is the
+        # SAME setting as the real row in per_detector, with the scores dealt
+        # at random.
+        ctrl_block = {}
+        for detector in detectors:
+            ctrl_block[detector] = {}
+            for rate in flag_rates:
+                by_model = {}
+                for mname in downstream_models:
+                    base = np.asarray(
+                        acc[space][detector][rate][mname]['no_cleaning'],
+                        dtype=float)
+                    by_cleanup = {}
+                    for cleanup in ctrl_cleanups:
+                        real = np.asarray(
+                            acc[space][detector][rate][mname][cleanup],
+                            dtype=float)
+                        per_seed = {}
+                        for seed in shuffle_seeds:
+                            shuf = np.asarray(
+                                acc_ctrl[space][detector][seed][rate][mname][
+                                    cleanup], dtype=float)
+                            if not shuf.size or shuf.size != real.size:
+                                continue
+                            sign = -1.0 if lower_is_better else 1.0
+                            ok = np.isfinite(shuf) & np.isfinite(base)
+                            gain = sign * (shuf - base)
+                            both = ok & np.isfinite(real)
+                            r_minus_s = sign * (real - shuf)
+                            per_seed[str(seed)] = {
+                                'shuffled_mean': float(np.nanmean(shuf)),
+                                # Against no cleaning, same sign as the real
+                                # row's mean_gain.
+                                'shuffled_mean_gain': (float(gain[ok].mean())
+                                                       if ok.any()
+                                                       else float('nan')),
+                                'shuffled_folds_won': int(np.sum(gain[ok] > 0)),
+                                # Against the real detector: positive means
+                                # the detector's own ranking did better.
+                                'real_minus_shuffled': (
+                                    float(r_minus_s[both].mean())
+                                    if both.any() else float('nan')),
+                                'real_minus_shuffled_per_fold': [
+                                    float(x) for x in r_minus_s[both]],
+                                'folds_real_beat_shuffled': int(
+                                    np.sum(r_minus_s[both] > 0)),
+                                'folds_scored': int(both.sum()),
+                            }
+                        if per_seed:
+                            by_cleanup[cleanup] = per_seed
+                    by_model[mname] = by_cleanup
+                ctrl_block[detector][str(rate)] = convert_numpy(by_model)
+        results['per_space'][space]['shuffled_control'] = ctrl_block
+
     results['summary'] = _summarise(results, downstream_models, flag_rates,
                                     detectors, spaces, metric_name,
                                     cleanups=CLEANUPS)
+    results['summary']['shuffled_control'] = _summarise_control(
+        results, spaces, shuffle_seeds, ctrl_cleanups)
     _print_summary(results, metric_name)
 
     # (results, output_dir, experiment_id, dataset) — see the note in n17; the
@@ -1182,6 +1315,51 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name,
     return out
 
 
+def _summarise_control(results, spaces, seeds, cleanups):
+    """Per space and cleanup: does the detector's ranking beat a random one?
+
+    One setting is one (detector, flag rate or strength, model). For each seed
+    separately: in how many settings the real cleanup beat the shuffled one on
+    most folds, and the mean over settings of the real and the shuffled gain
+    against no cleaning. No number here is averaged across seeds.
+    """
+    out = {'what_one_setting_is': '(detector, flag rate or strength, model)',
+           'per_space': {}}
+    for space in spaces:
+        ctrl = results['per_space'].get(space, {}).get('shuffled_control', {})
+        real_blk = results['per_space'].get(space, {}).get('per_detector', {})
+        per_cleanup = {}
+        for cleanup in cleanups:
+            per_seed = {}
+            for seed in seeds:
+                s = str(seed)
+                real_g, shuf_g, beat, n = [], [], 0, 0
+                for det, by_rate in ctrl.items():
+                    for rate, by_model in by_rate.items():
+                        for m, by_c in by_model.items():
+                            row = (by_c.get(cleanup) or {}).get(s)
+                            real = ((real_blk.get(det, {}).get(rate, {})
+                                     .get('per_model', {}).get(m, {})
+                                     .get(cleanup)))
+                            if not row or not real or not row['folds_scored']:
+                                continue
+                            n += 1
+                            real_g.append(real['mean_gain'])
+                            shuf_g.append(row['shuffled_mean_gain'])
+                            if row['folds_real_beat_shuffled'] * 2 > row['folds_scored']:
+                                beat += 1
+                if n:
+                    per_seed[s] = {
+                        'settings': n,
+                        'settings_where_real_beat_shuffled_on_most_folds': beat,
+                        'mean_real_gain': float(np.nanmean(real_g)),
+                        'mean_shuffled_gain': float(np.nanmean(shuf_g)),
+                    }
+            per_cleanup[cleanup] = per_seed
+        out['per_space'][space] = per_cleanup
+    return out
+
+
 def _print_summary(results, metric_name):
     s = results['summary']
     print("\n" + "=" * 70)
@@ -1207,6 +1385,21 @@ def _print_summary(results, metric_name):
                   f"{b.get('setting', b.get('flag_rate'))} — "
                   f"{b['folds_won']} of {b['folds_scored']} folds, "
                   f"mean gain {b['mean_gain']:+.4f}")
+    sc = s.get('shuffled_control', {}).get('per_space', {})
+    if sc:
+        print(f"\n  SHUFFLED-SCORE CONTROL — the same cleanup with the suspicion "
+              f"scores dealt at random ({metric_name}, + means better than no "
+              f"cleaning):")
+        for space, by_c in sc.items():
+            print(f"\n  {space}:")
+            for cleanup, by_seed in by_c.items():
+                for seed, row in by_seed.items():
+                    print(f"    {cleanup:14s} seed {seed}: real beat shuffled on "
+                          f"most folds in "
+                          f"{row['settings_where_real_beat_shuffled_on_most_folds']}"
+                          f" of {row['settings']} settings; mean gain real "
+                          f"{row['mean_real_gain']:+.4f}, shuffled "
+                          f"{row['mean_shuffled_gain']:+.4f}")
     print("\n  One setting winning on one fold is not a result. Read the counts.")
     if 'sweeps_by_space' in s:
         print("  'sweeps_by_space' in the result file holds the sweep counts in "
@@ -1221,6 +1414,9 @@ def main():
     parser.add_argument('--base-rep', type=str, default=None,
                         help='Which representation is the base space. Default: '
                              'pick_noise_base_rep\'s, and it is recorded either way')
+    parser.add_argument('--shuffle-seeds', type=str, default=None,
+                        help='Comma-separated seeds for the shuffled-score '
+                             'control. Default SHUFFLE_SEEDS; "" switches it off')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)
@@ -1229,6 +1425,9 @@ def main():
         kw['flag_rates'] = [float(x) for x in args.flag_rates.split(',')]
     if args.base_rep:
         kw['base_rep'] = args.base_rep
+    if args.shuffle_seeds is not None:
+        kw['shuffle_seeds'] = [int(x) for x in args.shuffle_seeds.split(',')
+                               if x.strip()]
     run(data, config, args.output, args.dataset, **kw)
 
 
