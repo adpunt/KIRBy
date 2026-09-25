@@ -116,8 +116,25 @@ from experiments.noise.noise_helpers import (hybrid_for_fold,
 # real labels, with nothing corrupted.
 from experiments.noise.n07_remediation import (_evaluate_fold, targets_needed,
                                                correction_targets,
-                                               SCORE_FREE_CLEANUPS)
+                                               SCORE_FREE_CLEANUPS,
+                                               cleaned_training_set)
 from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
+# The similarity axis, the D-versus-D' rows, the controls and the per-fold
+# checkpoint, added 2026-09-25 (plan sections 1-3). See _sim_axis_n15_n22.
+from experiments.noise import noise_cache as nc
+from experiments.noise import _sim_axis_n15_n22 as sx
+from experiments.noise.similarity_space import SWEPT_KS
+
+# The name the rows file, the checkpoint and the result file are filed under.
+EXP_FULL_NAME = 'n18_clean_the_real_labels'
+
+# The noise_condition column of every row this file writes: nothing injected.
+ROW_CONDITION = 'as_they_come'
+
+# Downstream models whose fit is seeded, so _evaluate_fold may read it back
+# from noise_cache (n07._evaluate_fold, cache_dataset=). dnn is fitted as
+# before. Same list as _sim_axis_n15_n22.CACHEABLE_MODELS.
+_CACHED_FIT_MODELS = sx.CACHEABLE_MODELS
 
 # The cleanup applied to the training rows. 'no_cleaning' is the score to beat.
 #
@@ -355,8 +372,27 @@ SPACES = BASE_SPACES + ('hybrid', 'hybrid_similarity')
 POOL_SUBSET = 'predictive_and_similarity'
 
 
-def _suspicion(detector, X_tr_s, y_tr, is_clf, groups=None):
+def _suspicion(detector, X_tr_s, y_tr, is_clf, groups=None, dataset=None):
     """One suspicion score per training row, or None if the detector failed.
+
+    ⛔ CHANGED 2026-09-25: THE NEIGHBOUR DETECTORS NOW EXCLUDE SAME-SCAFFOLD
+    NEIGHBOURS. Until today `offered` named `groups` only, which
+    CrossValResidualEstimator reads and NeighborResidualEstimator does not --
+    that one names the same array `exclude_groups` -- so neighbor_residual
+    found each molecule's neighbours among its own scaffold family, while n07,
+    n24 and n25 hand the same detector exclude_groups (plan section 4: "n18
+    and n23 do not exclude same-scaffold molecules from the neighbour
+    detectors ... The same detector gives different scores in different
+    experiments"). Both names are offered now, the way
+    n07._compute_noise_scores offers them (n07_remediation.py:432-433).
+    EVERY neighbor_residual NUMBER IN THIS FILE MOVES WITH THIS; the cross_val
+    numbers do not.
+
+    Computed through noise_cache.cached_detector_scores (plan section 3), which
+    calls n07._compute_noise_scores: the same estimator class with the same
+    k=10, metric=None, groups and exclude_groups, fitted with .fit(), whose
+    noise_scores_ is estimate()'s return (noise_estimation.py:79-81). A failed
+    fit is None, as before. `dataset` names the cache directory only.
 
     Returning None drops the four cleanups from this fold rather than scoring
     them against a silent fallback.
@@ -374,19 +410,19 @@ def _suspicion(detector, X_tr_s, y_tr, is_clf, groups=None):
     molecule's scaffold-mates train the model that predicts it, so its residual
     is small for a reason that has nothing to do with its label.
     """
-    import inspect
-    offered = {'k': DETECTOR_K, 'metric': None, 'groups': groups}
-    if is_clf:
-        offered['is_clf'] = True
+    if DETECTOR_K != 10:
+        # cached_detector_scores offers n07's k=10; a different DETECTOR_K
+        # here would be silently overridden.
+        raise ValueError(f'n18 DETECTOR_K={DETECTOR_K} but the shared scorer '
+                         f'offers k=10')
     try:
-        cls = ESTIMATOR_REGISTRY[detector]
-        accepts = set(inspect.signature(cls.__init__).parameters)
-        kwargs = {k: v for k, v in offered.items() if k in accepts}
-        est = cls(**kwargs)
-        return np.asarray(est.estimate(X_tr_s, y_tr), dtype=float)
+        s = nc.cached_detector_scores(dataset or 'n18', X_tr_s, y_tr,
+                                      is_clf=is_clf, detector=detector,
+                                      groups=groups)
     except Exception as exc:
         print(f"      {detector} failed: {type(exc).__name__}: {exc}")
         return None
+    return None if s is None else np.asarray(s, dtype=float)
 
 
 def _won(cleaned, base, lower_is_better):
@@ -900,10 +936,219 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     for d in detectors} for s in spaces}
     hybrid_failures = []
 
+    # ── The main measurement, the similarity axis and the checkpoint ──
+    # Added 2026-09-25 (plan sections 1-3).
+    #
+    # ROWS. Every cleanup's fit on D' (the cleaned training fold) beside the
+    # uncleaned fit on D, one d_vs_dprime row per (fold, feature matrix,
+    # detector, setting, model), appended as each fold finishes. The rows of
+    # the code path above are built from the numbers it already computed --
+    # no refit -- and carry similarity_setting 'model_input|none|process|
+    # k=default' when a neighbour list reached them (the neighbour detector,
+    # or label_smooth / knn_smooth), 'none' when nothing did.
+    #
+    # THE SIMILARITY SWEEP. For each downstream model in each feature matrix,
+    # the neighbours neighbor_residual and label_smooth / knn_smooth read are
+    # found in each setting of sx.sweep_settings() -- that model's top-2
+    # single representations, each plus augmented features, its two hybrids,
+    # ECFP4 Tanimoto, forest proximity, x four weightings x two distances --
+    # at every k in SWEPT_KS. The model is still fitted on the feature matrix
+    # it was fitted on before; only the neighbours move. The detector's lists
+    # exclude same-scaffold neighbours (exclude_groups=g_tr, as _suspicion now
+    # does); the smoothers' do not, as n07's own smoothers do not
+    # (n07:829-855). The sweep adds rows only: nothing in per_space or summary
+    # reads it. KIRBY_SIMILARITY_SETTINGS=model_input switches it off, and the
+    # file is then today's run.
+    #
+    # CHECKPOINT. The accumulators are pickled after every fold, so a killed
+    # run resumes at the next fold (sx.FoldCheckpoint); the rows resume through
+    # d_vs_dprime.done_keys.
+    metric = (metric_name, metric_fn, lower_is_better)
+    rows = sx.Rows(output_dir, EXP_FULL_NAME, dataset_name)
+    sweep = sx.sweep_settings()
+    results['rows'] = rows.summary()
+    results['similarity_settings_swept'] = [s.name for s in sweep]
+    results['similarity_ks_swept'] = list(SWEPT_KS) if sweep else []
+    # Which neighbours every number OUTSIDE the rows and the similarity axis was
+    # computed with, so each result record names its similarity setting.
+    results['similarity_setting_of_the_default_path'] = sx.TODAY
+    results['similarity_note'] = (
+        "The similarity axis writes rows only (rows_path). Its settings are "
+        "the features neighbours are found in; every fit stays on the feature "
+        "matrix of the space it is filed under. An empty "
+        "similarity_settings_swept means KIRBY_SIMILARITY_SETTINGS=model_input: "
+        "today's run.")
+    sim_unavailable = {}
+    ck = sx.FoldCheckpoint(
+        output_dir, EXP_FULL_NAME, dataset_name,
+        sx.run_signature(data, config, {
+            'models': downstream_models, 'flag_rates': flag_rates,
+            'detectors': detectors, 'shuffle_seeds': shuffle_seeds,
+            'base_reps': base_reps_override, 'spaces': list(spaces)}))
+    if ck.state is not None:
+        acc = ck.state['acc']
+        folds_ran = ck.state['folds_ran']
+        acc_ctrl = ck.state['acc_ctrl']
+        hybrid_failures = ck.state['hybrid_failures']
+        sim_unavailable = ck.state.get('sim_unavailable', {})
+
+    def _cache_name(mname):
+        # The name _evaluate_fold files a cached fit under, or None to fit it
+        # directly (dnn: its fit is not reproducible, see noise_cache).
+        return mname if mname in _CACHED_FIT_MODELS else None
+
+    def _setting_label(cleanup, slot, rate):
+        # The axis a cleanup is swept on and its value at this slot, as
+        # setting_axis defines them.
+        _axis, _vals = setting_axis(cleanup, is_clf)
+        return f"{_axis}={rate if _axis == 'flag_rate' else _vals[slot]}"
+
+    def _today_ident(method, cleanup, detector, slot, rate, model_input, fold):
+        # A row of the code path above. A neighbour list reached it when the
+        # detector reads one or the cleanup does; then its neighbours were
+        # found in the model-input matrix, each at today's count.
+        reads = (detector in nc.NEIGHBOUR_DETECTORS
+                 or cleanup in sx.SMOOTHERS_READING_NEIGHBOURS)
+        return sx.identity(
+            dataset=dataset_name, experiment=EXP_FULL_NAME, method=method,
+            method_setting=(f'detector={detector}|'
+                            f'{_setting_label(cleanup, slot, rate)}'),
+            similarity_setting=sx.TODAY if reads else sx.NO_SIMILARITY,
+            model_input=model_input, noise_condition=ROW_CONDITION,
+            fold=int(fold))
+
+    def _sweep_cell(X_tr_s, X_va_s, cell_models, mi, g_tr, y_train, y_val,
+                    train_idx, tr_reps, va_reps, smiles_tr, scores_by_detector,
+                    targets, base_score, fold_i):
+        """Every cleanup that a similarity setting reaches, per setting and k,
+        on one feature matrix. A setting reaches a (detector, cleanup) pair
+        when the detector reads neighbours (neighbor_residual) or the cleanup
+        does (label_smooth, knn_smooth); a pair it reaches neither way is the
+        'none' row the code path above already wrote. The model is fitted on
+        this matrix as before; the D score is the one base_score holds."""
+        for mname in cell_models:
+            fac = {mname: model_factories[mname]}
+            sp_tr, _sp_va, unav = sx.build_spaces(
+                dataset_name, sweep, X_model_tr=X_tr_s, train_reps=tr_reps,
+                val_reps=va_reps, train_idx=train_idx,
+                base_names=base_by_model.get(mname),
+                recipes=recipe_for_space_by_model.get(mname),
+                y_train=y_train, groups_train=g_tr, model_name=mname,
+                model_factory=model_factories[mname], metric=metric,
+                task_type=task_type,
+                augmentations_train=_aug_rows(train_idx),
+                augmentations_val=_aug_rows(val_idx_of[fold_i]))
+            for setting in sweep:
+                if setting.space in unav:
+                    sim_unavailable.setdefault(setting.name, {})[mname] = \
+                        unav[setting.space]
+                    continue
+                nb_plain, why = sx.neighbour_lists(
+                    dataset_name, setting, sp_tr, y_train,
+                    smiles_train=smiles_tr, is_clf=is_clf)
+                if nb_plain is None:
+                    sim_unavailable.setdefault(setting.name, {})[mname] = why
+                    continue
+                nb_excl = nb_plain
+                if g_tr is not None:
+                    nb_excl, _why_e = sx.neighbour_lists(
+                        dataset_name, setting, sp_tr, y_train,
+                        exclude_groups=g_tr, smiles_train=smiles_tr,
+                        is_clf=is_clf)
+                for k in sx.ks_held(nb_plain):
+                    sim = sx.sim_name(setting, k)
+                    for detector in detectors:
+                        det_reads = detector in nc.NEIGHBOUR_DETECTORS
+                        if det_reads:
+                            if nb_excl is None or k not in sx.ks_held(nb_excl):
+                                continue
+                            try:
+                                scores_k = nc.cached_detector_scores(
+                                    dataset_name, X_tr_s, y_train,
+                                    is_clf=is_clf, detector=detector,
+                                    groups=g_tr, similarity_neighbours=nb_excl,
+                                    similarity_k=k)
+                            except Exception as exc:
+                                print(f"      {detector} under {sim} failed: "
+                                      f"{type(exc).__name__}: {exc}")
+                                continue
+                        else:
+                            scores_k = scores_by_detector.get(detector)
+                        if scores_k is None:
+                            continue
+                        for cleanup in CLEANUPS:
+                            reads = sx.strategy_reads_setting(cleanup, setting)
+                            if not (det_reads or reads):
+                                continue
+                            _axis, _vals = setting_axis(cleanup, is_clf)
+                            for slot, rate in enumerate(flag_rates):
+                                if slot >= len(_vals):
+                                    continue
+                                _strength = (None if _axis == 'flag_rate'
+                                             else _vals[slot])
+                                ident = sx.identity(
+                                    dataset=dataset_name,
+                                    experiment=EXP_FULL_NAME, method=cleanup,
+                                    method_setting=(
+                                        f'detector={detector}|'
+                                        f'{_setting_label(cleanup, slot, rate)}'),
+                                    similarity_setting=sim, model_input=mi,
+                                    noise_condition=ROW_CONDITION,
+                                    fold=int(fold_i))
+                                if rows.is_done(ident, [mname]) and not \
+                                        sx.controls_enabled():
+                                    continue
+
+                                def _clean(sc_, rate_, _c=cleanup,
+                                           _s=_strength, _r=reads, _k=k):
+                                    return cleaned_training_set(
+                                        _c, X_tr_s, y_train, sc_, rate_,
+                                        is_clf=is_clf, groups=g_tr,
+                                        strength=_s, targets=targets,
+                                        dataset_name=dataset_name,
+                                        similarity_neighbours=(
+                                            nb_plain if _r else None),
+                                        similarity_k=_k if _r else None)
+                                try:
+                                    cleaned = _clean(scores_k, rate)
+                                except Exception as exc:
+                                    print(f"      {cleanup} under {sim} "
+                                          f"failed: {type(exc).__name__}: "
+                                          f"{exc}")
+                                    cleaned = None
+                                _kw = dict(X_tr=X_tr_s, y_D=y_train,
+                                           X_va=X_va_s, y_va=y_val,
+                                           metric=metric, factories=fac,
+                                           score_D={mname: base_score[mname]})
+                                sx.dprime_rows(rows, dataset_name, ident,
+                                               cleaned, **_kw)
+                                sx.control_rows(
+                                    rows, dataset_name, ident, cleaned,
+                                    seed=sx.seed_of(fold_i, mi, mname, cleanup,
+                                                    detector, sim, slot),
+                                    is_clf=is_clf, rerun=_clean, **_kw)
+
+    augmentations_all = data.get('augmentations') or None
+
+    def _aug_rows(idx):
+        # The augmentation donors sliced to these rows, for the four augmented
+        # similarity spaces. None when the loader carries none.
+        if not augmentations_all:
+            return None
+        return {a: np.asarray(m[idx], dtype=np.float64)
+                for a, m in augmentations_all.items()}
+
+    val_idx_of = {i: va for i, (_tr, va) in enumerate(splits)}
+
     t0 = time.time()
     for fold_i, (train_idx, val_idx) in enumerate(splits):
+        if ck.is_done(fold_i):
+            print(f"    fold {fold_i}: already in the checkpoint, skipped")
+            continue
         y_train = labels[train_idx]
         y_val = labels[val_idx]
+        smiles_tr = sx.smiles_for(data, train_idx)
+        fold_rows = []
 
         # ── The feature spaces for this fold ──
         # Each single-representation space holds one matrix per distinct
@@ -938,7 +1183,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                     dtype=np.float64)),
                     scaler.transform(np.asarray(reps[_rn][val_idx],
                                                 dtype=np.float64)),
-                    list(_ms)))
+                    list(_ms), _rn))
             fold_spaces[_bsp] = _cells
         _tr_reps = {k: np.asarray(v[train_idx], dtype=np.float64)
                     for k, v in reps.items()}
@@ -978,10 +1223,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _cells = []
             for _bp_m, _mnames, _shareable in _groups:
                 # The model instance is passed only when the build fits one.
-                X_tr_h, X_va_h = hybrid_for_fold(
-                    _tr_reps, _va_reps, y_train, _bp_m, g_tr,
+                # Through noise_cache since 2026-09-25 (plan section 3): the
+                # same hybrid_for_fold call, stored under its inputs, so the
+                # similarity sweep's 'hybrid' / 'hybrid_similarity' spaces for
+                # this model read this very build back instead of repeating it.
+                X_tr_h, X_va_h = nc.cached_hybrid_for_fold(
+                    dataset_name, _tr_reps, _va_reps, y_train, _bp_m, g_tr,
                     None if _shareable else model_factories[_mnames[0]](),
-                    metric_fn, lower_is_better)
+                    metric_fn, lower_is_better,
+                    model_name=None if _shareable else _mnames[0],
+                    metric_name=metric_name, train_idx=train_idx)
                 if X_tr_h is None:
                     for mname in _mnames:
                         hybrid_failures.append({'fold': int(fold_i),
@@ -990,13 +1241,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     continue
                 sc_h = StandardScaler()
                 _cells.append((sc_h.fit_transform(X_tr_h),
-                               sc_h.transform(X_va_h), list(_mnames)))
+                               sc_h.transform(X_va_h), list(_mnames),
+                               'recipe of ' + '+'.join(_mnames)))
             if _cells:
                 fold_spaces[_sp] = _cells
 
         # One pass per (space, feature matrix): once for the base
         # representation, once per downstream model in each hybrid space.
-        for space, (X_tr_s, X_va_s, cell_models) in (
+        for space, (X_tr_s, X_va_s, cell_models, cell_label) in (
                 (_sp, _cell) for _sp in spaces
                 for _cell in fold_spaces.get(_sp, ())):
 
@@ -1031,7 +1283,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_tr_s, X_va_s, y_train, y_val, 'no_noise', 0.0,
                     model_factories[mname], metric_fn, is_clf=is_clf,
                     metric_name=metric_name, dataset_name=dataset_name,
-                    precomputed_y_tr=y_train)
+                    precomputed_y_tr=y_train,
+                    cache_dataset=dataset_name,
+                    cache_model_name=_cache_name(mname))
                 base_score[mname] = float(sc) if sc is not None else float('nan')
 
             def _cleaned_score(cleanup, rate, slot, mname, scores):
@@ -1048,17 +1302,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     dataset_name=dataset_name,
                     precomputed_y_tr=y_train, noise_scores=scores,
                     strength=_strength, targets=_targets,
-                    train_groups=g_tr)
+                    train_groups=g_tr, cache_dataset=dataset_name,
+                    cache_model_name=_cache_name(mname))
                 return float(sc) if sc is not None else float('nan')
 
+            # This matrix's default-path scores per detector, which the
+            # similarity sweep below reuses for a detector that reads no
+            # neighbours (cross_val).
+            scores_by_detector = {}
+            _mi = f'{space}:{cell_label}'
             for det_i, detector in enumerate(detectors):
                 # Re-run per space. The detector reads features, so the
                 # molecules it flags in the hybrid are not the ones it flags in
                 # the base representation.
                 scores = _suspicion(detector, X_tr_s, y_train, is_clf,
-                                    groups=g_tr)
+                                    groups=g_tr, dataset=dataset_name)
                 if scores is None:
                     continue
+                scores_by_detector[detector] = scores
                 # The control: the same scores, dealt at random. Seeded on
                 # (seed, fold, space, detector) so a re-run reproduces it and
                 # two spaces or detectors never share a permutation.
@@ -1075,6 +1336,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 if sc is not None:
                                     acc_ctrl[space][detector][seed][rate][
                                         mname][cleanup].append(sc)
+                                    fold_rows.append(sx.row(
+                                        _today_ident(
+                                            f'{cleanup}__score_shuffled_seed{seed}',
+                                            cleanup, detector, slot, rate, _mi,
+                                            fold_i),
+                                        model=mname, metric=metric,
+                                        score_D=base_score[mname],
+                                        score_Dprime=sc))
                 for slot, rate in enumerate(flag_rates):
                     folds_ran[space][detector][rate].add(int(fold_i))
                     for mname in cell_models:
@@ -1115,10 +1384,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 # family trains the model that says what its
                                 # label should have been -- which is the leak
                                 # cleaned_training_set's docstring warns about.
-                                train_groups=g_tr)
+                                train_groups=g_tr,
+                                cache_dataset=dataset_name,
+                                cache_model_name=_cache_name(mname))
                             acc[space][detector][rate][mname][cleanup].append(
                                 float(sc) if sc is not None else float('nan'))
+                            fold_rows.append(sx.row(
+                                _today_ident(cleanup, cleanup, detector, slot,
+                                             rate, _mi, fold_i),
+                                model=mname, metric=metric,
+                                score_D=base_score[mname], score_Dprime=sc))
+
+            # ── The similarity sweep on this feature matrix ──
+            if sweep:
+                _sweep_cell(X_tr_s, X_va_s, cell_models, _mi, g_tr, y_train,
+                            y_val, train_idx, _tr_reps, _va_reps, smiles_tr,
+                            scores_by_detector, _targets, base_score, fold_i)
+
+        rows.write(fold_rows)
+        ck.save(fold_i, {'acc': acc, 'folds_ran': folds_ran,
+                         'acc_ctrl': acc_ctrl,
+                         'hybrid_failures': hybrid_failures,
+                         'sim_unavailable': sim_unavailable})
         print(f"    fold {fold_i}: [{time.time() - t0:.0f}s]")
+    results['rows'] = rows.summary()
+    if sim_unavailable:
+        results['similarity_settings_unavailable'] = sim_unavailable
 
     if hybrid_failures:
         # Named rather than left as a shorter list of folds. Those folds still
@@ -1251,6 +1542,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # arguments were rotated here the same way and with the same two effects.
     save_experiment_results(results, output_dir, 'n18_clean_the_real_labels',
                             dataset_name)
+    # The result file holds every fold now, so the per-fold snapshot is spent.
+    ck.clear()
     return results
 
 

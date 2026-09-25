@@ -1047,6 +1047,11 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Discard what an earlier attempt finished '
+             '(<output>.partial.jsonl) and recompute every item.')
+
     parser = add_distance_metric_arg(parser)
 
     args = parser.parse_args()
@@ -1065,11 +1070,39 @@ def main():
     print(f"  Folds: TRUE LOO (n_folds == n_groups per split)")
     print("=" * 70)
 
+    output_path = (args.output or
+                   'tests/results/comparisons/opig_kingsmith_component_splits.json')
+
+    # Each (dataset, split axis) result is written to <output>.partial.jsonl
+    # as soon as it finishes and read back on the next attempt (2026-09-25;
+    # experiments/_checkpoint.py). Before, a failure or a kill lost every
+    # dataset, because the one JSON below was written after the last. When
+    # every split axis of a dataset is already stored the dataset is not
+    # loaded again. A split that raised or returned {'error'}, and a dataset
+    # that failed to load, is not stored, is retried next time, and makes the
+    # script exit 1 after the JSON is written.
+    from experiments._checkpoint import (
+        script_checkpoint, is_failed_item, exit_if_failed)
+    _ck = script_checkpoint('opig_kingsmith_component_splits', output_path,
+                            args, exclude=('datasets', 'splits', 'output'))
+    _failed = []
+
     all_results = {}
     for ds_name in datasets:
         print(f"\n{'=' * 60}")
         print(f"Dataset: {ds_name}")
         print(f"{'=' * 60}")
+
+        if split_keys and all(_ck.done(dataset=ds_name, split=sk)
+                              for sk in split_keys):
+            _saved = [_ck.get(dataset=ds_name, split=sk) for sk in split_keys]
+            ds_result = {'n_reactions': _saved[0]['n_reactions'], 'splits': {}}
+            for sk, sv in zip(split_keys, _saved):
+                ds_result['splits'][sk] = sv['split']
+            print(f"  all {len(split_keys)} split axes finished in an earlier "
+                  f"attempt, read back")
+            all_results[ds_name] = ds_result
+            continue
 
         try:
             data = load_reaction_data(ds_name)
@@ -1077,6 +1110,7 @@ def main():
             print(f"  FAILED to load: {e}")
             import traceback
             traceback.print_exc()
+            _failed.append(ds_name)
             continue
 
         n = len(data['labels'])
@@ -1084,14 +1118,24 @@ def main():
 
         for split_key in split_keys:
             try:
-                split_result = evaluate_split(
-                    ds_name, data, split_key, args.n_folds,
-                    pruning_mode=args.pruning_mode)
+                if _ck.done(dataset=ds_name, split=split_key):
+                    split_result = _ck.get(dataset=ds_name,
+                                           split=split_key)['split']
+                else:
+                    split_result = evaluate_split(
+                        ds_name, data, split_key, args.n_folds,
+                        pruning_mode=args.pruning_mode)
+                    if not is_failed_item(split_result):
+                        _ck.put({'n_reactions': n, 'split': split_result},
+                                dataset=ds_name, split=split_key)
+                if is_failed_item(split_result):
+                    _failed.append(f'{ds_name}/{split_key}')
                 ds_result['splits'][split_key] = split_result
             except Exception as e:
                 print(f"  FAILED split={split_key}: {e}")
                 import traceback
                 traceback.print_exc()
+                _failed.append(f'{ds_name}/{split_key}')
 
         all_results[ds_name] = ds_result
 
@@ -1100,14 +1144,13 @@ def main():
         print_analysis(all_results)
 
     # Save
-    output_path = (args.output or
-                   'tests/results/comparisons/opig_kingsmith_component_splits.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
     with open(p, 'w') as f:
         json.dump(convert_numpy(all_results), f, indent=2)
     print(f"\nResults saved: {p}")
+    exit_if_failed(_failed, 'dataset or split')
 
 
 if __name__ == '__main__':

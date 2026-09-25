@@ -262,6 +262,60 @@ def _knn_indices(X, k, metric, exclude_groups=None, return_distance=False):
     return (out_d, out_i) if return_distance else out_i
 
 
+def _neighbours_for(precomputed, X, k, metric, exclude_groups=None,
+                    return_distance=False):
+    """_knn_indices, or the caller's precomputed neighbour list cut to k.
+
+    `precomputed` is None (compute here, exactly as before), an index array
+    (n, >=k), a tuple (indices, distances), or the dict
+    tests/experiments/noise/similarity_space.neighbour_lists returns. Indices
+    must exclude the row itself and whatever exclude_groups would; the list is
+    taken as given and `metric` and `exclude_groups` are not read. For a
+    neighbour_lists dict holding `exact_by_k` (the MODEL_INPUT setting) the
+    exact list for k is used, because under ties a longer sklearn query cut to
+    k is not the same list.
+
+    Added 2026-09-25 so a noise experiment can find neighbours in a different
+    space from the one the estimator's X is in (plan section 1).
+    """
+    if precomputed is None:
+        return _knn_indices(X, k, metric, exclude_groups=exclude_groups,
+                            return_distance=return_distance)
+    dist = None
+    if isinstance(precomputed, dict):
+        if not precomputed.get('available', True):
+            raise ValueError(f"precomputed_neighbors is unavailable: "
+                             f"{precomputed.get('reason')}")
+        exact = precomputed.get('exact_by_k')
+        if exact is not None:
+            # MODEL_INPUT: never cut a longer list to k, for the reason above.
+            if k not in exact:
+                raise KeyError(
+                    f"precomputed_neighbors holds exact lists for k in "
+                    f"{sorted(exact)}, not {k}; a longer query cut to {k} is "
+                    f"not the same list under ties.")
+            idx, dist = exact[k]
+        else:
+            idx = precomputed.get('idx_train', precomputed.get('idx'))
+            dist = precomputed.get('dist_train', precomputed.get('dist'))
+    elif isinstance(precomputed, tuple):
+        idx, dist = precomputed
+    else:
+        idx = precomputed
+    idx = np.asarray(idx)
+    if idx.shape[0] != len(X):
+        raise ValueError(f"precomputed_neighbors has {idx.shape[0]} rows, X "
+                         f"has {len(X)}.")
+    w = int(min(k, idx.shape[1]))
+    idx = idx[:, :w]
+    if not return_distance:
+        return idx
+    if dist is None:
+        raise ValueError("this estimator weights by distance and "
+                         "precomputed_neighbors carries none")
+    return np.asarray(dist)[:, :w], idx
+
+
 class NeighborResidualEstimator(NoiseEstimator):
     """
     Estimate noise as deviation from k-NN consensus.
@@ -276,7 +330,8 @@ class NeighborResidualEstimator(NoiseEstimator):
 
     def __init__(self, k: int = 10, metric: str = None,
                  normalize: bool = True, is_clf: bool = False,
-                 exclude_groups=None, random_state: int = 42):
+                 exclude_groups=None, random_state: int = 42,
+                 precomputed_neighbors=None):
         super().__init__(random_state)
         self.k = k
         self.metric = resolve_distance_metric(metric)
@@ -285,12 +340,15 @@ class NeighborResidualEstimator(NoiseEstimator):
         # One label per row; a row never takes a neighbour sharing it. See
         # _knn_indices for why repeat measurements need this.
         self.exclude_groups = exclude_groups
+        # None computes neighbours from X as before. See _neighbours_for.
+        self.precomputed_neighbors = precomputed_neighbors
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
 
-        neighbor_indices = _knn_indices(X, k, self.metric,
-                                        exclude_groups=self.exclude_groups)
+        neighbor_indices = _neighbours_for(
+            self.precomputed_neighbors, X, k, self.metric,
+            exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
 
         if self.is_clf:
@@ -340,18 +398,22 @@ class LocalVarianceRatioEstimator(NoiseEstimator):
 
     def __init__(self, k: int = 10, metric: str = None,
                  is_clf: bool = False, exclude_groups=None,
-                 random_state: int = 42):
+                 random_state: int = 42,
+                 precomputed_neighbors=None):
         super().__init__(random_state)
         self.k = k
         self.metric = resolve_distance_metric(metric)
         self.is_clf = is_clf
         self.exclude_groups = exclude_groups
+        # None computes neighbours from X as before. See _neighbours_for.
+        self.precomputed_neighbors = precomputed_neighbors
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
 
-        neighbor_indices = _knn_indices(X, k, self.metric,
-                                        exclude_groups=self.exclude_groups)
+        neighbor_indices = _neighbours_for(
+            self.precomputed_neighbors, X, k, self.metric,
+            exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
         k = neighbor_indices.shape[1]
 
@@ -403,20 +465,23 @@ class DistanceWeightedResidualEstimator(NoiseEstimator):
 
     def __init__(self, k: int = 10, metric: str = None,
                  normalize: bool = True, is_clf: bool = False,
-                 exclude_groups=None, random_state: int = 42):
+                 exclude_groups=None, random_state: int = 42,
+                 precomputed_neighbors=None):
         super().__init__(random_state)
         self.k = k
         self.metric = resolve_distance_metric(metric)
         self.normalize = normalize
         self.is_clf = is_clf
         self.exclude_groups = exclude_groups
+        # None computes neighbours from X as before. See _neighbours_for.
+        self.precomputed_neighbors = precomputed_neighbors
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
 
-        neighbor_distances, neighbor_indices = _knn_indices(
-            X, k, self.metric, exclude_groups=self.exclude_groups,
-            return_distance=True)
+        neighbor_distances, neighbor_indices = _neighbours_for(
+            self.precomputed_neighbors, X, k, self.metric,
+            exclude_groups=self.exclude_groups, return_distance=True)
         neighbor_labels = y[neighbor_indices]
 
         weights = 1 / (neighbor_distances + 1e-10)
@@ -470,18 +535,22 @@ class ActivityCliffAwareEstimator(NoiseEstimator):
 
     def __init__(self, k: int = 10, metric: str = None,
                  is_clf: bool = False, exclude_groups=None,
-                 random_state: int = 42):
+                 random_state: int = 42,
+                 precomputed_neighbors=None):
         super().__init__(random_state)
         self.k = k
         self.metric = resolve_distance_metric(metric)
         self.is_clf = is_clf
         self.exclude_groups = exclude_groups
+        # None computes neighbours from X as before. See _neighbours_for.
+        self.precomputed_neighbors = precomputed_neighbors
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
 
-        neighbor_indices = _knn_indices(X, k, self.metric,
-                                        exclude_groups=self.exclude_groups)
+        neighbor_indices = _neighbours_for(
+            self.precomputed_neighbors, X, k, self.metric,
+            exclude_groups=self.exclude_groups)
         neighbor_labels = y[neighbor_indices]
 
         if self.is_clf:

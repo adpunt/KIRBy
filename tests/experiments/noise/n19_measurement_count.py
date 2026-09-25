@@ -241,6 +241,24 @@ from experiments.noise.noise_helpers import (
     hybrid_for_fold, pool_recipe_per_downstream_model, group_models_by_recipe,
 )
 from kirby.utils.noisy_labels import oof_predict
+# The D-versus-D' rows, the controls, the caches and the per-fold checkpoint,
+# added 2026-09-25 (plan sections 2-3). n19 finds no neighbours, so it takes no
+# similarity setting (plan section 6: "Experiments with no similarity (n19,
+# ...) get the output row and the caches only").
+from experiments.noise import noise_cache as nc
+from experiments.noise import _sim_axis_n15_n22 as sx
+
+# The name the rows file, the checkpoint and the result file are filed under.
+EXP_FULL_NAME = 'n19_measurement_count'
+
+# The noise_condition column of every row: nothing injected, the laboratories
+# disagree.
+ROW_CONDITION = 'real_replicate_disagreement'
+
+# The learner each model arm pair is, for the `model` column of its rows.
+MODEL_ARM_LEARNER = {'ngboost_count_feature': 'ngboost',
+                     'gp_per_molecule_noise': 'gp',
+                     'xgboost_interval_aft': 'xgboost_aft'}
 
 # How a training molecule's label is built from its own measurements.
 LABEL_BUILDS = ('single', 'averaged')
@@ -1172,8 +1190,50 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # weighted condition is traceable to the model rather than to the data.
     refuses_weight = set()
 
+    # ── The main measurement and the checkpoint ──
+    # Added 2026-09-25 (plan sections 2-3).
+    #
+    # ROWS. D is `untouched` -- every training molecule at its label,
+    # unweighted -- and D' is each other condition, on the same feature
+    # matrix, one d_vs_dprime row per (draw, label build, fold, matrix,
+    # condition, model), built from the numbers the loop below already
+    # computes: no refit. The model arms give one row per pair, the variant
+    # against its own plain arm (MODEL_ARM_PAIRS). similarity_setting is
+    # 'none': nothing here finds a neighbour. score_clean is nan: there is no
+    # clean label column.
+    #
+    # CHECKPOINT. The accumulators are pickled after every (draw, label build,
+    # fold), so a killed run resumes at the next one; rows resume through
+    # done_keys.
+    metric = (metric_name, metric_fn, lower_is_better)
+    rows = sx.Rows(output_dir, EXP_FULL_NAME, dataset_name)
+    results['rows'] = rows.summary()
+    ck = sx.FoldCheckpoint(
+        output_dir, EXP_FULL_NAME, dataset_name,
+        sx.run_signature(data, config, {
+            'models': downstream_models, 'n_draws': n_draws,
+            'label_builds': label_builds, 'oof_splits': oof_splits,
+            'model_arms': model_arms, 'base_reps': base_reps_override,
+            'spaces': list(spaces)}))
+    if ck.state is not None:
+        results['per_draw'] = ck.state['per_draw']
+        refuses_weight = set(ck.state['refuses_weight'])
+    _st0 = ck.state or {}
+    _cm_ident = dict(dataset=dataset_name, experiment=EXP_FULL_NAME,
+                     noise_condition=ROW_CONDITION)
+
+    def _row_ident(method, build, space, cell_rep, draw, fold_i):
+        return sx.identity(**_cm_ident, method=method,
+                           method_setting=f'label_build={build}',
+                           similarity_setting=sx.NO_SIMILARITY,
+                           model_input=f'{space}:{cell_rep}', draw=int(draw),
+                           fold=int(fold_i))
+
     # ── The experiment ──
     for draw in range(n_draws):
+        if str(draw) in results['per_draw']:
+            print(f"\n  === draw {draw}: already in the checkpoint, skipped ===")
+            continue
         t_draw = time.time()
         print(f"\n  === draw {draw} ===")
         ent = build_entities(labels, rep_groups, seed=draw)
@@ -1192,8 +1252,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     for name, mat in reps.items()}
 
         draw_block = {'per_label_build': {}}
+        if _st0.get('draw') == draw:
+            draw_block = _st0['draw_block']
 
         for build in label_builds:
+            if build in draw_block['per_label_build']:
+                print(f"    label build {build!r}: already in the checkpoint, "
+                      f"skipped")
+                continue
             y_train_all, n_behind = training_labels(ent, stats, build)
             aft_lo_all, aft_hi_all = interval_bounds(ent, stats, build,
                                                      y_train_all)
@@ -1244,12 +1310,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # the interval bounds do not depend on the space.
             arm_skips = {}
             folds_scored = 0
+            if _st0.get('draw') == draw and _st0.get('build') == build:
+                # This label build was part-way through when the run stopped.
+                (acc, errors, tau2_seen, shrink_seen, noise_fits, arm_acc,
+                 arm_skips, folds_scored) = _st0['build_acc']
 
             splits = list(cv_split(ent_groups, n_folds,
                                    next(iter(ent_reps.values())),
                                    y_train_all))
             for fold_i, (tr, va) in enumerate(splits):
                 fold_key = f'd{draw}f{fold_i}'
+                _unit = f'd{draw}|{build}|f{fold_i}'
+                if ck.is_done(_unit):
+                    print(f"      fold {fold_i}: already in the checkpoint, "
+                          f"skipped")
+                    continue
+                fold_rows = []
                 va_graded = va[gradeable[va]]
                 if len(va_graded) < 5:
                     print(f"      fold {fold_i}: {len(va_graded)} gradeable "
@@ -1337,8 +1413,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     for _bp_m, _mnames, _shareable in group_models_by_recipe(
                             {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                              for _m in downstream_models}, downstream_models):
-                        X_tr_h, X_va_h = hybrid_for_fold(
-                            _tr_reps, _va_reps,
+                        # Through noise_cache since 2026-09-25 (plan section
+                        # 3): the same hybrid_for_fold call, stored under its
+                        # inputs.
+                        X_tr_h, X_va_h = nc.cached_hybrid_for_fold(
+                            dataset_name, _tr_reps, _va_reps,
                             # The hybrid is built on the UNTOUCHED training
                             # labels, once per fold, and all conditions share
                             # it. So the only thing differing between two
@@ -1348,7 +1427,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             y_tr, _bp_m, g_tr,
                             None if _shareable
                             else model_factories[_mnames[0]](),
-                            metric_fn, lower_is_better)
+                            metric_fn, lower_is_better,
+                            model_name=None if _shareable else _mnames[0],
+                            metric_name=metric_name, train_idx=tr)
                         if X_tr_h is not None:
                             sc_h = StandardScaler()
                             _hcells.append((
@@ -1377,8 +1458,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     y_shrunk = y_calib = None
                     oof = None
                     try:
-                        oof = oof_predict(X_tr_s, y_tr, g_tr,
-                                          n_splits=oof_splits)
+                        # Through noise_cache since 2026-09-25 (plan section
+                        # 3): kirby.utils.noisy_labels.oof_predict with the
+                        # same arguments and its default seed 0.
+                        oof = nc.cached_oof_predict(dataset_name, X_tr_s, y_tr,
+                                                    g_tr, n_splits=oof_splits)
                         y_shrunk, s_own, tau2 = shrink_toward(
                             y_tr, oof, var_own[tr])
                         y_calib, _s_cal, _ = shrink_toward(
@@ -1464,6 +1548,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 errors[f'{space}|{cond}|{mname}|{fold_key}'] = err
                                 continue
                             acc[space][cond][mname][fold_key] = score
+                            # The random and shuffled twins of this
+                            # condition's weights or labels, under
+                            # KIRBY_NOISE_CONTROLS=1 only. The count-feature
+                            # conditions change the features, which neither
+                            # twin can deal out, so they get none.
+                            if (sx.controls_enabled() and cond != 'untouched'
+                                    and cond not in COUNT_FEATURE_CONDITIONS):
+                                _cl = {'X': X_fit, 'y': y_use,
+                                       'sample_weight': w, 'keep': None,
+                                       'label_column': (
+                                           y_use if cond in RELABEL_CONDITIONS
+                                           else None)}
+                                _D = acc[space]['untouched'][mname].get(
+                                    fold_key)
+                                sx.control_rows(
+                                    rows, dataset_name,
+                                    _row_ident(cond, build, space, cell_rep,
+                                               draw, fold_i),
+                                    _cl, X_tr=X_tr_s, y_D=y_tr, X_va=X_va_s,
+                                    y_va=y_va, metric=metric,
+                                    factories={mname: model_factories[mname]},
+                                    seed=sx.seed_of(draw, build, fold_i, space,
+                                                    cell_rep, cond, mname),
+                                    score_D=(None if _D is None
+                                             else {mname: _D}))
 
                     # ── The model arms ──
                     # One GP draw per (draw, fold), shared by both GP arms and
@@ -1526,6 +1635,45 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             errors[f'{space}|{arm}|{fold_key}'] = (
                                 f'{type(exc).__name__}: {exc}')
 
+                # ── This fold's rows, from the scores just computed ──
+                for space, (_X1, _X2, cell_models, cell_rep, run_arms) in (
+                        (_sp, _c) for _sp in spaces
+                        for _c in fold_spaces.get(_sp, ())):
+                    for cond in CONDITIONS:
+                        if cond == 'untouched':
+                            continue
+                        for mname in cell_models:
+                            _D = acc[space]['untouched'][mname].get(fold_key)
+                            if _D is None:
+                                continue
+                            fold_rows.append(sx.row(
+                                _row_ident(cond, build, space, cell_rep, draw,
+                                           fold_i),
+                                model=mname, metric=metric, score_D=_D,
+                                score_Dprime=acc[space][cond][mname].get(
+                                    fold_key)))
+                    if not run_arms:
+                        continue
+                    for variant, plain in MODEL_ARM_PAIRS.items():
+                        _D = arm_acc[space].get(plain, {}).get(fold_key)
+                        if variant not in model_arms or _D is None:
+                            continue
+                        fold_rows.append(sx.row(
+                            _row_ident(variant, build, space, cell_rep, draw,
+                                       fold_i),
+                            model=MODEL_ARM_LEARNER[variant], metric=metric,
+                            score_D=_D,
+                            score_Dprime=arm_acc[space].get(variant, {}).get(
+                                fold_key)))
+                rows.write(fold_rows)
+                ck.save(_unit, {
+                    'per_draw': results['per_draw'],
+                    'refuses_weight': sorted(refuses_weight),
+                    'draw': draw, 'build': build, 'draw_block': draw_block,
+                    'build_acc': (acc, errors, tau2_seen, shrink_seen,
+                                  noise_fits, arm_acc, arm_skips,
+                                  folds_scored)})
+
             for space in spaces:
                 _t_all = [v for vs in tau2_seen[space].values() for v in vs]
                 _s_all = [v for vs in shrink_seen[space].values() for v in vs]
@@ -1569,9 +1717,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if errors:
                 build_block['_errors'] = errors
             draw_block['per_label_build'][build] = convert_numpy(build_block)
+            ck.save(f'd{draw}|{build}', {
+                'per_draw': results['per_draw'],
+                'refuses_weight': sorted(refuses_weight), 'draw': draw,
+                'build': None, 'draw_block': draw_block})
 
         results['per_draw'][str(draw)] = draw_block
+        ck.save(f'd{draw}', {'per_draw': results['per_draw'],
+                             'refuses_weight': sorted(refuses_weight),
+                             'draw': None})
         print(f"    [{time.time() - t_draw:.0f}s]")
+    results['rows'] = rows.summary()
 
     results['models_refusing_sample_weight'] = sorted(refuses_weight)
     results['summary'] = _summarise(results, downstream_models, label_builds,
@@ -1582,6 +1738,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     save_experiment_results(results, output_dir, 'n19_measurement_count',
                             dataset_name)
+    # The result file holds every draw now, so the per-fold snapshot is spent.
+    ck.clear()
     return results
 
 

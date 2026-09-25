@@ -89,7 +89,7 @@ def _condition_naive_pool(train_fps, train_labels_noisy, test_fps,
     return compute_clf_metrics(test_labels_clean, pred_classes, prob_positive)
 
 
-def run(data, config, output_dir, dataset_name, **kwargs):
+def _run_one(data, config, output_dir, dataset_name, **kwargs):
     """Fed01: Noise heterogeneity across silos."""
     print("\n" + "=" * 70)
     print("EXPERIMENT FED01: NOISE HETEROGENEITY ACROSS SILOS")
@@ -1079,6 +1079,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {sigma:<8} {'  '.join(vals)}")
 
     return results
+
+
+# ── One (FLuID model, seed) call saved as it finishes (2026-09-25) ──────────
+# federated_helpers.run_all calls run() once per (fed_model, fed_seed) -- nine
+# calls -- and wrote fed01_noise_heterogeneity/<dataset>.json only after the ninth. A kill or
+# an exception in any call lost every call before it. Each call's return value
+# is now written to fed01_noise_heterogeneity/<dataset>.partial.jsonl the moment it returns
+# and read back on the next attempt (_checkpoint.resumable_run), keyed on the
+# model, the seed and any keyword argument, under an identity that includes the
+# input fingerprint, the plain config and the KIRBY_* settings. The returned
+# dict is decoded to the same objects, so aggregate_seed_runs and the final
+# JSON are unchanged. --force-rerun / KIRBY_FORCE_RERUN=1 discards the file.
+def run(data, config, output_dir, dataset_name, **kwargs):
+    from experiments._checkpoint import resumable_run
+    _key = {'fed_model': str(config.get('fed_model', 'rf')),
+            'fed_seed': int(config.get('fed_seed', 0)),
+            **{k: v for k, v in kwargs.items()}}
+    return resumable_run(
+        'fed01_noise_heterogeneity',
+        lambda: _run_one(data, config, output_dir, dataset_name, **kwargs),
+        data, config, output_dir, dataset_name, key=_key)
+
 
 
 if __name__ == '__main__':

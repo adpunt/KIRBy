@@ -59,6 +59,13 @@ from kirby.find_best_hybrid import Blueprint
 OUT = tempfile.mkdtemp(prefix='n25_smoke_')
 FAIL = []
 
+# 2026-09-25: n25 now caches through noise_cache under KIRBY_CACHE_DIR, so the
+# toy entries go to a temporary directory, as
+# tests/smoke/smoke_noise_similarity_foundation.py does. Every test but
+# test_similarity_sweep runs today's path only; that one names its settings.
+os.environ['KIRBY_CACHE_DIR'] = tempfile.mkdtemp(prefix='n25_smoke_cache_')
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+
 
 def check(name, ok, detail=''):
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ''))
@@ -495,6 +502,56 @@ def test_the_exempt_set_is_built_from_what_the_method_can_see():
           observed.shape == (len(train),), str(observed.shape))
 
 
+# ── the similarity sweep and the D-versus-D' rows (2026-09-25) ──────────────
+
+SWEEP_SETTINGS = ('base_1|none|manhattan', 'forest_proximity|none|forest')
+
+
+def test_similarity_sweep():
+    """Plan sections 1 and 2 on n25: under cross_val, which reads no
+    neighbours, the sweep runs knn_smooth in every setting, prox_smooth only
+    under forest_proximity, and remove never; neighbor_residual drives every
+    cleanup in every setting; all three arms write rows."""
+    import json
+    from experiments.noise import similarity_space as ss
+    from experiments.noise.n23_uncertainty_cleaning import TODAY_SIMILARITY
+    print("\nthe similarity sweep and the D-versus-D' rows:")
+    prev = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+    os.environ['KIRBY_SIMILARITY_SETTINGS'] = ','.join(SWEEP_SETTINGS)
+    try:
+        r = run_it(make_data(n=180, seed=5), 'toy_n25_sweep', models=['rf'],
+                   detectors=['neighbor_residual', 'cross_val'],
+                   cleanups=['remove', 'knn_smooth', 'prox_smooth'],
+                   flag_rates=[0.10], base_reps={'rf': ['toy', 'second']})
+    finally:
+        if prev is None:
+            os.environ.pop('KIRBY_SIMILARITY_SETTINGS', None)
+        else:
+            os.environ['KIRBY_SIMILARITY_SETTINGS'] = prev
+    path = r['rows']['rows_file']
+    rows = [json.loads(l) for l in open(path)] if path and os.path.exists(path) else []
+    check('rows were written to the rows file', len(rows) > 0, str(path))
+    forest = {f'forest_proximity|none|forest|k={k}' for k in ss.SWEPT_KS}
+    feat = {f'base_1|none|manhattan|k={k}' for k in ss.SWEPT_KS}
+    cv = {(x['method'], x['similarity_setting']) for x in rows
+          if x['method_setting'].startswith('cross_val')
+          and x['similarity_setting'] in forest | feat}
+    check('cross_val: knn_smooth in every setting, prox_smooth only under '
+          'the forest, remove never',
+          {('knn_smooth', l) for l in forest | feat}
+          | {('prox_smooth', l) for l in forest} == cv,
+          f'{len(cv)} (cleanup, setting) pairs')
+    nr = {(x['method'], x['similarity_setting']) for x in rows
+          if x['method_setting'].startswith('neighbor_residual')}
+    check('neighbor_residual: every cleanup in every setting and today',
+          {(c, l) for c in ('remove', 'knn_smooth', 'prox_smooth')
+           for l in forest | feat | {TODAY_SIMILARITY}} <= nr,
+          f'{len(nr)} (cleanup, setting) pairs')
+    arms = {x['method_setting'].rsplit('|arm=', 1)[-1] for x in rows}
+    check('all three arms write rows',
+          {'plain', 'cliff_exempt', 'random_exempt'} <= arms, str(sorted(arms)))
+
+
 if __name__ == '__main__':
     test_put_back()
     test_direction()
@@ -505,6 +562,7 @@ if __name__ == '__main__':
     test_no_stored_search_means_no_space()
     test_refuses_a_condition_with_no_correct_labels()
     test_the_exempt_set_is_built_from_what_the_method_can_see()
+    test_similarity_sweep()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")

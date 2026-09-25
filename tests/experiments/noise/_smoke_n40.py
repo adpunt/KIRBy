@@ -26,6 +26,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
+# 2026-09-25: today's similarity (model_input) unless a check sets its own
+# list, and the noise cache in a temporary directory, never the real one.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+import tempfile as _tf
+os.environ['KIRBY_CACHE_DIR'] = _tf.mkdtemp(prefix='n40_smoke_cache_')
+
 os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
@@ -309,11 +315,83 @@ def test_the_command_line():
           f'missing {missing}' if missing else f'{len(wanted)} flags present')
 
 
+
+def _rows_of(res):
+    """The D-versus-D' rows a run wrote (2026-09-25)."""
+    import json
+    p = (res.get('d_vs_dprime') or {}).get('rows_file')
+    if not p or not os.path.exists(p):
+        return []
+    return [json.loads(l) for l in open(p) if l.strip()]
+
+
+def _with_settings(names, fn):
+    """Run fn() under KIRBY_SIMILARITY_SETTINGS=names, then restore it."""
+    old = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+    os.environ['KIRBY_SIMILARITY_SETTINGS'] = names
+    try:
+        return fn()
+    finally:
+        if old is None:
+            os.environ.pop('KIRBY_SIMILARITY_SETTINGS', None)
+        else:
+            os.environ['KIRBY_SIMILARITY_SETTINGS'] = old
+
+
+
+def _close(a, b, rtol=1e-12):
+    """a == b, floats to rtol. rf's default factory predicts with n_jobs=-1,
+    and its threads sum the trees in no fixed order, so two fits of the same
+    forest can differ in the last bit (measured 2026-09-25: 1.402832974397575
+    against 1.4028329743975747). That is not a change of number."""
+    import math
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k], rtol) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_close(x, y, rtol) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float):
+        return (a == b or (math.isnan(a) and math.isnan(b))
+                or math.isclose(a, b, rel_tol=rtol, abs_tol=0.0))
+    return a == b
+
+def test_rows_and_resume():
+    """2026-09-25: the D-versus-D' rows (or, for a measurement-only experiment,
+    the per-pass checkpoint), a rerun that resumes every pass, and -- where
+    the experiment finds neighbours -- the similarity sweep."""
+    print("\nrows, resume and the similarity sweep:")
+    from experiments.noise.d_vs_dprime import ROW_FIELDS
+    kw = dict(models=['rf', 'lightgbm'], levels=[0.5], draws=[0], skip_tuning=True, skip_gp=True, skip_stack=True, noise_condition='gaussian', seed_avg_n=2)
+    res = run_one(make_data(), 'toy_rows', **dict(kw))
+    check('R1. no D-vs-D\' rows: this experiment changes no training label',
+          not _rows_of(res) and 'checkpoint' in res)
+    again = run_one(make_data(), 'toy_rows', **dict(kw))
+    got = again['checkpoint']
+    check('R2. a rerun resumes every pass from the checkpoint and returns the '
+          'same scores', got['passes_resumed_from_checkpoint'] > 0
+          and got['rows_written_this_run'] == 0
+          and again['per_level'] == res['per_level'],
+          f"{got['passes_resumed_from_checkpoint']} passes resumed")
+    # The same dataset name: the injected noise is seeded on it, so another
+    # name would compare two different draws. The settings are in the
+    # checkpoint signature, so this run recomputes rather than resumes.
+    names = 'model_input,base_2|none|manhattan'
+    r_sw = _with_settings(names, lambda: run_one(make_data(), 'toy_rows',
+                                                 **dict(kw)))
+    fx = r_sw['per_level']['0.5']['base_1']['fixed']
+    check('R3. knn_k5_uniform and knn_k_cp are scored under the other '
+          'setting, and today\'s knn arms are unchanged',
+          'knn_k5_uniform@base_2|none|manhattan' in fx
+          and 'knn_k_cp@base_2|none|manhattan|k10' in fx
+          and _close(fx['knn_k_cp'], res['per_level']['0.5']['base_1']['fixed']['knn_k_cp']),
+          f'{sorted(a for a in fx if "@" in a)[:4]}')
+
+
 if __name__ == '__main__':
     test_pieces()
     test_tuner_never_sees_held_out()
     test_full_runs()
     test_sweep()
+    test_rows_and_resume()
     test_the_command_line()
     print()
     if FAIL:

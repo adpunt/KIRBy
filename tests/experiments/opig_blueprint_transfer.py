@@ -329,8 +329,30 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
 
     per_model = {}
 
+    # Each downstream model's block is written to
+    # opig_blueprint_transfer/<source>_to_<target>.partial.jsonl when it
+    # finishes and read back on the next attempt (2026-09-25;
+    # experiments/_checkpoint.py). The searches above come from the
+    # find_best_hybrid cache and the folds are deterministic, so a block read
+    # back holds what a fresh computation gives.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity, fingerprint_of)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 'opig_blueprint_transfer',
+                           f'{source_name}_to_{target_name}'),
+        run_identity('opig_blueprint_transfer',
+                     f'{source_name}_to_{target_name}', target_data, config,
+                     source_fingerprint=fingerprint_of(source_data, config),
+                     pruning_mode=pruning_mode,
+                     shared_rep_names=list(shared_rep_names)))
+
     for model_name in model_names:
         if model_name not in model_factories_tgt or model_name not in model_factories_src:
+            continue
+        if _ck.done(model=model_name):
+            per_model[model_name] = _ck.get(model=model_name)
+            print(f"\n    {model_name}: finished in an earlier attempt, "
+                  f"read back")
             continue
 
         source_best = get_best_for_downstream(source_search, model_name)
@@ -644,6 +666,7 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 float(np.std(diffs)) if diffs else float('nan'))
 
         per_model[model_name] = model_res
+        _ck.put(model_res, model=model_name)
 
     # ── Summary table ───────────────────────────────────────────────────
     if not per_model:
@@ -865,6 +888,10 @@ if __name__ == '__main__':
                         help="Adaptive pruning mode (default 'default_pruning'). "
                              "'aggressive_pruning' = F16-validated multi-stage pruning "
                              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
+    parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Discard the models an earlier attempt finished '
+             '(<output>/opig_blueprint_transfer/<pair>.partial.jsonl).')
     parser = add_distance_metric_arg(parser)
     args = parser.parse_args()
 
@@ -903,3 +930,7 @@ if __name__ == '__main__':
     save_experiment_results(results, args.output,
                            'opig_blueprint_transfer',
                            f'{args.source}_to_{args.target}')
+    # Written first, then a failed run exits 1 (2026-09-25).
+    if isinstance(results, dict) and 'error' in results:
+        print(f"FAILED: {results['error']}")
+        sys.exit(1)

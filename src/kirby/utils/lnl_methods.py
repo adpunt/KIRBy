@@ -725,10 +725,16 @@ class DistanceBasedSelection(LNLMethod):
     Category: Sample selection.
     """
 
-    def __init__(self, k=10, threshold_pct=85, **kwargs):
+    def __init__(self, k=10, threshold_pct=85, precomputed_neighbors=None,
+                 **kwargs):
         super().__init__(**kwargs)
         self.k = k
         self.threshold_pct = threshold_pct
+        # A neighbour list found in another space (plan section 1,
+        # 2026-09-25): None, an index array, (indices, distances), or a
+        # similarity_space.neighbour_lists dict, over X_train's rows with each
+        # row itself excluded. Read through noise_estimation._neighbours_for.
+        self.precomputed_neighbors = precomputed_neighbors
 
     @property
     def category(self):
@@ -737,17 +743,29 @@ class DistanceBasedSelection(LNLMethod):
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         from sklearn.neighbors import NearestNeighbors
         from sklearn.preprocessing import StandardScaler
+        from kirby.similarity.distance_config import sklearn_kwargs
 
         X_t = np.asarray(X_train, dtype=np.float32)
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_t)
 
-        # kNN structure
+        # kNN structure. ⛔ Until 2026-09-25 this was a bare NearestNeighbors,
+        # sklearn's Minkowski p=2 (Euclidean), whatever --distance-metric said
+        # (plan section 4, "Euclidean slips in unasked", this line). It now
+        # reads the process-wide distance (distance_config.sklearn_kwargs,
+        # manhattan by default), as _shared.make_nearest_neighbors does, so
+        # its numbers under the default move from Euclidean to manhattan.
         k_actual = min(self.k, len(y_train) - 1)
-        nn_model = NearestNeighbors(n_neighbors=k_actual + 1)
-        nn_model.fit(X_scaled)
-        _, indices = nn_model.kneighbors(X_scaled)
-        neighbor_idx = indices[:, 1:]  # exclude self
+        if self.precomputed_neighbors is not None:
+            from kirby.utils.noise_estimation import _neighbours_for
+            neighbor_idx = _neighbours_for(self.precomputed_neighbors,
+                                           X_scaled, k_actual, None)
+        else:
+            nn_model = NearestNeighbors(n_neighbors=k_actual + 1,
+                                        **sklearn_kwargs())
+            nn_model.fit(X_scaled)
+            _, indices = nn_model.kneighbors(X_scaled)
+            neighbor_idx = indices[:, 1:]  # exclude self
 
         y_arr = np.asarray(y_train).ravel()
         if self.is_clf:
@@ -1586,9 +1604,12 @@ class MentorNet(LNLMethod):
     Category: Curriculum learning.
     """
 
-    def __init__(self, k_neighbors=10, **kwargs):
+    def __init__(self, k_neighbors=10, precomputed_neighbors=None, **kwargs):
         super().__init__(**kwargs)
         self.k_neighbors = k_neighbors
+        # A neighbour list found in another space, with distances (plan
+        # section 1, 2026-09-25); see DistanceBasedSelection.
+        self.precomputed_neighbors = precomputed_neighbors
 
     @property
     def category(self):
@@ -1634,10 +1655,21 @@ class MentorNet(LNLMethod):
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_t)
         k_actual = min(self.k_neighbors, n - 1)
-        nn_model = NearestNeighbors(n_neighbors=k_actual + 1)
-        nn_model.fit(X_scaled)
-        distances, _ = nn_model.kneighbors(X_scaled)
-        knn_dist = distances[:, 1:].mean(axis=1)
+        # ⛔ Process-wide distance since 2026-09-25 (was sklearn's Euclidean
+        # default; plan section 4, this line). See DistanceBasedSelection.
+        if self.precomputed_neighbors is not None:
+            from kirby.utils.noise_estimation import _neighbours_for
+            dist_k, _idx = _neighbours_for(self.precomputed_neighbors,
+                                           X_scaled, k_actual, None,
+                                           return_distance=True)
+            knn_dist = np.asarray(dist_k, dtype=float).mean(axis=1)
+        else:
+            from kirby.similarity.distance_config import sklearn_kwargs
+            nn_model = NearestNeighbors(n_neighbors=k_actual + 1,
+                                        **sklearn_kwargs())
+            nn_model.fit(X_scaled)
+            distances, _ = nn_model.kneighbors(X_scaled)
+            knn_dist = distances[:, 1:].mean(axis=1)
         knn_dist = (knn_dist - knn_dist.mean()) / (knn_dist.std() + 1e-10)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)

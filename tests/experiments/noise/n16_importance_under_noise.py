@@ -138,6 +138,14 @@ from kirby.hybrid import compute_feature_importance
 from kirby.noise_spec import (
     NoiseSpec, calibrate, make_noisy_labels_verbose, noise_provenance_row,
 )
+# The disk cache and the per-fold checkpoint, added 2026-09-25 (plan section
+# 3). n16 finds no neighbours and fits no downstream model, so it takes no
+# similarity setting and writes no D-versus-D' rows (plan section 6).
+from experiments.noise import noise_cache as nc
+from experiments.noise import _sim_axis_n15_n22 as sx
+
+# The name the checkpoint and the result directory are filed under.
+EXP_FULL_NAME = 'n16_importance_under_noise'
 
 
 # The three the engine can actually pick: find_best_hybrid.py:3240
@@ -278,8 +286,18 @@ def _inject_ladder(labels, specs, levels, noise_groups):
     return per_level, provenance
 
 
-def _score_one(X, y, method, seed):
+def _score_one(X, y, method, seed, dataset=None):
     """One representation's per-feature importance vector, on the rows given.
+
+    `dataset`, added 2026-09-25 (plan section 3): given, the vector is read
+    from noise_cache when (X, y, method, seed) were scored before -- keyed on
+    the CONTENT of X and of the label vector, so level 0.0, which hands every
+    replicate and every condition the same clean labels, is scored once per
+    (representation, fold, method) instead of once per replicate per
+    condition. compute_feature_importance is seeded (random_state), and the
+    thread counts torch and LightGBM read are in every key. A failure raises
+    and is never stored. The seconds returned are this call's, so a cached
+    read reports its own few milliseconds.
 
     compute_feature_importance fits an estimator on (X, y) — the labels are its
     second positional argument (hybrid.py:4253) — so under label noise it must be
@@ -295,9 +313,18 @@ def _score_one(X, y, method, seed):
     that cannot run on a representation into a missing row that reads as "no drift".
     """
     t0 = time.time()
-    out = compute_feature_importance({'x': X}, y, method=method,
-                                     random_state=seed)
-    v = np.asarray(out['x'], dtype=float).ravel()
+
+    def _compute():
+        out = compute_feature_importance({'x': X}, y, method=method,
+                                         random_state=seed)
+        return np.asarray(out['x'], dtype=float).ravel()
+    if dataset is None:
+        v = _compute()
+    else:
+        v = np.asarray(nc.cached(
+            dataset, 'importance',
+            {'X': nc.array_hash(X), 'y': nc.array_hash(y),
+             'method': str(method), 'seed': int(seed)}, _compute))
     if v.shape[0] != X.shape[1]:
         raise ValueError(
             f"{method} returned {v.shape[0]} scores for {X.shape[1]} features")
@@ -655,13 +682,38 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['n_folds_scored'] = len(folds)
     fold_signature = [(tr.tolist(), va.tolist()) for tr, va in folds]
 
+    # ── The per-fold checkpoint ──
+    # Added 2026-09-25 (plan section 3, and the resume rule in section 7).
+    # One condition is written as a whole by sweep_conditions; inside it this
+    # pickles the results and the replicate's vectors after every (replicate,
+    # fold), so a killed condition resumes at the next fold rather than at
+    # its first.
+    ck = sx.FoldCheckpoint(
+        output_dir, EXP_FULL_NAME, dataset_name,
+        sx.run_signature(data, config, {
+            'levels': levels, 'replicates': n_replicates, 'arm': arm,
+            'top_k': top_k, 'methods': imp_methods,
+            'max_folds': config.get('max_folds')}),
+        condition=condition)
+    _st0 = ck.state or {}
+    if _st0:
+        results = _st0['results']
+
     t_start = time.time()
     for replicate in range(n_replicates):
+        if str(replicate) in results['per_replicate']:
+            print(f"  replicate {replicate}: already in the checkpoint, "
+                  f"skipped")
+            continue
+        _resumed = _st0.get('replicate') == replicate
         specs = _specs_for_ladder(condition, levels, replicate, dataset_name)
         per_level, prov = _inject_ladder(labels, specs, levels, noise_groups)
         results['noise_provenance'].update(prov)
 
         for lv in levels:
+            if _resumed:
+                # Printed and recorded the first time this replicate ran.
+                break
             pl = per_level[lv]
             asked = pl['target']
             got = pl['realised']
@@ -675,8 +727,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 'realised_dose_label_units': got,
             })
 
-        rep_block = {}
+        rep_block = _st0['rep_block'] if _resumed else {}
         for fold_idx, (train_idx, val_idx) in enumerate(folds):
+            if ck.is_done(f'r{replicate}f{fold_idx}'):
+                print(f"    [r{replicate} f{fold_idx}] already in the "
+                      f"checkpoint, skipped")
+                continue
             if (train_idx.tolist(), val_idx.tolist()) != fold_signature[fold_idx]:
                 raise RuntimeError(
                     f"fold {fold_idx} moved between noise levels. The folds are made "
@@ -722,7 +778,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             try:
                                 v, secs = _score_one(
                                     train_reps[rname], y_tr, method,
-                                    seed=42 + fold_idx)
+                                    seed=42 + fold_idx, dataset=dataset_name)
                             except Exception as exc:
                                 msg = f"{type(exc).__name__}: {exc}"
                                 print(f"    base {method}/{rname} level {lv:g}: {msg}")
@@ -762,14 +818,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         # internal admission holdout falls back to a RandomState(42)
                         # 20% random carve sharing scaffolds with its own training
                         # rows (_shared.py:4379-4386).
-                        X_tr_h, _, feat_info = build_fold_hybrid(
-                            reps_for_bp, reps_for_bp, y_tr, bp,
-                            augmentations_train=train_augs,
-                            augmentations_val=train_augs,
-                            groups=g_train,
-                            model=model_inst, metric_fn=metric_fn,
-                            lower_is_better=lower_is_better,
-                        )
+                        X_tr_h, feat_info = _cached_build(
+                            dataset_name, reps_for_bp, y_tr, bp, train_augs,
+                            g_train, model_inst, metric_fn, metric_name,
+                            lower_is_better)
                     except Exception as exc:
                         msg = f"{type(exc).__name__}: {exc}"
                         print(f"    hybrid level {lv:g} fold {fold_idx}: {msg}")
@@ -812,7 +864,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     for method in imp_methods:
                         try:
                             v, hsecs = _score_one(X_h, y_tr, method,
-                                                  seed=42 + fold_idx)
+                                                  seed=42 + fold_idx,
+                                                  dataset=dataset_name)
                         except Exception as exc:
                             msg = f"{type(exc).__name__}: {exc}"
                             print(f"    hybrid {method} level {lv:g}: {msg}")
@@ -828,6 +881,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                              'n_features': int(v.size),
                              'seconds': round(hsecs, 3)})
 
+            ck.save(f'r{replicate}f{fold_idx}',
+                    {'results': results, 'replicate': replicate,
+                     'rep_block': rep_block})
+
         results['per_replicate'][str(replicate)] = _summarise_replicate(
             rep_block, rep_order, imp_methods, levels, len(folds), reps, top_k, arm)
 
@@ -837,11 +894,51 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         _save_vectors(rep_block, output_dir, dataset_name, condition, replicate,
                       results)
 
+        ck.save(f'r{replicate}', {'results': results, 'replicate': None})
+
     results['seconds_total'] = round(time.time() - t_start, 1)
     results['summary'] = _summarise(results, levels, imp_methods, rep_order, arm)
     print(f"\n  Done in {results['seconds_total']:.1f}s. "
           f"{len(results['errors'])} cells failed.")
+    # sweep_conditions writes this condition's file from the return value.
+    ck.clear()
     return convert_numpy(results)
+
+
+def _cached_build(dataset, reps_for_bp, y_tr, bp, train_augs, g_train,
+                  model_inst, metric_fn, metric_name, lower_is_better):
+    """build_fold_hybrid exactly as the hybrid arm calls it -- training rows
+    handed in as both sides, the recipe's representations only -- read from
+    noise_cache when the same inputs were built before. Added 2026-09-25
+    (plan section 3): level 0.0 hands every replicate and every condition the
+    same clean labels, so its build was repeated once per replicate per
+    condition. Returns (X_train_hybrid, feature_info). Representation names
+    are in the key because feature_info is keyed by them. A build that raises
+    raises, and is never stored."""
+    from experiments._shared import build_fold_hybrid
+
+    def _compute():
+        X_tr_h, _, feat_info = build_fold_hybrid(
+            reps_for_bp, reps_for_bp, y_tr, bp,
+            augmentations_train=train_augs,
+            augmentations_val=train_augs,
+            groups=g_train,
+            model=model_inst, metric_fn=metric_fn,
+            lower_is_better=lower_is_better,
+        )
+        return X_tr_h, feat_info
+    names = list(reps_for_bp)
+    key = {'blueprint': nc.blueprint_fingerprint(bp, names),
+           'rep_names': names,
+           'reps': [nc.array_hash(reps_for_bp[r]) for r in names],
+           'augmentations': (None if not train_augs else
+                             [[a, nc.array_hash(train_augs[a])]
+                              for a in train_augs]),
+           'y': nc.array_hash(y_tr), 'groups': nc.array_hash(g_train),
+           'model_signature': nc.model_signature(model_inst),
+           'metric': str(metric_name),
+           'lower_is_better': bool(lower_is_better)}
+    return nc.cached(dataset, 'n16_build_fold_hybrid', key, _compute)
 
 
 def _save_vectors(rep_block, output_dir, dataset_name, condition, replicate, results):

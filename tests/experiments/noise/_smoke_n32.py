@@ -29,6 +29,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 
 os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
+# 2026-09-25: the smoke runs today's similarity (model_input) unless told
+# otherwise; test_rows_resume_and_sweep sets a short list of settings itself.
+# The noise cache goes to a temporary directory, never the real one.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+import tempfile as _tf
+os.environ['KIRBY_CACHE_DIR'] = _tf.mkdtemp(prefix='n32_smoke_cache_')
 
 import itertools
 import math
@@ -264,6 +270,126 @@ def test_full_runs():
                      np.mean([g[x] - b[x] for x in k])))
 
 
+def test_rows_resume_and_sweep():
+    """Added 2026-09-25: the D-versus-D' rows, the per-pass resume, the
+    similarity sweep of knn_shapley, the cached ITLM round 1 and the
+    controls."""
+    print("\nrows, resume, similarity sweep, controls:")
+    import json
+    from experiments.noise.d_vs_dprime import ROW_FIELDS
+    d = make_data()
+    kw = dict(models=['rf', 'svm'], noise_condition='shift_only_p10',
+              levels=[2.0], draws=[0], alphas=[0.9], random_seeds=[0],
+              detectors=['oof_residual'])
+    res = run_it(d, 'toy_rows', **kw)
+    path = res['d_vs_dprime']['rows_file']
+    rows = [json.loads(l) for l in open(path)]
+    arms = [a for a in res['arms'] if a not in ('clean', 'no_cleaning')]
+    want = len(arms) * 2 * 2 * 3           # arms x models x spaces x folds
+    check('13. one D-vs-D\' row per (arm, model, space, fold), each with '
+          'exactly the d_vs_dprime columns',
+          len(rows) == want and all(set(r) == set(ROW_FIELDS) for r in rows),
+          f'{len(rows)} rows, expected {want}')
+    r0 = rows[0]
+    b = res['per_level']['2'][r0['model_input']]
+    check('13b. a row carries the scores the result holds: D = no_cleaning, '
+          'D\' = the arm, clean = clean',
+          r0['score_D'] == b['no_cleaning'][r0['model']][f"l2d0f{r0['fold']}"]
+          and r0['score_Dprime'] == b[r0['method']][r0['model']][
+              f"l2d0f{r0['fold']}"]
+          and r0['score_clean'] == b['clean'][r0['model']][f"l2d0f{r0['fold']}"])
+    again = run_it(d, 'toy_rows', **kw)
+    rows2 = [json.loads(l) for l in open(path)]
+    check('14. a rerun resumes every pass from the checkpoint, writes no row '
+          'twice and returns the same scores',
+          again['d_vs_dprime']['rows_written_this_run'] == 0
+          and len(rows2) == len(rows)
+          and again['per_level'] == res['per_level']
+          and again['summary'] == res['summary'])
+    fresh = run_it(d, 'toy_rows', restart_passes=True, **kw)
+    check('14b. restart_passes (--force-rerun) sets the old rows aside and '
+          'recomputes the same numbers',
+          fresh['d_vs_dprime']['set_aside']
+          and fresh['per_level'] == res['per_level'])
+
+    # ITLM round 1 read off the cached out-of-fold prediction is the refit.
+    from kirby.utils.noisy_labels import oof_predict
+    rng = np.random.default_rng(5)
+    X = rng.normal(size=(90, 4))
+    y = X[:, 0] + rng.normal(0, 0.2, 90)
+    g = np.arange(90)
+    p = oof_predict(X, y, g, n_splits=5)
+    a = n32.itlm(X, y, g, 0.9, rounds=2)
+    b2 = n32.itlm(X, y, g, 0.9, rounds=2, first_loss=(y - p) ** 2)
+    check('15. ITLM with round 1 read off the out-of-fold prediction keeps the '
+          'same molecules with the same loss, bit for bit',
+          np.array_equal(a[0], b2[0]) and np.array_equal(a[1], b2[1]))
+
+    # The similarity sweep of knn_shapley.
+    old = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+    kws = dict(models=['rf'], noise_condition='shift_only_p10', levels=[2.0],
+               draws=[0], alphas=[0.9], random_seeds=[0],
+               detectors=['knn_shapley'])
+    try:
+        os.environ['KIRBY_SIMILARITY_SETTINGS'] = 'model_input'
+        r_mi = run_it(d, 'toy_sim_a', **kws)
+        os.environ['KIRBY_SIMILARITY_SETTINGS'] = (
+            'model_input,base_2|none|manhattan,base_1|lightgbm_gain|euclidean,'
+            'forest_proximity|none|forest,tanimoto_ecfp4|none|tanimoto')
+        r_sw = run_it(d, 'toy_sim_b', **kws)
+    finally:
+        if old is None:
+            os.environ.pop('KIRBY_SIMILARITY_SETTINGS', None)
+        else:
+            os.environ['KIRBY_SIMILARITY_SETTINGS'] = old
+    dm, ds_ = r_mi['detection']['2']['base_1'], r_sw['detection']['2']['base_1']
+    check('16. knn_shapley under model_input at k=5 is the same number with '
+          'and without the other settings',
+          _close(dm['knn_shapley'], ds_['knn_shapley']))
+    want_keys = {'knn_shapley@base_2|none|manhattan|k5',
+                 'knn_shapley@base_1|lightgbm_gain|euclidean|k20',
+                 'knn_shapley@forest_proximity|none|forest|k9',
+                 'knn_shapley@model_input|none|process|k10'}
+    check('16b. every other setting and k is scored under its own key',
+          want_keys <= set(ds_), f'{sorted(k for k in ds_ if "@" in k)[:6]}...')
+    una = r_sw['method_records']['2']['base_1'][0].get(
+        'similarity_unavailable', {})
+    check('16c. Tanimoto on a dataset with no SMILES is recorded as '
+          'unavailable, not faked',
+          any(k.startswith('tanimoto_ecfp4') for k in una)
+          and not any('tanimoto' in k for k in ds_), str(una))
+
+    # Controls.
+    os.environ['KIRBY_NOISE_CONTROLS'] = '1'
+    try:
+        rc = run_it(d, 'toy_ctrl', **kw)
+    finally:
+        os.environ.pop('KIRBY_NOISE_CONTROLS', None)
+    crow = [json.loads(l) for l in open(rc['d_vs_dprime']['rows_file'])]
+    meths = {r['method'] for r in crow}
+    check('17. with KIRBY_NOISE_CONTROLS=1 every data-changing arm has a random '
+          'and a shuffled twin row',
+          {'itlm_a0.9|random_twin', 'itlm_a0.9|shuffled_twin',
+           'shrink_flagged_one_weight|random_twin'} <= meths,
+          f'{len(crow)} rows')
+
+
+
+def _close(a, b, rtol=1e-12):
+    """a == b, floats to rtol. rf's default factory predicts with n_jobs=-1,
+    and its threads sum the trees in no fixed order, so two fits of the same
+    forest can differ in the last bit (measured 2026-09-25: 1.402832974397575
+    against 1.4028329743975747). That is not a change of number."""
+    import math
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k], rtol) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_close(x, y, rtol) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float):
+        return (a == b or (math.isnan(a) and math.isnan(b))
+                or math.isclose(a, b, rel_tol=rtol, abs_tol=0.0))
+    return a == b
+
 def test_guards():
     print("\nthe guards:")
     d = make_data()
@@ -313,6 +439,7 @@ if __name__ == '__main__':
     test_itlm_and_shrink()
     test_guards()
     test_full_runs()
+    test_rows_resume_and_sweep()
     test_the_command_line()
     print()
     if FAIL:

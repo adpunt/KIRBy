@@ -520,8 +520,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                             task_type=task_type)
     sample_X = next(iter(reps.values()))
 
+    # Each neighbour count's block (its correlations and its reliability
+    # diagram) and each conformal fold are written to
+    # s06_applicability_domain/<dataset>.partial.jsonl when they finish and read
+    # back on the next attempt (2026-09-25; _checkpoint.py). The folds come
+    # from a deterministic splitter and every random forest and calibration
+    # split here is seeded, so a unit read back holds what a fresh computation
+    # gives. A unit in which a fold's build raised is not stored: it is retried.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's06_applicability_domain', dataset_name),
+        run_identity('s06_applicability_domain', dataset_name, data, config,
+                     kwargs=kwargs, k_values=list(k_values),
+                     cmp_rep=cmp_rep, ad_statistic=ad_statistic_name(),
+                     has_sim_recipe=bp_sim is not None))
+
     for k in k_values:
         print(f"\n  k={k}:")
+        if _ck.done(k=k):
+            _saved = _ck.get(k=k)
+            if _saved['correlation'] is not None:
+                results['distance_error_correlation'][f'k{k}'] = \
+                    _saved['correlation']
+            if _saved['reliability'] is not None:
+                results['reliability'][f'k{k}'] = _saved['reliability']
+            continue
+        _threw = []
         all_d_cmp = []
         all_d_cmp_w = []
         all_d_hybrid = []
@@ -597,6 +622,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # is distinguishable from a genuinely skipped fold.
                 print(f"      AD hybrid weight fold failed: "
                       f"{type(exc).__name__}: {exc}")
+                _threw.append('hybrid')
                 continue
 
             # Train RF on hybrid features (existing — may have tautological AD advantage)
@@ -741,6 +767,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 except Exception as exc:
                     print(f"      {SIM_ARM} fold build failed: "
                           f"{type(exc).__name__}: {exc}")
+                    _threw.append(SIM_ARM)
                     d_hybrid_sim = d_weighted_sim = None
                 if d_hybrid_sim is not None:
                     all_d_hybrid_sim.extend(d_hybrid_sim.tolist())
@@ -779,6 +806,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _fold_spearman(_d, errors_neutral))
 
         if not all_errors:
+            if not _threw:
+                _ck.put({'correlation': None, 'reliability': None}, k=k)
             continue
 
         all_d_cmp = np.array(all_d_cmp)
@@ -967,6 +996,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'decile_counts': decile_counts,
             }
 
+        if not _threw:
+            _ck.put({'correlation': results['distance_error_correlation'].get(
+                         f'k{k}'),
+                     'reliability': results['reliability'].get(f'k{k}')},
+                    k=k)
+
     # Conformal calibration comparison (regression only — residual-based intervals)
     if task_type == 'classification':
         print("\n  Conformal calibration: SKIP (regression-only, not applicable to classification)")
@@ -986,8 +1021,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             conf_mpiw = {name: [] for name in _conf_arms}
             alpha = 0.1
 
-            for train_idx, val_idx in (splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
+            for _conf_fold, (train_idx, val_idx) in enumerate(splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
                 y_train, y_val = labels[train_idx], labels[val_idx]
+                if _ck.done(conformal_fold=_conf_fold):
+                    for _fn, (_pc, _mw) in _ck.get(
+                            conformal_fold=_conf_fold).items():
+                        conf_picp[_fn].append(_pc)
+                        conf_mpiw[_fn].append(_mw)
+                    continue
+                _fold_conf = {}
+                _conf_threw = False
 
                 # Per-fold hybrid using search blueprint (avoids data leakage)
                 train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
@@ -1026,6 +1069,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     except Exception as exc:
                         print(f"      AD calibration fold {SIM_ARM} build "
                               f"failed: {type(exc).__name__}: {exc}")
+                        _conf_threw = True
                         X_hyb_sim_tr = X_hyb_sim_va = None
 
                 # Split train into proper-train and calibration (group-aware)
@@ -1077,6 +1121,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     mpiw = float(np.mean(interval_width))
                     conf_picp[feat_name].append(picp)
                     conf_mpiw[feat_name].append(mpiw)
+                    _fold_conf[feat_name] = (picp, mpiw)
+
+                if not _conf_threw:
+                    _ck.put(_fold_conf, conformal_fold=_conf_fold)
 
             results['conformal'] = {'nominal_coverage': 1 - alpha}
             for feat_name in _conf_arms:

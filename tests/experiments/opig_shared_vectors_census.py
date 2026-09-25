@@ -772,6 +772,9 @@ def main():
                          'given bare, 0 = off). Applies each stored '
                          'recipe over every molecule; it never searches.')
     ap.add_argument('--output-dir', default=DEFAULT_OUTPUT)
+    ap.add_argument('--force-rerun', action='store_true',
+                    help='Recompute what an earlier attempt finished '
+                         '(<output>.partial.jsonl).')
     ap = add_distance_metric_arg(ap)
     args = ap.parse_args()
     apply_distance_metric_arg(args)
@@ -780,19 +783,43 @@ def main():
     override = ([r.strip() for r in args.reps.split(',') if r.strip()]
                 if args.reps else None)
 
+    # Each dataset's census is written to
+    # opig_shared_vectors_census.partial.jsonl when it finishes and read back
+    # on the next attempt (2026-09-25; experiments/_checkpoint.py). The census
+    # counts identical rows of stored matrices, so a dataset read back holds
+    # what a fresh count gives. A dataset that raised is not stored, is retried
+    # next time, and makes the script exit 1 after the JSON is written. A
+    # dataset census_one itself skips (meta['error']) is stored: that skip is
+    # decided by the data, not by a failure.
+    from experiments._checkpoint import script_checkpoint, exit_if_failed
+    _ck = script_checkpoint(
+        'opig_shared_vectors_census',
+        os.path.join(args.output_dir, 'opig_shared_vectors_census.json'),
+        args, exclude=('datasets', 'domains', 'output_dir'))
+    _failed = []
+
     all_rows, all_pairs, all_pool, all_meta = [], [], [], []
     t0 = time.time()
     for ds in datasets:
         print(f'\n=== {ds} ({time.time() - t0:.0f}s) ===', flush=True)
         names = override or pool_for(ds, include_donors=not args.no_donors)
         try:
-            rows, pairs, pool_row, meta = census_one(
-                ds, names, build_missing=args.build_missing,
-                check_freshness=args.check_freshness,
-                with_hybrids=args.with_hybrids)
+            if _ck.done(dataset=ds, names=list(names)):
+                rows, pairs, pool_row, meta = _ck.get(dataset=ds,
+                                                      names=list(names))
+                print('  finished in an earlier attempt, read back',
+                      flush=True)
+            else:
+                rows, pairs, pool_row, meta = census_one(
+                    ds, names, build_missing=args.build_missing,
+                    check_freshness=args.check_freshness,
+                    with_hybrids=args.with_hybrids)
+                _ck.put((rows, pairs, pool_row, meta), dataset=ds,
+                        names=list(names))
         except Exception as exc:                      # one dataset must not stop the rest
             print(f'  FAILED: {type(exc).__name__}: {exc}', flush=True)
             all_meta.append({'dataset': ds, 'error': f'{type(exc).__name__}: {exc}'})
+            _failed.append(ds)
             continue
         if meta.get('error'):
             print(f'  skipped: {meta["error"]}', flush=True)
@@ -838,6 +865,7 @@ def main():
             w.writeheader()
             w.writerows(all_rows)
         print(f'wrote {cpath}')
+    exit_if_failed(_failed, 'dataset')
 
 
 if __name__ == '__main__':

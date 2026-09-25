@@ -1033,6 +1033,11 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Discard targets finished by an earlier attempt '
+             '(<output>.partial.jsonl) and recompute every one.')
+
     parser = add_distance_metric_arg(parser)
 
     args = parser.parse_args()
@@ -1051,17 +1056,42 @@ def main():
     print(f"  Folds: {args.n_folds}")
     print("=" * 70)
 
+    output_path = (args.output or
+                   'tests/results/comparisons/opig_activity_cliff_qsar.json')
+
+    # Each target's result is written to <output>.partial.jsonl as soon as it
+    # finishes and read back on the next attempt (2026-09-25;
+    # experiments/_checkpoint.py). Before, a failure or a kill lost every
+    # target, because the one JSON below was written after the last. A target
+    # that raised or returned {'error'} is not stored, is retried next time,
+    # and makes the script exit 1 after the JSON is written.
+    from experiments._checkpoint import (
+        script_checkpoint, is_failed_item, exit_if_failed)
+    _ck = script_checkpoint('opig_activity_cliff_qsar', output_path, args,
+                            exclude=('targets', 'output'),
+                            rep_preset=rep_preset)
+    _failed = []
+
     all_results = {}
     for target in targets:
         try:
-            target_results = evaluate_target(target, rep_preset, args.n_folds,
-                                              pruning_mode=args.pruning_mode)
+            if _ck.done(target=target):
+                target_results = _ck.get(target=target)
+                print(f"  {target}: finished in an earlier attempt, read back")
+            else:
+                target_results = evaluate_target(
+                    target, rep_preset, args.n_folds,
+                    pruning_mode=args.pruning_mode)
+                _ck.put(target_results, target=target)
+            if is_failed_item(target_results):
+                _failed.append(target)
             if target_results is not None:
                 all_results[target] = target_results
         except Exception as e:
             print(f"  FAILED: {e}")
             import traceback
             traceback.print_exc()
+            _failed.append(target)
 
     # Cross-target analysis
     if all_results:
@@ -1077,8 +1107,6 @@ def main():
         for rep_name, rep_data in tr['results'].items():
             save_results[target]['results'][rep_name] = rep_data
 
-    output_path = (args.output or
-                   'tests/results/comparisons/opig_activity_cliff_qsar.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1098,6 +1126,7 @@ def main():
     with open(p, 'w') as f:
         json.dump(_nan_to_none(convert_numpy(save_results)), f, indent=2)
     print(f"\nResults saved: {p}")
+    exit_if_failed(_failed, 'target')
 
 
 if __name__ == '__main__':

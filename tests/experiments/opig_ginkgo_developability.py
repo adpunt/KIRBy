@@ -885,6 +885,11 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Discard what an earlier attempt finished '
+             '(<output>.partial.jsonl) and recompute every item.')
+
     parser = add_distance_metric_arg(parser)
 
     args = parser.parse_args()
@@ -904,6 +909,21 @@ def main():
     print(f"  Folds: {args.n_folds}")
     print("=" * 70)
 
+    output_path = (args.output or
+                   'tests/results/comparisons/opig_ginkgo_developability.json')
+
+    # Each property is written to <output>.partial.jsonl as soon as it finishes
+    # and read back on the next attempt (2026-09-25;
+    # experiments/_checkpoint.py). Before, a failure or a kill lost every
+    # property, because the one JSON below was written after the last. A property
+    # that raised or returned {'error'} is not stored, is retried next time,
+    # and makes the script exit 1 after the JSON is written.
+    from experiments._checkpoint import (
+        script_checkpoint, is_failed_item, exit_if_failed)
+    _ck = script_checkpoint('opig_ginkgo_developability', output_path, args,
+                            exclude=('properties', 'output'))
+    _failed = []
+
     all_results = {}
     skipped = {}
     for prop_name in properties:
@@ -919,14 +939,22 @@ def main():
                 print(f"\n  SKIPPED {prop_name}: {e}")
                 skipped[prop_name] = str(e)
                 continue
-            prop_results = evaluate_property(prop_name, rep_names, args.n_folds,
-                                              pruning_mode=args.pruning_mode)
+            if _ck.done(property=prop_name, rep_names=rep_names):
+                prop_results = _ck.get(property=prop_name, rep_names=rep_names)
+                print(f"  {prop_name}: finished in an earlier attempt, read back")
+            else:
+                prop_results = evaluate_property(prop_name, rep_names, args.n_folds,
+                                                 pruning_mode=args.pruning_mode)
+                _ck.put(prop_results, property=prop_name, rep_names=rep_names)
+            if is_failed_item(prop_results):
+                _failed.append(prop_name)
             if prop_results is not None:
                 all_results[prop_name] = prop_results
         except Exception as e:
             print(f"  FAILED: {e}")
             import traceback
             traceback.print_exc()
+            _failed.append(prop_name)
 
     # Cross-property analysis
     if all_results:
@@ -939,8 +967,6 @@ def main():
               f"for want of an approved rep pool: {sorted(skipped)}")
 
     # Save results
-    output_path = (args.output or
-                   'tests/results/comparisons/opig_ginkgo_developability.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
@@ -950,6 +976,7 @@ def main():
     with open(p, 'w') as f:
         json.dump(convert_numpy(all_results), f, indent=2)
     print(f"\nResults saved: {p}")
+    exit_if_failed(_failed, 'property')
 
 
 if __name__ == '__main__':

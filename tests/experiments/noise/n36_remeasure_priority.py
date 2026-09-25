@@ -96,7 +96,6 @@ import functools
 import time
 
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
@@ -117,6 +116,17 @@ from experiments.noise.noise_helpers import (
     tail_scores,
 )
 from kirby.utils.noisy_labels import oof_predict
+# The D-versus-D' rows, per-pass checkpoint, cached builds, controls and the
+# similarity axis shared by n32-n41 (n32's shared block, 2026-09-25).
+from experiments.noise.n32_iterative_and_dual_selection import (
+    method_setting, downstream_model_list, fit_predict_cached,
+    scaled_base_cells, cached_hybrid, ledger_signature, PassLedger,
+    restart_flag, arm_rows, arm_result, control_twins, twin_scores,
+    controls_enabled, replicate_seed, sweep_settings, sweep_ks,
+    is_model_input, setting_models, similarity_key, FoldSimilarity, _nc, _ss,
+)
+
+EXP_ID = 'n36_remeasure_priority'
 
 # Which searches the recipe may come from. Same as n19, n23, n24 and n26.
 POOL_SUBSET = 'predictive_and_similarity'
@@ -174,12 +184,23 @@ def neighbour_stats(X_tr, n_neighbours=N_NEIGHBOURS):
     leverage  1 + how many OTHER training molecules have this one among their
               n_neighbours nearest
     sparsity  mean distance to this molecule's own n_neighbours nearest
+
+    ⛔ THE DISTANCE CHANGED 2026-09-25. Until then this was a bare
+    sklearn NearestNeighbors, whose default is Minkowski p=2 -- Euclidean --
+    whatever --distance-metric said (plan section 4: "Euclidean slips in
+    unasked", this line). It is now _shared.make_nearest_neighbors, the
+    process-wide distance (manhattan by default), which is what the
+    model_input similarity setting means everywhere else. So n36's leverage
+    and sparsest rules under model_input are NOT today's numbers: they move to
+    the process-wide distance, as the owner asked (2026-09-25). Every other
+    setting reads its neighbours through neighbour_stats_from_lists.
     """
+    from experiments._shared import make_nearest_neighbors
     n = X_tr.shape[0]
     k = min(n_neighbours, n - 1)
     if k < 1:
         return np.ones(n), np.zeros(n)
-    nn = NearestNeighbors(n_neighbors=k + 1).fit(X_tr)
+    nn = make_nearest_neighbors(n_neighbors=k + 1).fit(X_tr)
     dist, idx = nn.kneighbors(X_tr)
     # Column 0 is the molecule itself, except when duplicates tie at distance
     # 0; dropping the molecule's own index wherever it sits handles both.
@@ -193,6 +214,23 @@ def neighbour_stats(X_tr, n_neighbours=N_NEIGHBOURS):
     leverage = 1.0 + np.bincount(keep_i.ravel(), minlength=n).astype(float)
     sparsity = keep_d.mean(axis=1)
     return leverage, sparsity
+
+
+def neighbour_stats_from_lists(idx, dist):
+    """Leverage and sparsity from neighbour lists a similarity setting gave
+    (similarity_space.neighbours_at): the molecule itself is already excluded
+    by index there. Same two quantities as neighbour_stats."""
+    idx = np.asarray(idx)
+    n = idx.shape[0]
+    if idx.shape[1] < 1:
+        return np.ones(n), np.zeros(n)
+    leverage = 1.0 + np.bincount(idx.ravel(), minlength=n).astype(float)
+    sparsity = np.asarray(dist, dtype=float).mean(axis=1)
+    return leverage, sparsity
+
+
+# The rules that read the neighbour search, and so take a similarity setting.
+NEIGHBOUR_RULES = ('leverage', 'leverage_x_disagreement', 'sparsest')
 
 
 def rank_candidates(rule, cand, *, disagreement, leverage, sparsity,
@@ -243,8 +281,19 @@ def _score(metric_fn, y_true, pred):
     return out
 
 
-def run(data, config, output_dir, dataset_name, **kwargs):
-    """N36: which molecules to measure a second time."""
+def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
+    """N36: which molecules to measure a second time.
+
+    force_rerun (run_dataset.py --force-rerun, via run_all) sets aside the
+    rows file and the per-pass checkpoint and recomputes every pass.
+
+    THE SIMILARITY AXIS, added 2026-09-25 (plan section 1). leverage,
+    leverage_x_disagreement and sparsest read a neighbour search. Under the
+    model_input setting at k = N_NEIGHBOURS they keep their names; every other
+    (setting, k) of the sweep (n32.sweep_settings, n32.sweep_ks) adds the
+    rules <rule>@<setting>|k<k>, paired against the same random draws. A
+    per-model space is built for each model of the cell and that model fits
+    its own columns."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N36: WHICH MOLECULES TO MEASURE AGAIN")
     print("=" * 70)
@@ -299,8 +348,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'skipped': 'too_few_repeated_molecules',
                 'molecules_measured_twice_or_more': n_multi}
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=n_ent)
     downstream_models = [m for m in downstream_models if m in model_factories]
@@ -335,8 +383,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         },
         'leverage_definition': (
             '1 + the number of training molecules that have this candidate '
-            f'among their {N_NEIGHBOURS} nearest neighbours, Euclidean, in the '
+            f'among their {N_NEIGHBOURS} nearest neighbours in the similarity '
+            'setting; under model_input, the process-wide distance '
+            '(manhattan by default; Euclidean before 2026-09-25) in the '
             'standardised space being scored'),
+        'similarity_settings': [st.name for st in sweep_settings()],
+        'similarity_ks': list(sweep_ks(N_NEIGHBOURS)),
+        'controls_run': controls_enabled(),
+        'rows_note': ('D is zero_budget, D\' each rule\'s column, '
+                      'score_clean all_measurements: the mean of every '
+                      'measurement, the nearest this dataset has to a clean '
+                      'label.'),
         'variance_term_note': (
             'No variance term is used: every candidate goes from 1 measurement '
             'to 2, so the variance drop s2e/1 - s2e/2 = s2e/2 is the same for '
@@ -415,6 +472,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     scores = {s: {m: {} for m in downstream_models} for s in spaces}
     s2e_by_pass, errors = {}, {}
     t0 = time.time()
+    metric = (metric_name, metric_fn, lower_is_better)
+    sim_settings = sweep_settings()
+    sim_ks = sweep_ks(N_NEIGHBOURS)
+    # The neighbour rules added under the similarity axis, in the order they
+    # were first scored; handed to _summarise beside the base rules.
+    extra_rules = []
+    # The augmentations and SMILES aligned to the molecule rows (ent_*).
+    ent_aug = ({a: np.asarray(v)[stats['row_index']]
+                for a, v in (data.get('augmentations') or {}).items()}
+               or None)
+    ent_smiles = (None if data.get('smiles') is None
+                  else [data['smiles'][i] for i in stats['row_index']])
+    # Rows and the per-pass checkpoint, 2026-09-25 (n32's PassLedger).
+    ledger = PassLedger(output_dir, EXP_ID, dataset_name, kwargs.get('tag'),
+                        signature=ledger_signature(data, config, results,
+                                                   splits),
+                        restart=bool(force_rerun) or restart_flag(kwargs))
+    if ledger.restored():
+        st_ = ledger.restored()
+        scores, s2e_by_pass, errors = (st_['scores'], st_['s2e_by_pass'],
+                                       st_['errors'])
+        extra_rules = list(st_['extra_rules'])
+        print(f"  resumed {len(ledger.passes_done)} finished passes")
 
     for fold_i, (tr, va) in enumerate(splits):
         g_tr = ent_groups[tr]
@@ -432,6 +512,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for seed in seeds:
             pass_key = f'f{fold_i}s{seed}'
+            if ledger.pass_done(pass_key):
+                continue
+            pass_rows = []
             s2e_by_pass[pass_key] = s2e
             start_all, spare_all = draw_start_and_spare(values, seed)
             start_tr, spare_tr = start_all[tr], spare_all[tr]
@@ -444,13 +527,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for _k, _bsp in enumerate(BASE_SPACES, start=1):
                 if _bsp not in spaces:
                     continue
-                _bcells = []
-                for _rn, _ms in base_rank_groups(base_by_model, _k,
-                                                 downstream_models).items():
-                    sc = StandardScaler()
-                    _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                    sc.transform(val_reps[_rn]), list(_ms)))
-                fold_spaces[_bsp] = _bcells
+                # Standardised once per fold through noise_cache (2026-09-25).
+                fold_spaces[_bsp] = scaled_base_cells(
+                    dataset_name, ent_reps, tr, va, base_by_model, _k,
+                    downstream_models)
             for _sp in spaces:
                 if _sp in BASE_SPACES:
                     continue
@@ -458,10 +538,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for _bp, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, start_tr, _bp, g_tr,
-                        None if _shareable else model_factories[_mnames[0]](),
-                        metric_fn, lower_is_better)
+                    # Cached per (fold, recipe, labels), 2026-09-25.
+                    X_tr_h, X_va_h = cached_hybrid(
+                        dataset_name, train_reps, val_reps, start_tr, _bp,
+                        g_tr, _mnames[0], model_factories, metric, tr,
+                        _shareable)
                     if X_tr_h is None:
                         errors[f'{_sp}/{_mnames[0]}|{pass_key}|build'] = (
                             'the hybrid could not be built on this fold')
@@ -472,24 +553,68 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if _cells:
                     fold_spaces[_sp] = _cells
 
+            # The similarity spaces of this fold, from the zero-budget
+            # labels (plan section 1, 2026-09-25).
+            fsim = FoldSimilarity(
+                dataset_name, data, reps=ent_reps, train_idx=tr, val_idx=va,
+                y_train=start_tr, groups_train=g_tr,
+                base_by_model=base_by_model,
+                recipe_for_space_by_model=recipe_for_space_by_model,
+                model_factories=model_factories, metric=metric,
+                task_type=task_type, augmentations=ent_aug,
+                smiles=ent_smiles)
+
             for space in spaces:
                 for X_tr_s, X_va_s, cell_models in fold_spaces.get(space, ()):
                     _ekey = (space if cell_models == list(downstream_models)
                              else f'{space}/{cell_models[0]}')
                     # What every rule reads, once per cell.
                     try:
-                        oof = oof_predict(X_tr_s, start_tr, g_tr,
-                                          n_splits=oof_splits, seed=seed)
+                        # Cached on the label hash (2026-09-25).
+                        oof = _nc.cached_oof_predict(
+                            dataset_name, X_tr_s, start_tr, g_tr,
+                            n_splits=oof_splits, seed=seed)
                         disagreement = np.abs(start_tr - oof)
                     except Exception as exc:
                         errors[f'{_ekey}|{pass_key}|oof'] = (
                             f'{type(exc).__name__}: {exc}')
                         disagreement = None
-                    leverage, sparsity = neighbour_stats(X_tr_s)
 
-                    # Every label column this cell fits on.
+                    # {(suffix, model or None): (leverage, sparsity)}: the
+                    # neighbour search of every (setting, k). Suffix '' with
+                    # model None is model_input at N_NEIGHBOURS, today's rule
+                    # names; a per-model space gives one entry per model.
+                    nstats, sim_unavail = {}, {}
+                    for setting in sim_settings:
+                        for model in setting_models(setting, cell_models):
+                            if is_model_input(setting):
+                                for k in sim_ks:
+                                    nstats[(similarity_key(
+                                        setting, k, today_k=N_NEIGHBOURS),
+                                        None)] = neighbour_stats(X_tr_s, k)
+                                continue
+                            nb = fsim.neighbours(setting, model, X_tr_s)
+                            if not nb.get('available'):
+                                sim_unavail[f'{setting.name}|{model}'] = \
+                                    nb.get('reason')
+                                continue
+                            per_m = (model if setting.space
+                                     in _ss.FEATURE_SPACES else None)
+                            for k in sim_ks:
+                                if nb['k_eff'] < k:
+                                    continue
+                                i_, d_ = _ss.neighbours_at(nb, k)
+                                nstats[(similarity_key(setting, k), per_m)] = \
+                                    neighbour_stats_from_lists(i_, d_)
+                    if sim_unavail:
+                        errors.setdefault('similarity_unavailable', {}).update(
+                            sim_unavail)
+
+                    # Every label column this cell fits on. model_columns
+                    # holds the columns a per-model space gave one model.
                     columns = {'zero_budget': start_tr,
                                'all_measurements': y_mean_all[tr]}
+                    model_columns = {m: {} for m in cell_models}
                     for b in budgets:
                         n_b = int(round(b * len(cand)))
                         if n_b < 1:
@@ -501,32 +626,90 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             # tie-break, and paired against every random
                             # draw. Only 'random' is redrawn.
                             draws = range(n_random) if rule == 'random' else (0,)
-                            for r in draws:
-                                ranked = rank_candidates(
-                                    rule, cand, disagreement=disagreement,
-                                    leverage=leverage, sparsity=sparsity,
-                                    random_seed=1000 * seed + 17 * fold_i + r)
-                                columns[f'{b:g}|{rule}|{r}'] = \
-                                    labels_after_budget(start_tr, spare_tr,
-                                                        ranked[:n_b])
+                            variants = ([(k_, m_) for k_, m_ in nstats]
+                                        if rule in NEIGHBOUR_RULES
+                                        else [('', None)])
+                            for sfx, per_m in variants:
+                                lev, spa = nstats.get((sfx, per_m),
+                                                      nstats.get(('', None),
+                                                                 (None, None)))
+                                rname = f'{rule}{sfx}'
+                                if sfx and rname not in extra_rules:
+                                    extra_rules.append(rname)
+                                for r in draws:
+                                    ranked = rank_candidates(
+                                        rule, cand, disagreement=disagreement,
+                                        leverage=lev, sparsity=spa,
+                                        random_seed=1000 * seed + 17 * fold_i + r)
+                                    col = labels_after_budget(
+                                        start_tr, spare_tr, ranked[:n_b])
+                                    if per_m is None:
+                                        columns[f'{b:g}|{rname}|{r}'] = col
+                                    else:
+                                        model_columns[per_m][
+                                            f'{b:g}|{rname}|{r}'] = col
+                    pass_scores = {}
                     for mname in cell_models:
-                        for arm, y_fit in columns.items():
+                        for arm, y_fit in list(columns.items()) + list(
+                                model_columns[mname].items()):
                             try:
-                                pred = _fit_predict(model_factories[mname],
-                                                    X_tr_s, y_fit, X_va_s)
+                                # Through noise_cache for a seeded model
+                                # (2026-09-25); the same prediction.
+                                pred = np.asarray(fit_predict_cached(
+                                    dataset_name, mname,
+                                    model_factories[mname], X_tr_s, y_fit,
+                                    X_va_s, metric_name),
+                                    dtype=np.float64).ravel()
                             except Exception as exc:
                                 errors[f'{space}|{mname}|{arm}|{pass_key}'] = (
                                     f'{type(exc).__name__}: {exc}')
                                 continue
+                            sc_ = _score(metric_fn, y_va, pred)
                             scores[space][mname].setdefault(arm, {})[
-                                pass_key] = _score(metric_fn, y_va, pred)
-            print(f"    fold {fold_i} seed {seed} done "
-                  f"[{time.time() - t0:.0f}s]")
+                                pass_key] = sc_
+                            pass_scores.setdefault(arm, {})[mname] = \
+                                sc_['score']
+                    # ── Controls (KIRBY_NOISE_CONTROLS=1): every budget
+                    # column is a label move, twinned by controls.py. n36's own
+                    # 'random' rule is kept; it draws among the candidates,
+                    # the twins among every training molecule. ──
+                    if controls_enabled():
+                        for mname in cell_models:
+                            for arm, y_fit in list(columns.items()) + list(
+                                    model_columns[mname].items()):
+                                if arm in ('zero_budget', 'all_measurements'):
+                                    continue
+                                twins = control_twins(
+                                    arm_result(start_tr, y=y_fit), X_tr_s,
+                                    start_tr, (replicate_seed(arm), seed,
+                                               fold_i))
+                                for tw, by_m in twin_scores(
+                                        dataset_name, twins, model_factories,
+                                        [mname], X_va_s, y_va,
+                                        metric).items():
+                                    pass_scores.setdefault(
+                                        f'{arm}|{tw}', {}).update(by_m)
+                    pass_rows += arm_rows(
+                        dataset_name=dataset_name, exp_id=EXP_ID,
+                        metric=metric,
+                        condition=results['noise_regime'], level=None,
+                        draw=seed, fold=fold_i, model_input=_ekey,
+                        scores_by_arm=pass_scores, reference='zero_budget',
+                        clean='all_measurements',
+                        setting_of=_n36_row_setting)
+            ledger.add_rows(pass_rows)
+            ledger.finish_pass(pass_key, {
+                'scores': scores, 's2e_by_pass': s2e_by_pass,
+                'errors': errors, 'extra_rules': extra_rules})
+            print(f"    fold {fold_i} seed {seed} done, {len(pass_rows)} "
+                  f"D-vs-D' rows [{time.time() - t0:.0f}s]")
 
     results['s2e_training_fold_by_pass'] = s2e_by_pass
     results['per_space'] = _summarise(scores, spaces, downstream_models,
-                                      budgets, rules, n_random,
+                                      budgets, rules + extra_rules, n_random,
                                       lower_is_better)
+    results['rules_under_similarity_settings'] = extra_rules
+    results['d_vs_dprime'] = ledger.describe()
     if errors:
         results['_errors'] = errors
     results = convert_numpy(results)
@@ -534,6 +717,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     save_experiment_results(results, output_dir, 'n36_remeasure_priority',
                             dataset_name, filename_suffix=kwargs.get('tag'))
     return results
+
+
+def _n36_row_setting(arm):
+    """(method, method_setting, similarity_setting) of an n36 budget column
+    '<budget>|<rule>[@<setting>|k<k>]|<draw>[|<twin>]' for its row."""
+    parts = arm.split('|')
+    twin = ''
+    if parts[-1] in ('random_twin', 'shuffled_twin'):
+        twin = '|' + parts.pop()
+    budget, draw = parts[0], parts[-1]
+    rule_part = '|'.join(parts[1:-1])
+    rule, _, sim = rule_part.partition('@')
+    k = None
+    sim_name = _ss.MODEL_INPUT.name
+    if sim:
+        bits = sim.split('|')
+        k = bits[3][1:] if len(bits) > 3 else None
+        sim_name = '|'.join(bits[:3])
+    elif rule in NEIGHBOUR_RULES:
+        k = N_NEIGHBOURS
+    return (f'{rule}{twin}',
+            method_setting(budget_share=budget, random_draw=draw, k=k),
+            sim_name)
 
 
 def _gain(a, b, lower_is_better):
@@ -648,6 +854,7 @@ def main():
     if args.tag:
         kw['tag'] = args.tag
     run(data, config, args.output, args.dataset, **kw)
+    # run() saves its own result file (n36 has no sweep_conditions).
 
 
 if __name__ == '__main__':

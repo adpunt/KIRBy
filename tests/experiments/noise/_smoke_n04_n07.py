@@ -21,6 +21,14 @@ for _v in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
            'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS'):
     os.environ.setdefault(_v, '1')
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+# 2026-09-25: the noise experiments sweep every similarity setting by default
+# (KIRBY_SIMILARITY_SETTINGS unset = all 66, plan section 1). This smoke checks
+# what each run() computed before that axis existed, so it runs today's
+# setting alone, and it writes its caches under a temporary directory, never
+# the real KIRBY_CACHE_DIR.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+import tempfile as _tempfile
+os.environ['KIRBY_CACHE_DIR'] = _tempfile.mkdtemp(prefix='kirby_smoke_cache_')
 
 import sys
 import argparse

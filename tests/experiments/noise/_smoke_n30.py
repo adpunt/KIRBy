@@ -44,6 +44,12 @@ from kirby.find_best_hybrid import Blueprint
 OUT = tempfile.mkdtemp(prefix='n30_smoke_')
 FAIL = []
 
+# 2026-09-25: n30 now caches through noise_cache under KIRBY_CACHE_DIR and
+# checkpoints under the output directory, so the toy entries go to a
+# temporary directory, as tests/smoke/smoke_noise_similarity_foundation.py
+# does.
+os.environ['KIRBY_CACHE_DIR'] = tempfile.mkdtemp(prefix='n30_smoke_cache_')
+
 
 def check(name, ok, detail=''):
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ''))
@@ -280,6 +286,38 @@ def test_the_command_line():
     check('10b. --base-rep is gone', '--base-rep' not in out.stdout)
 
 
+# ── the D-versus-D' rows and the checkpoint (2026-09-25) ────────────────────
+
+def test_rows_and_checkpoint():
+    """Plan section 2 on n30: the run writes D-versus-D' rows beside its
+    result file, each with the metric direction and a gain signed by it, and
+    leaves no per-pass checkpoint behind once the result is complete."""
+    import json
+    print("\nthe D-versus-D' rows and the checkpoint:")
+    res = run_it(make_data(), 'toy_rows', models=['rf'], levels=[0.25])
+    path = res['rows']['rows_file']
+    rows = ([json.loads(l) for l in open(path)]
+            if path and os.path.exists(path) else [])
+    check('rows were written to the rows file', len(rows) > 0, str(path))
+    methods = {x['method'] for x in rows}
+    check('the rows name the methods that change the training data',
+          {'constant_lift', 'drop_clipped', 'truncated_normal_mean'} <= methods, str(sorted(methods)))
+    check('every row carries the direction the dataset\'s metric has',
+          all(x['lower_is_better'] is bool(res['lower_is_better'])
+              for x in rows), str(res['lower_is_better']))
+    ok = all((x['gain'] != x['gain']) or abs(
+        x['gain'] - ((x['score_D'] - x['score_Dprime'])
+                     if x['lower_is_better']
+                     else (x['score_Dprime'] - x['score_D']))) < 1e-12
+             for x in rows)
+    check('gain is score_D against score_Dprime, signed by the direction', ok)
+    check('the clean fit is written beside every row',
+          all(x['score_clean'] == x['score_clean'] for x in rows))
+    ck = os.path.join(OUT, 'n30_censored_likelihood', '_checkpoints')
+    check('no checkpoint is left once the result is complete',
+          not (os.path.isdir(ck) and os.listdir(ck)), ck)
+
+
 if __name__ == '__main__':
     test_injector()
     test_lifts_and_winsor()
@@ -288,6 +326,7 @@ if __name__ == '__main__':
     test_guards()
     test_full_runs()
     test_the_command_line()
+    test_rows_and_checkpoint()
     print()
     if FAIL:
         print(f"FAILED {len(FAIL)}: {FAIL}")

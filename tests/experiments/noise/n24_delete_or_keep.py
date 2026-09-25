@@ -124,6 +124,18 @@ detection and deletion records are keyed '<space>/<first model on it>'.
 WHAT THE HELD-OUT MOLECULES ARE GRADED AGAINST. `labels[val_idx]`, untouched, in
 every arm. No cleaned label and no corrupted label is ever scored against.
 
+SIMILARITY AXIS, ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 1-3).
+The loop is today's path and computes what it computed before. On top of it,
+each similarity setting x k of similarity_space.settings_from_env() re-runs
+neighbor_residual in that setting (every arm, the random-deletion control
+included) and, under cross_val, the two cleanups that read neighbours.
+KIRBY_SIMILARITY_SETTINGS=model_input runs today's path alone. Every arm writes
+one D-versus-D' row per pass beside the result file; the accumulators are
+checkpointed per pass; the hybrid builds, the scaled representations, the
+detector scores, the correction targets and the no-cleaning and clean-label
+fits of seeded models go through noise_cache. controls.py's twins run with
+KIRBY_NOISE_CONTROLS=1; n24's own random deletion always runs.
+
 Usage:
     python n24_delete_or_keep.py --dataset flab_thermo_tresanco --mode full
 """
@@ -166,6 +178,19 @@ from experiments.noise.n07_remediation import (
     REGRESSION_ONLY_CLEANUPS,
 )
 from kirby.noise_spec import GROUPED_STRATEGIES, OUTLIER_STRATEGIES
+# The D-versus-D' rows, the per-pass checkpoint, the caches, the similarity
+# axis and the controls (2026-09-25, plan sections 1-3). They live in n23 for
+# the reason given at the top of its shared block.
+from experiments.noise import noise_cache as nc
+from experiments.noise import similarity_space as ss
+from experiments.noise.controls import controls_enabled
+from experiments.noise.n23_uncertainty_cleaning import (
+    RowSink, PassCheckpoint, ensure_dprime_models, fit_score_cached,
+    swept_similarity, model_similarity_spaces, smiles_for,
+    setting_neighbours, control_twins, cleanup_reads_setting,
+    correction_targets_cached, cached_base_cell, cached_hybrid_cell,
+    TODAY_SIMILARITY, NO_NEIGHBOURS, TODAY_NEIGHBOUR_CLEANUPS,
+)
 
 # ── The arms ───────────────────────────────────────────────────────────────
 # One cleanup name per arm, all of them n07's. The three groups are the answer
@@ -417,6 +442,252 @@ def _injury_carried_by_flagged(y_clean_train, y_noisy_train, mask):
     }
 
 
+def _cleaned(cleanup, X_tr_s, y0, scores, rate, is_clf, g_tr, targets, sim):
+    """n07.cleaned_training_set for one arm. `sim` None is today's call,
+    unchanged. `sim` = (neighbour lists, k, setting) hands the lists to a
+    cleanup that reads them (cleanup_reads_setting) and None to one that does
+    not, which n07 would refuse (n07:722-733)."""
+    if sim is not None and cleanup_reads_setting(cleanup, sim[2]):
+        return cleaned_training_set(
+            cleanup, X_tr_s, y0, scores, rate, is_clf=is_clf, groups=g_tr,
+            strength=None, targets=targets, similarity_neighbours=sim[0],
+            similarity_k=sim[1])
+    return cleaned_training_set(cleanup, X_tr_s, y0, scores, rate,
+                                is_clf=is_clf, groups=g_tr, strength=None,
+                                targets=targets)
+
+
+def _arm_scores(det_cell, detector, scores, sim, only, X_tr_s, X_va_s, y0,
+                y_val, g_tr, cell_models, targets, base_score, random_cache,
+                lvl_key, level, draw, fold_i, ckey, pass_key, n_tr, cmask,
+                arms, flag_rates, is_clf, model_factories, metric_fn,
+                metric_name, errors, deleted_acc):
+    """Every arm of one detector on one matrix, into det_cell[rate][arm][model].
+
+    Moved out of run() on 2026-09-25 so today's path and the similarity sweep
+    run the SAME code; with sim=None and only=None it is the loop that stood
+    here, line for line. `only` names the cleanups to run (the sweep, for a
+    detector that reads no neighbours, runs only the cleanups that do).
+    `deleted_acc` None skips the deletion counts (the sweep writes rows, not
+    those counts). Error keys carry the similarity label when sim is given.
+    """
+    tag = '' if sim is None else f'{sim[2].name}|k={sim[1]}|'
+    # Per-pass scores for the arms that are fitted once because their cleaned
+    # training set does not depend on the rate.
+    blind = {}
+    for slot, rate in enumerate(flag_rates):
+        rate_key = f'{rate:g}'
+        rate_cell = det_cell.setdefault(rate_key, {})
+        for mname, s in base_score.items():
+            (rate_cell.setdefault('no_cleaning', {})
+             .setdefault(mname, {})[pass_key]) = s
+
+        n_deleted_here = None
+        for arm, family, cleanup, seed in arms:
+            if family in ('no_cleaning', 'delete_at_random'):
+                continue
+            if only is not None and cleanup not in only:
+                continue
+            blind_key = (detector, cleanup)
+            if (not reads_flag_rate(cleanup, is_clf)
+                    and blind_key in blind):
+                # Already fitted at the first rate; the cleaned training set
+                # is the same column, so the same per-pass score is written
+                # here rather than the same fit being run again.
+                for mname, done in blind[blind_key].items():
+                    (rate_cell.setdefault(arm, {})
+                     .setdefault(mname, {})[pass_key]) = done
+                continue
+
+            try:
+                cleaned = _cleaned(cleanup, X_tr_s, y0, scores, rate, is_clf,
+                                   g_tr, targets, sim)
+            except Exception as exc:
+                errors[f'{tag}{lvl_key}|{ckey}|{detector}|'
+                       f'{rate_key}|{arm}|f{fold_i}|clean'] = (
+                    f'{type(exc).__name__}: {exc}')
+                continue
+            if cleaned is None:
+                errors[f'{tag}{lvl_key}|{ckey}|{detector}|'
+                       f'{rate_key}|{arm}|f{fold_i}|clean'] = (
+                    'the cleanup declined on this pass')
+                continue
+
+            if family == 'delete':
+                n_deleted_here = _deleted_count(cleaned, n_tr)
+                if deleted_acc is not None:
+                    rm = ~np.asarray(cleaned['keep'], dtype=bool)
+                    (deleted_acc.setdefault(lvl_key, {})
+                     .setdefault(ckey, {})
+                     .setdefault(detector, {})
+                     .setdefault(rate_key, []).append({
+                         'molecules_deleted': int(rm.sum()),
+                         'training_molecules': n_tr,
+                         'widened_molecules_among_the_deleted':
+                             int(np.sum(np.asarray(cmask, dtype=bool) & rm)),
+                         'widened_molecules': int(np.sum(cmask))}))
+
+            got = {}
+            for mname in cell_models:
+                s, err = _fit_score(
+                    model_factories[mname], cleaned, X_va_s,
+                    y_val, metric_fn, metric_name)
+                if s is None:
+                    errors[f'{tag}{lvl_key}|{ckey}|{detector}|'
+                           f'{rate_key}|{arm}|{mname}|f{fold_i}'] = err
+                    continue
+                got[mname] = s
+                (rate_cell.setdefault(arm, {})
+                 .setdefault(mname, {})[pass_key]) = s
+            if not reads_flag_rate(cleanup, is_clf):
+                blind[blind_key] = got
+
+        # ── The control, on the same count ──
+        if only is not None and DELETE_CLEANUP not in only:
+            continue
+        if not n_deleted_here:
+            errors[f'{tag}{lvl_key}|{ckey}|{detector}|{rate_key}|'
+                   f'f{fold_i}|control'] = (
+                'the deletion arm removed no molecule on this '
+                'pass, so there is no count to match at random')
+            continue
+        for arm, family, cleanup, seed in arms:
+            if family != 'delete_at_random':
+                continue
+            # The random deletion does not depend on the similarity setting,
+            # only on the count, so one cache serves every setting.
+            ck = (ckey, tuple(cell_models), n_deleted_here, seed)
+            if ck not in random_cache:
+                rs, rrate = random_deletion_scores(
+                    n_tr, n_deleted_here,
+                    replicate_seed(seed, level, draw, fold_i,
+                                   n_tr, n_deleted_here))
+                rcleaned = cleaned_training_set(
+                    cleanup, X_tr_s, y0, rs, rrate,
+                    is_clf=is_clf, groups=g_tr,
+                    strength=None, targets=targets)
+                if rcleaned is None:
+                    errors[f'{tag}{lvl_key}|{ckey}|{rate_key}|'
+                           f'{arm}|f{fold_i}|clean'] = (
+                        'the deletion declined on this pass')
+                    random_cache[ck] = {}
+                else:
+                    if deleted_acc is not None:
+                        rm = ~np.asarray(rcleaned['keep'], dtype=bool)
+                        (deleted_acc.setdefault(lvl_key, {})
+                         .setdefault(ckey, {})
+                         .setdefault(f'random_seed{seed}', {})
+                         .setdefault(rate_key, []).append({
+                             'molecules_deleted': int(rm.sum()),
+                             'training_molecules': n_tr,
+                             'widened_molecules_among_the_deleted':
+                                 int(np.sum(np.asarray(
+                                     cmask, dtype=bool) & rm)),
+                             'widened_molecules': int(
+                                 np.sum(cmask))}))
+                    out = {}
+                    for mname in cell_models:
+                        s, err = _fit_score(
+                            model_factories[mname], rcleaned,
+                            X_va_s, y_val, metric_fn,
+                            metric_name)
+                        if s is None:
+                            errors[
+                                f'{tag}{lvl_key}|{ckey}|{rate_key}'
+                                f'|{arm}|{mname}|f{fold_i}'] = err
+                        else:
+                            out[mname] = s
+                    random_cache[ck] = out
+            for mname, s in random_cache[ck].items():
+                (rate_cell.setdefault(arm, {})
+                 .setdefault(mname, {})[pass_key]) = s
+
+
+def _rows_for_rate(rows, rate_cell, arms, detector, rate, label_fn, space,
+                   models, base_score, clean_score, condition, level, draw,
+                   fold_i, pass_key):
+    """The D-versus-D' rows of one (detector, flag rate): one per (arm,
+    model) that scored on this pass. score_D is the no-cleaning fit on the
+    same matrix. A rate-blind arm's repeated score is written under every
+    rate, as the result file writes it (`rate_blind_rows_are_repeats`)."""
+    for arm, family, cleanup, seed in arms:
+        if family == 'no_cleaning':
+            continue
+        for m in models:
+            sP = (rate_cell.get(arm) or {}).get(m, {}).get(pass_key)
+            if sP is None:
+                continue
+            setting = f'{detector}|flag_rate={rate:g}'
+            if family == 'delete_at_random':
+                setting += f'|seed={seed}'
+            rows.add(method=(cleanup if family != 'delete_at_random'
+                             else 'delete_at_random'),
+                     method_setting=setting,
+                     similarity_setting=label_fn(detector, cleanup),
+                     model_input=space, model=m, noise_condition=condition,
+                     level=float(level), draw=int(draw), fold=fold_i,
+                     score_D=base_score.get(m), score_Dprime=sP,
+                     score_clean=clean_score.get(m))
+
+
+def _controls_for(rows, detector, scores, sim, only, X_tr_s, X_va_s, y0,
+                  y_val, g_tr, models, targets, base_score, clean_score, arms,
+                  flag_rates, is_clf, model_factories, metric_fn, metric_name,
+                  label_fn, space, condition, level, draw, fold_i, errors,
+                  lvl_key, ckey):
+    """The shared random and shuffled twins of every detector-driven arm,
+    only when KIRBY_NOISE_CONTROLS=1 (controls.py). n24's own
+    delete_at_random stays as it is and always runs: it is this file's design
+    and draws its molecules with replicate_seed, which controls.random_twin
+    does not reproduce. random_twin is given `rerun`, the arm's own
+    cleaned_training_set call on a score that flags the chosen molecules --
+    n24's random_deletion_scores rule, generalised by controls.py. A rate-blind
+    arm is twinned once, at the first rate."""
+    if not controls_enabled():
+        return
+    tag = '' if sim is None else f'{sim[2].name}|k={sim[1]}|'
+    for slot, rate in enumerate(flag_rates):
+        for arm, family, cleanup, seed in arms:
+            if family in ('no_cleaning', 'delete_at_random'):
+                continue
+            if only is not None and cleanup not in only:
+                continue
+            if slot > 0 and not reads_flag_rate(cleanup, is_clf):
+                continue
+            try:
+                cleaned = _cleaned(cleanup, X_tr_s, y0, scores, rate, is_clf,
+                                   g_tr, targets, sim)
+            except Exception:
+                continue
+            if cleaned is None:
+                continue
+
+            def _rerun(sc, r, _c=cleanup):
+                return _cleaned(_c, X_tr_s, y0, sc, r, is_clf, g_tr,
+                                targets, sim)
+            _seed = (int(draw), int(fold_i), int(zlib.crc32(
+                f'{detector}|{cleanup}|{rate:g}|{space}|{tag}'.encode())
+                & 0x7FFFFFFF))
+            for cname, tw, why in control_twins(cleaned, X_tr_s, y0, _seed,
+                                                is_clf=is_clf, rerun=_rerun):
+                if tw is None:
+                    errors[f'{tag}{lvl_key}|{ckey}|{detector}|{rate:g}|{arm}|'
+                           f'{cname}|f{fold_i}'] = why
+                    continue
+                for m in models:
+                    sP, err = _fit_score(model_factories[m], tw, X_va_s,
+                                         y_val, metric_fn, metric_name)
+                    rows.add(method=cleanup,
+                             method_setting=(f'{detector}|flag_rate={rate:g}'
+                                             f'|control={cname}'),
+                             similarity_setting=label_fn(detector, cleanup),
+                             model_input=space, model=m,
+                             noise_condition=condition, level=float(level),
+                             draw=int(draw), fold=fold_i,
+                             score_D=base_score.get(m), score_Dprime=sP,
+                             score_clean=clean_score.get(m))
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N24: delete the flagged molecules, rewrite them, or weigh them down."""
     print("\n" + "=" * 70)
@@ -443,7 +714,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # directory read kwargs alone and silently dropped the list the runner was
     # asked for; fixed across them on 2026-09-20. An explicit kwarg still wins,
     # which is what a smoke or a direct caller passes.
-    downstream_models = list(
+    # rf and svm are added when the caller left them out: every D-versus-D'
+    # row needs them (ensure_dprime_models, owner decision 2026-09-25).
+    downstream_models = ensure_dprime_models(
         kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
@@ -677,7 +950,76 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     detection_acc = {}
     injury_acc = {}
     deleted_acc = {}
+    # The similarity sweep's detection readings and missing spaces
+    # (2026-09-25): sim_detection[level][matrix][model][detector][label].
+    sim_detection = {}
+    sim_unavailable = {}
     t0 = time.time()
+
+    # ── Rows, checkpoints, the similarity axis (2026-09-25) ──
+    # The rows file sits beside the result file run_all writes:
+    # <exp>/<dataset>[__<condition>].json.
+    _metric = (metric_name, metric_fn, lower_is_better)
+    rows = RowSink(output_dir, 'n24_delete_or_keep', dataset_name,
+                   experiment='n24', metric=_metric,
+                   condition=kwargs.get('noise_condition'), data=data,
+                   config=config)
+    # n24 saved nothing until every pass had run. The accumulators are now
+    # checkpointed after every (level, draw, fold).
+    ckpt = PassCheckpoint(
+        output_dir, 'n24_delete_or_keep', dataset_name,
+        condition=kwargs.get('noise_condition'), data=data, config=config,
+        source_file=__file__,
+        key={'condition': condition, 'detectors': detectors,
+             'flag_rates': flag_rates, 'seeds': seeds,
+             'models': list(downstream_models), 'base_reps': base_by_model,
+             'levels': kwargs.get('levels'), 'draws': kwargs.get('draws'),
+             'n_splits': n_folds})
+    done_passes = set()
+    _state = ckpt.load()
+    if _state:
+        acc, errors = _state['acc'], _state['errors']
+        detection_acc, injury_acc = _state['detection_acc'], _state['injury_acc']
+        deleted_acc = _state['deleted_acc']
+        sim_detection = _state['sim_detection']
+        sim_unavailable = _state['sim_unavailable']
+        done_passes = set(_state['done'])
+        print(f"  resumed from {ckpt.path}: {len(done_passes)} (level, draw, "
+              f"fold) passes already done")
+    sim_axis = swept_similarity()
+    results['similarity_sweep'] = {
+        'settings_env': os.environ.get('KIRBY_SIMILARITY_SETTINGS'),
+        'n_settings_times_k': len(sim_axis),
+        'ks': list(ss.SWEPT_KS),
+        'what_is_swept': (
+            'Beyond today\'s path (TODAY_SIMILARITY on a row), every '
+            'similarity setting x k, per downstream model in its own '
+            'similarity spaces: a detector that reads neighbours '
+            '(neighbor_residual) is recomputed in the setting and drives every '
+            'arm, including the random-deletion control at its own count; a '
+            'detector that reads none (cross_val) keeps today\'s scores and '
+            'drives only the arms that read neighbours (label_smooth, '
+            'knn_smooth), which read them in the setting. Neighbours for a '
+            'detector exclude the molecule\'s scaffold group, as '
+            '_compute_noise_scores does; neighbours for a cleanup do not, as '
+            'n07.cleaned_training_set does not. The model is fitted on the '
+            'same matrix as today.'),
+    }
+
+    def _save_state():
+        ckpt.save({'acc': acc, 'errors': errors,
+                   'detection_acc': detection_acc, 'injury_acc': injury_acc,
+                   'deleted_acc': deleted_acc, 'sim_detection': sim_detection,
+                   'sim_unavailable': sim_unavailable,
+                   'done': sorted(done_passes)})
+
+    def _sim_label(detector, cleanup):
+        """TODAY_SIMILARITY when today's path read neighbours for this row
+        (the detector or the cleanup), NO_NEIGHBOURS when neither did."""
+        return (TODAY_SIMILARITY
+                if (detector in nc.NEIGHBOUR_DETECTORS
+                    or cleanup in TODAY_NEIGHBOUR_CLEANUPS)
+                else NO_NEIGHBOURS)
 
     for level, draw in passes:
         lvl_key = f'{level:g}'
@@ -688,6 +1030,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for fold_i, (train_idx, val_idx) in enumerate(splits):
             pass_key = f'l{lvl_key}d{draw}f{fold_i}'
+            if pass_key in done_passes:
+                print(f"    {pass_key}: on disk in the checkpoint")
+                continue
             y_val = labels[val_idx]
             y_clean_train = np.asarray(labels[train_idx], dtype=float)
             g_tr = groups[train_idx] if groups is not None else None
@@ -704,6 +1049,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if not is_clf:
                 y0 = y0.astype(float)
             n_tr = int(len(y0))
+            # The clean labels in the dtype the fit on D gets, for the
+            # score_clean column.
+            y_clean_fit = (np.asarray(labels[train_idx]) if is_clf
+                           else y_clean_train)
 
             if not is_clf:
                 (injury_acc.setdefault(lvl_key, [])
@@ -728,9 +1077,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _bcells = []
                 for _rn, _ms in base_rank_groups(base_by_model, _k,
                                                  downstream_models).items():
-                    sc = StandardScaler()
-                    _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                    sc.transform(val_reps[_rn]), list(_ms)))
+                    # noise_cache.cached_scaled since 2026-09-25.
+                    _Xt, _Xv = cached_base_cell(dataset_name, reps[_rn],
+                                                train_idx, val_idx)
+                    _bcells.append((_Xt, _Xv, list(_ms)))
                 fold_spaces[_bsp] = _bcells
             for _sp in spaces:
                 if _sp in BASE_SPACES:
@@ -739,11 +1089,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, y0, _bp_m, g_tr,
+                    # noise_cache.cached_hybrid_for_fold since 2026-09-25:
+                    # the same build for the same draw is shared with n23,
+                    # n25, n30-n35, n38, n40 and n41 (plan section 3).
+                    X_tr_h, X_va_h = cached_hybrid_cell(
+                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        None if _shareable else _mnames[0],
                         None if _shareable
                         else model_factories[_mnames[0]](),
-                        metric_fn, lower_is_better)
+                        _metric, train_idx)
                     if X_tr_h is None:
                         errors[f'{lvl_key}|d{draw}|f{fold_i}|{_sp}/'
                                f'{_mnames[0]}|build'] = (
@@ -754,6 +1108,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                    sh.transform(X_va_h), list(_mnames)))
                 if _cells:
                     fold_spaces[_sp] = _cells
+            hybrid_by_model = {}
+            for _sp, _cs in fold_spaces.items():
+                if _sp in BASE_SPACES:
+                    continue
+                for _Xt, _Xv, _ms in _cs:
+                    for _m in _ms:
+                        hybrid_by_model.setdefault(_m, {})[_sp] = _Xt
 
             for space in spaces:
                 for X_tr_s, X_va_s, cell_models in fold_spaces.get(space, ()):
@@ -776,35 +1137,51 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # quantile forest fitted for arms that do not exist. On a
                     # classification label oof_smooth is dropped, so the want-list
                     # is empty there and that is exactly when it would have fired.
+                    # Through noise_cache since 2026-09-25
+                    # (correction_targets_cached, the same values).
                     _want = targets_needed(cleanups_used)
-                    targets = (correction_targets(X_tr_s, y0, groups=g_tr,
-                                                  want=_want) if _want else {})
+                    targets = (correction_targets_cached(
+                        dataset_name, X_tr_s, y0, g_tr, _want)
+                        if _want else {})
 
                     # The score to beat, fitted once per (pass, space, model) and
                     # shared by every detector and every flag rate -- they all have
                     # to beat the same number or the comparison is not paired.
+                    # Through noise_cache for a seeded model since 2026-09-25.
                     base_score = {}
+                    clean_score = {}
                     for mname in cell_models:
-                        s, err = _fit_score(
-                            model_factories[mname],
-                            {'X': X_tr_s, 'y': y0, 'sample_weight': None},
-                            X_va_s, y_val, metric_fn, metric_name)
+                        s, err = fit_score_cached(
+                            dataset_name, mname, model_factories[mname],
+                            X_tr_s, y0, X_va_s, y_val, metric_fn, metric_name)
                         if s is None:
                             errors[f'{lvl_key}|{ckey}|{mname}|'
                                    f'f{fold_i}|no_cleaning'] = err
                         else:
                             base_score[mname] = s
+                        # score_clean for the rows: the same model on the
+                        # clean training labels (plan section 2).
+                        clean_score[mname], _e = fit_score_cached(
+                            dataset_name, mname, model_factories[mname],
+                            X_tr_s, y_clean_fit, X_va_s, y_val, metric_fn,
+                            metric_name)
 
                     # One random deletion is one fit per (space, model, count,
                     # seed) and the same count comes back from both detectors, so
                     # the fit is done once and read twice rather than repeated.
                     random_cache = {}
+                    # {detector: scores} from today's path, reused by the
+                    # similarity sweep for a detector that reads no neighbours.
+                    today_scores = {}
 
                     for detector in detectors:
                         try:
-                            scores = _compute_noise_scores(
-                                X_tr_s, y0, is_clf=is_clf, detector=detector,
-                                groups=g_tr)
+                            # noise_cache.cached_detector_scores with no
+                            # neighbour list IS n07._compute_noise_scores,
+                            # stored (plan section 3).
+                            scores = nc.cached_detector_scores(
+                                dataset_name, X_tr_s, y0, is_clf=is_clf,
+                                detector=detector, groups=g_tr)
                         except Exception as exc:
                             errors[f'{lvl_key}|{ckey}|{detector}|f{fold_i}|'
                                    f'detector'] = f'{type(exc).__name__}: {exc}'
@@ -814,6 +1191,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                    f'detector'] = 'the estimator fit failed'
                             continue
                         scores = np.asarray(scores, dtype=float)
+                        today_scores[detector] = scores
 
                         # Did the detector rank the damaged molecules at the top,
                         # before any arm ran? It costs no model fit.
@@ -824,135 +1202,137 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              .setdefault(detector, []).append(det))
 
                         det_cell = space_cell.setdefault(detector, {})
-                        # Per-pass scores for the arms that are fitted once because
-                        # their cleaned training set does not depend on the rate.
-                        blind = {}
+                        _arm_scores(
+                            det_cell, detector, scores, None, None, X_tr_s,
+                            X_va_s, y0, y_val, g_tr, cell_models, targets,
+                            base_score, random_cache, lvl_key, level, draw,
+                            fold_i, ckey, pass_key, n_tr, cmask, arms,
+                            flag_rates, is_clf, model_factories, metric_fn,
+                            metric_name, errors, deleted_acc)
 
-                        for slot, rate in enumerate(flag_rates):
-                            rate_key = f'{rate:g}'
-                            rate_cell = det_cell.setdefault(rate_key, {})
-                            for mname, s in base_score.items():
-                                (rate_cell.setdefault('no_cleaning', {})
-                                 .setdefault(mname, {})[pass_key]) = s
+                        # ── The rows and the controls of today's path ──
+                        for rate in flag_rates:
+                            rate_cell = det_cell.get(f'{rate:g}', {})
+                            _rows_for_rate(
+                                rows, rate_cell, arms, detector, rate,
+                                _sim_label, space, cell_models, base_score,
+                                clean_score, condition, level, draw, fold_i,
+                                pass_key)
+                        _controls_for(
+                            rows, detector, scores, None, None, X_tr_s,
+                            X_va_s, y0, y_val, g_tr, cell_models, targets,
+                            base_score, clean_score, arms, flag_rates, is_clf,
+                            model_factories, metric_fn, metric_name,
+                            _sim_label, space, condition,
+                            level, draw, fold_i, errors, lvl_key, ckey)
 
-                            n_deleted_here = None
-                            for arm, family, cleanup, seed in arms:
-                                if family in ('no_cleaning', 'delete_at_random'):
-                                    continue
-                                blind_key = (detector, cleanup)
-                                if (not reads_flag_rate(cleanup, is_clf)
-                                        and blind_key in blind):
-                                    # Already fitted at the first rate; the cleaned
-                                    # training set is the same column, so the same
-                                    # per-pass score is written here rather than
-                                    # the same fit being run again.
-                                    for mname, done in blind[blind_key].items():
-                                        (rate_cell.setdefault(arm, {})
-                                         .setdefault(mname, {})[pass_key]) = done
-                                    continue
-
-                                try:
-                                    cleaned = cleaned_training_set(
-                                        cleanup, X_tr_s, y0, scores, rate,
-                                        is_clf=is_clf, groups=g_tr,
-                                        strength=None, targets=targets)
-                                except Exception as exc:
-                                    errors[f'{lvl_key}|{ckey}|{detector}|'
-                                           f'{rate_key}|{arm}|f{fold_i}|clean'] = (
-                                        f'{type(exc).__name__}: {exc}')
-                                    continue
-                                if cleaned is None:
-                                    errors[f'{lvl_key}|{ckey}|{detector}|'
-                                           f'{rate_key}|{arm}|f{fold_i}|clean'] = (
-                                        'the cleanup declined on this pass')
-                                    continue
-
-                                if family == 'delete':
-                                    n_deleted_here = _deleted_count(cleaned, n_tr)
-                                    rm = ~np.asarray(cleaned['keep'], dtype=bool)
-                                    (deleted_acc.setdefault(lvl_key, {})
-                                     .setdefault(ckey, {})
-                                     .setdefault(detector, {})
-                                     .setdefault(rate_key, []).append({
-                                         'molecules_deleted': int(rm.sum()),
-                                         'training_molecules': n_tr,
-                                         'widened_molecules_among_the_deleted':
-                                             int(np.sum(
-                                                 np.asarray(cmask, dtype=bool) & rm)),
-                                         'widened_molecules': int(np.sum(cmask))}))
-
-                                got = {}
-                                for mname in cell_models:
-                                    s, err = _fit_score(
-                                        model_factories[mname], cleaned, X_va_s,
-                                        y_val, metric_fn, metric_name)
-                                    if s is None:
-                                        errors[f'{lvl_key}|{ckey}|{detector}|'
-                                               f'{rate_key}|{arm}|{mname}|'
-                                               f'f{fold_i}'] = err
-                                        continue
-                                    got[mname] = s
-                                    (rate_cell.setdefault(arm, {})
-                                     .setdefault(mname, {})[pass_key]) = s
-                                if not reads_flag_rate(cleanup, is_clf):
-                                    blind[blind_key] = got
-
-                            # ── The control, on the same count ──
-                            if not n_deleted_here:
-                                errors[f'{lvl_key}|{ckey}|{detector}|{rate_key}|'
-                                       f'f{fold_i}|control'] = (
-                                    'the deletion arm removed no molecule on this '
-                                    'pass, so there is no count to match at random')
+                    # ── The similarity sweep (2026-09-25, plan section 1) ──
+                    # Per downstream model, in its own similarity spaces. The
+                    # model is fitted on THIS matrix, as today.
+                    if not sim_axis:
+                        continue
+                    _smi = smiles_for(data, train_idx)
+                    for mname in cell_models:
+                        _spaces_tr, _why = model_similarity_spaces(
+                            dataset_name, data, model_name=mname,
+                            factory=model_factories[mname],
+                            base_reps=base_by_model.get(mname),
+                            hybrid_train=hybrid_by_model.get(mname),
+                            train_idx=train_idx, val_idx=val_idx, y_train=y0,
+                            groups_train=g_tr, metric=_metric,
+                            task_type=task_type, model_input_train=X_tr_s)
+                        for _sp_u, _w in _why.items():
+                            sim_unavailable.setdefault(_sp_u, {}).setdefault(
+                                mname, _w)
+                        _lists = {}
+                        m_random_cache = {}
+                        for label, sset, kk in sim_axis:
+                            if sset.name not in _lists:
+                                _ex = setting_neighbours(
+                                    dataset_name, sset, _spaces_tr, y0,
+                                    exclude_groups=g_tr, smiles_train=_smi,
+                                    is_clf=is_clf)
+                                _pl = (_ex if g_tr is None else
+                                       setting_neighbours(
+                                           dataset_name, sset, _spaces_tr, y0,
+                                           exclude_groups=None,
+                                           smiles_train=_smi, is_clf=is_clf))
+                                _lists[sset.name] = (_ex, _pl)
+                            nb_ex, nb_pl = _lists[sset.name]
+                            if not (nb_ex.get('available')
+                                    and nb_pl.get('available')):
+                                sim_unavailable.setdefault(
+                                    sset.space, {}).setdefault(
+                                        mname, nb_ex.get('reason')
+                                        or nb_pl.get('reason'))
                                 continue
-                            for arm, family, cleanup, seed in arms:
-                                if family != 'delete_at_random':
-                                    continue
-                                ck = (ckey, n_deleted_here, seed)
-                                if ck not in random_cache:
-                                    rs, rrate = random_deletion_scores(
-                                        n_tr, n_deleted_here,
-                                        replicate_seed(seed, level, draw, fold_i,
-                                                       n_tr, n_deleted_here))
-                                    rcleaned = cleaned_training_set(
-                                        cleanup, X_tr_s, y0, rs, rrate,
-                                        is_clf=is_clf, groups=g_tr,
-                                        strength=None, targets=targets)
-                                    if rcleaned is None:
-                                        errors[f'{lvl_key}|{ckey}|{rate_key}|'
-                                               f'{arm}|f{fold_i}|clean'] = (
-                                            'the deletion declined on this pass')
-                                        random_cache[ck] = {}
-                                    else:
-                                        rm = ~np.asarray(rcleaned['keep'],
-                                                         dtype=bool)
-                                        (deleted_acc.setdefault(lvl_key, {})
+                            for detector in detectors:
+                                if detector in nc.NEIGHBOUR_DETECTORS:
+                                    try:
+                                        s_scores = nc.cached_detector_scores(
+                                            dataset_name, X_tr_s, y0,
+                                            is_clf=is_clf, detector=detector,
+                                            groups=g_tr,
+                                            similarity_neighbours=nb_ex,
+                                            similarity_k=kk)
+                                    except Exception as exc:
+                                        errors[f'{lvl_key}|{ckey}|{mname}|'
+                                               f'{detector}|{label}|f{fold_i}|'
+                                               f'detector'] = (
+                                            f'{type(exc).__name__}: {exc}')
+                                        continue
+                                    if s_scores is None:
+                                        continue
+                                    s_scores = np.asarray(s_scores, dtype=float)
+                                    det = detection_scores(cmask, s_scores,
+                                                           condition)
+                                    if det is not None:
+                                        (sim_detection.setdefault(lvl_key, {})
                                          .setdefault(ckey, {})
-                                         .setdefault(f'random_seed{seed}', {})
-                                         .setdefault(rate_key, []).append({
-                                             'molecules_deleted': int(rm.sum()),
-                                             'training_molecules': n_tr,
-                                             'widened_molecules_among_the_deleted':
-                                                 int(np.sum(np.asarray(
-                                                     cmask, dtype=bool) & rm)),
-                                             'widened_molecules': int(
-                                                 np.sum(cmask))}))
-                                        out = {}
-                                        for mname in cell_models:
-                                            s, err = _fit_score(
-                                                model_factories[mname], rcleaned,
-                                                X_va_s, y_val, metric_fn,
-                                                metric_name)
-                                            if s is None:
-                                                errors[
-                                                    f'{lvl_key}|{ckey}|{rate_key}'
-                                                    f'|{arm}|{mname}|f{fold_i}'] = err
-                                            else:
-                                                out[mname] = s
-                                        random_cache[ck] = out
-                                for mname, s in random_cache[ck].items():
-                                    (rate_cell.setdefault(arm, {})
-                                     .setdefault(mname, {})[pass_key]) = s
+                                         .setdefault(mname, {})
+                                         .setdefault(detector, {})
+                                         .setdefault(label, []).append(det))
+                                    only = None
+                                elif detector in today_scores:
+                                    s_scores = today_scores[detector]
+                                    only = TODAY_NEIGHBOUR_CLEANUPS
+                                else:
+                                    continue
+                                sw_cell = {}
+                                _arm_scores(
+                                    sw_cell, detector, s_scores,
+                                    (nb_pl, kk, sset), only, X_tr_s, X_va_s,
+                                    y0, y_val, g_tr, [mname], targets,
+                                    base_score, m_random_cache, lvl_key,
+                                    level, draw, fold_i, ckey, pass_key, n_tr,
+                                    cmask, arms, flag_rates, is_clf,
+                                    model_factories, metric_fn, metric_name,
+                                    errors, None)
+                                for rate in flag_rates:
+                                    _rows_for_rate(
+                                        rows, sw_cell.get(f'{rate:g}', {}),
+                                        arms, detector, rate,
+                                        lambda d, c, _l=label: _l, space,
+                                        [mname], base_score, clean_score,
+                                        condition, level, draw, fold_i,
+                                        pass_key)
+                                _controls_for(
+                                    rows, detector, s_scores,
+                                    (nb_pl, kk, sset), only, X_tr_s, X_va_s,
+                                    y0, y_val, g_tr, [mname], targets,
+                                    base_score, clean_score, arms, flag_rates,
+                                    is_clf, model_factories, metric_fn,
+                                    metric_name,
+                                    lambda d, c, _l=label: _l, space,
+                                    condition, level, draw, fold_i, errors,
+                                    lvl_key, ckey)
 
+            # The pass is finished: its rows to disk, then the accumulators
+            # to the checkpoint, so a kill between the two reruns the pass and
+            # writes no row twice.
+            rows.flush()
+            done_passes.add(pass_key)
+            _save_state()
             print(f"    level {lvl_key} draw {draw} fold {fold_i} done "
                   f"[{time.time() - t0:.0f}s]")
 
@@ -986,7 +1366,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['summary'] = convert_numpy(_summarise(
         acc, arms, downstream_models, metric_name, lower_is_better, seeds,
         results['detection']))
+    # The similarity sweep's detection readings, averaged over the passes of
+    # a level as `detection` is, and the spaces that could not be built
+    # (2026-09-25).
+    results['similarity_sweep']['detection'] = convert_numpy({
+        lvl: {mk: {m: {d: {lab: _mean_detection(rs)
+                           for lab, rs in by_lab.items()}
+                       for d, by_lab in by_d.items()}
+                   for m, by_d in by_m.items()}
+              for mk, by_m in by_mk.items()}
+        for lvl, by_mk in sim_detection.items()})
+    results['similarity_sweep']['spaces_unavailable'] = sim_unavailable
+    results['rows'] = rows.summary()
+    results['controls_run'] = bool(controls_enabled())
     _print_summary(results, metric_name)
+    print(f"  D-versus-D' rows: {rows.n_written} written this run to "
+          f"{rows.path or 'memory'}")
+    ckpt.clear()
     return results
 
 

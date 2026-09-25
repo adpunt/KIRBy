@@ -136,6 +136,16 @@ from experiments.noise.noise_helpers import (
 )
 from experiments.noise.n07_remediation import _predict_for_metric
 from kirby.utils.noisy_labels import oof_predict
+# The D-versus-D' rows, per-pass checkpoint, cached builds and controls shared
+# by n32-n41 (n32's shared block, 2026-09-25).
+from experiments.noise.n32_iterative_and_dual_selection import (
+    downstream_model_list, fit_predict_cached, scaled_base_cells,
+    cached_hybrid, ledger_signature, PassLedger, restart_flag, arm_rows,
+    arm_result, control_twins, twin_scores, controls_enabled, replicate_seed,
+    _nc,
+)
+
+EXP_ID = 'n34_group_random_effects'
 
 GROUPED_CONDITIONS = ('grouped_shifted', 'grouped_wider')
 # The level-0.0 pass is stored under this name: nothing is injected, so it is
@@ -300,12 +310,24 @@ def offset_recovery(offset_rows, y_noisy, y_clean, g):
 
 
 def recovery_share(clean, noisy, arm, lower_is_better):
-    """(share, None) or (None, why). n30's rule."""
+    """(share, None) or (None, why). n30's rule (n30:341-352).
+
+    The gap is signed by the metric: positive when the noise made the score
+    worse. Until 2026-09-25 this refused only on abs(gap), so a level where
+    the noise IMPROVED the score passed the floor with a negative gap, and the
+    share came out with its sign flipped -- a method that moved the score
+    toward clean read as recovering a negative share. It now refuses whenever
+    the gap is under the floor, negative gaps included, as n30 (n30:348) and
+    n32 do. n39 imports this function and gets the same rule."""
     vals = (clean, noisy, arm)
     if not all(np.isfinite(v) for v in vals):
         return None, 'a mean is not finite'
     gap = (noisy - clean) if lower_is_better else (clean - noisy)
-    if abs(gap) < GAP_MIN_FRAC * max(abs(clean), 1e-12):
+    floor = GAP_MIN_FRAC * max(abs(clean), 1e-12)
+    if gap < floor:
+        if gap < 0:
+            return None, (f'the noise improved the score: the clean-to-noisy '
+                          f'gap is {gap:+.4g}, so there is nothing to recover')
         return None, (f'the clean-to-noisy gap {gap:+.4g} is under '
                       f'{GAP_MIN_FRAC:.0%} of the clean score')
     got = (noisy - arm) if lower_is_better else (arm - noisy)
@@ -342,8 +364,11 @@ def _passes(dataset_name, conditions, levels=None, draws=None):
     return out
 
 
-def run(data, config, output_dir, dataset_name, **kwargs):
-    """N34: group mean subtraction against a shrunk random intercept."""
+def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
+    """N34: group mean subtraction against a shrunk random intercept.
+
+    force_rerun (run_dataset.py --force-rerun, via run_all) sets aside the
+    rows file and the per-pass checkpoint and recomputes every pass."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N34: SCAFFOLD-GROUP OFFSETS -- MEAN OR RANDOM INTERCEPT")
     print("=" * 70)
@@ -376,8 +401,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     oof_splits = int(kwargs.get('oof_splits', OOF_SPLITS))
     em_max_rounds = int(kwargs.get('em_max_rounds', EM_MAX_ROUNDS))
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     downstream_models = [m for m in downstream_models if m in model_factories]
@@ -428,6 +452,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'claim_scope': (
             'The grouped noise is injected; the none pass is the real labels. '
             'Every number is confined to this dataset.'),
+        'similarity_note': ('n34 finds no neighbours, so it has no similarity '
+                            'axis; its rows carry model_input|none|process.'),
+        'controls_run': controls_enabled(),
     }
 
     splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
@@ -520,6 +547,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     acc, tails, group_rec = {}, {}, {}
     errors = {}
     t0 = time.time()
+    metric = (metric_name, metric_fn, lower_is_better)
+    # Rows and the per-pass checkpoint, 2026-09-25 (n32's PassLedger). The
+    # file stem matches main()'s result suffix: the named condition, or
+    # 'grouped' for both.
+    ledger = PassLedger(output_dir, EXP_ID, dataset_name,
+                        condition or 'grouped',
+                        signature=ledger_signature(data, config, results,
+                                                   splits),
+                        restart=bool(force_rerun) or restart_flag(kwargs))
+    if ledger.restored():
+        st = ledger.restored()
+        acc, tails, group_rec, errors = (st['acc'], st['tails'],
+                                         st['group_rec'], st['errors'])
+        print(f"  resumed {len(ledger.passes_done)} finished passes")
 
     for cond, level, draw in passes:
         lvl_key = f'{level:g}'
@@ -532,6 +573,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for fold_i, (train_idx, val_idx) in enumerate(splits):
             pass_key = f'd{draw}f{fold_i}'
+            ledger_key = f'{cond}|{lvl_key}|{pass_key}'
+            if ledger.pass_done(ledger_key):
+                continue
+            pass_rows = []
             y_val = labels[val_idx]
             y_clean_tr = labels[train_idx]
             g_tr = groups[train_idx] if groups is not None else None
@@ -571,17 +616,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             fold_spaces = {}
             # Each single-representation space holds one matrix per distinct
             # representation at that rank, shared by the models that rank it
-            # there.
+            # there. Standardised once per fold through noise_cache
+            # (2026-09-25).
             for _k, _bsp in enumerate(BASE_SPACES, start=1):
                 if _bsp not in spaces:
                     continue
-                _bcells = []
-                for _rn, _ms in base_rank_groups(base_by_model, _k,
-                                                 downstream_models).items():
-                    sc = StandardScaler()
-                    _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                    sc.transform(val_reps[_rn]), list(_ms)))
-                fold_spaces[_bsp] = _bcells
+                fold_spaces[_bsp] = scaled_base_cells(
+                    dataset_name, reps, train_idx, val_idx, base_by_model, _k,
+                    downstream_models)
             for _sp in spaces:
                 if _sp in BASE_SPACES:
                     continue
@@ -589,11 +631,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, y0, _bp_m, g_tr,
-                        None if _shareable
-                        else model_factories[_mnames[0]](),
-                        metric_fn, lower_is_better)
+                    # Cached per (fold, recipe, labels), 2026-09-25.
+                    X_tr_h, X_va_h = cached_hybrid(
+                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        _mnames[0], model_factories, metric, train_idx,
+                        _shareable)
                     if X_tr_h is None:
                         errors[f'{cond}|{lvl_key}|{_sp}/{_mnames[0]}|'
                                f'd{draw}f{fold_i}|build'] = (
@@ -611,8 +653,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              else f'{space}/{cell_models[0]}')
                     space_cell = cell.setdefault(space, {})
                     tspace = tcell.setdefault(space, {})
-                    oof_fn = (lambda X, y, _g=g_tr: oof_predict(
-                        X, y, _g if _g is not None else np.arange(len(y)),
+                    # Cached on the label hash (2026-09-25): the first call
+                    # is the plain out-of-fold p n30-n33 compute for the
+                    # draw; each EM round's labels have their own entry.
+                    oof_fn = (lambda X, y, _g=g_tr: _nc.cached_oof_predict(
+                        dataset_name, X, y,
+                        _g if _g is not None else np.arange(len(y)),
                         n_splits=oof_splits))
                     cols = {'clean': y_clean_tr, 'none': y0}
                     sp_rec = {}
@@ -645,12 +691,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                f'offsets'] = f'{type(exc).__name__}: {exc}'
                     rec['per_space'][_ekey] = sp_rec
 
+                    pass_scores = {}
                     for arm in ARMS:
                         if arm not in cols:
                             continue
                         for mname in cell_models:
                             try:
-                                pred = _fit_predict(
+                                # Through noise_cache for a seeded model
+                                # (2026-09-25); the same prediction.
+                                pred = fit_predict_cached(
+                                    dataset_name, mname,
                                     model_factories[mname], X_tr_s, cols[arm],
                                     X_va_s, metric_name)
                                 s = float(metric_fn(y_val, pred))
@@ -661,11 +711,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 continue
                             (space_cell.setdefault(arm, {})
                              .setdefault(mname, {})[pass_key]) = s
+                            pass_scores.setdefault(arm, {})[mname] = s
                             (tspace.setdefault(arm, {})
                              .setdefault(mname, {})[pass_key]) = tail_scores(
                                 y_val, pred)
 
+                    # ── Controls (KIRBY_NOISE_CONTROLS=1): every offset arm
+                    # is a label move, twinned by controls.py. ──
+                    for arm in ('group_center', 'group_center_3plus',
+                                'random_intercept'):
+                        if arm not in cols:
+                            continue
+                        twins = control_twins(
+                            arm_result(y0, y=cols[arm]), X_tr_s, y0,
+                            (replicate_seed(arm, cond), draw, fold_i,
+                             int(round(level * 1000))))
+                        for tw, by_m in twin_scores(
+                                dataset_name, twins, model_factories,
+                                cell_models, X_va_s, y_val, metric).items():
+                            pass_scores[f'{arm}|{tw}'] = by_m
+                    # ── D against D': `none` is D, each offset arm a D'. ──
+                    pass_rows += arm_rows(
+                        dataset_name=dataset_name, exp_id=EXP_ID,
+                        metric=metric, condition=cond, level=level, draw=draw,
+                        fold=fold_i, model_input=_ekey,
+                        scores_by_arm=pass_scores, reference=ARM_TO_BEAT)
+
             group_rec.setdefault(cond, {}).setdefault(lvl_key, []).append(rec)
+            ledger.add_rows(pass_rows)
+            ledger.finish_pass(ledger_key, {'acc': acc, 'tails': tails,
+                                            'group_rec': group_rec,
+                                            'errors': errors})
             print(f"    {cond} {lvl_key} d{draw} fold {fold_i}: "
                   f"{rec['training_groups']} groups, {rec['groups_of_one']} of "
                   f"one, median size {rec['median_group_size']:g} "
@@ -674,6 +750,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['per_condition'] = convert_numpy(acc)
     results['tail_per_condition'] = convert_numpy(tails)
     results['groups_per_pass'] = convert_numpy(group_rec)
+    results['d_vs_dprime'] = ledger.describe()
     if errors:
         results['_errors'] = errors
     results['summary'] = convert_numpy(_summarise(
@@ -814,7 +891,7 @@ def main():
     suffix = kw.get('noise_condition') or 'grouped'
     if args.tag:
         suffix = f'{suffix}_{args.tag}'
-    save_experiment_results(res, args.output, 'n34_group_random_effects',
+    save_experiment_results(res, args.output, EXP_ID,
                             args.dataset, filename_suffix=suffix)
 
 

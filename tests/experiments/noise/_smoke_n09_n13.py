@@ -34,6 +34,18 @@ for _v in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
            'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS'):
     os.environ.setdefault(_v, '1')
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+# 2026-09-25: the noise experiments sweep every similarity setting by default
+# (KIRBY_SIMILARITY_SETTINGS unset = all 66, plan section 1). This smoke checks
+# what each run() computed before that axis existed, so it runs today's
+# setting alone, and it writes its caches under a temporary directory, never
+# the real KIRBY_CACHE_DIR.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+import tempfile as _tempfile
+os.environ['KIRBY_CACHE_DIR'] = _tempfile.mkdtemp(prefix='kirby_smoke_cache_')
+# Output of the run() calls below. It was '/tmp'; since 2026-09-25 run()
+# writes rows and a resume checkpoint there, which a later smoke would read
+# back, so each smoke run gets its own directory.
+_OUT = _tempfile.mkdtemp(prefix='kirby_smoke_out_')
 
 import sys
 import warnings
@@ -287,7 +299,7 @@ def test_n09_base_reps_are_top_two_for_the_dnn():
     n09.get_best_search_for_downstream = _lookup
     n09.find_best_hybrid = _no_search
     r = n09._run_one_condition(
-        data, {'n_splits': 2}, '/tmp', 'qm9', noise_condition='gaussian',
+        data, {'n_splits': 2}, _OUT, 'qm9', noise_condition='gaussian',
         sigmas=[0.0, 0.5], noise_seeds=[0], methods=['small_loss'])
     assert r['base_reps_by_model'] == {'dnn': ['aaa', 'bbb']}, \
         f"expected the DNN's top 2 (aaa, bbb), got {r['base_reps_by_model']}"
@@ -314,7 +326,7 @@ def test_n09_base_reps_are_top_two_for_the_dnn():
 
     # A caller-given list overrides the ranking.
     r2 = n09._run_one_condition(
-        data, {'n_splits': 2}, '/tmp', 'qm9', noise_condition='gaussian',
+        data, {'n_splits': 2}, _OUT, 'qm9', noise_condition='gaussian',
         sigmas=[0.0, 0.5], noise_seeds=[0], methods=['small_loss'],
         base_reps={'dnn': ['ccc']})
     assert r2['base_reps_by_model'] == {'dnn': ['ccc']}
@@ -362,7 +374,7 @@ def test_n13_single_reps_per_model_and_track_a_for_the_dnn():
     n13.ESTIMATORS = ['local_variance_ratio']
     n13.LNL_EPOCHS = 5
     n13.NOISE_SEEDS = [0]
-    r = n13.run(data, {'n_splits': 2, 'models': ['rf']}, '/tmp', 'qm9',
+    r = n13.run(data, {'n_splits': 2, 'models': ['rf']}, _OUT, 'qm9',
                 noise_types=['gaussian'], strengths=[0.5])
     assert 'error' not in r, r.get('error')
     assert r['base_reps_by_model'] == {'rf': ['aaa', 'bbb'],

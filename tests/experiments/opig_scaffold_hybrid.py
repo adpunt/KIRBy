@@ -279,6 +279,9 @@ def main():
     ap.add_argument('--smoke', action='store_true',
                     help='cheap fast reps only, for local plumbing checks')
     ap.add_argument('--output-dir', default=os.path.join(HERE, 'results'))
+    ap.add_argument('--force-rerun', action='store_true',
+                    help='Recompute datasets an earlier attempt finished '
+                         '(opig_scaffold_hybrid_summary.partial.jsonl).')
     ap = add_distance_metric_arg(ap)
     args = ap.parse_args()
 
@@ -297,7 +300,60 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     summaries, t0 = [], time.time()
 
+    # Each dataset's block is also written to
+    # opig_scaffold_hybrid_summary.partial.jsonl when it finishes and read back
+    # on the next attempt (2026-09-25; experiments/_checkpoint.py). The
+    # per-dataset JSON was already written as each dataset finished, but one
+    # dataset that raised ended the loop, so the datasets after it never ran
+    # and the summary was never written. A dataset that raises is now recorded,
+    # the loop moves on, and the script exits 1 after the summary is written.
+    from experiments._checkpoint import script_checkpoint, exit_if_failed
+    _ck = script_checkpoint(
+        'opig_scaffold_hybrid',
+        os.path.join(args.output_dir, 'opig_scaffold_hybrid_summary.json'),
+        args, exclude=('datasets', 'output_dir'))
+    _failed = []
+
     for ds in args.datasets:
+        if _ck.done(dataset=ds):
+            block = _ck.get(dataset=ds)
+            summaries.append(summarise_one(ds, block))
+            print(f'  {ds}: finished in an earlier attempt, read back',
+                  flush=True)
+            continue
+        try:
+            block = _run_one_dataset(ds, args, override, config, budgets, t0)
+        except Exception as e:
+            import traceback
+            print(f'  {ds} FAILED: {type(e).__name__}: {e}', flush=True)
+            traceback.print_exc()
+            _failed.append(ds)
+            continue
+        if not _ck.put(block, dataset=ds):
+            # Not storable as-is: store the JSON form written to disk instead.
+            _ck.put(json.loads(json.dumps(block, default=_json_default)),
+                    dataset=ds)
+        summaries.append(summarise_one(ds, block))
+
+    print_summary(summaries)
+    spath = os.path.join(args.output_dir, 'opig_scaffold_hybrid_summary.json')
+    with open(spath, 'w') as f:
+        json.dump(summaries, f, indent=1, default=str)
+    print(f'\nwrote {spath}')
+    exit_if_failed(_failed, 'dataset')
+
+
+def _json_default(o):
+    return (o.item() if isinstance(o, (np.floating, np.integer))
+            else o.tolist() if isinstance(o, np.ndarray) else str(o))
+
+
+def _run_one_dataset(ds, args, override, config, budgets, t0):
+    """One dataset: build the pool, run the nested CV, write its JSON.
+    Moved out of main() unchanged on 2026-09-25 so main() can catch a failure
+    per dataset."""
+    from experiments._shared import load_data, run_nested_cv
+    if True:
         pool = base_pool_for(ds, override)
         print(f'\n=== {ds} | base pool = {len(pool)} reps + '
               f'{len(SCAFFOLD_REPS)} scaffold ({time.time()-t0:.0f}s) ===', flush=True)
@@ -323,17 +379,9 @@ def main():
 
         out_path = os.path.join(args.output_dir, f'opig_scaffold_hybrid_{ds}.json')
         with open(out_path, 'w') as f:
-            json.dump(block, f, indent=1, default=lambda o: (
-                o.item() if isinstance(o, (np.floating, np.integer))
-                else o.tolist() if isinstance(o, np.ndarray) else str(o)))
-        summaries.append(summarise_one(ds, block))
+            json.dump(block, f, indent=1, default=_json_default)
         print(f'  wrote {out_path} ({time.time()-t0:.0f}s)', flush=True)
-
-    print_summary(summaries)
-    spath = os.path.join(args.output_dir, 'opig_scaffold_hybrid_summary.json')
-    with open(spath, 'w') as f:
-        json.dump(summaries, f, indent=1, default=str)
-    print(f'\nwrote {spath}')
+    return block
 
 
 if __name__ == '__main__':

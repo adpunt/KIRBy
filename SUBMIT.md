@@ -2,6 +2,43 @@
 
 Written 2026-09-17 because we were not working from the same picture.
 
+**2026-09-25: the four stages (prelim noise, trials, full suite, full noise)
+are in `tests/slurm_scripts/runbook/README.md`, with one script each.** This
+page is still how the precompute chain and `submit_everything.sh` work.
+
+---
+
+## Which cluster and which account
+
+Fair share is kept per cluster AND per account. Measured 2026-09-24, higher
+starts sooner:
+
+| cluster | account | FairShare |
+|---|---|--:|
+| htc | stat-cadd | 0.0491 |
+| htc | stat-ecr | 0.0360 |
+| arc | stat-cadd | 0.0326 |
+| arc | stat-ecr | 0.0195 |
+
+The `/data/stat-ecr` paths are a filesystem and have nothing to do with which
+account is billed. `submit_dataset.sh` no longer names an account in its
+header; until 2026-09-25 it named stat-ecr, the lowest of the four.
+
+`submit_everything.sh` run with no flags submits to the login node's cluster
+and bills the account `where_to_submit.sh --emit` picks, which compares the
+accounts on that one cluster only. To use the best pair across both clusters:
+
+```bash
+sshare -M arc,htc -u $USER -o Cluster,Account,User,FairShare     # re-measure
+read CL ACCT < <(bash tests/slurm_scripts/where_to_submit.sh --best-cluster-account)
+bash tests/slurm_scripts/submit_everything.sh --clusters "$CL" --account "$ACCT" --dry-run
+```
+
+A dependency cannot cross clusters: a job on htc cannot wait for a precompute
+job on arc. `submit_everything.sh` skips a dataset whose precompute is queued on
+the other cluster when it queues precompute; `runbook/stage3_full.sh` gates the
+experiment-only submission on `tests/tools/precompute_status.py` instead.
+
 ---
 
 ## The one command
@@ -59,6 +96,13 @@ Everything that copy then *invokes* is read from disk at run time. So:
 | any experiment file (`n07.py`, `c11.py`, …) | **yes** |
 | `precompute_hybrids.py`, `find_best_hybrid.py`, `_shared.py` | **yes** |
 | `run_precompute_dataset.sh`, `submit_dataset.sh` | **no** — resubmit to change those |
+
+`submit_dataset.sh` changed on 2026-09-25: each experiment runs in its own
+python process, so one segfault or out-of-memory kill no longer ends the rest;
+each experiment's exit code goes to `<output>/_job_summaries/<jobid>.tsv`; the
+defaults are 8 CPUs, 64G, 47:59:00, partition medium (were 32, 128G, 7 days,
+long); `KIRBY_SKIP_INSTALLS=1` and `KIRBY_LGBM_THREADS=1` by default. Jobs
+queued before that run the old copy.
 
 Adding or dropping an experiment therefore needs no resubmission. Changing which
 passes or which speed a precompute job uses does.

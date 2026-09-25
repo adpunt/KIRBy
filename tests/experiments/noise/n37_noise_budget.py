@@ -131,6 +131,15 @@ from experiments.noise.n26_noise_variance_from_repeats import (
     measurements_by_molecule, direct_noise_variance,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
+# The per-fold checkpoint, cached builds and the similarity axis shared by
+# n32-n41 (n32's shared block, 2026-09-25). n37 changes no label, so it writes
+# no D-versus-D' rows: SIMEX adds noise to measure sensitivity, it mitigates
+# nothing.
+from experiments.noise.n32_iterative_and_dual_selection import (
+    downstream_model_list, fit_predict_cached, cached_hybrid,
+    ledger_signature, PassLedger, restart_flag, sweep_settings, sweep_ks,
+    is_model_input, fold_similarity, setting_models, similarity_key, _nc, _ss,
+)
 
 EXP_ID = 'n37_noise_budget'
 # The only injected condition, for the check.
@@ -275,8 +284,20 @@ def _molecule_count_and_spread(labels, rep_groups):
 # The run
 # ---------------------------------------------------------------------------
 
-def run(data, config, output_dir, dataset_name, **kwargs):
-    """N37: the label-noise share of the model's error, on clean labels."""
+def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
+    """N37: the label-noise share of the model's error, on clean labels.
+
+    force_rerun (run_dataset.py --force-rerun, via run_all) sets aside the
+    per-fold checkpoint and recomputes every fold.
+
+    THE SIMILARITY AXIS, added 2026-09-25 (plan section 1). The Gamma test
+    reads each molecule's nearest neighbours. Today's intercepts (Tanimoto or
+    Euclidean on the fold-standardised matrix, the forest on the reference
+    representation) are the model_input setting at k_max and keep their keys.
+    Every other (setting, k) of the sweep writes the intercept of that
+    setting's full training distance under
+    '<space key>@<setting>|k<k>[|<model>]', k taking the place of k_max. The
+    check and SIMEX still read today's reference intercept."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N37: NOISE BUDGET")
     print("=" * 70)
@@ -301,8 +322,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                          else kwargs['simex_draws']))
     k_max = int(kwargs.get('k_max') or K_MAX)
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     downstream_models = [m for m in downstream_models if m in model_factories]
@@ -347,6 +367,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'no_pruning_note': ('the report proposes stopping noise work where the '
                             'noise share is under 0.1; that rule is not applied '
                             'here, the share is written.'),
+        'similarity_settings': [st.name for st in sweep_settings()],
+        'similarity_ks': list(sweep_ks(k_max)),
+        'similarity_note': (
+            'gamma[<space key>] is today\'s intercept (model_input at k_max). '
+            'gamma[<space key>@<setting>|k<k>] is the intercept in that '
+            'setting\'s distance with k neighbours, k in place of k_max.'),
     }
     if rep_groups is not None:
         results['repeat_noise_variance_whole_dataset'] = direct_noise_variance(
@@ -473,8 +499,45 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     oof = {}
     errors = {}
     t0 = time.time()
+    metric = (metric_name, metric_fn, lower_is_better)
+    sim_settings = sweep_settings()
+    sim_ks = sweep_ks(k_max)
+    # The per-fold checkpoint, 2026-09-25 (n32's PassLedger; no rows).
+    ledger = PassLedger(output_dir, EXP_ID, dataset_name, kwargs.get('tag'),
+                        signature=ledger_signature(data, config, results,
+                                                   splits),
+                        restart=bool(force_rerun) or restart_flag(kwargs))
+    if ledger.restored():
+        st_ = ledger.restored()
+        per_fold, oof, errors = st_['per_fold'], st_['oof'], st_['errors']
+        print(f"  resumed {len(ledger.passes_done)} finished folds")
+
+    def _sim_gamma(frec, key, X_cell, cell_models, fsim, today_D):
+        """Gamma intercepts of one cell under every (setting, k) but today's."""
+        for setting in sim_settings:
+            for model in setting_models(setting, cell_models):
+                try:
+                    if is_model_input(setting):
+                        D = today_D
+                    else:
+                        D, why = fsim.full_distance(setting, model, X_cell)
+                        if D is None:
+                            frec['gamma'][f'{key}@{setting.name}'] = {
+                                'unavailable': why}
+                            continue
+                    for k in sim_ks:
+                        sfx = similarity_key(setting, k, model, today_k=k_max,
+                                             per_model=len(cell_models) > 1)
+                        if not sfx:
+                            continue    # today's intercept, already written
+                        frec['gamma'][f'{key}{sfx}'] = gamma_test(D, y_tr, k)
+                except Exception as exc:
+                    errors[f'f{fold_i}|{key}@{setting.name}|{model}'] = (
+                        f'{type(exc).__name__}: {exc}')
 
     for fold_i, (train_idx, val_idx) in enumerate(splits):
+        if ledger.pass_done(f'f{fold_i}'):
+            continue
         y_tr = labels[train_idx]
         y_va = labels[val_idx]
         g_tr = groups[train_idx] if groups is not None else None
@@ -498,6 +561,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         val_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
                     for k, v in reps.items()}
 
+        # The similarity spaces of this fold, from the clean training labels
+        # (plan section 1, 2026-09-25).
+        fsim = fold_similarity(
+            dataset_name, data, reps=reps, train_idx=train_idx,
+            val_idx=val_idx, y_train=y_tr, groups_train=g_tr,
+            base_by_model=base_by_model,
+            recipe_for_space_by_model=recipe_for_space_by_model,
+            model_factories=model_factories, metric=metric,
+            task_type=task_type)
+
         # {space_key: (X_tr, X_va, models)}
         cells = {}
         # The single-representation cells, each with its own Gamma intercept.
@@ -506,12 +579,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         Db = Xref_tr = None
         for _sp in base_spaces:
             for _key, _rn, _ms in base_cells[_sp]:
-                sc = StandardScaler()
-                Xb_tr = sc.fit_transform(train_reps[_rn])
-                Xb_va = sc.transform(val_reps[_rn])
+                # Standardised once per fold through noise_cache
+                # (2026-09-25); the same float64 values.
+                Xb_tr, Xb_va = _nc.cached_scaled(dataset_name, reps[_rn],
+                                                 train_idx, val_idx,
+                                                 dtype=np.float64)
                 _D = (tanimoto_distance_matrix(train_reps[_rn])
                       if base_binary[_rn] else euclidean_distance_matrix(Xb_tr))
                 frec['gamma'][_key] = gamma_test(_D, y_tr, k_max)
+                _sim_gamma(frec, _key, Xb_tr, list(_ms), fsim, _D)
                 cells[_key] = (Xb_tr, Xb_va, list(_ms))
                 if _key == ref_key:
                     Db, Xref_tr = _D, Xb_tr
@@ -551,9 +627,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             else:
                 try:
                     from kirby.utils.noise_estimation import (
-                        forest_leaf_ids, forest_proximity_distance)
-                    Dp = forest_proximity_distance(
-                        forest_leaf_ids(Xref_tr, y_tr, False))
+                        forest_proximity_distance)
+                    # Leaf ids through noise_cache (2026-09-25): the same
+                    # forest forest_leaf_ids fits.
+                    Dp = forest_proximity_distance(_nc.cached_forest_leaf_ids(
+                        dataset_name, Xref_tr, y_tr, False)[0])
                     frec['gamma'][PROXIMITY_SPACE] = gamma_test(Dp, y_tr, k_max)
                     del Dp
                 except Exception as exc:
@@ -566,10 +644,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for _bp_m, _mnames, _shareable in group_models_by_recipe(
                     {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                      for _m in downstream_models}, downstream_models):
-                X_tr_h, X_va_h = hybrid_for_fold(
-                    train_reps, val_reps, y_tr, _bp_m, g_tr,
-                    None if _shareable else model_factories[_mnames[0]](),
-                    metric_fn, lower_is_better)
+                # Cached per (fold, recipe, labels), 2026-09-25.
+                X_tr_h, X_va_h = cached_hybrid(
+                    dataset_name, train_reps, val_reps, y_tr, _bp_m, g_tr,
+                    _mnames[0], model_factories, metric, train_idx, _shareable)
                 _key = (_sp if list(_mnames) == list(downstream_models)
                         else f'{_sp}/{_mnames[0]}')
                 if X_tr_h is None:
@@ -579,15 +657,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 sh = StandardScaler()
                 Xh_tr = sh.fit_transform(X_tr_h)
                 Xh_va = sh.transform(X_va_h)
-                frec['gamma'][_key] = gamma_test(
-                    euclidean_distance_matrix(Xh_tr), y_tr, k_max)
+                _Dh = euclidean_distance_matrix(Xh_tr)
+                frec['gamma'][_key] = gamma_test(_Dh, y_tr, k_max)
+                _sim_gamma(frec, _key, Xh_tr, list(_mnames), fsim, _Dh)
+                del _Dh
                 cells[_key] = (Xh_tr, Xh_va, list(_mnames))
 
         for key, (X_tr_s, X_va_s, cell_models) in cells.items():
             for mname in cell_models:
                 fac = model_factories[mname]
                 try:
-                    pred = _fit_predict(fac, X_tr_s, y_tr, X_va_s, metric_name)
+                    # Through noise_cache for a seeded model (2026-09-25).
+                    pred = np.asarray(fit_predict_cached(
+                        dataset_name, mname, fac, X_tr_s, y_tr, X_va_s,
+                        metric_name), dtype=float)
                 except Exception as exc:
                     errors[f'f{fold_i}|{key}|{mname}|fit'] = (
                         f'{type(exc).__name__}: {exc}')
@@ -626,8 +709,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             y_x = y_tr + rng.normal(size=n_tr) * np.sqrt(
                                 lam * s2_base)
                             try:
-                                p_x = _fit_predict(fac, X_tr_s, y_x, X_va_s,
-                                                   metric_name)
+                                p_x = np.asarray(fit_predict_cached(
+                                    dataset_name, mname, fac, X_tr_s, y_x,
+                                    X_va_s, metric_name), dtype=float)
                             except Exception as exc:
                                 errors[f'f{fold_i}|{key}|{mname}|simex|'
                                        f'{lam:g}|d{d}'] = (
@@ -647,12 +731,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     frec['simex'].setdefault(key, {})[mname] = ex
 
         per_fold.append(frec)
+        ledger.finish_pass(f'f{fold_i}', {'per_fold': per_fold, 'oof': oof,
+                                          'errors': errors})
         gb = (frec['gamma'].get(ref_key) if ref_key else None) or {}
         print(f"    fold {fold_i}: {n_tr} training rows, reference Gamma intercept "
               f"{gb.get('intercept', float('nan')):.4f} (label variance "
               f"{gb.get('var_y', float('nan')):.4f}) [{time.time() - t0:.0f}s]")
 
     results['per_fold'] = convert_numpy(per_fold)
+    results['checkpoint'] = ledger.describe()
 
     # Out-of-fold residuals: every held-out molecule once.
     oof_block = {}

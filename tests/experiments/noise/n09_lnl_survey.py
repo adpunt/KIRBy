@@ -399,6 +399,51 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     }
     _recipe_sources = results['recipe_sources']
 
+    # ── Checkpoint and the similarity axis, added 2026-09-25 ──────────────
+    # Plan sections 1-3. Each (level, fold, draw) pass is written as it
+    # finishes and read back on resume; see the pass below.
+    #
+    # distance_selection finds neighbours and drops training molecules, so it
+    # is swept over every similarity setting and k and its kept rows are
+    # written as D-versus-D' rows (see the pass).
+    #
+    # TODO(similarity-sweep 2026-09-25): the other eleven methods change how
+    # the DNN trains, not the training set, so there is no D' to fit RF and
+    # SVM on and they write no rows. small_loss and confident_learning do
+    # drop molecules but do not return which; mentornet reads a neighbour
+    # list but carves its checkpoint-selection rows out of X_train first
+    # (lnl_methods.py, MentorNet.train_and_predict), so a list over the
+    # training fold no longer lines up and it is not swept. Each needs a
+    # decision on what its D' is.
+    from experiments.noise.n07_remediation import (
+        FoldCheckpoint, similarity_record, sweep_settings, sweep_ks, RowSink,
+        sweep_context, similarity_sweep)
+    sim_settings = sweep_settings()
+    sim_sink = RowSink(output_dir, 'n09_lnl_survey', dataset_name,
+                       kwargs.get('noise_condition'))
+    sim_ctx = sweep_context(
+        experiment='n09_lnl_survey', dataset_name=dataset_name, sink=sim_sink,
+        settings=sim_settings, metric=(metric_name, metric_fn,
+                                       lower_is_better),
+        task_type=task_type, condition=noise_condition, level=None, data=data,
+        factories=get_model_factories(['rf', 'svm', 'dnn'],
+                                      task_type=task_type,
+                                      n_samples=len(labels)))
+    # The DNN's similarity spaces: its top-2 single representations and the
+    # clean-pool recipe, as every other noise experiment reads them.
+    sim_base = [rn for _k, rn in base_ranks]
+    sim_recipes = {'hybrid': (bp, (meta or {}).get('aug_condition',
+                                                    'uncapped'))}
+    _ds_by_sim = {}
+    from experiments._shared import input_fingerprint
+    ckpt = FoldCheckpoint(output_dir, 'n09_lnl_survey', dataset_name,
+                          condition=kwargs.get('noise_condition'),
+                          tag='passes', fingerprint={
+                              'input': input_fingerprint(data, config),
+                              'noise_condition': noise_condition,
+                              'methods': list(methods_to_test),
+                              'base_ranks': [list(x) for x in base_ranks]})
+
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
@@ -460,6 +505,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         _passes = [(_fi + 1, _tr, _va, _ns)
                    for _fi, (_tr, _va) in enumerate(_splits)
                    for _ns in _seeds]
+        _outer_results = sigma_results
         for fold_idx, train_idx, val_idx, noise_seed in _passes:
             y_train_clean = labels[train_idx]
             y_val = labels[val_idx]
@@ -473,285 +519,406 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 groups=noise_groups, dataset_name=dataset_name)
             noise_provenance.setdefault(_spec.spec_id, _prov)
 
-            # The single-representation features, one pair per rank, each
-            # scaled on this fold's training molecules.
-            X_base_by_key = {}
-            for (_k, _rn), _bk in zip(base_ranks, base_keys):
-                scaler_base = StandardScaler()
-                X_base_by_key[_bk] = (
-                    scaler_base.fit_transform(reps[_rn][train_idx]),
-                    scaler_base.transform(reps[_rn][val_idx]))
+            # ── One (level, fold, draw) pass, checkpointed. 2026-09-25 ──
+            # n09 changes no training data (its methods change how the network
+            # trains), so it writes no D-versus-D' rows; each pass is instead
+            # written to a checkpoint as it finishes and read back on resume
+            # (n07.FoldCheckpoint). The body below is the pass as it was; it
+            # writes into pass-local copies of the accumulators, which are
+            # then appended to the level's in the same order as before, so the
+            # means are the same numbers whether a pass ran or was read back.
+            def _one_pass(fold_idx=fold_idx, train_idx=train_idx,
+                          val_idx=val_idx, noise_seed=noise_seed,
+                          y_train=y_train, y_val=y_val, _cmask=_cmask):
+                sigma_results = {k: ([] if not isinstance(v, dict) else
+                                     {m: [] for m in v})
+                                 for k, v in _outer_results.items()}
+                sigma_folds = {k: ([] if not isinstance(v, dict) else
+                                   {m: [] for m in v})
+                               for k, v in _outer_results.items()}
+                sigma_draws = {k: ([] if not isinstance(v, dict) else
+                                   {m: [] for m in v})
+                               for k, v in _outer_results.items()}
+                detection_acc = {}
+                _recipe_sources = []
 
-            # Build hybrid features by running a fresh feature-mix search on
-            # the NOISY training labels (matching the c06 per-variant pattern).
-            # The pool blueprint `bp` above was fit on clean labels, which
-            # would give the LNL methods a feature mix chosen with oracle
-            # access to ground truth. Refitting per (noise level, fold) on
-            # noisy labels removes that leak. Uses a reduced budget grid to
-            # keep runtime tractable; downstream model is 'rf' as a
-            # fast proxy for DNN (RF-best and DNN-best feature mixes are
-            # usually well-correlated on tabular molecular features).
-            train_reps = {k: v[train_idx] for k, v in reps.items()}
-            val_reps = {k: v[val_idx] for k, v in reps.items()}
-            try:
-                train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-                val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+                # The single-representation features, one pair per rank, each
+                # scaled on this fold's training molecules.
+                X_base_by_key = {}
+                for (_k, _rn), _bk in zip(base_ranks, base_keys):
+                    scaler_base = StandardScaler()
+                    X_base_by_key[_bk] = (
+                        scaler_base.fit_transform(reps[_rn][train_idx]),
+                        scaler_base.transform(reps[_rn][val_idx]))
 
-                # Run search WITHIN the train fold using noisy labels.
-                # Subset groups (if present) so inner CV stays inside the train fold.
-                train_groups_subset = (groups[train_idx]
-                                       if groups is not None else None)
-                inner_n_folds = max(2, min(3, n_folds))
-                _rf_factory = get_model_factories(
-                    ['rf'], task_type=task_type,
-                    n_samples=len(train_idx))['rf']
-                # THIS SEARCH IS STORED. It used to run with cache=False, so
-                # a second run of the same passes searched again from cold, and
-                # the search is the largest single cost in the file: on
-                # flab_thermo_tresanco at level 0.5, fold 1 of 3, 448 antibodies
-                # trained on, it took 677 seconds, against 3.6 seconds to read
-                # back what a previous call wrote. Writing costs 160 seconds the
-                # first time. Measured 2026-09-21; the stored call and the
-                # unstored call chose the same feature mix and the same inner
-                # score, 0.489755 spearman.
-                #
-                # WHAT KEEPS TWO PASSES APART. The file is named by the fold
-                # index and by a hash of the exact training labels this pass
-                # holds, so the clean pass and the corrupted pass of one fold
-                # never share a file, and neither do two folds whose training
-                # blocks are the same size. Naming it by (level, fold, draw)
-                # instead would give three separate files to the three draws of
-                # level 0.0, which move no label and are the same search.
-                #
-                # find_best_hybrid then content-checks the labels, the
-                # representation names and shapes, the groups, the budgets, the
-                # metric and the seed before it serves anything, and recomputes
-                # on any disagreement. It does NOT check representation VALUES:
-                # a neural embedding is not bit-reproducible across thread
-                # counts, so those hashes are ignored by design, which is why
-                # the fold index is in the name.
-                #
-                # The namespace also separates the per-representation baselines
-                # this search fits. Without one all six passes wrote to the same
-                # baseline filenames, whose names carry no label hash, so each
-                # pass evicted the one before it and none was ever reused.
-                _label_token = hashlib.sha1(
-                    np.ascontiguousarray(y_train).tobytes()).hexdigest()[:12]
-                inner_search = find_best_hybrid(
-                    base_reps={k: v[train_idx] for k, v in reps.items()},
-                    labels=y_train,
-                    groups=train_groups_subset,
-                    models={'rf': _rf_factory()},
-                    budgets=NOISY_SEARCH_BUDGETS,
-                    task_type=task_type,
-                    metric=metric_name,
-                    # Runtime is kept tractable by the reduced
-                    # NOISY_SEARCH_BUDGETS grid and the small inner n_folds.
-                    seed=42 + fold_idx,
-                    n_folds=inner_n_folds,
-                    cache=True,
-                    dataset_name=dataset_name,
-                    tier='n09_noisy_search',
-                    cache_namespace=f'n09search_f{fold_idx}_y{_label_token}',
-                    augmentations=({k: v[train_idx] for k, v in augmentations.items()}
-                                   if augmentations else None),
-                    augmentation_strategy=meta.get('aug_condition', 'uncapped') if meta else 'uncapped',
-                    verbose=False,
-                )
-                # Pick the best blueprint across the reduced budget grid
-                per_budget = inner_search.best_by_model_budget.get('rf', {})
-                _best_bp = None
-                _best_score = float('inf') if lower_is_better else float('-inf')
-                for _budget, _entry in per_budget.items():
-                    if _entry is None:
-                        continue
-                    _score = _entry.get('score_mean', float('nan'))
-                    if np.isnan(_score):
-                        continue
-                    if (lower_is_better and _score < _best_score) or \
-                       (not lower_is_better and _score > _best_score):
-                        _best_score = _score
-                        _best_bp = _entry['blueprint']
-                # The whole point of the inner search is that the recipe is
-                # chosen on the NOISY labels, with no clean-label oracle. When
-                # every budget in the reduced grid scored NaN there is no noisy
-                # recipe, and `bp` -- chosen on the clean labels -- is used
-                # instead. That is a reasonable fallback and a different
-                # measurement, and nothing in the output said which had
-                # happened, so a fold that fell back read as one that did not.
-                inner_bp = _best_bp if _best_bp is not None else bp
-                _recipe_source = 'noisy_search' if _best_bp is not None else 'clean_pool_fallback'
-                # The fold this happened on used to be printed and nowhere in
-                # the saved output: recipe_sources was a bare list of strings,
-                # so a reader could not say WHICH fold fell back, only how many
-                # did. Each entry now carries its noise level, its fold index
-                # and its noise draw seed. Split audit D,
-                # tests/experiments/noise/n09_lnl_survey.py:338.
-                _recipe_sources.append({
-                    'sigma': float(sigma),
-                    'fold': int(fold_idx),
-                    'noise_seed': int(noise_seed),
-                    'source': _recipe_source,
-                })
-                if _best_bp is None:
-                    print(f"    fold {fold_idx}: the noisy search scored no "
-                          f"budget, so this fold uses the CLEAN-label recipe "
-                          f"(recorded as clean_pool_fallback)")
-
-                # model/metric_fn: the accept-or-reject step inside the build
-                # now fits the same plain DNN every condition here is scored
-                # with, and grades it by the dataset's own metric. Without them
-                # create_hybrid falls back to its internal evaluator scoring
-                # r2 (or accuracy), so the features were kept or dropped by a
-                # different learner than the one that goes on to use them. The
-                # number of fits is unchanged — the internal evaluator fitted
-                # once per candidate allocation too.
-                X_hybrid_train, X_hybrid_val, fi = build_fold_hybrid(
-                    train_reps, val_reps, y_train, inner_bp,
-                    augmentations_train=train_augs, augmentations_val=val_augs,
-                    groups=train_groups_subset,
-                    model=_BaselineDNN(random_state=42 + fold_idx,
-                                       is_clf=is_clf, classes_=classes_),
-                    metric_fn=metric_fn, lower_is_better=lower_is_better)
-                scaler_hyb = StandardScaler()
-                X_hybrid_train_s = scaler_hyb.fit_transform(X_hybrid_train)
-                X_hybrid_val_s = scaler_hyb.transform(X_hybrid_val)
-                hybrid_ok = True
-            except Exception as e:
-                print(f"    Hybrid failed (fold {fold_idx}): {e}")
-                hybrid_ok = False
-
-            # --- Condition A: single representation, no LNL, once per rank ---
-            for _bk, (X_base_train_s, X_base_val_s) in X_base_by_key.items():
+                # Build hybrid features by running a fresh feature-mix search on
+                # the NOISY training labels (matching the c06 per-variant pattern).
+                # The pool blueprint `bp` above was fit on clean labels, which
+                # would give the LNL methods a feature mix chosen with oracle
+                # access to ground truth. Refitting per (noise level, fold) on
+                # noisy labels removes that leak. Uses a reduced budget grid to
+                # keep runtime tractable; downstream model is 'rf' as a
+                # fast proxy for DNN (RF-best and DNN-best feature mixes are
+                # usually well-correlated on tabular molecular features).
+                train_reps = {k: v[train_idx] for k, v in reps.items()}
+                val_reps = {k: v[val_idx] for k, v in reps.items()}
                 try:
-                    y_pred_a = _run_baseline(X_base_train_s, y_train,
-                                             X_base_val_s, y_val,
-                                             random_state=42 + fold_idx,
-                                             is_clf=is_clf, classes_=classes_)
-                    score_a = float(metric_fn(y_val, y_pred_a))
-                    sigma_results[f'{_bk}_no_lnl'].append(score_a)
-                    sigma_folds[f'{_bk}_no_lnl'].append(fold_idx)
-                    sigma_draws[f'{_bk}_no_lnl'].append(noise_seed)
+                    train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+                    val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+
+                    # Run search WITHIN the train fold using noisy labels.
+                    # Subset groups (if present) so inner CV stays inside the train fold.
+                    train_groups_subset = (groups[train_idx]
+                                           if groups is not None else None)
+                    inner_n_folds = max(2, min(3, n_folds))
+                    _rf_factory = get_model_factories(
+                        ['rf'], task_type=task_type,
+                        n_samples=len(train_idx))['rf']
+                    # THIS SEARCH IS STORED. It used to run with cache=False, so
+                    # a second run of the same passes searched again from cold, and
+                    # the search is the largest single cost in the file: on
+                    # flab_thermo_tresanco at level 0.5, fold 1 of 3, 448 antibodies
+                    # trained on, it took 677 seconds, against 3.6 seconds to read
+                    # back what a previous call wrote. Writing costs 160 seconds the
+                    # first time. Measured 2026-09-21; the stored call and the
+                    # unstored call chose the same feature mix and the same inner
+                    # score, 0.489755 spearman.
+                    #
+                    # WHAT KEEPS TWO PASSES APART. The file is named by the fold
+                    # index and by a hash of the exact training labels this pass
+                    # holds, so the clean pass and the corrupted pass of one fold
+                    # never share a file, and neither do two folds whose training
+                    # blocks are the same size. Naming it by (level, fold, draw)
+                    # instead would give three separate files to the three draws of
+                    # level 0.0, which move no label and are the same search.
+                    #
+                    # find_best_hybrid then content-checks the labels, the
+                    # representation names and shapes, the groups, the budgets, the
+                    # metric and the seed before it serves anything, and recomputes
+                    # on any disagreement. It does NOT check representation VALUES:
+                    # a neural embedding is not bit-reproducible across thread
+                    # counts, so those hashes are ignored by design, which is why
+                    # the fold index is in the name.
+                    #
+                    # The namespace also separates the per-representation baselines
+                    # this search fits. Without one all six passes wrote to the same
+                    # baseline filenames, whose names carry no label hash, so each
+                    # pass evicted the one before it and none was ever reused.
+                    # TODO(similarity-sweep 2026-09-25): this is a search, and the
+                    # prelim runs set KIRBY_NO_COLD_SEARCH=1 (experiments read the
+                    # precompute and never search). Tier 'n09_noisy_search' is not
+                    # in the precompute, so under that setting every pass whose
+                    # search is not already stored is refused, the except below
+                    # catches it and the hybrid arms drop the pass. Whether n09
+                    # keeps its per-pass noisy-label search is the owner's call.
+                    _label_token = hashlib.sha1(
+                        np.ascontiguousarray(y_train).tobytes()).hexdigest()[:12]
+                    inner_search = find_best_hybrid(
+                        base_reps={k: v[train_idx] for k, v in reps.items()},
+                        labels=y_train,
+                        groups=train_groups_subset,
+                        models={'rf': _rf_factory()},
+                        budgets=NOISY_SEARCH_BUDGETS,
+                        task_type=task_type,
+                        metric=metric_name,
+                        # Runtime is kept tractable by the reduced
+                        # NOISY_SEARCH_BUDGETS grid and the small inner n_folds.
+                        seed=42 + fold_idx,
+                        n_folds=inner_n_folds,
+                        cache=True,
+                        dataset_name=dataset_name,
+                        tier='n09_noisy_search',
+                        cache_namespace=f'n09search_f{fold_idx}_y{_label_token}',
+                        augmentations=({k: v[train_idx] for k, v in augmentations.items()}
+                                       if augmentations else None),
+                        augmentation_strategy=meta.get('aug_condition', 'uncapped') if meta else 'uncapped',
+                        verbose=False,
+                    )
+                    # Pick the best blueprint across the reduced budget grid
+                    per_budget = inner_search.best_by_model_budget.get('rf', {})
+                    _best_bp = None
+                    _best_score = float('inf') if lower_is_better else float('-inf')
+                    for _budget, _entry in per_budget.items():
+                        if _entry is None:
+                            continue
+                        _score = _entry.get('score_mean', float('nan'))
+                        if np.isnan(_score):
+                            continue
+                        if (lower_is_better and _score < _best_score) or \
+                           (not lower_is_better and _score > _best_score):
+                            _best_score = _score
+                            _best_bp = _entry['blueprint']
+                    # The whole point of the inner search is that the recipe is
+                    # chosen on the NOISY labels, with no clean-label oracle. When
+                    # every budget in the reduced grid scored NaN there is no noisy
+                    # recipe, and `bp` -- chosen on the clean labels -- is used
+                    # instead. That is a reasonable fallback and a different
+                    # measurement, and nothing in the output said which had
+                    # happened, so a fold that fell back read as one that did not.
+                    inner_bp = _best_bp if _best_bp is not None else bp
+                    _recipe_source = 'noisy_search' if _best_bp is not None else 'clean_pool_fallback'
+                    # The fold this happened on used to be printed and nowhere in
+                    # the saved output: recipe_sources was a bare list of strings,
+                    # so a reader could not say WHICH fold fell back, only how many
+                    # did. Each entry now carries its noise level, its fold index
+                    # and its noise draw seed. Split audit D,
+                    # tests/experiments/noise/n09_lnl_survey.py:338.
+                    _recipe_sources.append({
+                        'sigma': float(sigma),
+                        'fold': int(fold_idx),
+                        'noise_seed': int(noise_seed),
+                        'source': _recipe_source,
+                    })
+                    if _best_bp is None:
+                        print(f"    fold {fold_idx}: the noisy search scored no "
+                              f"budget, so this fold uses the CLEAN-label recipe "
+                              f"(recorded as clean_pool_fallback)")
+
+                    # model/metric_fn: the accept-or-reject step inside the build
+                    # now fits the same plain DNN every condition here is scored
+                    # with, and grades it by the dataset's own metric. Without them
+                    # create_hybrid falls back to its internal evaluator scoring
+                    # r2 (or accuracy), so the features were kept or dropped by a
+                    # different learner than the one that goes on to use them. The
+                    # number of fits is unchanged — the internal evaluator fitted
+                    # once per candidate allocation too.
+                    X_hybrid_train, X_hybrid_val, fi = build_fold_hybrid(
+                        train_reps, val_reps, y_train, inner_bp,
+                        augmentations_train=train_augs, augmentations_val=val_augs,
+                        groups=train_groups_subset,
+                        model=_BaselineDNN(random_state=42 + fold_idx,
+                                           is_clf=is_clf, classes_=classes_),
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+                    scaler_hyb = StandardScaler()
+                    X_hybrid_train_s = scaler_hyb.fit_transform(X_hybrid_train)
+                    X_hybrid_val_s = scaler_hyb.transform(X_hybrid_val)
+                    hybrid_ok = True
                 except Exception as e:
-                    print(f"    Condition A ({_bk}) failed: {e}")
+                    print(f"    Hybrid failed (fold {fold_idx}): {e}")
+                    hybrid_ok = False
 
-            # --- Condition B: hybrid, no LNL ---
-            if hybrid_ok:
-                try:
-                    y_pred_b = _run_baseline(X_hybrid_train_s, y_train,
-                                             X_hybrid_val_s, y_val,
-                                             random_state=42 + fold_idx,
-                                             is_clf=is_clf, classes_=classes_)
-                    score_b = float(metric_fn(y_val, y_pred_b))
-                    sigma_results['hybrid_no_lnl'].append(score_b)
-                    sigma_folds['hybrid_no_lnl'].append(fold_idx)
-                    sigma_draws['hybrid_no_lnl'].append(noise_seed)
-                except Exception as e:
-                    print(f"    Condition B failed: {e}")
+                # --- Condition A: single representation, no LNL, once per rank ---
+                for _bk, (X_base_train_s, X_base_val_s) in X_base_by_key.items():
+                    try:
+                        y_pred_a = _run_baseline(X_base_train_s, y_train,
+                                                 X_base_val_s, y_val,
+                                                 random_state=42 + fold_idx,
+                                                 is_clf=is_clf, classes_=classes_)
+                        score_a = float(metric_fn(y_val, y_pred_a))
+                        sigma_results[f'{_bk}_no_lnl'].append(score_a)
+                        sigma_folds[f'{_bk}_no_lnl'].append(fold_idx)
+                        sigma_draws[f'{_bk}_no_lnl'].append(noise_seed)
+                    except Exception as e:
+                        print(f"    Condition A ({_bk}) failed: {e}")
 
-            # --- Build weighted hybrid features for conditions E/F ---
-            # Use per-fold feat_info weights (not global) to avoid dimension mismatch
-            weighted_ok = False
-            if hybrid_ok:
-                try:
-                    from experiments._shared import flatten_fold_weights
-                    fold_weights = flatten_fold_weights(fi)
-                    n_cols = X_hybrid_train_s.shape[1]
-                    if len(fold_weights) == n_cols:
-                        # Importance-weight each hybrid column with MEAN-1
-                        # normalisation. w is normalised to mean 1 (not sum 1),
-                        # so columns keep ~unit scale on average and the input
-                        # magnitude is preserved — this avoids the original
-                        # scale-collapse (sum-1 weights shrank every column by
-                        # ~1/n_cols ≈0.01, crushing DNN/LNL inputs to near zero).
-                        # We deliberately do NOT re-fit a StandardScaler here:
-                        # X_hybrid_*_s is already unit-variance, so multiplying
-                        # column j by w_j gives std w_j and a fresh per-column
-                        # StandardScaler would divide it straight back out —
-                        # exactly cancelling the weighting and collapsing
-                        # conditions E→B and F→D. Mean-1 scaling is the fix that
-                        # keeps the weighting hypothesis testable.
-                        w = np.sqrt(np.maximum(fold_weights, 0))
-                        w = w / (w.mean() + 1e-10)
-                        X_whybrid_train_s = X_hybrid_train_s * w
-                        X_whybrid_val_s = X_hybrid_val_s * w
-                        weighted_ok = True
-                    else:
-                        print(f"    Weight dim mismatch: {len(fold_weights)} vs {n_cols}")
-                except Exception as e:
-                    print(f"    Weighted hybrid build failed: {e}")
+                # --- Condition B: hybrid, no LNL ---
+                if hybrid_ok:
+                    try:
+                        y_pred_b = _run_baseline(X_hybrid_train_s, y_train,
+                                                 X_hybrid_val_s, y_val,
+                                                 random_state=42 + fold_idx,
+                                                 is_clf=is_clf, classes_=classes_)
+                        score_b = float(metric_fn(y_val, y_pred_b))
+                        sigma_results['hybrid_no_lnl'].append(score_b)
+                        sigma_folds['hybrid_no_lnl'].append(fold_idx)
+                        sigma_draws['hybrid_no_lnl'].append(noise_seed)
+                    except Exception as e:
+                        print(f"    Condition B failed: {e}")
 
-            # --- Condition E: weighted hybrid, no LNL ---
-            if weighted_ok:
-                try:
-                    y_pred_e = _run_baseline(X_whybrid_train_s, y_train,
-                                             X_whybrid_val_s, y_val,
-                                             random_state=42 + fold_idx,
-                                             is_clf=is_clf, classes_=classes_)
-                    score_e = float(metric_fn(y_val, y_pred_e))
-                    sigma_results['weighted_hybrid_no_lnl'].append(score_e)
-                    sigma_folds['weighted_hybrid_no_lnl'].append(fold_idx)
-                    sigma_draws['weighted_hybrid_no_lnl'].append(noise_seed)
-                except Exception as e:
-                    print(f"    Condition E failed: {e}")
+                # --- Build weighted hybrid features for conditions E/F ---
+                # Use per-fold feat_info weights (not global) to avoid dimension mismatch
+                weighted_ok = False
+                if hybrid_ok:
+                    try:
+                        from experiments._shared import flatten_fold_weights
+                        fold_weights = flatten_fold_weights(fi)
+                        n_cols = X_hybrid_train_s.shape[1]
+                        if len(fold_weights) == n_cols:
+                            # Importance-weight each hybrid column with MEAN-1
+                            # normalisation. w is normalised to mean 1 (not sum 1),
+                            # so columns keep ~unit scale on average and the input
+                            # magnitude is preserved — this avoids the original
+                            # scale-collapse (sum-1 weights shrank every column by
+                            # ~1/n_cols ≈0.01, crushing DNN/LNL inputs to near zero).
+                            # We deliberately do NOT re-fit a StandardScaler here:
+                            # X_hybrid_*_s is already unit-variance, so multiplying
+                            # column j by w_j gives std w_j and a fresh per-column
+                            # StandardScaler would divide it straight back out —
+                            # exactly cancelling the weighting and collapsing
+                            # conditions E→B and F→D. Mean-1 scaling is the fix that
+                            # keeps the weighting hypothesis testable.
+                            w = np.sqrt(np.maximum(fold_weights, 0))
+                            w = w / (w.mean() + 1e-10)
+                            X_whybrid_train_s = X_hybrid_train_s * w
+                            X_whybrid_val_s = X_hybrid_val_s * w
+                            weighted_ok = True
+                        else:
+                            print(f"    Weight dim mismatch: {len(fold_weights)} vs {n_cols}")
+                    except Exception as e:
+                        print(f"    Weighted hybrid build failed: {e}")
 
-            # --- Conditions C, D & F: LNL methods (skip at sigma=0) ---
-            if sigma > 0:
-                lnl_kwargs = dict(random_state=42 + fold_idx,
-                                  is_clf=is_clf, classes_=classes_)
-                for method_name in methods_to_test:
-                    # Condition C: single representation + LNL, once per rank
-                    for _bk, (X_base_train_s, X_base_val_s) in X_base_by_key.items():
-                        _ck = f'{_bk}_lnl'
-                        try:
-                            method_c = get_lnl_method(method_name, **lnl_kwargs)
-                            # Keeps each method's checkpoint-selection carve
-                            # scaffold-disjoint inside the training fold.
-                            method_c.selection_groups = train_groups_subset
-                            result_c = method_c.train_and_predict(
-                                X_base_train_s, y_train, X_base_val_s, y_val)
-                            score_c = float(metric_fn(y_val, result_c['y_pred']))
-                            _record_detection(detection_acc, _ck, method_name,
-                                               result_c, _cmask, noise_condition)
-                            sigma_results[_ck][method_name].append(score_c)
-                            sigma_folds[_ck][method_name].append(fold_idx)
-                            sigma_draws[_ck][method_name].append(noise_seed)
-                        except Exception as e:
-                            print(f"    C/{_bk}/{method_name} failed: {e}")
+                # --- Condition E: weighted hybrid, no LNL ---
+                if weighted_ok:
+                    try:
+                        y_pred_e = _run_baseline(X_whybrid_train_s, y_train,
+                                                 X_whybrid_val_s, y_val,
+                                                 random_state=42 + fold_idx,
+                                                 is_clf=is_clf, classes_=classes_)
+                        score_e = float(metric_fn(y_val, y_pred_e))
+                        sigma_results['weighted_hybrid_no_lnl'].append(score_e)
+                        sigma_folds['weighted_hybrid_no_lnl'].append(fold_idx)
+                        sigma_draws['weighted_hybrid_no_lnl'].append(noise_seed)
+                    except Exception as e:
+                        print(f"    Condition E failed: {e}")
 
-                    # Condition D: hybrid + LNL
+                # --- Conditions C, D & F: LNL methods (skip at sigma=0) ---
+                if sigma > 0:
+                    lnl_kwargs = dict(random_state=42 + fold_idx,
+                                      is_clf=is_clf, classes_=classes_)
+                    for method_name in methods_to_test:
+                        # Condition C: single representation + LNL, once per rank
+                        for _bk, (X_base_train_s, X_base_val_s) in X_base_by_key.items():
+                            _ck = f'{_bk}_lnl'
+                            try:
+                                method_c = get_lnl_method(method_name, **lnl_kwargs)
+                                # Keeps each method's checkpoint-selection carve
+                                # scaffold-disjoint inside the training fold.
+                                method_c.selection_groups = train_groups_subset
+                                result_c = method_c.train_and_predict(
+                                    X_base_train_s, y_train, X_base_val_s, y_val)
+                                score_c = float(metric_fn(y_val, result_c['y_pred']))
+                                _record_detection(detection_acc, _ck, method_name,
+                                                   result_c, _cmask, noise_condition)
+                                sigma_results[_ck][method_name].append(score_c)
+                                sigma_folds[_ck][method_name].append(fold_idx)
+                                sigma_draws[_ck][method_name].append(noise_seed)
+                            except Exception as e:
+                                print(f"    C/{_bk}/{method_name} failed: {e}")
+
+                        # Condition D: hybrid + LNL
+                        if hybrid_ok:
+                            try:
+                                method_d = get_lnl_method(method_name, **lnl_kwargs)
+                                method_d.selection_groups = train_groups_subset
+                                result_d = method_d.train_and_predict(
+                                    X_hybrid_train_s, y_train,
+                                    X_hybrid_val_s, y_val)
+                                score_d = float(metric_fn(y_val, result_d['y_pred']))
+                                _record_detection(detection_acc, 'hybrid_lnl', method_name,
+                                                   result_d, _cmask, noise_condition)
+                                sigma_results['hybrid_lnl'][method_name].append(score_d)
+                                sigma_folds['hybrid_lnl'][method_name].append(fold_idx)
+                                sigma_draws['hybrid_lnl'][method_name].append(noise_seed)
+                            except Exception as e:
+                                print(f"    D/{method_name} failed: {e}")
+
+                        # Condition F: weighted hybrid + LNL
+                        if weighted_ok:
+                            try:
+                                method_f = get_lnl_method(method_name, **lnl_kwargs)
+                                method_f.selection_groups = train_groups_subset
+                                result_f = method_f.train_and_predict(
+                                    X_whybrid_train_s, y_train,
+                                    X_whybrid_val_s, y_val)
+                                score_f = float(metric_fn(y_val, result_f['y_pred']))
+                                _record_detection(detection_acc, 'weighted_hybrid_lnl', method_name,
+                                                   result_f, _cmask, noise_condition)
+                                sigma_results['weighted_hybrid_lnl'][method_name].append(score_f)
+                                sigma_folds['weighted_hybrid_lnl'][method_name].append(fold_idx)
+                                sigma_draws['weighted_hybrid_lnl'][method_name].append(noise_seed)
+                            except Exception as e:
+                                print(f"    F/{method_name} failed: {e}")
+                # ── distance_selection under every similarity setting ──
+                # 2026-09-25. The one LNL method here that finds neighbours
+                # and drops training molecules (lnl_methods.
+                # DistanceBasedSelection, which takes a neighbour list since
+                # 2026-09-25). Run once per (setting, k) on each single
+                # representation and on the hybrid; its DNN score goes to
+                # results['distance_selection_by_similarity'], and the rows it
+                # kept are D', fitted with RF, SVM and the DNN as rows.
+                _sim_scores = []
+                if (sigma > 0 and 'distance_selection' in methods_to_test
+                        and sim_sink.enabled):
+                    _g_tr = (groups[train_idx] if groups is not None
+                             else None)
+                    _arms = list(X_base_by_key.items())
                     if hybrid_ok:
-                        try:
-                            method_d = get_lnl_method(method_name, **lnl_kwargs)
-                            method_d.selection_groups = train_groups_subset
-                            result_d = method_d.train_and_predict(
-                                X_hybrid_train_s, y_train,
-                                X_hybrid_val_s, y_val)
-                            score_d = float(metric_fn(y_val, result_d['y_pred']))
-                            _record_detection(detection_acc, 'hybrid_lnl', method_name,
-                                               result_d, _cmask, noise_condition)
-                            sigma_results['hybrid_lnl'][method_name].append(score_d)
-                            sigma_folds['hybrid_lnl'][method_name].append(fold_idx)
-                            sigma_draws['hybrid_lnl'][method_name].append(noise_seed)
-                        except Exception as e:
-                            print(f"    D/{method_name} failed: {e}")
+                        _arms.append(('hybrid', (X_hybrid_train_s,
+                                                 X_hybrid_val_s)))
+                    for _arm, (_Xtr, _Xva) in _arms:
+                        def _ds_dprimes(setting, lists, k, _Xtr=_Xtr,
+                                        _Xva=_Xva, _arm=_arm):
+                            try:
+                                _mth = get_lnl_method(
+                                    'distance_selection', k=k,
+                                    precomputed_neighbors=lists,
+                                    random_state=42 + fold_idx,
+                                    is_clf=is_clf, classes_=classes_)
+                                _mth.selection_groups = _g_tr
+                                _res = _mth.train_and_predict(_Xtr, y_train,
+                                                              _Xva, y_val)
+                            except Exception as e:
+                                print(f"    distance_selection "
+                                      f"{setting.name} k={k} failed: {e}")
+                                yield 'distance_selection', 'threshold_pct=85', None
+                                return
+                            _sim_scores.append({
+                                'arm': _arm, 'setting': setting.name,
+                                'k': int(k), 'score': float(metric_fn(
+                                    y_val, _res['y_pred']))})
+                            # The rows the method kept, rebuilt from what it
+                            # returns: flagged = suspicion above its
+                            # threshold, and every row kept when fewer than
+                            # 10 would remain (lnl_methods.py, the lines
+                            # after the neighbour search).
+                            _md = _res['metadata']
+                            _keep = ~(np.asarray(_md['suspicion_scores'])
+                                      > float(_md['threshold']))
+                            if _keep.sum() < 10:
+                                _keep = np.ones(len(y_train), dtype=bool)
+                            yield ('distance_selection', 'threshold_pct=85',
+                                   {'X': _Xtr[_keep],
+                                    'y': np.asarray(y_train)[_keep],
+                                    'keep': _keep, 'sample_weight': None,
+                                    'label_column': None})
+                        similarity_sweep(
+                            sim_ctx, model_name='dnn',
+                            model_input=f'dnn:{_arm}', X_tr=_Xtr, X_va=_Xva,
+                            y_tr_noisy=y_train, y_tr_clean=y_train_clean,
+                            y_val=y_val, train_idx=train_idx, val_idx=val_idx,
+                            # fold_idx counts from 1 in this file (the pass
+                            # list above); rows count folds from 0, as every
+                            # other experiment's rows and run_one's --fold do.
+                            groups_tr=_g_tr, fold=fold_idx - 1,
+                            draw=noise_seed,
+                            recipes=sim_recipes, base_reps=sim_base,
+                            make_dprimes=_ds_dprimes, level=sigma)
+                return {'results': sigma_results, 'folds': sigma_folds,
+                        'draws': sigma_draws, 'detection': detection_acc,
+                        'recipe_sources': _recipe_sources,
+                        'sim': _sim_scores}
 
-                    # Condition F: weighted hybrid + LNL
-                    if weighted_ok:
-                        try:
-                            method_f = get_lnl_method(method_name, **lnl_kwargs)
-                            method_f.selection_groups = train_groups_subset
-                            result_f = method_f.train_and_predict(
-                                X_whybrid_train_s, y_train,
-                                X_whybrid_val_s, y_val)
-                            score_f = float(metric_fn(y_val, result_f['y_pred']))
-                            _record_detection(detection_acc, 'weighted_hybrid_lnl', method_name,
-                                               result_f, _cmask, noise_condition)
-                            sigma_results['weighted_hybrid_lnl'][method_name].append(score_f)
-                            sigma_folds['weighted_hybrid_lnl'][method_name].append(fold_idx)
-                            sigma_draws['weighted_hybrid_lnl'][method_name].append(noise_seed)
-                        except Exception as e:
-                            print(f"    F/{method_name} failed: {e}")
+            _pass = ckpt.cached([float(sigma), int(fold_idx), int(noise_seed)],
+                                _one_pass)
+            for _ck, _v in _pass['results'].items():
+                if isinstance(_v, dict):
+                    for _m, _xs in _v.items():
+                        sigma_results[_ck][_m].extend(_xs)
+                        sigma_folds[_ck][_m].extend(_pass['folds'][_ck][_m])
+                        sigma_draws[_ck][_m].extend(_pass['draws'][_ck][_m])
+                else:
+                    sigma_results[_ck].extend(_v)
+                    sigma_folds[_ck].extend(_pass['folds'][_ck])
+                    sigma_draws[_ck].extend(_pass['draws'][_ck])
+            for _ck, _by_m in _pass['detection'].items():
+                for _m, _rows in _by_m.items():
+                    detection_acc.setdefault(_ck, {}).setdefault(
+                        _m, []).extend(_rows)
+            results['recipe_sources'].extend(_pass['recipe_sources'])
+            for _r in _pass.get('sim') or []:
+                (_ds_by_sim.setdefault(str(sigma), {}).setdefault(_r['arm'], {})
+                 .setdefault(_r['setting'], {}).setdefault(str(_r['k']), [])
+                 .append(_r['score']))
 
         # Aggregate fold results
         agg = {}
@@ -1084,6 +1251,20 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         else top3_hybrid != top3_whybrid)
 
     results['summary'] = convert_numpy(summary)
+    results['similarity'] = similarity_record(
+        sim_settings, sim_sink, swept_methods=['distance_selection'],
+        spaces_unavailable=sim_ctx['unavailable'],
+        checkpoint_file=ckpt.path, passes_read_back=ckpt.n_resumed)
+    # {level: {arm: {setting: {k: mean DNN score over (fold, draw)}}}}, in the
+    # dataset's metric. The legacy distance_selection rows above are
+    # MODEL_INPUT-like: the method's own neighbour search in the arm's
+    # features.
+    results['distance_selection_by_similarity'] = {
+        _lv: {_a: {_sn: {_k: {'mean': float(np.mean(_v)), 'n': len(_v)}
+                         for _k, _v in _byk.items()}
+                   for _sn, _byk in _bys.items()}
+              for _a, _bys in _bya.items()}
+        for _lv, _bya in _ds_by_sim.items()}
 
     print(f"\n  === SUMMARY ===")
     print("  Clean: " + "".join(f"{_bk}={clean_base[_bk]:.4f}, "

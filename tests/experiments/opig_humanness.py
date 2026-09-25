@@ -607,6 +607,11 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Discard what an earlier attempt finished '
+             '(<output>.partial.jsonl) and recompute every item.')
+
     parser = add_distance_metric_arg(parser)
 
     args = parser.parse_args()
@@ -632,6 +637,21 @@ def main():
     print(f"  Folds: {args.n_folds}")
     print("=" * 70)
 
+    output_path = (args.output or
+                   'tests/results/comparisons/opig_humanness.json')
+
+    # Each dataset is written to <output>.partial.jsonl as soon as it finishes
+    # and read back on the next attempt (2026-09-25;
+    # experiments/_checkpoint.py). Before, a failure or a kill lost every
+    # dataset, because the one JSON below was written after the last. A dataset
+    # that raised or returned {'error'} is not stored, is retried next time,
+    # and makes the script exit 1 after the JSON is written.
+    from experiments._checkpoint import (
+        script_checkpoint, is_failed_item, exit_if_failed)
+    _ck = script_checkpoint('opig_humanness', output_path, args,
+                            exclude=('datasets', 'output'))
+    _failed = []
+
     all_results = {}
     skipped = {}
     for ds_name in datasets:
@@ -646,8 +666,15 @@ def main():
                 print(f"\n  SKIPPED {ds_name}: {e}")
                 skipped[ds_name] = str(e)
                 continue
-            ds_results = evaluate_dataset(ds_name, rep_names, args.n_folds,
-                                           pruning_mode=args.pruning_mode)
+            if _ck.done(dataset=ds_name, rep_names=rep_names):
+                ds_results = _ck.get(dataset=ds_name, rep_names=rep_names)
+                print(f"  {ds_name}: finished in an earlier attempt, read back")
+            else:
+                ds_results = evaluate_dataset(ds_name, rep_names, args.n_folds,
+                                              pruning_mode=args.pruning_mode)
+                _ck.put(ds_results, dataset=ds_name, rep_names=rep_names)
+            if is_failed_item(ds_results):
+                _failed.append(ds_name)
             if ds_results is not None:
                 all_results[ds_name] = ds_results
                 print_analysis(ds_name, ds_results)
@@ -655,10 +682,9 @@ def main():
             print(f"  FAILED: {e}")
             import traceback
             traceback.print_exc()
+            _failed.append(ds_name)
 
     # Save results
-    output_path = (args.output or
-                   'tests/results/comparisons/opig_humanness.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
@@ -668,6 +694,7 @@ def main():
     with open(p, 'w') as f:
         json.dump(convert_numpy(all_results), f, indent=2)
     print(f"\nResults saved: {p}")
+    exit_if_failed(_failed, 'dataset')
 
 
 if __name__ == '__main__':

@@ -171,6 +171,12 @@ from experiments.noise.n30_censored_likelihood import winsorise
 from experiments.noise.n32_iterative_and_dual_selection import (
     itlm, random_keep, replicate_seed, _paired, recovery_share, _mean_on,
     _tail_row, _mean_detection,
+    # The D-versus-D' rows, per-pass checkpoint, cached builds and controls
+    # shared by n32-n41 (n32's shared block, 2026-09-25).
+    method_setting, downstream_model_list, fit_predict_cached,
+    scaled_base_cells, cached_hybrid, ledger_signature, PassLedger,
+    restart_flag, arm_rows, arm_result, control_twins, twin_scores,
+    controls_enabled, _nc, _ss,
 )
 from experiments.noise.n33_robust_training import (
     make_swap, robust_scale, oof_ngboost_sigma, invvar_weights,
@@ -294,20 +300,19 @@ def build_arm_names(seeds, winsor_c=WINSOR_C, alpha=ITLM_ALPHA):
 
 
 def _fit_score(factory, X_tr, y_tr, X_va, truths, metric_fn, metric_name,
-               keep=None, sample_weight=None):
+               keep=None, sample_weight=None, dataset_name=None,
+               model_name=None):
     """One fit scored against each truth; ({truth: score}, tail dict, None) or
-    (None, None, why). Tails are against the first truth."""
+    (None, None, why). Tails are against the first truth.
+
+    dataset_name / model_name, added 2026-09-25, route a seeded downstream
+    model through noise_cache (n32.fit_predict_cached); the prediction is the
+    same. A loss swap is passed with model_name None and fitted here."""
     try:
-        m = factory()
-        X_f, y_f, w_f = X_tr, np.asarray(y_tr, dtype=float), sample_weight
-        if keep is not None:
-            X_f, y_f = X_f[keep], y_f[keep]
-            w_f = None if w_f is None else np.asarray(w_f)[keep]
-        if w_f is None:
-            m.fit(X_f, y_f)
-        else:
-            m.fit(X_f, y_f, sample_weight=w_f)
-        pred = np.asarray(_predict_for_metric(m, X_va, metric_name), dtype=float)
+        pred = np.asarray(fit_predict_cached(
+            dataset_name, model_name, factory, X_tr,
+            np.asarray(y_tr, dtype=float), X_va, metric_name, keep=keep,
+            sample_weight=sample_weight), dtype=float)
         scores = {k: float(metric_fn(v, pred)) for k, v in truths.items()}
         first = next(iter(truths.values()))
         return scores, tail_scores(first, pred), None
@@ -336,6 +341,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  SKIPPED: {named} is not sized by the model's error; n38 runs "
               f"only {', '.join(RELATIVE_CONDITIONS)}.")
         return {'skipped': 'not_a_relative_condition', 'noise_condition': named}
+    # sweep_conditions pops force_rerun; PassLedger reads restart_passes.
+    kwargs['restart_passes'] = bool(kwargs.get('force_rerun'))
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
         default_conditions=list(RELATIVE_CONDITIONS), kwargs=kwargs)
@@ -382,8 +389,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     w_arm = f'winsorise_c{WINSOR_C:g}'
     i_arm = f'itlm_a{ITLM_ALPHA:g}'
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     downstream_models = [m for m in downstream_models if m in model_factories]
@@ -426,6 +432,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'claim_scope': (
             'The noise is injected, so every number is confined to this '
             'condition on this dataset.'),
+        'similarity_note': ('n38 finds no neighbours, so it has no similarity '
+                            'axis; its rows carry model_input|none|process.'),
+        'controls_run': controls_enabled(),
+        'rows_note': ('One row per (label base, arm, model, space, pass): the '
+                      'label base is in method_setting; scores are against '
+                      'the held-out truth, not the signal.'),
         'per_level': {}, 'per_level_vs_signal': {}, 'tails': {},
         'detection': {}, 'fold_records': {}, 'method_records': {},
     }
@@ -532,6 +544,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     acc, acc_sig, tail_acc, det_acc, rec_acc, errors = {}, {}, {}, {}, {}, {}
     fold_recs = {}
     t0 = time.time()
+    metric = (metric_name, metric_fn, lower_is_better)
+    # Rows and the per-pass checkpoint, 2026-09-25 (n32's PassLedger). A pass
+    # is one (label base, level, draw, fold).
+    ledger = PassLedger(output_dir, EXP_ID, dataset_name, condition,
+                        signature=ledger_signature(data, config, results,
+                                                   splits),
+                        restart=restart_flag(kwargs))
+    if ledger.restored():
+        st_ = ledger.restored()
+        (acc, acc_sig, tail_acc, det_acc, rec_acc, errors) = (
+            st_['acc'], st_['acc_sig'], st_['tail_acc'], st_['det_acc'],
+            st_['rec_acc'], st_['errors'])
+        print(f"  resumed {len(ledger.passes_done)} finished passes")
 
     for base in bases:
         # ── The clean labels and the unit, once per fold ──
@@ -542,11 +567,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             try:
                 if resid_sd_rep is None:
                     raise RuntimeError(results['resid_sd_rep_chosen_as'])
-                sc = StandardScaler()
-                Xb_tr = sc.fit_transform(np.asarray(reps[resid_sd_rep][train_idx],
-                                                    dtype=float))
-                Xb_va = sc.transform(np.asarray(reps[resid_sd_rep][val_idx],
-                                                dtype=float))
+                # Standardised once per fold through noise_cache
+                # (2026-09-25); the same float64 values.
+                Xb_tr, Xb_va = _nc.cached_scaled(
+                    dataset_name, reps[resid_sd_rep], train_idx, val_idx,
+                    dtype=float)
                 y_tr_c, y_va_c, sig_va, rsd, prov = label_base_for_fold(
                     base, Xb_tr, Xb_va, labels[train_idx], g_tr,
                     seed=replicate_seed('semi', fold_i), oof_splits=oof_splits)
@@ -568,6 +593,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     continue
                 y_clean_tr, y_val, sig_va, rsd = fold_clean[fold_i]
                 pass_key = f'l{lvl_key}d{draw}f{fold_i}'
+                if ledger.pass_done(f'{base}|{pass_key}'):
+                    continue
+                pass_rows = []
                 g_tr = (np.asarray(groups)[train_idx] if groups is not None
                         else np.arange(len(train_idx)))
                 # the base's clean column stands in for the labels: the
@@ -602,14 +630,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # that rank it there.
                 fold_spaces = {}
                 for _sp in base_spaces:
-                    _bcells = []
-                    for _rn, _ms in base_rank_groups(
-                            base_by_model, int(_sp.split('_')[1]),
-                            downstream_models).items():
-                        sc = StandardScaler()
-                        _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                        sc.transform(val_reps[_rn]), list(_ms)))
-                    fold_spaces[_sp] = _bcells
+                    # Standardised once per fold through noise_cache
+                    # (2026-09-25).
+                    fold_spaces[_sp] = scaled_base_cells(
+                        dataset_name, reps, train_idx, val_idx, base_by_model,
+                        int(_sp.split('_')[1]), downstream_models)
                 for _sp in spaces:
                     if _sp in base_spaces:
                         continue
@@ -617,11 +642,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     for _bp_m, _mnames, _shareable in group_models_by_recipe(
                             {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                              for _m in downstream_models}, downstream_models):
-                        X_tr_h, X_va_h = hybrid_for_fold(
-                            train_reps, val_reps, y0, _bp_m, g_tr,
-                            None if _shareable
-                            else model_factories[_mnames[0]](),
-                            metric_fn, lower_is_better)
+                        # Cached per (fold, recipe, labels), 2026-09-25.
+                        X_tr_h, X_va_h = cached_hybrid(
+                            dataset_name, train_reps, val_reps, y0, _bp_m,
+                            g_tr, _mnames[0], model_factories, metric,
+                            train_idx, _shareable)
                         if X_tr_h is None:
                             errors[f'{base}|{lvl_key}|{_sp}/{_mnames[0]}|'
                                    f'f{fold_i}|build'] = 'the hybrid could not be built'
@@ -642,7 +667,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                'injection': {k: v for k, v in prov.items()
                                              if k not in ('condition',)}}
                         try:
-                            p = oof_predict(X_tr_s, y0, g_tr, n_splits=oof_splits)
+                            # Cached on the label hash (2026-09-25).
+                            p = _nc.cached_oof_predict(dataset_name, X_tr_s, y0,
+                                                       g_tr, n_splits=oof_splits)
                         except Exception as exc:
                             errors[f'{base}|{lvl_key}|{_ekey}|f{fold_i}|oof'] = (
                                 f'{type(exc).__name__}: {exc}')
@@ -690,9 +717,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             cols['robust_loss'] = dict(
                                 y=y0, swap_scale=robust_scale(y0, p))
                         try:
+                            # Round 1 read off p (n32.itlm first_loss,
+                            # 2026-09-25): the same loss, not refitted.
                             keep, last_loss, rounds = itlm(
                                 X_tr_s, y0, g_tr, ITLM_ALPHA, rounds=itlm_rounds,
-                                oof_splits=oof_splits)
+                                oof_splits=oof_splits,
+                                first_loss=(None if p is None
+                                            else (y0 - p) ** 2))
                             cols[i_arm] = dict(y=y0, keep=keep)
                             n_rm = int(n_tr - keep.sum())
                             rec[i_arm] = {
@@ -726,34 +757,77 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                     .setdefault(lvl_key, {}).setdefault(space, {}))
                         tcell = (tail_acc.setdefault(base, {})
                                  .setdefault(lvl_key, {}).setdefault(space, {}))
+                        pass_scores = {}
                         for arm in arm_names:
                             if arm not in cols:
                                 continue
                             c = cols[arm]
                             for mname in cell_models:
                                 factory = model_factories[mname]
+                                cache_as = mname
                                 if arm == 'robust_loss':
                                     swap = ROBUST_SWAP.get(mname)
                                     if swap is None:
                                         continue
                                     factory = functools.partial(
                                         make_swap, swap, c['swap_scale'], (ROBUST_C,))
+                                    cache_as = None
                                 sc_, tl, err = _fit_score(
                                     factory, X_tr_s, c['y'], X_va_s, truths,
                                     metric_fn, metric_name, keep=c.get('keep'),
-                                    sample_weight=c.get('weight'))
+                                    sample_weight=c.get('weight'),
+                                    dataset_name=dataset_name,
+                                    model_name=cache_as)
                                 if sc_ is None:
                                     errors[f'{base}|{lvl_key}|{_ekey}|{arm}|'
                                            f'{mname}|f{fold_i}'] = err
                                     continue
                                 (cell.setdefault(arm, {}).setdefault(mname, {})
                                  [pass_key]) = sc_['truth']
+                                pass_scores.setdefault(arm, {})[mname] = \
+                                    sc_['truth']
                                 if 'signal' in sc_:
                                     (cell_sig.setdefault(arm, {})
                                      .setdefault(mname, {})[pass_key]) = sc_['signal']
                                 if tl is not None:
                                     (tcell.setdefault(arm, {}).setdefault(mname, {})
                                      [pass_key]) = tl
+
+                        # ── Controls (KIRBY_NOISE_CONTROLS=1): winsorising
+                        # (a label move), ITLM (a deletion) and the NGBoost
+                        # weights, twinned by controls.py beside n38's own
+                        # random twins, which are kept: they draw differently
+                        # (random_twin_of_changes does not sort its pick). ──
+                        for arm, src in ((w_arm, dict(y=cols.get(w_arm, {})
+                                                      .get('y'))),
+                                         (i_arm, dict(keep=cols.get(i_arm, {})
+                                                      .get('keep'))),
+                                         ('invvar_ngboost', dict(
+                                             weight=cols.get('invvar_ngboost',
+                                                             {}).get('weight')))):
+                            if arm not in cols:
+                                continue
+                            twins = control_twins(
+                                arm_result(y0, **src), X_tr_s, y0,
+                                (replicate_seed(arm, base), draw, fold_i,
+                                 int(round(level * 1000))))
+                            for tw, by_m in twin_scores(
+                                    dataset_name, twins, model_factories,
+                                    cell_models, X_va_s, y_val,
+                                    metric).items():
+                                pass_scores[f'{arm}|{tw}'] = by_m
+                        pass_rows += arm_rows(
+                            dataset_name=dataset_name, exp_id=EXP_ID,
+                            metric=metric, condition=condition, level=level,
+                            draw=draw, fold=fold_i, model_input=_ekey,
+                            scores_by_arm=pass_scores,
+                            setting_of=lambda a, _b=base: (
+                                a, method_setting(label_base=_b),
+                                _ss.MODEL_INPUT.name))
+                ledger.add_rows(pass_rows)
+                ledger.finish_pass(f'{base}|{pass_key}', {
+                    'acc': acc, 'acc_sig': acc_sig, 'tail_acc': tail_acc,
+                    'det_acc': det_acc, 'rec_acc': rec_acc, 'errors': errors})
                 print(f"    {base} level {lvl_key} draw {draw} fold {fold_i}: "
                       f"{int(prov.get('n_moved', 0))} of {n_tr} training "
                       f"molecules moved, resid_sd {rsd:.3f} "
@@ -769,6 +843,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['detection'] = convert_numpy(_summarise_detection(det_acc))
     results['fold_records'] = convert_numpy(fold_recs)
     results['method_records'] = convert_numpy(rec_acc)
+    results['d_vs_dprime'] = ledger.describe()
     results['robust_loss_not_scored_for'] = [
         m for m in downstream_models if m not in ROBUST_SWAP]
     if errors:

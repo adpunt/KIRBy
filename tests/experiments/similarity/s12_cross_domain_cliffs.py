@@ -452,9 +452,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Per-rep baselines per model
     per_rep_results = {}
 
+    # Each (representation, model) baseline and each model's hybrid block are
+    # written to s12_cross_domain_cliffs/<dataset>.partial.jsonl when they
+    # finish and read back on the next attempt (2026-09-25; _checkpoint.py).
+    # The folds, the cliff rows and the pool reads are recomputed identically
+    # and every model is seeded, so a unit read back holds what a fresh
+    # computation gives. A unit in which a fit or a hybrid build raised (its
+    # fold is NaN) is not stored, so it is retried.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's12_cross_domain_cliffs', dataset_name),
+        run_identity('s12_cross_domain_cliffs', dataset_name, data, config,
+                     kwargs=kwargs, models=sorted(model_factories),
+                     budget=budget, n_pool_hybrids=_N_POOL_HYBRIDS))
+    _hyb_threw = []
+
     for rep_name, X_rep in reps.items():
         rep_model_results = {}
         for mname, mfactory in model_factories.items():
+            if _ck.done(rep=rep_name, model=mname):
+                rep_model_results[mname] = _ck.get(rep=rep_name, model=mname)
+                continue
+            _threw = False
             # Fold-aligned per-fold cliff scores: append NaN for any fold that has
             # no usable cliff subset (or a failed fit) so fold f means the same fold
             # across every rep + the hybrid — required for held-out selection in
@@ -473,6 +493,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     y_pred = m.predict(X_va)
                 except Exception as e:
                     print(f"  [warn] per-rep fit/predict ({rep_name}/{mname}): {type(e).__name__}: {str(e)[:100]}")
+                    _threw = True
                     cliff_fold_scores.append(float('nan'))
                     noncliff_fold_scores.append(float('nan'))
                     continue
@@ -498,6 +519,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'cliff_fold_scores': cliff_fold_scores,
                 'noncliff_fold_scores': noncliff_fold_scores,
             }
+            if not _threw:
+                _ck.put(rep_model_results[mname], rep=rep_name, model=mname)
         per_rep_results[rep_name] = rep_model_results
 
     def _score_hybrid_fold(mname, mfactory, blueprint, aug_cond,
@@ -519,6 +542,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 lower_is_better=lower_is_better)
         except Exception as e:
             print(f"  [warn] hybrid build ({mname}): {type(e).__name__}: {str(e)[:100]}")
+            _hyb_threw.append(mname)
             return float('nan'), float('nan')
 
         scaler = StandardScaler()
@@ -531,6 +555,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_pred = m.predict(X_va_s)
         except Exception as e:
             print(f"  [warn] hybrid fit/predict ({mname}): {type(e).__name__}: {str(e)[:100]}")
+            _hyb_threw.append(mname)
             return float('nan'), float('nan')
 
         val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
@@ -555,6 +580,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     pool_selection_by_model = {}
     fold0_pruned_any = None
     for mname, mfactory in model_factories.items():
+        if _ck.done(hybrid_model=mname):
+            _saved = _ck.get(hybrid_model=mname)
+            pool_selection_by_model[mname] = _saved['selection']
+            pool_rank_results_by_model[mname] = _saved['ranks']
+            hybrid_results_by_model[mname] = _saved['hybrid']
+            _p = _saved['fold0_pruned']
+            if _p is not None:
+                fold0_pruned_any = (_p if fold0_pruned_any is None
+                                    else (fold0_pruned_any or _p))
+            continue
+        _n_threw_before = len(_hyb_threw)
+        _fold0_pruned_this = None
         # Fold-aligned per-fold hybrid scores (NaN placeholder on skipped/failed
         # folds) so fold_reselection can index the same fold as the per-rep baselines.
         rank_cliff = [[] for _ in range(_N_POOL_HYBRIDS)]
@@ -569,6 +606,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _p = True if _p is None else bool(_p)
                 fold0_pruned_any = (_p if fold0_pruned_any is None
                                     else (fold0_pruned_any or _p))
+                _fold0_pruned_this = (_p if _fold0_pruned_this is None
+                                      else (_fold0_pruned_this or _p))
                 _base = pool.get('base_rep') or {}
                 sel_by_fold[fold_i] = {
                     'pool_subset': pool.get('pool_subset'),
@@ -651,6 +690,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
         if not rank_recipes[0]:
             hybrid_results_by_model[mname]['skipped'] = 'no_pool_recipe_on_any_fold'
+        if len(_hyb_threw) == _n_threw_before:
+            _ck.put({'selection': pool_selection_by_model[mname],
+                     'ranks': pool_rank_results_by_model[mname],
+                     'hybrid': hybrid_results_by_model[mname],
+                     'fold0_pruned': _fold0_pruned_this},
+                    hybrid_model=mname)
 
     results = {
         'domain': domain,

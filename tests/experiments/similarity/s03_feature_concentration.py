@@ -145,9 +145,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     rng = np.random.RandomState(42)
 
+    # Each (model, budget) cell is written to
+    # s03_feature_concentration/<dataset>.partial.jsonl when it finishes and read
+    # back on the next attempt (2026-09-25; _checkpoint.py). The random subsets
+    # of every cell are drawn from the ONE rng above, so a cell read back also
+    # restores the rng to the state it was left in after that cell; the next
+    # cell computed draws exactly the subset an uninterrupted run draws. A cell
+    # whose search failed is stored as {'error'} in results and is not saved to
+    # the sidecar: it consumed no draw, and it is retried.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's03_feature_concentration', dataset_name),
+        run_identity('s03_feature_concentration', dataset_name, data, config,
+                     kwargs=kwargs, budgets=list(budgets),
+                     downstream_models=list(downstream_models)))
+
     for downstream_model in downstream_models:
         for budget in budgets:
             print(f"\n  ── model={downstream_model}, budget={budget} ──")
+            _ckey = dict(model=downstream_model, budget=budget)
+            if _ck.done(**_ckey):
+                _saved = _ck.get(**_ckey)
+                results['per_rep'][_cell_key(downstream_model, budget)] = \
+                    _saved['cell']
+                rng.set_state(_saved['rng_state'])
+                continue
             try:
                 X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
                     reps, labels, groups,
@@ -273,6 +296,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 per_rep_results[rep_name] = rep_result
 
             results['per_rep'][_cell_key(downstream_model, budget)] = per_rep_results
+            _ck.put({'cell': per_rep_results, 'rng_state': rng.get_state()},
+                    **_ckey)
 
     # Gini coefficient of importance scores per method
     for wm in weight_methods:

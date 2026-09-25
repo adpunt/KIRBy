@@ -14,9 +14,14 @@ A similarity setting is three choices:
                tanimoto_ecfp4     2048-bit Morgan radius-2 bits from SMILES,
                                   distance 1 - Tanimoto (n01:92-122)
                base_1, base_2     each model's top 2 single representations
-               base_1_aug,        each of those plus augmented features, built
-               base_2_aug         per fold the way c21 builds 'B_aug'
-                                  (see base_aug_blueprint below)
+               base_1_aug_capped,     each of those plus augmented
+               base_1_aug_uncapped,   features, built per fold the way c21
+               base_2_aug_capped,     builds 'B_aug', under both of c21's
+               base_2_aug_uncapped    admission methods (c21:200-207):
+                                      capped extras displace base features
+                                      inside the budget, uncapped extras are
+                                      appended outside it. Both, owner
+                                      decision 2026-09-25 (base_aug_blueprint)
                hybrid             the prediction-built hybrid
                hybrid_similarity  the similarity-built hybrid
                forest_proximity   1 - share of trees in which two molecules
@@ -30,9 +35,21 @@ A similarity setting is three choices:
   metric     manhattan or euclidean for the feature spaces; 'tanimoto' for
              tanimoto_ecfp4; 'forest' for forest_proximity.
 
-6 feature spaces x 4 weightings x 2 distances = 48, plus Tanimoto and forest
-proximity = 50 (enumerate_settings). k = 5, 10 and 20 are read off one list of
-k_max = 20 neighbours per molecule, so k is not part of a setting.
+8 feature spaces x 4 weightings x 2 distances = 64, plus Tanimoto and forest
+proximity = 66 (enumerate_settings). Until 2026-09-25 there was one augmented
+space per base representation (base_k_aug, uncapped only) and the count was
+6 x 4 x 2 + 2 = 50; the owner asked for both admission methods on 2026-09-25.
+
+k is swept over SWEPT_KS = 5, 9, 10, 20: every count in use today (9 for
+label_smooth / knn_smooth, 10 for prox_smooth and the four neighbour
+estimators; see below) plus 5 and 20 (owner decision 2026-09-25). All are read
+off one list of k_max = 20 neighbours per molecule, so k is not part of a
+setting.
+
+KIRBY_SIMILARITY_SETTINGS picks which settings a run sweeps
+(settings_from_env): unset or 'all' is every setting (enumerate_settings);
+'model_input' is [MODEL_INPUT] alone, today's numbers bit for bit; otherwise a
+comma list of setting names as SimilaritySetting.name writes them.
 
 THE MODEL_INPUT SENTINEL is today's behaviour: neighbours in the model's own
 matrix, the process-wide distance (make_nearest_neighbors,
@@ -81,8 +98,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # The axis
 # ---------------------------------------------------------------------------
 
-FEATURE_SPACES = ('base_1', 'base_2', 'base_1_aug', 'base_2_aug',
-                  'hybrid', 'hybrid_similarity')
+# The augmented spaces, one per base representation and c21 admission method.
+# Replaced 'base_1_aug' / 'base_2_aug' (uncapped only) on 2026-09-25.
+AUG_STRATEGIES = ('capped', 'uncapped')
+AUG_SPACES = tuple(f'base_{i}_aug_{st}' for i in (1, 2) for st in AUG_STRATEGIES)
+FEATURE_SPACES = ('base_1', 'base_2') + AUG_SPACES + (
+    'hybrid', 'hybrid_similarity')
 TANIMOTO_SPACE = 'tanimoto_ecfp4'
 FOREST_SPACE = 'forest_proximity'
 MODEL_INPUT_SPACE = 'model_input'
@@ -91,8 +112,13 @@ ALL_SPACES = FEATURE_SPACES + (TANIMOTO_SPACE, FOREST_SPACE)
 WEIGHTINGS = ('none', 'lightgbm_gain', 'treeshap', 'deeplift')
 FEATURE_METRICS = ('manhattan', 'euclidean')
 
-# The ks the plan sweeps. Read off one k_max list.
-SWEEP_KS = (5, 10, 20)
+# The ks swept, owner decision 2026-09-25: every count in use today (9 for
+# label_smooth / knn_smooth, n07:829-842; 10 for prox_smooth, n07:907, and the
+# four neighbour estimators, noise_estimation.py) plus 5 and 20. Read off one
+# k_max list. SWEEP_KS is the name this had before 2026-09-25, when it was
+# (5, 10, 20); kept as an alias of the new tuple.
+SWEPT_KS = (5, 9, 10, 20)
+SWEEP_KS = SWEPT_KS
 DEFAULT_K_MAX = 20
 
 # scipy cdist names for the two feature-space distances.
@@ -158,9 +184,10 @@ def enumerate_settings(available_spaces: Optional[Iterable[str]] = None,
                        k_max: int = DEFAULT_K_MAX):
     """Every similarity setting of plan section 1 whose space is available.
 
-    `available_spaces` None means all eight. With all eight this is 50:
-    6 feature spaces x 4 weightings x 2 distances, plus tanimoto_ecfp4 and
-    forest_proximity. MODEL_INPUT is not in the list; a caller adds it when it
+    `available_spaces` None means all ten. With all ten this is 66:
+    8 feature spaces x 4 weightings x 2 distances, plus tanimoto_ecfp4 and
+    forest_proximity (50 before 2026-09-25, when the augmented space split
+    into capped and uncapped). MODEL_INPUT is not in the list; a caller adds it when it
     wants today's behaviour as a row.
 
     A space missing from `available_spaces` is dropped, not faked. Which spaces
@@ -185,9 +212,69 @@ def enumerate_settings(available_spaces: Optional[Iterable[str]] = None,
     return out
 
 
+def settings_from_env(available_spaces: Optional[Iterable[str]] = None,
+                      k_max: int = DEFAULT_K_MAX, env=None):
+    """The similarity settings a run sweeps, from KIRBY_SIMILARITY_SETTINGS.
+
+      unset, '' or 'all'  enumerate_settings(available_spaces, k_max): the
+                          full sweep, the default (owner decision 2026-09-25)
+      'model_input'       [MODEL_INPUT]: today's behaviour, today's numbers
+                          bit for bit
+      a comma list        those settings by name, as SimilaritySetting.name
+                          writes them ('base_1|lightgbm_gain|euclidean',
+                          'tanimoto_ecfp4|none|tanimoto',
+                          'model_input|none|process', ...), in the order
+                          given, duplicates dropped. 'all' and 'model_input'
+                          may appear in the list too.
+    A name that is not a valid setting raises. A named setting whose space is
+    not in `available_spaces` is dropped with a printed line, the same rule
+    enumerate_settings applies -- never faked.
+    `env` overrides os.environ for testing.
+    """
+    raw = (os.environ if env is None else env).get('KIRBY_SIMILARITY_SETTINGS')
+    raw = '' if raw is None else str(raw).strip()
+    if raw in ('', 'all'):
+        return enumerate_settings(available_spaces, k_max)
+    avail = set(ALL_SPACES if available_spaces is None else available_spaces)
+    out, seen = [], set()
+    for tok in (t.strip() for t in raw.split(',')):
+        if not tok:
+            continue
+        if tok == 'all':
+            cands = enumerate_settings(available_spaces, k_max)
+        elif tok == MODEL_INPUT_SPACE:
+            cands = [SimilaritySetting(MODEL_INPUT_SPACE, 'none', 'process',
+                                       k_max)]
+        else:
+            parts = tok.split('|')
+            if len(parts) != 3:
+                raise ValueError(
+                    f"KIRBY_SIMILARITY_SETTINGS: {tok!r} is not 'all', "
+                    f"'model_input' or a setting name 'space|weighting|metric'")
+            s = SimilaritySetting(parts[0], parts[1], parts[2], k_max)
+            if s.space != MODEL_INPUT_SPACE and s.space not in avail:
+                print(f"  KIRBY_SIMILARITY_SETTINGS: {tok} dropped, space "
+                      f"{s.space!r} not available here")
+                continue
+            cands = [s]
+        for s in cands:
+            if s.name not in seen:
+                seen.add(s.name)
+                out.append(s)
+    return out
+
+
 # ---------------------------------------------------------------------------
-# Augmented single-representation space (base_k_aug)
+# Augmented single-representation spaces (base_k_aug_capped / _uncapped)
 # ---------------------------------------------------------------------------
+
+def aug_space_name(base_index, strategy):
+    """'base_1_aug_capped' etc. base_index is 1 or 2; strategy in
+    AUG_STRATEGIES."""
+    if int(base_index) not in (1, 2) or strategy not in AUG_STRATEGIES:
+        raise ValueError(f"no augmented space for base {base_index!r}, "
+                         f"strategy {strategy!r}")
+    return f'base_{int(base_index)}_aug_{strategy}'
 
 def base_aug_blueprint(base_name, base_width, *, metric_name, task_type,
                        lower_is_better, strategy='uncapped',
@@ -212,7 +299,7 @@ def base_aug_blueprint(base_name, base_width, *, metric_name, task_type,
                      minus the base itself (c21:429)
         model, metric_fn, lower_is_better   as c21 passes them (c21:925-929)
     then standardise the result and hand it in spaces_train/spaces_val under
-    'base_1_aug' or 'base_2_aug'.
+    aug_space_name(k, strategy), e.g. 'base_1_aug_capped'.
 
     Differences from c21, stated: no decoy donors are planted (c21:909-913 --
     they exist to count what an admission rule wrongly takes, and a similarity
@@ -220,10 +307,15 @@ def base_aug_blueprint(base_name, base_width, *, metric_name, task_type,
     precomputed_alloc_scores={base: 1.0} (c21:950), which c21 measured to give
     identical matrices at about half the time.
 
-    `strategy`: c21 ships 'capped' and 'uncapped' (c21:204). Which one the
-    similarity space uses is not decided; 'uncapped' is the default here
-    because that is how c21's own docstring defines B_aug (c21:10).
+    `strategy`: c21 ships 'capped' and 'uncapped' (c21:200-207). Both are
+    similarity spaces since 2026-09-25 (owner decision), so the caller builds
+    one per strategy. Every other field is the same for the two, as in c21,
+    where one Blueprint call takes the strategy as its only varying argument
+    (c21 at HEAD, lines 622-639). 'uncapped' stays the default argument
+    because that is how c21's docstring defines B_aug (c21:10).
     """
+    if strategy not in AUG_STRATEGIES:
+        raise ValueError(f"strategy {strategy!r} not in {AUG_STRATEGIES}")
     from kirby.find_best_hybrid import Blueprint
     return Blueprint(
         reps=[base_name],
@@ -575,10 +667,10 @@ def model_input_ks(n_train, k_max=DEFAULT_K_MAX):
     n07's label_smooth / knn_smooth: min(10, n-1) queried, the first dropped,
     so min(10, n-1) - 1 neighbours (n07:829-842). n07's prox_smooth:
     min(10, n-1) (n07:907). The four neighbour estimators: min(10, n-1)
-    (noise_estimation.py:291). Plus the plan's sweep, 5, 10, 20, and k_max.
+    (noise_estimation.py:291). Plus the swept ks, SWEPT_KS, and k_max.
     """
     base = min(10, n_train - 1)
-    ks = {base - 1, base, k_max, *SWEEP_KS}
+    ks = {base - 1, base, k_max, *SWEPT_KS}
     return sorted(k for k in ks if 1 <= k <= n_train - 1)
 
 

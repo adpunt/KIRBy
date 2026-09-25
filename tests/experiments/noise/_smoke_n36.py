@@ -24,6 +24,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 
+# 2026-09-25: today's similarity (model_input) unless a check sets its own
+# list, and the noise cache in a temporary directory, never the real one.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+import tempfile as _tf
+os.environ['KIRBY_CACHE_DIR'] = _tf.mkdtemp(prefix='n36_smoke_cache_')
+
 os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
@@ -210,9 +216,85 @@ def test_help():
     check('--base-rep is gone', '--base-rep' not in p.stdout)
 
 
+
+def _rows_of(res):
+    """The D-versus-D' rows a run wrote (2026-09-25)."""
+    import json
+    p = (res.get('d_vs_dprime') or {}).get('rows_file')
+    if not p or not os.path.exists(p):
+        return []
+    return [json.loads(l) for l in open(p) if l.strip()]
+
+
+def _with_settings(names, fn):
+    """Run fn() under KIRBY_SIMILARITY_SETTINGS=names, then restore it."""
+    old = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+    os.environ['KIRBY_SIMILARITY_SETTINGS'] = names
+    try:
+        return fn()
+    finally:
+        if old is None:
+            os.environ.pop('KIRBY_SIMILARITY_SETTINGS', None)
+        else:
+            os.environ['KIRBY_SIMILARITY_SETTINGS'] = old
+
+
+
+def _close(a, b, rtol=1e-12):
+    """a == b, floats to rtol. rf's default factory predicts with n_jobs=-1,
+    and its threads sum the trees in no fixed order, so two fits of the same
+    forest can differ in the last bit (measured 2026-09-25: 1.402832974397575
+    against 1.4028329743975747). That is not a change of number."""
+    import math
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k], rtol) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_close(x, y, rtol) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float):
+        return (a == b or (math.isnan(a) and math.isnan(b))
+                or math.isclose(a, b, rel_tol=rtol, abs_tol=0.0))
+    return a == b
+
+def test_rows_and_resume():
+    """2026-09-25: the D-versus-D' rows (or, for a measurement-only experiment,
+    the per-pass checkpoint), a rerun that resumes every pass, and -- where
+    the experiment finds neighbours -- the similarity sweep."""
+    print("\nrows, resume and the similarity sweep:")
+    from experiments.noise.d_vs_dprime import ROW_FIELDS
+    kw = dict(models=['rf', 'svm'], budget_shares=[0.5], seeds=[0], random_draws=1, oof_splits=3)
+    res = run_it(make_data(n_mol=120, seed=4), 'toy_rows', **dict(kw))
+    rows = _rows_of(res)
+    check('R1. D-vs-D\' rows are written, each with exactly the d_vs_dprime '
+          'columns, D and D\' both scored', bool(rows) and all(
+              set(r) == set(ROW_FIELDS) and r['score_D'] is not None
+              for r in rows) and {'rf', 'svm'} <= {r['model'] for r in rows},
+          f'{len(rows)} rows, methods {sorted({r["method"] for r in rows})[:4]}')
+    again = run_it(make_data(n_mol=120, seed=4), 'toy_rows', **dict(kw))
+    got = again['d_vs_dprime']
+    check('R2. a rerun resumes every pass from the checkpoint and returns the '
+          'same scores', got['passes_resumed_from_checkpoint'] > 0
+          and got['rows_written_this_run'] == 0
+          and again['per_space'] == res['per_space'],
+          f"{got['passes_resumed_from_checkpoint']} passes resumed")
+    # The same dataset name: the injected noise is seeded on it, so another
+    # name would compare two different draws. The settings are in the
+    # checkpoint signature, so this run recomputes rather than resumes.
+    names = 'model_input,base_2|none|manhattan,forest_proximity|none|forest'
+    r_sw = _with_settings(names, lambda: run_it(make_data(n_mol=120, seed=4),
+                                                'toy_rows', **dict(kw)))
+    row = r_sw['per_space']['base_1']['rf']['scores']
+    base = res['per_space']['base_1']['rf']['scores']
+    new = [a for a in row if '@base_2|none|manhattan|k5' in a]
+    check('R3. every neighbour rule is also scored under each other setting '
+          'and k, and model_input\'s own columns are unchanged',
+          bool(new) and any('@forest_proximity|none|forest|k20' in a for a in row)
+          and all(_close(row[a], base[a]) for a in base), f'{len(row)} columns')
+
+
 if __name__ == '__main__':
     test_helpers()
     test_run()
+    test_rows_and_resume()
     test_help()
     print()
     if FAIL:

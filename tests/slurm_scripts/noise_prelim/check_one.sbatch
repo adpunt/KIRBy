@@ -22,8 +22,12 @@
 # n_splits=5 while holding one fold, and a full run would resume on them.
 #
 # CLUSTER. htc, by ARC's own division of labour: one node, 8 CPUs, no GPU.
-# --clusters=htc is in the header. NEVER pass --account.
+# --clusters=htc is in the header.
 #   https://arc-user-guide.readthedocs.io/en/latest/job-scheduling.html
+# ACCOUNT (changed 2026-09-25). None in the header, so SLURM bills the default
+# association. Fair share is per cluster and per account; on 2026-09-24 htc
+# stat-cadd stood highest (0.0491). To bill it, add it on the sbatch line:
+#   sbatch --account=$(bash tests/slurm_scripts/where_to_submit.sh --best-cluster-account htc | cut -d' ' -f2) ...
 #
 # WALL. short: 1 h default, 12 h maximum (ARC docs, same page). A one-fold,
 # one-level run twice plus a read of the stored searches is expected to fit;
@@ -54,6 +58,9 @@ COND="${3:-}"
 PRUNING_MODE="${PRUNING_MODE:-calibrated}"
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
+# Skip mode (2026-09-25): full-mode setup.sh re-runs `pip install -e .` on the
+# shared venv and on htc builds HMMER into it (setup.sh:138, :212-240).
+export KIRBY_SKIP_INSTALLS="${KIRBY_SKIP_INSTALLS:-1}"
 . setup.sh
 
 export KIRBY_NO_COLD_SEARCH=1

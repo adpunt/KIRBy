@@ -2172,6 +2172,51 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # they are not cached.
     _per_rep_cache = {}
 
+    # Each (hybrid space, task) block is written to
+    # s10_importance_downstream/<dataset>.partial.jsonl when it returns and
+    # read back on the next attempt (2026-09-25; _checkpoint.py). The stored
+    # unit also carries what that task added to _per_rep_cache, so a later
+    # space still reuses the first space's per-representation arms and still
+    # records per_rep_reused_from_first_space=True, as an uninterrupted run
+    # does. It is stored before _orient_deltas runs further down, so the
+    # orientation is applied exactly once either way. Every model here is
+    # seeded and the folds and fold importances are recomputed identically, so
+    # a block read back holds what a fresh computation gives. A block in which
+    # any fold's hybrid failed to build (n_hybrid_build_failures > 0 anywhere
+    # in it) is not stored, so it is retried.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's10_importance_downstream',
+                           dataset_name),
+        run_identity('s10_importance_downstream', dataset_name, data, config,
+                     kwargs=kwargs, sweep_budgets=list(sweep_budgets),
+                     spaces=list(_spaces_to_run),
+                     recipes=results['hybrid_space_recipes']))
+
+    def _had_build_failure(obj):
+        if isinstance(obj, dict):
+            if (obj.get('n_hybrid_build_failures') or 0) > 0:
+                return True
+            return any(_had_build_failure(v) for v in obj.values())
+        if isinstance(obj, (list, tuple)):
+            return any(_had_build_failure(v) for v in obj)
+        return False
+
+    def _task(space, task, compute):
+        _key = dict(space=space, task=task)
+        if _ck.done(**_key):
+            _saved = _ck.get(**_key)
+            _per_rep_cache.update(_saved['cache'])
+            return _saved['out']
+        _before = set(_per_rep_cache)
+        out = compute()
+        if not _had_build_failure(out):
+            _ck.put({'out': out,
+                     'cache': {k: v for k, v in _per_rep_cache.items()
+                               if k not in _before}}, **_key)
+        return out
+
     for _space in _spaces_to_run:
         _fold_bps = fold_blueprints_by_space[_space]
         _space_out = {}
@@ -2179,12 +2224,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # Task 1: Weighted kNN
         t0 = time.time()
-        _space_out['weighted_knn'] = _run_weighted_knn(
+        _space_out['weighted_knn'] = _task(_space, 'weighted_knn', lambda: _run_weighted_knn(
             reps, labels, groups, config, _fold_bps,
             metric_fn, metric_name, lower_is_better,
             augmentations=augmentations, task_type=task_type,
             fold_splits=fold_splits, fold_importance=fold_importance,
-            hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache)
+            hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache))
         print(f"  [Task 1 elapsed: {time.time() - t0:.1f}s]")
 
         # Task 2: GP with importance-weighted RBF (regression only)
@@ -2194,13 +2239,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                          'reason': 'classification'}
         else:
             t0 = time.time()
-            _space_out['weighted_gp'] = _run_weighted_gp(
+            _space_out['weighted_gp'] = _task(_space, 'weighted_gp', lambda: _run_weighted_gp(
                 reps, labels, groups, config, _fold_bps,
                 metric_fn, metric_name, n_samples,
                 lower_is_better=lower_is_better,
                 augmentations=augmentations,
                 fold_splits=fold_splits, fold_importance=fold_importance,
-                hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache)
+                hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache))
             print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
 
         # Task 3: SVR with importance-weighted RBF (regression only)
@@ -2210,24 +2255,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                           'reason': 'classification'}
         else:
             t0 = time.time()
-            _space_out['weighted_svr'] = _run_weighted_svr(
+            _space_out['weighted_svr'] = _task(_space, 'weighted_svr', lambda: _run_weighted_svr(
                 reps, labels, groups, config, _fold_bps,
                 metric_fn, metric_name, n_samples,
                 lower_is_better=lower_is_better,
                 augmentations=augmentations,
                 fold_splits=fold_splits, fold_importance=fold_importance,
-                hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache)
+                hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache))
             print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
 
         # Task 4: q-RASAR similarity-augmented features
         t0 = time.time()
-        _space_out['qrasar'] = _run_qrasar(
+        _space_out['qrasar'] = _task(_space, 'qrasar', lambda: _run_qrasar(
             reps, labels, groups, config, _fold_bps,
             metric_fn, metric_name, task_type=task_type,
             lower_is_better=lower_is_better,
             augmentations=augmentations,
             fold_splits=fold_splits, fold_importance=fold_importance,
-            hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache)
+            hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache))
         print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
 
         _space_out['built_under_objective'] = (

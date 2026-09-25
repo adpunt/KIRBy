@@ -298,6 +298,111 @@ def _build_ac_reference(data, dataset_name, labels):
     return adj, provenance
 
 
+def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
+                                  config):
+    """The cliff graph's geometry under every similarity setting and k.
+
+    Added 2026-09-25 (plan sections 1-3). Spaces, over every molecule:
+      model_input        every representation concatenated and standardised,
+                         the stage-0 feature space below
+      base_1, base_2     rf's top-2 single representations, ranked by rf's own
+                         score in the stored search (noise_base_reps_by_model)
+                         -- rf because n14 fits no model of its own and rf is
+                         the reference model of the suite's pool reads
+      tanimoto_ecfp4     from the SMILES
+      forest_proximity   the forest fitted on model_input and the labels
+    Neighbour lists through n07.fold_neighbours (noise_cache). Each (setting,
+    k) geometry is written to a checkpoint as it finishes and read back on
+    resume.
+
+    TODO(similarity-sweep 2026-09-25): the augmented spaces and the two
+    hybrids are recipes built from a fold's TRAINING labels; n14 has no fold,
+    so building them here means choosing features from every molecule's
+    label. Whether a whole-dataset build is the right space for a survey that
+    fits nothing is the owner's call; until then those settings are recorded
+    as unavailable, with this reason, and skipped.
+    """
+    from sklearn.preprocessing import StandardScaler
+    from experiments.noise.n07_remediation import (
+        sweep_settings, sweep_ks, usable_ks, fold_neighbours, FoldCheckpoint,
+        similarity_record)
+    from experiments.noise.similarity_space import neighbours_at
+    from experiments._shared import input_fingerprint
+    settings = sweep_settings()
+    reps = data.get('reps') or {}
+    n = len(labels)
+    unavailable = {}
+    spaces = {}
+    if reps:
+        spaces['model_input'] = StandardScaler().fit_transform(np.hstack(
+            [np.nan_to_num(np.asarray(reps[k], dtype=float), nan=0.0)
+             for k in sorted(reps)]))
+    need = {st.space for st in settings}
+    base = []
+    if need & {'base_1', 'base_2'}:
+        try:
+            from experiments._shared import (get_best_search_for_downstream,
+                                             noise_base_reps_by_model)
+            _s, _m = get_best_search_for_downstream(
+                reps, data['labels'], data.get('groups'), downstream_model='rf',
+                budget=None, augmentations=data.get('augmentations'),
+                dataset_name=dataset_name, task_type=data['task_type'],
+                data=data)
+            _b, _miss = noise_base_reps_by_model({'rf': _s}, ['rf'], reps=reps,
+                                                 dataset_name=dataset_name,
+                                                 verbose=False)
+            base = _b.get('rf', [])
+            if not base:
+                unavailable['base_1'] = unavailable['base_2'] = _miss.get('rf')
+        except Exception as exc:
+            unavailable['base_1'] = unavailable['base_2'] = (
+                f'{type(exc).__name__}: {exc}')
+    for i, rn in enumerate(base[:2], start=1):
+        spaces[f'base_{i}'] = StandardScaler().fit_transform(
+            np.asarray(reps[rn], dtype=float))
+    for sp in ('hybrid', 'hybrid_similarity', 'base_1_aug_capped',
+               'base_1_aug_uncapped', 'base_2_aug_capped',
+               'base_2_aug_uncapped'):
+        if sp in need:
+            unavailable[sp] = ('a recipe build chooses features from training '
+                               'labels and n14 has no fold; see the TODO in '
+                               '_cliff_geometry_by_similarity')
+    ckpt = FoldCheckpoint(output_dir, 'n14_activity_cliff_landscape',
+                          dataset_name, tag='geometry', fingerprint={
+                              'input': input_fingerprint(data, config),
+                              'potency': AC_POTENCY_THRESHOLD,
+                              'base': base})
+    nb = fold_neighbours(dataset_name, settings, spaces, None, labels,
+                         smiles_train=data.get('smiles'), is_clf=False)
+    out = {}
+    for st in settings:
+        L = nb.get(st.name)
+        if L is None or not L.get('available'):
+            unavailable.setdefault(st.name, (L or {}).get('reason')
+                                   or unavailable.get(st.space))
+            continue
+        for k in usable_ks(L):
+            def _geo(L=L, k=k):
+                idx = neighbours_at(L, k)[0]
+                adj = np.zeros((n, n), dtype=bool)
+                rows = np.repeat(np.arange(n), idx.shape[1])
+                cols = idx.ravel()
+                gap = np.abs(labels[rows] - labels[cols]) > AC_POTENCY_THRESHOLD
+                adj[rows[gap], cols[gap]] = True
+                adj |= adj.T
+                np.fill_diagonal(adj, False)
+                return _geometry(adj)[0]
+            out.setdefault(st.name, {})[str(k)] = ckpt.cached(
+                [st.name, int(k)], _geo)
+    meta = similarity_record(
+        settings, None, base_reps_rf=base, spaces_unavailable=unavailable,
+        cliff_rule=('an edge joins two molecules when one is among the '
+                    "other's k nearest in the setting and |delta label| > "
+                    f'{AC_POTENCY_THRESHOLD}'),
+        checkpoint_file=ckpt.path, read_back=ckpt.n_resumed)
+    return out, meta
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N14: activity-cliff landscape survey. Trains no downstream models."""
     print("\n" + "=" * 70)
@@ -354,6 +459,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                  'genuine activity endpoints (pIC50/pKi/pKd); for other '
                  'regression targets it is a fixed 2-unit label gap.'),
     }
+
+    # --- 3b. The same cliff graph under every similarity setting ---------
+    # Added 2026-09-25 (plan sections 1 and 6: the cliff definitions in n01,
+    # n14 and n25 take a similarity setting). The graph above is one
+    # similarity -- MMP pairs, or ECFP4 Tanimoto at 0.55 -- and is unchanged.
+    # Here an edge joins two molecules when one is among the other's k nearest
+    # in the setting's features and their labels differ by more than
+    # AC_POTENCY_THRESHOLD, for every k in SWEPT_KS, and _geometry reads the
+    # graph the same way. Every molecule is its own training row: n14 fits no
+    # model and has no held-out fold.
+    geometry_by_similarity, sim_meta = _cliff_geometry_by_similarity(
+        data, dataset_name, labels, output_dir, config)
 
     # --- 4. Feasibility flags for the deferred method families ---
     rep_groups = build_replicate_groups(data)
@@ -429,9 +546,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Stage-0 feature space: {_w} features over "
                   f"{len(labels)} molecules (every representation "
                   f"concatenated, no dimension cap)")
-            stage0 = stage0_diagnostics(
-                X_concat, y_pos, groups, n_splits=n_splits, splitter=cv_split)
-            stage0 = _rescale_stage0(stage0, _params)
+            # Written to a checkpoint when it finishes and read back on resume
+            # (2026-09-25): the widest fit in the suite, more than 14 minutes
+            # on herg_ki, and the only part of n14 that fits anything.
+            from experiments.noise.n07_remediation import FoldCheckpoint
+            from experiments._shared import input_fingerprint
+            _s0ck = FoldCheckpoint(output_dir, 'n14_activity_cliff_landscape',
+                                   dataset_name, tag='stage0', fingerprint={
+                                       'input': input_fingerprint(data, config),
+                                       'n_splits': int(n_splits),
+                                       'width': _w})
+            stage0 = _s0ck.cached(['stage0'], lambda: _rescale_stage0(
+                stage0_diagnostics(X_concat, y_pos, groups, n_splits=n_splits,
+                                   splitter=cv_split), _params))
             print(f"  Stage-0: resid_sd={stage0['resid_sd_label_units']:.3f} "
                   f"label units (={stage0['log_resid_sd']:.3f} SDs of a "
                   f"{_label_sd:.3f}-SD label), "
@@ -473,6 +600,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'stage0_diagnostics': stage0,
         'stage0_error': stage0_error,
         'decision_hint': decision_hint,
+        # 2026-09-25: {setting: {k: _geometry of the k-nearest cliff graph}}.
+        'cliff_geometry_by_similarity': geometry_by_similarity,
+        'similarity': sim_meta,
     }
     print(f"  OPIG standalone candidate: {decision_hint['opig_standalone_candidate']}")
     return results

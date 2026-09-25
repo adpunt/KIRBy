@@ -162,6 +162,17 @@ molecule of very different activity, which is what a cliff and a pair of
 mislabelled neighbours both look like. A win says the model did better when
 those molecules were left alone.
 
+SIMILARITY AXIS, ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 1-3).
+The loop is today's path and computes what it computed before. On top of it,
+each similarity setting x k re-runs the two neighbour detectors in that
+setting, and under cross_val the cleanups that read neighbours (prox_smooth
+only under forest_proximity); all three arms are fitted. The cliff set is not
+on the axis -- see the TODO in cliff_mask_for_dataset.
+KIRBY_SIMILARITY_SETTINGS=model_input runs today's path alone. Every arm writes
+one D-versus-D' row per pass; the accumulators are checkpointed per pass; the
+caches of plan section 3 are used. controls.py's twins of the plain cleanup
+run with KIRBY_NOISE_CONTROLS=1; n25's random_exempt always runs.
+
 Usage:
     python n25_cliff_exemption.py --dataset herg_ki --mode full
 """
@@ -172,6 +183,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import functools
 import time
+import zlib
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
@@ -209,6 +221,19 @@ from experiments.noise.n01_activity_cliff_framework import (
     identify_cliff_pairs, _compute_ecfp4_tanimoto_sim,
     _compute_reaction_tanimoto_sim, _compute_dta_sim, _compute_euclidean_sim,
     SIMILAR_PERCENTILE,
+)
+# The D-versus-D' rows, the per-pass checkpoint, the caches, the similarity
+# axis and the controls (2026-09-25, plan sections 1-3). They live in n23 for
+# the reason given at the top of its shared block.
+from experiments.noise import noise_cache as nc
+from experiments.noise import similarity_space as ss
+from experiments.noise.controls import controls_enabled
+from experiments.noise.n23_uncertainty_cleaning import (
+    RowSink, PassCheckpoint, ensure_dprime_models, swept_similarity,
+    model_similarity_spaces, smiles_for, setting_neighbours, control_twins,
+    cleanup_reads_setting, correction_targets_cached, cached_base_cell,
+    cached_hybrid_cell, CACHEABLE_MODELS, TODAY_SIMILARITY, NO_NEIGHBOURS,
+    TODAY_NEIGHBOUR_CLEANUPS,
 )
 
 
@@ -482,6 +507,17 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
     }
 
     # ── The structural reference ────────────────────────────────────────────
+    # TODO(similarity-sweep 2026-09-25): the cliff set is NOT on the
+    # similarity axis. It is a PAIRWISE test -- similarity at or above 0.55
+    # Tanimoto, or inside the top SIMILAR_PERCENTILE of pairs, AND an activity
+    # gap (n01.identify_cliff_pairs) -- and similarity_space returns k-nearest
+    # neighbour lists, not a pairwise matrix with a threshold. Putting it on
+    # the axis needs a decision the owner has not made: which threshold means
+    # "similar" in a Manhattan or forest distance (a percentile of pairs, as
+    # the fallback here uses, or "among the k nearest"), and whether the
+    # exempt set may then come from the same features the detector reads,
+    # which this file's docstring calls contamination. Until then every
+    # setting of the sweep exempts the same ECFP4 cliff set.
     similar_percentile = None
     if heavy_seqs is not None and domain == 'antibody':
         from experiments.similarity.similarity_helpers import (
@@ -767,6 +803,133 @@ def _drop_blueprint(obj):
 # The run
 # ---------------------------------------------------------------------------
 
+def _pairs_for_detector(detector, scores, sim, only, X_tr_s, X_va_s, y_noisy,
+                        y_val, g_tr, models, targets, cliff_train, rand_train,
+                        n_rand, n_train, flag_rates, cleanups, is_clf,
+                        model_factories, metric_fn, metric_name, pass_key, *,
+                        arm_cell, spared_cell, rows, label_fn, space,
+                        base_noisy, base_clean, condition, level, draw,
+                        fold_i):
+    """Every (setting slot, cleanup) of one detector: the plain cleanup, the
+    cliff exemption and the random exemption, each fitted per model.
+
+    Moved out of run() on 2026-09-25 so today's path and the similarity sweep
+    run the same code. With sim=None, only=None and the two cells given it is
+    the loop that stood in run(), line for line, plus the D-versus-D' rows.
+    `sim` = (neighbour lists, k, setting) hands the lists to a cleanup that
+    reads them (cleanup_reads_setting). `only` restricts the cleanups (the
+    sweep under cross_val, which reads no neighbours, runs only the cleanups
+    that read this setting). arm_cell / spared_cell None: the sweep writes
+    rows only, not the result file's per-arm blocks.
+    """
+    for slot, rate in enumerate(flag_rates):
+        rk = str(rate)
+        for cleanup in cleanups:
+            if only is not None and not (
+                    cleanup in only and cleanup_reads_setting(cleanup, sim[2])):
+                continue
+            axis, vals = setting_axis(cleanup, is_clf)
+            if slot >= len(vals):
+                # Fewer settings than slots: quantile_clip
+                # reads neither axis, so a second row here
+                # would be the same column fitted again.
+                continue
+            strength = (None if axis == 'flag_rate'
+                        else vals[slot])
+            _sim_kw = ({} if sim is None or not cleanup_reads_setting(
+                cleanup, sim[2]) else
+                {'similarity_neighbours': sim[0], 'similarity_k': sim[1]})
+            try:
+                plain = cleaned_training_set(
+                    cleanup, X_tr_s, y_noisy, scores, rate,
+                    is_clf=is_clf, groups=g_tr,
+                    strength=strength, targets=targets, **_sim_kw)
+            except Exception as exc:
+                print(f"      {cleanup} declined: "
+                      f"{type(exc).__name__}: {exc}")
+                plain = None
+            if plain is None:
+                # `remove` left under ten training
+                # molecules, or a target could not be
+                # built. The whole pair is dropped, so the
+                # comparison is never half-scored.
+                continue
+
+            cliff_arm = put_back(plain, cliff_train,
+                                 X_tr_s, y_noisy)
+            rand_arm = put_back(plain, rand_train,
+                                X_tr_s, y_noisy)
+            if spared_cell is not None:
+                spared_cell(rk, cleanup)[pass_key] = {
+                    'n_training_molecules': n_train,
+                    'n_cliff_molecules_in_training':
+                        int(cliff_train.sum()),
+                    'n_cliff_molecules_spared': n_spared(
+                        plain, cliff_arm, cliff_train, y_noisy),
+                    'n_random_control_molecules': int(n_rand),
+                    'n_random_molecules_spared': n_spared(
+                        plain, rand_arm, rand_train, y_noisy),
+                    'setting_axis': axis,
+                    'setting': (rate if axis == 'flag_rate'
+                                else strength),
+                }
+            _setting = rate if axis == 'flag_rate' else strength
+            _ms = f'{detector}|{axis}={_setting}'
+            for mname in models:
+                for arm, cleaned in (('plain', plain),
+                                     ('cliff_exempt', cliff_arm),
+                                     ('random_exempt', rand_arm)):
+                    s = _fit_score(
+                        cleaned, X_va_s, y_val,
+                        model_factories[mname],
+                        metric_fn, metric_name,
+                        label=f'{cleanup}/{arm}/{mname}')
+                    if arm_cell is not None:
+                        arm_cell(rk, mname, cleanup)[arm][pass_key] = s
+                    rows.add(method=cleanup, method_setting=f'{_ms}|arm={arm}',
+                             similarity_setting=label_fn(detector, cleanup),
+                             model_input=space, model=mname,
+                             noise_condition=condition, level=float(level),
+                             draw=int(draw), fold=int(fold_i),
+                             score_D=base_noisy[space][mname].get(pass_key),
+                             score_Dprime=s,
+                             score_clean=base_clean[space][mname].get(pass_key))
+
+            # ── The shared controls (KIRBY_NOISE_CONTROLS=1 only) ──
+            # Twins of the PLAIN cleanup. n25's own random_exempt stays as it
+            # is and always runs: it is the control of the exemption, and the
+            # exemption is this file's question. random_twin is given the
+            # cleanup's own call as `rerun` (controls.random_twin).
+            if not controls_enabled():
+                continue
+
+            def _rerun(sc, r, _c=cleanup, _st=strength, _kw=_sim_kw):
+                return cleaned_training_set(
+                    _c, X_tr_s, y_noisy, sc, r, is_clf=is_clf, groups=g_tr,
+                    strength=_st, targets=targets, **_kw)
+            _seed = (int(draw), int(fold_i), int(zlib.crc32(
+                f'{detector}|{cleanup}|{slot}|{space}|'
+                f'{label_fn(detector, cleanup)}'.encode()) & 0x7FFFFFFF))
+            for cname, tw, why in control_twins(plain, X_tr_s, y_noisy, _seed,
+                                                is_clf=is_clf, rerun=_rerun):
+                if tw is None:
+                    print(f"      {cleanup} {cname} not run: {why}")
+                    continue
+                for mname in models:
+                    s = _fit_score(tw, X_va_s, y_val, model_factories[mname],
+                                   metric_fn, metric_name,
+                                   label=f'{cleanup}/{cname}/{mname}')
+                    rows.add(method=cleanup,
+                             method_setting=f'{_ms}|arm=plain|control={cname}',
+                             similarity_setting=label_fn(detector, cleanup),
+                             model_input=space, model=mname,
+                             noise_condition=condition, level=float(level),
+                             draw=int(draw), fold=int(fold_i),
+                             score_D=base_noisy[space][mname].get(pass_key),
+                             score_Dprime=s,
+                             score_clean=base_clean[space][mname].get(pass_key))
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N25: exempting the cliff molecules from cleaning."""
     print("\n" + "=" * 70)
@@ -796,7 +959,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # config['models'] and forwards no `models` kwarg, so a file that reads
     # kwargs alone silently drops the list the runner was asked for. An explicit
     # kwarg still wins, which is what a smoke or a direct caller passes.
-    downstream_models = list(
+    # rf and svm are added when the caller left them out: every D-versus-D'
+    # row needs them (ensure_dprime_models, owner decision 2026-09-25).
+    downstream_models = ensure_dprime_models(
         kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS_NOISE)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
@@ -1130,6 +1295,79 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     hybrid_failures = []
     provenance = {}
     fold_cliff_counts = []
+    # The similarity sweep's detection readings and missing spaces
+    # (2026-09-25): sim_detection[matrix][model][detector][label][pass].
+    sim_detection = {}
+    sim_unavailable = {}
+
+    # ── Rows, checkpoints, the similarity axis (2026-09-25) ──
+    _metric = (metric_name, metric_fn, lower_is_better)
+    rows = RowSink(output_dir, 'n25_cliff_exemption', dataset_name,
+                   experiment='n25', metric=_metric,
+                   condition=kwargs.get('noise_condition'), data=data,
+                   config=config)
+    # n25 saved nothing until every pass had run. Its accumulators are now
+    # checkpointed after every (level, fold, draw).
+    ckpt = PassCheckpoint(
+        output_dir, 'n25_cliff_exemption', dataset_name,
+        condition=kwargs.get('noise_condition'), data=data, config=config,
+        source_file=__file__,
+        key={'condition': condition, 'detectors': detectors,
+             'flag_rates': flag_rates, 'seeds': seeds, 'levels': levels,
+             'cleanups': list(CLEANUPS), 'models': list(downstream_models),
+             'base_reps': base_by_model, 'n_splits': n_folds,
+             'cliff': {k: kwargs.get(k) for k in (
+                 'cliff_sim_threshold', 'cliff_activity_k',
+                 'cliff_threshold_mode', 'cliff_potency_threshold')}})
+    done_passes = set()
+    _state = ckpt.load()
+    if _state:
+        (base_noisy, base_clean, arm_score, spared, det_rows, premise,
+         matrix_of, hybrid_failures, provenance, fold_cliff_counts,
+         sim_detection, sim_unavailable) = (
+            _state[k] for k in (
+                'base_noisy', 'base_clean', 'arm_score', 'spared', 'det_rows',
+                'premise', 'matrix_of', 'hybrid_failures', 'provenance',
+                'fold_cliff_counts', 'sim_detection', 'sim_unavailable'))
+        done_passes = set(_state['done'])
+        print(f"  resumed from {ckpt.path}: {len(done_passes)} (level, fold, "
+              f"draw) passes already done")
+    sim_axis = swept_similarity()
+    results['similarity_sweep'] = {
+        'settings_env': os.environ.get('KIRBY_SIMILARITY_SETTINGS'),
+        'n_settings_times_k': len(sim_axis),
+        'ks': list(ss.SWEPT_KS),
+        'what_is_swept': (
+            'Beyond today\'s path (TODAY_SIMILARITY on a row), every '
+            'similarity setting x k, per downstream model in its own '
+            'similarity spaces: a detector that reads neighbours '
+            '(neighbor_residual, activity_cliff_aware) is recomputed in the '
+            'setting and drives every cleanup; cross_val keeps today\'s '
+            'scores and drives only the cleanups that read neighbours '
+            '(label_smooth and knn_smooth in any setting, prox_smooth only '
+            'under forest_proximity). All three arms (plain, cliff_exempt, '
+            'random_exempt) are fitted. The cliff set is NOT swept: it is '
+            'still n01\'s ECFP4 Tanimoto reference, see the TODO at '
+            'cliff_mask_for_dataset. The model is fitted on the same matrix '
+            'as today.'),
+    }
+
+    def _save_state():
+        ckpt.save({'base_noisy': base_noisy, 'base_clean': base_clean,
+                   'arm_score': arm_score, 'spared': spared,
+                   'det_rows': det_rows, 'premise': premise,
+                   'matrix_of': matrix_of, 'hybrid_failures': hybrid_failures,
+                   'provenance': provenance,
+                   'fold_cliff_counts': fold_cliff_counts,
+                   'sim_detection': sim_detection,
+                   'sim_unavailable': sim_unavailable,
+                   'done': sorted(done_passes)})
+
+    def _today_label(detector, cleanup):
+        return (TODAY_SIMILARITY
+                if (detector in nc.NEIGHBOUR_DETECTORS
+                    or cleanup in TODAY_NEIGHBOUR_CLEANUPS)
+                else NO_NEIGHBOURS)
 
     t0 = time.time()
     for level in levels:
@@ -1151,6 +1389,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for seed in seeds:
                 pass_key = f'L{level:g}|f{fold_i}|s{seed}'
+                if pass_key in done_passes:
+                    print(f"    {pass_key}: on disk in the checkpoint")
+                    continue
                 spec = noise_spec_for(dataset_name, condition, level,
                                       noise_seed=seed, is_clf=is_clf)
                 y_noisy, corrupt_mask, prov = inject_train_labels(
@@ -1205,10 +1446,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _bcells = []
                     for _rn, _ms in base_rank_groups(
                             base_by_model, _k, downstream_models).items():
-                        scaler = StandardScaler()
-                        _bcells.append((
-                            scaler.fit_transform(_tr_reps[_rn]),
-                            scaler.transform(_va_reps[_rn]), list(_ms)))
+                        # noise_cache.cached_scaled since 2026-09-25.
+                        _Xt, _Xv = cached_base_cell(dataset_name, reps[_rn],
+                                                    train_idx, val_idx)
+                        _bcells.append((_Xt, _Xv, list(_ms)))
                     fold_spaces[_bsp] = _bcells
                 for _sp in spaces:
                     if _sp in BASE_SPACES:
@@ -1217,11 +1458,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     for _bp_m, _mnames, _shareable in group_models_by_recipe(
                             {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                              for _m in downstream_models}, downstream_models):
-                        X_tr_h, X_va_h = hybrid_for_fold(
-                            _tr_reps, _va_reps, y_noisy, _bp_m, g_tr,
+                        # noise_cache.cached_hybrid_for_fold since 2026-09-25
+                        # (plan section 3).
+                        X_tr_h, X_va_h = cached_hybrid_cell(
+                            dataset_name, _tr_reps, _va_reps, y_noisy, _bp_m,
+                            g_tr, None if _shareable else _mnames[0],
                             None if _shareable
                             else model_factories[_mnames[0]](),
-                            metric_fn, lower_is_better,
+                            _metric, train_idx,
                             augmentations_train=_tr_augs,
                             augmentations_val=_va_augs)
                         if X_tr_h is None:
@@ -1234,6 +1478,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                        sc_h.transform(X_va_h), list(_mnames)))
                     if _cells:
                         fold_spaces[_sp] = _cells
+                hybrid_by_model = {}
+                for _sp, _cs in fold_spaces.items():
+                    if _sp in BASE_SPACES:
+                        continue
+                    for _Xt, _Xv, _ms in _cs:
+                        for _m in _ms:
+                            hybrid_by_model.setdefault(_m, {})[_sp] = _Xt
 
                 for space in spaces:
                     for X_tr_s, X_va_s, cell_models in fold_spaces.get(
@@ -1251,11 +1502,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # matrix). They depend on the features, the labels and the
                         # groups and on nothing else -- not the suspicion score,
                         # not the strength, not which model is about to be fitted.
-                        _targets = correction_targets(
-                            X_tr_s, y_noisy, groups=g_tr,
-                            want=targets_needed(CLEANUPS))
+                        # Through noise_cache since 2026-09-25.
+                        _want = targets_needed(CLEANUPS)
+                        _targets = (correction_targets_cached(
+                            dataset_name, X_tr_s, y_noisy, g_tr, _want)
+                            if _want else {})
 
                         for mname in cell_models:
+                            # A seeded model's two baseline fits go through
+                            # noise_cache (n07._evaluate_fold's
+                            # cache_dataset, 2026-09-25): the same fit, stored.
+                            _cd = (dataset_name if mname in CACHEABLE_MODELS
+                                   else None)
                             # The score to beat: the same corrupted labels, no
                             # cleaning. One fit per (pass, matrix, model), shared by
                             # every cleanup, setting, detector and arm.
@@ -1263,7 +1521,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 X_tr_s, X_va_s, y_noisy, y_val, 'noisy_baseline',
                                 0.0, model_factories[mname], metric_fn,
                                 is_clf=is_clf, metric_name=metric_name,
-                                dataset_name=dataset_name, precomputed_y_tr=y_noisy)
+                                dataset_name=dataset_name, precomputed_y_tr=y_noisy,
+                                cache_dataset=_cd, cache_model_name=mname)
                             base_noisy[space][mname][pass_key] = (
                                 float(sc) if sc is not None else float('nan'))
                             # The ceiling: the labels before anything was injected.
@@ -1272,15 +1531,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 X_tr_s, X_va_s, y_clean_train, y_val, 'no_noise',
                                 0.0, model_factories[mname], metric_fn,
                                 is_clf=is_clf, metric_name=metric_name,
-                                dataset_name=dataset_name)
+                                dataset_name=dataset_name,
+                                cache_dataset=_cd, cache_model_name=mname)
                             base_clean[space][mname][pass_key] = (
                                 float(sc) if sc is not None else float('nan'))
 
+                        today_scores = {}
                         for detector in detectors:
                             try:
-                                scores = _compute_noise_scores(
-                                    X_tr_s, y_noisy, is_clf=is_clf,
-                                    detector=detector, groups=g_tr)
+                                # noise_cache.cached_detector_scores with no
+                                # list IS n07._compute_noise_scores, stored.
+                                scores = nc.cached_detector_scores(
+                                    dataset_name, X_tr_s, y_noisy,
+                                    is_clf=is_clf, detector=detector,
+                                    groups=g_tr)
                             except Exception as exc:
                                 print(f"      {detector} refused: "
                                       f"{type(exc).__name__}: {exc}")
@@ -1288,6 +1552,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             if scores is None:
                                 continue
                             scores = np.asarray(scores, dtype=float)
+                            today_scores[detector] = scores
 
                             det = detection_scores(corrupt_mask, scores, condition)
                             if det is not None:
@@ -1299,65 +1564,115 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 premise.setdefault(ckey, {}).setdefault(
                                     detector, {})[pass_key] = pr
 
-                            for slot, rate in enumerate(flag_rates):
-                                rk = str(rate)
-                                for cleanup in CLEANUPS:
-                                    axis, vals = setting_axis(cleanup, is_clf)
-                                    if slot >= len(vals):
-                                        # Fewer settings than slots: quantile_clip
-                                        # reads neither axis, so a second row here
-                                        # would be the same column fitted again.
-                                        continue
-                                    strength = (None if axis == 'flag_rate'
-                                                else vals[slot])
-                                    try:
-                                        plain = cleaned_training_set(
-                                            cleanup, X_tr_s, y_noisy, scores, rate,
-                                            is_clf=is_clf, groups=g_tr,
-                                            strength=strength, targets=_targets)
-                                    except Exception as exc:
-                                        print(f"      {cleanup} declined: "
-                                              f"{type(exc).__name__}: {exc}")
-                                        plain = None
-                                    if plain is None:
-                                        # `remove` left under ten training
-                                        # molecules, or a target could not be
-                                        # built. The whole pair is dropped, so the
-                                        # comparison is never half-scored.
-                                        continue
+                            _pairs_for_detector(
+                                detector, scores, None, None, X_tr_s, X_va_s,
+                                y_noisy, y_val, g_tr, cell_models, _targets,
+                                cliff_train, rand_train, n_rand, n_train,
+                                flag_rates, CLEANUPS, is_clf, model_factories,
+                                metric_fn, metric_name, pass_key,
+                                arm_cell=lambda rk, m, c, _d=detector, _s=space:
+                                    arm_score[_s][_d][rk][m][c],
+                                spared_cell=lambda rk, c, _d=detector, _k=ckey: (
+                                    spared.setdefault(_k, {})
+                                    .setdefault(_d, {})
+                                    .setdefault(rk, {})
+                                    .setdefault(c, {})),
+                                rows=rows, label_fn=_today_label, space=space,
+                                base_noisy=base_noisy, base_clean=base_clean,
+                                condition=condition, level=level, draw=seed,
+                                fold_i=fold_i)
 
-                                    cliff_arm = put_back(plain, cliff_train,
-                                                         X_tr_s, y_noisy)
-                                    rand_arm = put_back(plain, rand_train,
-                                                        X_tr_s, y_noisy)
-                                    _spared_cell = (
-                                        spared.setdefault(ckey, {})
-                                        .setdefault(detector, {})
-                                        .setdefault(rk, {})
-                                        .setdefault(cleanup, {}))
-                                    _spared_cell[pass_key] = {
-                                        'n_training_molecules': n_train,
-                                        'n_cliff_molecules_in_training':
-                                            int(cliff_train.sum()),
-                                        'n_cliff_molecules_spared': n_spared(
-                                            plain, cliff_arm, cliff_train, y_noisy),
-                                        'n_random_control_molecules': int(n_rand),
-                                        'n_random_molecules_spared': n_spared(
-                                            plain, rand_arm, rand_train, y_noisy),
-                                        'setting_axis': axis,
-                                        'setting': (rate if axis == 'flag_rate'
-                                                    else strength),
-                                    }
-                                    for mname in cell_models:
-                                        for arm, cleaned in (('plain', plain),
-                                                             ('cliff_exempt', cliff_arm),
-                                                             ('random_exempt', rand_arm)):
-                                            arm_score[space][detector][rk][mname][
-                                                cleanup][arm][pass_key] = _fit_score(
-                                                    cleaned, X_va_s, y_val,
-                                                    model_factories[mname],
-                                                    metric_fn, metric_name,
-                                                    label=f'{cleanup}/{arm}/{mname}')
+                        # ── The similarity sweep (2026-09-25) ──
+                        if not sim_axis:
+                            continue
+                        _smi = smiles_for(data, train_idx)
+                        for mname in cell_models:
+                            _spaces_tr, _why = model_similarity_spaces(
+                                dataset_name, data, model_name=mname,
+                                factory=model_factories[mname],
+                                base_reps=base_by_model.get(mname),
+                                hybrid_train=hybrid_by_model.get(mname),
+                                train_idx=train_idx, val_idx=val_idx,
+                                y_train=y_noisy, groups_train=g_tr,
+                                metric=_metric, task_type=task_type,
+                                model_input_train=X_tr_s)
+                            for _sp_u, _w in _why.items():
+                                sim_unavailable.setdefault(
+                                    _sp_u, {}).setdefault(mname, _w)
+                            _lists = {}
+                            for label, sset, kk in sim_axis:
+                                if sset.name not in _lists:
+                                    _ex = setting_neighbours(
+                                        dataset_name, sset, _spaces_tr,
+                                        y_noisy, exclude_groups=g_tr,
+                                        smiles_train=_smi, is_clf=is_clf)
+                                    _pl = (_ex if g_tr is None else
+                                           setting_neighbours(
+                                               dataset_name, sset, _spaces_tr,
+                                               y_noisy, exclude_groups=None,
+                                               smiles_train=_smi,
+                                               is_clf=is_clf))
+                                    _lists[sset.name] = (_ex, _pl)
+                                nb_ex, nb_pl = _lists[sset.name]
+                                if not (nb_ex.get('available')
+                                        and nb_pl.get('available')):
+                                    sim_unavailable.setdefault(
+                                        sset.space, {}).setdefault(
+                                            mname, nb_ex.get('reason')
+                                            or nb_pl.get('reason'))
+                                    continue
+                                for detector in detectors:
+                                    if detector in nc.NEIGHBOUR_DETECTORS:
+                                        try:
+                                            s_scores = nc.cached_detector_scores(
+                                                dataset_name, X_tr_s, y_noisy,
+                                                is_clf=is_clf,
+                                                detector=detector, groups=g_tr,
+                                                similarity_neighbours=nb_ex,
+                                                similarity_k=kk)
+                                        except Exception as exc:
+                                            print(f"      {detector} in {label} "
+                                                  f"refused: "
+                                                  f"{type(exc).__name__}: {exc}")
+                                            continue
+                                        if s_scores is None:
+                                            continue
+                                        s_scores = np.asarray(s_scores,
+                                                              dtype=float)
+                                        det = detection_scores(
+                                            corrupt_mask, s_scores, condition)
+                                        if det is not None:
+                                            (sim_detection.setdefault(ckey, {})
+                                             .setdefault(mname, {})
+                                             .setdefault(detector, {})
+                                             .setdefault(label, {}))[
+                                                 pass_key] = det
+                                        only = None
+                                    elif detector in today_scores:
+                                        s_scores = today_scores[detector]
+                                        only = TODAY_NEIGHBOUR_CLEANUPS
+                                    else:
+                                        continue
+                                    _pairs_for_detector(
+                                        detector, s_scores, (nb_pl, kk, sset),
+                                        only, X_tr_s, X_va_s, y_noisy, y_val,
+                                        g_tr, [mname], _targets, cliff_train,
+                                        rand_train, n_rand, n_train,
+                                        flag_rates, CLEANUPS, is_clf,
+                                        model_factories, metric_fn,
+                                        metric_name, pass_key,
+                                        arm_cell=None, spared_cell=None,
+                                        rows=rows,
+                                        label_fn=lambda d, c, _l=label: _l,
+                                        space=space, base_noisy=base_noisy,
+                                        base_clean=base_clean,
+                                        condition=condition, level=level,
+                                        draw=seed, fold_i=fold_i)
+                # The pass is finished: its rows to disk, then the
+                # accumulators to the checkpoint.
+                rows.flush()
+                done_passes.add(pass_key)
+                _save_state()
                 print(f"    {pass_key} done [{time.time() - t0:.0f}s]")
 
     if hybrid_failures:
@@ -1477,7 +1792,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results['summary'] = _summarise(results, downstream_models, flag_rates,
                                     detectors, spaces, metric_name, CLEANUPS)
+    # The similarity sweep's detection readings per pass, and the spaces that
+    # could not be built (2026-09-25).
+    results['similarity_sweep']['detection_by_matrix'] = convert_numpy(
+        sim_detection)
+    results['similarity_sweep']['spaces_unavailable'] = sim_unavailable
+    results['rows'] = rows.summary()
+    results['controls_run'] = bool(controls_enabled())
     _print_summary(results, metric_name)
+    print(f"  D-versus-D' rows: {rows.n_written} written this run to "
+          f"{rows.path or 'memory'}")
+    ckpt.clear()
 
     save_experiment_results(results, output_dir, 'n25_cliff_exemption',
                             dataset_name)

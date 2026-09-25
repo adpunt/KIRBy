@@ -132,6 +132,14 @@ from kirby.hybrid import compute_feature_importance
 from kirby.utils.noise_estimation import (
     weights_from_scores, forest_leaf_ids, forest_proximity_distance,
     FOREST_TREES, FOREST_MIN_SAMPLES_LEAF, FOREST_SEED)
+# The shared similarity axis, the D-versus-D' rows, the controls and the
+# per-fold checkpoint, added 2026-09-25 (plan sections 1-3). See
+# _sim_axis_n15_n22.
+from experiments.noise import _sim_axis_n15_n22 as sx
+from experiments.noise.similarity_space import SWEPT_KS, neighbours_at
+
+# The name the rows file, the checkpoint and the result file are filed under.
+EXP_FULL_NAME = 'n21_neighbour_distance'
 
 
 # The two neighbour-based detectors n12 runs, so the two experiments can be read
@@ -286,6 +294,13 @@ def weight_features(X_standardized, importance, exponent):
     exponent 0.5 and the smoke can assert it.
 
     An all-zero importance returns X_standardized untouched.
+
+    TODO(similarity-sweep 2026-09-25): plan section 1 says n12's and n21's own
+    weighting copies are replaced by kirby.similarity.preprocessing.
+    fold_weights. Not done here: this file's own spaces sweep the exponent
+    (0.5 = n12's space, which the smoke asserts), and replacing it changes
+    every importance_weighted number n21 has written. The shared similarity
+    axis (_sweep_pass) already weights through fold_weights. Owner's call.
     """
     imp = np.maximum(np.asarray(importance, dtype=float), 0)
     if importance_is_all_zero(imp):
@@ -352,6 +367,19 @@ def neighbours_in_space(X, k, metric):
     nn.fit(X)
     _d, idx = nn.kneighbors(X)
     return idx[:, 1:k + 1]
+
+
+def _cached_neighbours_in_space(dataset, X, k, metric):
+    """neighbours_in_space, read from noise_cache when the same matrix, k
+    and metric were queried before. Added 2026-09-25 (plan section 3). The
+    process-wide distance setting is in every key (noise_cache.
+    process_settings), which covers metric=None."""
+    from experiments.noise import noise_cache as _nc
+    return np.asarray(_nc.cached(
+        dataset, 'n21_neighbours',
+        {'X': _nc.array_hash(np.asarray(X)), 'k': int(k),
+         'metric': None if metric is None else str(metric)},
+        lambda: neighbours_in_space(X, k, metric)))
 
 
 def neighbours_in_distance_matrix(D, k):
@@ -544,7 +572,7 @@ def plain_reference_for(spec, metrics):
 
 def _build_hybrid_space(train_reps, val_reps, y_noisy, bp, groups_train,
                         train_augs, val_augs, model, metric_fn,
-                        lower_is_better):
+                        lower_is_better, cache=None):
     """This fold's hybrid features, rebuilt under the corrupted labels.
 
     `noise_helpers.hybrid_for_fold` does the work: it narrows the pool to the
@@ -556,11 +584,31 @@ def _build_hybrid_space(train_reps, val_reps, y_noisy, bp, groups_train,
     Returns (X_hybrid, None) or (None, reason). `hybrid_for_fold` prints and
     returns (None, None) on a failure rather than raising, so the reason
     recorded here is that it returned nothing.
+
+    `cache`, added 2026-09-25 (plan section 3): {'dataset', 'model_name',
+    'metric_name', 'train_idx'} sends the same call through
+    noise_cache.cached_hybrid_for_fold, so the shared similarity axis's
+    'hybrid' / 'hybrid_similarity' spaces read this build back. Under a
+    geometry recipe the model is handed as None: hybrid_for_fold drops it
+    there anyway, and None is what the similarity axis's build passes, so
+    the two share one cache entry. None (the default) calls hybrid_for_fold
+    directly, as before.
     """
-    X_tr_h, _X_va_h = hybrid_for_fold(
-        train_reps, val_reps, y_noisy, bp, groups_train,
-        model, metric_fn, lower_is_better,
-        augmentations_train=train_augs, augmentations_val=val_augs)
+    if cache is None:
+        X_tr_h, _X_va_h = hybrid_for_fold(
+            train_reps, val_reps, y_noisy, bp, groups_train,
+            model, metric_fn, lower_is_better,
+            augmentations_train=train_augs, augmentations_val=val_augs)
+    else:
+        from experiments.noise.noise_cache import cached_hybrid_for_fold
+        from experiments.noise.noise_helpers import recipe_is_geometry
+        _geo = recipe_is_geometry(bp)
+        X_tr_h, _X_va_h = cached_hybrid_for_fold(
+            cache['dataset'], train_reps, val_reps, y_noisy, bp, groups_train,
+            None if _geo else model, metric_fn, lower_is_better,
+            model_name=None if _geo else cache['model_name'],
+            metric_name=cache['metric_name'], train_idx=cache['train_idx'],
+            augmentations_train=train_augs, augmentations_val=val_augs)
     if X_tr_h is None:
         return None, 'hybrid_for_fold could not build this fold'
     return X_tr_h, None
@@ -568,8 +616,16 @@ def _build_hybrid_space(train_reps, val_reps, y_noisy, bp, groups_train,
 
 def _spaces_for_pass(X_base_raw, X_base_std, y_noisy, is_clf, specs,
                      importance_methods, forest_kw, hybrid_X, errors,
-                     pass_key, hybrid_sim_X=None):
+                     pass_key, hybrid_sim_X=None, dataset=None):
     """Build every space this pass scores, once.
+
+    `dataset`, added 2026-09-25 (plan section 3): given, each importance
+    vector is read from noise_cache when (X_base_raw, y_noisy, method) were
+    scored before -- keyed on the content of the matrix and of the noisy label
+    vector, so level 0.0, which hands every seed the clean labels, fits it
+    once per (fold, representation, method). compute_feature_importance is
+    seeded (random_state 42 by default, hybrid.py:4692) and the thread counts
+    are in every key. None computes it directly, as before.
 
     Returns ({key: ('features', X, metric) or ('distance', D, None)},
              {key: True for every weighted space whose importance was all zero}).
@@ -586,8 +642,19 @@ def _spaces_for_pass(X_base_raw, X_base_std, y_noisy, is_clf, specs,
     imp_by_method = {}
     for imp_method in importance_methods:
         try:
-            imp_by_method[imp_method] = compute_feature_importance(
-                {'base': X_base_raw}, y_noisy, method=imp_method)['base']
+            def _imp(_m=imp_method):
+                return np.asarray(compute_feature_importance(
+                    {'base': X_base_raw}, y_noisy, method=_m)['base'],
+                    dtype=float)
+            if dataset is None:
+                imp_by_method[imp_method] = _imp()
+            else:
+                from experiments.noise import noise_cache as _nc
+                imp_by_method[imp_method] = np.asarray(_nc.cached(
+                    dataset, 'n21_importance',
+                    {'X': _nc.array_hash(X_base_raw),
+                     'y': _nc.array_hash(y_noisy), 'method': str(imp_method),
+                     'random_state': 42}, _imp))
         except Exception as exc:
             errors[f'{pass_key}|importance|{imp_method}'] = \
                 f'{type(exc).__name__}: {exc}'
@@ -937,9 +1004,159 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'per_level': {},
     }
 
+    # ── The main measurement, the shared similarity axis and the checkpoint ──
+    # Added 2026-09-25 (plan sections 1-3).
+    #
+    # ROWS. The repaired fit IS a D' -- the corrupted training fold with the
+    # suspicion score turned into a row weight -- so every repaired fit above
+    # writes one d_vs_dprime row beside the corrupted fit (score_D) and the
+    # clean one (score_clean), from numbers already computed: no refit. Their
+    # similarity_setting is 'n21:<this file's own space key>|k=<k>'. The prefix
+    # is there because this file's own distances (plain, importance-weighted,
+    # forest, its two hybrids) are found by its own code under its own metric
+    # names and are not claimed to be any shared setting.
+    #
+    # THE SHARED SIMILARITY AXIS. The same two detectors and the same repair,
+    # with the neighbours found in every setting of sx.sweep_settings() --
+    # the first downstream model's top-2 single representations (the ones
+    # base_used names), each plus augmented features, the two hybrids this file
+    # builds, ECFP4 Tanimoto, forest proximity, x four weightings x two
+    # distances -- at every k in SWEPT_KS. Detection average precision per
+    # (single representation, setting, k, detector) goes to
+    # per_level[level]['similarity_axis']; every repaired fit goes to the rows.
+    # No neighbour list excludes anything, as this file's own do not.
+    # KIRBY_SIMILARITY_SETTINGS=model_input switches it off.
+    #
+    # CHECKPOINT. Every accumulator is pickled after every (level, fold) and
+    # restored on a re-run of this condition; rows resume through done_keys.
+    metric = (metric_name, metric_fn, lower_is_better)
+    rows = sx.Rows(output_dir, EXP_FULL_NAME, dataset_name, condition=condition)
+    sweep = sx.sweep_settings()
+    results['rows'] = rows.summary()
+    results['similarity_settings_swept'] = [s_.name for s_ in sweep]
+    results['similarity_ks_swept'] = list(SWEPT_KS) if sweep else []
+    results['similarity_axis_note'] = (
+        "per_level[level]['similarity_axis'] holds detection average precision "
+        "with the neighbours found in each shared similarity setting, keyed "
+        "'<base_k>/<setting>|k=<k>'. The repaired fits are in the rows file.")
+    ck = sx.FoldCheckpoint(
+        output_dir, EXP_FULL_NAME, dataset_name,
+        sx.run_signature(data, config, {
+            'levels': levels, 'k_values': k_values, 'detectors': detectors,
+            'importance_methods': importance_methods, 'metrics': metrics,
+            'exponents': exponents, 'seeds': seeds, 'forest': forest_kw,
+            'models': downstream_models, 'base_used': base_used,
+            'include_hybrid': include_hybrid}),
+        condition=condition)
+    _st0 = ck.state or {}
+    if _st0:
+        results['per_level'] = _st0['per_level']
+    _row_mi = {b: f'{b}:{rn}' for b, rn in base_used.items()}
+
+    def _n21_ident(detector, sim, base, level, seed, fold_i):
+        return sx.identity(
+            dataset=dataset_name, experiment=EXP_FULL_NAME,
+            method=f'{detector}_weight',
+            method_setting=f'strength={WEIGHT_STRENGTH}|shape={WEIGHT_METHOD}',
+            similarity_setting=sim, model_input=_row_mi[base],
+            noise_condition=condition, level=float(level), draw=int(seed),
+            fold=int(fold_i))
+
+    def _sweep_pass(level, seed, fold_i, pass_key, fold_key0, base_mats,
+                    train_reps, val_reps, train_augs, val_augs, train_idx,
+                    g_train, y_noisy, cmask, y_val, _hyb_ok, noisy, clean,
+                    sim_ap, sim_unavailable):
+        """Both detectors and the repair under every shared similarity
+        setting and k, per single representation. The spaces are the first
+        downstream model's (rank_owner), as the rest of this file's are."""
+        smiles_tr = sx.smiles_for(data, train_idx)
+        for _b, (_raw, X_base_std, X_eval_std) in base_mats.items():
+            sp_tr, _sp_va, unav = sx.build_spaces(
+                dataset_name, sweep, X_model_tr=X_base_std,
+                train_reps=train_reps, val_reps=val_reps, train_idx=train_idx,
+                base_names=list(base_used.values()),
+                recipes={'hybrid': bp, 'hybrid_similarity': bp_sim},
+                y_train=y_noisy, groups_train=g_train, model_name=rank_owner,
+                model_factory=model_factories[rank_owner], metric=metric,
+                task_type=task_type, augmentations_train=train_augs,
+                augmentations_val=val_augs, hybrid_augmentations=True)
+            for setting in sweep:
+                if setting.space in unav:
+                    sim_unavailable.setdefault(setting.name,
+                                               unav[setting.space])
+                    continue
+                nb, why = sx.neighbour_lists(dataset_name, setting, sp_tr,
+                                             y_noisy, smiles_train=smiles_tr,
+                                             is_clf=is_clf)
+                if nb is None:
+                    sim_unavailable.setdefault(setting.name, why)
+                    continue
+                for k in sx.ks_held(nb):
+                    sim = sx.sim_name(setting, k)
+                    idx = neighbours_at(nb, k)[0]
+                    for detector in detectors:
+                        try:
+                            scores = suspicion_from_neighbours(
+                                idx, y_noisy, detector, is_clf)
+                        except Exception as exc:
+                            print(f"      {detector} under {sim}: "
+                                  f"{type(exc).__name__}: {exc}")
+                            continue
+                        det = detection_scores(cmask, scores, condition)
+                        if det is not None:
+                            sim_ap.setdefault(f'{_b}/{sim}', {})[
+                                f'{detector}|{pass_key}'] = \
+                                det['detection_average_precision']
+                        ident = _n21_ident(detector, sim, _b, level, seed,
+                                           fold_i)
+                        if rows.is_done(ident, downstream_models) and not \
+                                sx.controls_enabled():
+                            continue
+                        try:
+                            weights = weights_from_scores(
+                                scores, strength=WEIGHT_STRENGTH,
+                                method=WEIGHT_METHOD)
+                            cleaned = {'X': X_base_std, 'y': y_noisy,
+                                       'sample_weight': weights, 'keep': None,
+                                       'label_column': None}
+                        except Exception as exc:
+                            print(f"      weights under {sim}: "
+                                  f"{type(exc).__name__}: {exc}")
+                            cleaned = None
+                        _kw = dict(
+                            X_tr=X_base_std, y_D=y_noisy, X_va=X_eval_std,
+                            y_va=y_val, metric=metric,
+                            factories={m: model_factories[m]
+                                       for m in downstream_models},
+                            score_D={m: noisy[_b][m][pass_key]
+                                     for m in downstream_models
+                                     if pass_key in noisy[_b][m]},
+                            score_clean={m: clean[_b][m][fold_key0]
+                                         for m in downstream_models
+                                         if fold_key0 in clean[_b][m]})
+                        sx.dprime_rows(rows, dataset_name, ident, cleaned,
+                                       **_kw)
+
+                        def _rerun(sc_, _r, _d=detector):
+                            # The same repair on another score column.
+                            return {'X': X_base_std, 'y': y_noisy,
+                                    'sample_weight': weights_from_scores(
+                                        sc_, strength=WEIGHT_STRENGTH,
+                                        method=WEIGHT_METHOD),
+                                    'keep': None, 'label_column': None}
+                        sx.control_rows(
+                            rows, dataset_name, ident, cleaned,
+                            seed=sx.seed_of(level, seed, fold_i, _b, sim,
+                                            detector),
+                            is_clf=is_clf, rerun=_rerun, **_kw)
+
     t0 = time.time()
     for level in levels:
         lvl_key = f'{level:g}'
+        if lvl_key in results['per_level']:
+            print(f"\n  === level {lvl_key}: already in the checkpoint, "
+                  f"skipped ===")
+            continue
         print(f"\n  === level {lvl_key} ===")
         t_level = time.time()
 
@@ -955,8 +1172,21 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         counts = {'n_corrupted': [], 'n_training': []}
         errors = {}
         provenance = {}
+        # {f'{base}/{setting}|k={k}': {f'{detector}|{pass_key}': average
+        # precision}} for the shared similarity axis.
+        sim_ap = {}
+        sim_unavailable = {}
+        if _st0.get('level') == lvl_key:
+            # This level was part-way through when the run stopped.
+            (clean, noisy, det_ap, det_pk, rep_score, zero_imp_builds, counts,
+             errors, provenance, sim_ap, sim_unavailable) = _st0['level_acc']
 
         for fold_i, (train_idx, val_idx) in enumerate(splits):
+            if ck.is_done(f'{lvl_key}|f{fold_i}'):
+                print(f"    level {lvl_key} fold {fold_i}: already in the "
+                      f"checkpoint, skipped")
+                continue
+            fold_rows = []
             y_val = labels[val_idx]
             # {base space: (raw training, z-scored training, z-scored held out)}
             base_mats = {}
@@ -1028,7 +1258,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         train_reps, val_reps, y_noisy, _bp, g_train,
                         train_augs, val_augs,
                         model_factories[downstream_models[0]](),
-                        metric_fn, lower_is_better)
+                        metric_fn, lower_is_better,
+                        cache={'dataset': dataset_name,
+                               'model_name': downstream_models[0],
+                               'metric_name': metric_name,
+                               'train_idx': train_idx})
                     if _X is None:
                         errors[f'{pass_key}|{_fam}'] = why
                     elif _fam == 'hybrid':
@@ -1046,7 +1280,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     _built1, _zero1 = _spaces_for_pass(
                         X_base_raw, X_base_std, y_noisy, is_clf, _specs_one,
                         importance_methods, forest_kw, hybrid_X, errors,
-                        f'{_b}|{pass_key}', hybrid_sim_X=hybrid_sim_X)
+                        f'{_b}|{pass_key}', hybrid_sim_X=hybrid_sim_X,
+                        dataset=dataset_name)
                     for key in _zero1:
                         _pk = f'{_b}/{key}'
                         zero_imp_builds[_pk] = zero_imp_builds.get(_pk, 0) + 1
@@ -1064,8 +1299,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 if _is_hybrid and (key1, k) in hybrid_nbrs:
                                     nbrs = hybrid_nbrs[(key1, k)]
                                 elif kind == 'features':
-                                    nbrs = neighbours_in_space(
-                                        payload, k_eff, space_metric)
+                                    # Through noise_cache since 2026-09-25
+                                    # (plan section 3): the plain lists depend
+                                    # on the fold only, and were rebuilt for
+                                    # every level and seed.
+                                    nbrs = _cached_neighbours_in_space(
+                                        dataset_name, payload, k_eff,
+                                        space_metric)
                                 else:
                                     nbrs = neighbours_in_distance_matrix(
                                         payload, k_eff)
@@ -1118,10 +1358,33 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                                       _predict_for_metric(
                                                           mdl, X_eval_std,
                                                           metric_name)))
+                                        fold_rows.append(sx.row(
+                                            _n21_ident(
+                                                detector, f'n21:{key1}|k={k}',
+                                                _b, level, seed, fold_i),
+                                            model=mn, metric=metric,
+                                            score_D=noisy[_b][mn].get(pass_key),
+                                            score_Dprime=rep_score[space_key][
+                                                cell],
+                                            score_clean=clean[_b][mn].get(
+                                                fold_key0)))
                                     except Exception as exc:
                                         errors[f'{space_key}|{cell}'] = \
                                             f'{type(exc).__name__}: {exc}'
 
+                if sweep:
+                    _sweep_pass(level, seed, fold_i, pass_key, fold_key0,
+                                base_mats, train_reps, val_reps, train_augs,
+                                val_augs, train_idx, g_train, y_noisy, cmask,
+                                y_val, hybrid_X is not None or bp is None,
+                                noisy, clean, sim_ap, sim_unavailable)
+
+            rows.write(fold_rows)
+            ck.save(f'{lvl_key}|f{fold_i}', {
+                'per_level': results['per_level'], 'level': lvl_key,
+                'level_acc': (clean, noisy, det_ap, det_pk, rep_score,
+                              zero_imp_builds, counts, errors, provenance,
+                              sim_ap, sim_unavailable)})
             print(f"    level {lvl_key} fold {fold_i} done, "
                   f"{len(errors)} failures so far [{time.time() - t0:.0f}s]")
 
@@ -1129,7 +1392,23 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             specs, downstream_models, detectors, k_values, seeds,
             clean, noisy, det_ap, det_pk, rep_score, zero_imp_builds,
             counts, errors, provenance, lower_is_better, base_used))
+        if sweep:
+            results['per_level'][lvl_key]['similarity_axis'] = convert_numpy({
+                key: {
+                    det: {'average_precision_mean': _mean(
+                              [v for c, v in cells.items()
+                               if c.split('|', 1)[0] == det]),
+                          'n_passes': sum(1 for c in cells
+                                          if c.split('|', 1)[0] == det)}
+                    for det in detectors}
+                for key, cells in sim_ap.items()})
+            if sim_unavailable:
+                results['per_level'][lvl_key][
+                    'similarity_axis_unavailable'] = sim_unavailable
+        ck.save(f'{lvl_key}', {'per_level': results['per_level'],
+                               'level': None})
         print(f"    [{time.time() - t_level:.0f}s]")
+    results['rows'] = rows.summary()
 
     # ── the top 2, added beside what is already reported ───────────────────
     # Added 2026-09-18, owner's instruction: the top 2 rows everywhere as an
@@ -1227,6 +1506,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     _print_summary(results)
     save_experiment_results(results, output_dir, 'n21_neighbour_distance',
                             dataset_name)
+    # Every level is in the result now, so the per-fold snapshot is spent.
+    ck.clear()
     return results
 
 

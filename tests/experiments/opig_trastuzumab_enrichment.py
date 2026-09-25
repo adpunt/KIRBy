@@ -575,6 +575,27 @@ def _paired_enrichment_delta(results):
     return out
 
 
+# Set by main() (2026-09-25). evaluate_dataset writes each (representation,
+# model) result and the per-fold hybrid block to <output>.partial.jsonl as they
+# finish and reads them back on the next attempt (experiments/_checkpoint.py).
+# None when the function is called from elsewhere: nothing is stored then.
+_CK = None
+# What failed inside evaluate_dataset without raising; main() exits 1 on it
+# after the JSON is written.
+_FAILED = []
+
+
+def _ck_cached(compute, store_if=lambda v: True, **key):
+    if _CK is None:
+        return compute()
+    if _CK.done(**key):
+        return _CK.get(**key)
+    val = compute()
+    if store_if(val):
+        _CK.put(val, **key)
+    return val
+
+
 def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     """Evaluate all reps × models on tz_her2_binary for enrichment."""
     print(f"\n{'=' * 60}")
@@ -844,8 +865,11 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         for model_name, factory in models.items():
             t0 = time.time()
             try:
-                res = evaluate_rep_enrichment(X, labels, groups, factory(),
-                                              n_folds, fold_splits=fold_splits)
+                res = _ck_cached(
+                    lambda: evaluate_rep_enrichment(
+                        X, labels, groups, factory(), n_folds,
+                        fold_splits=fold_splits),
+                    rep=rep_name, model=model_name, n_folds=n_folds)
             except ValueError as e:
                 print(f"    {rep_name:25s} {model_name:8s}  SKIPPED: {e}")
                 continue
@@ -866,12 +890,17 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # percent binder count.
     print(f"\n  Per-fold hybrid enrichment ({n_folds} folds, train-only search)...")
     try:
-        hybrid_enrich, hybrid_dim, hybrid_top3 = (
-            _evaluate_hybrid_enrichment_per_fold(
+        hybrid_enrich, hybrid_dim, hybrid_top3 = _ck_cached(
+            lambda: _evaluate_hybrid_enrichment_per_fold(
                 reps, labels, groups, fold_splits, models,
-                pruning_mode=pruning_mode))
+                pruning_mode=pruning_mode),
+            # (None, 0, ...) means no fold built a hybrid: not stored.
+            store_if=lambda v: v[0] is not None,
+            hybrid_per_fold=True, n_folds=n_folds,
+            reps=sorted(reps), pruning_mode=pruning_mode)
     except Exception as e:
         print(f"  Per-fold hybrid enrichment failed: {e}")
+        _FAILED.append('per-fold hybrid enrichment')
         hybrid_enrich, hybrid_dim, hybrid_top3 = None, 0, None
 
     if hybrid_top3:
@@ -1057,6 +1086,11 @@ def main():
              "'aggressive_pruning' = F16-validated multi-stage pruning "
              "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
+    parser.add_argument(
+        '--force-rerun', action='store_true',
+        help='Discard what an earlier attempt finished '
+             '(<output>.partial.jsonl) and recompute every item.')
+
     parser = add_distance_metric_arg(parser)
 
     args = parser.parse_args()
@@ -1082,20 +1116,28 @@ def main():
     print(f"  Enrichment fractions: {ENRICHMENT_FRACTIONS}")
     print("=" * 70)
 
+    output_path = (args.output or
+                   'tests/results/comparisons/opig_trastuzumab_enrichment.json')
+    global _CK
+    from experiments._checkpoint import script_checkpoint, exit_if_failed
+    _CK = script_checkpoint('opig_trastuzumab_enrichment', output_path, args,
+                            exclude=('output',), rep_names=rep_names)
+
     ds_results = evaluate_dataset(rep_names, args.n_folds,
                                     pruning_mode=args.pruning_mode)
     if ds_results is not None:
         print_analysis(ds_results)
+    else:
+        _FAILED.append('dataset (evaluate_dataset returned nothing)')
 
     # Save results
-    output_path = (args.output or
-                   'tests/results/comparisons/opig_trastuzumab_enrichment.json')
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
     with open(p, 'w') as f:
         json.dump(convert_numpy(ds_results or {}), f, indent=2)
     print(f"\nResults saved: {p}")
+    exit_if_failed(_FAILED, 'part')
 
 
 if __name__ == '__main__':

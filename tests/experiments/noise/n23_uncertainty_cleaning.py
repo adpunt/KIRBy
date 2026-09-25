@@ -193,6 +193,20 @@ scored against.
 THE HEADLINE IS A COUNT OF FOLDS, not a mean, for n18's reason at :33-37. Every
 comparison is PAIRED: the same fold, the same held-out molecules, two arms.
 
+SIMILARITY AXIS, ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 1-3).
+The loop is today's path and computes what it computed before, with one
+exception: activity_cliff_aware now excludes a molecule's scaffold group from
+its neighbours, as n07, n24 and n25 do (_estimator_kwargs). On top of it, each
+similarity setting x k of similarity_space.settings_from_env() is run for the
+sources whose score reads neighbours, and for a source whose move target fell
+back to the neighbours' mean; KIRBY_SIMILARITY_SETTINGS=model_input runs
+today's path alone. Every (source, arm, model) writes one D-versus-D' row per
+fold to <dataset>__<condition>.rows.jsonl beside the condition file; the
+accumulators are checkpointed per fold; the hybrid builds, the scaled
+representations, the no-cleaning and clean-label fits of seeded models and the
+uncertainty estimates go through noise_cache. Controls run with
+KIRBY_NOISE_CONTROLS=1.
+
 Usage:
     python n23_uncertainty_cleaning.py --dataset herg_ki --mode full
 """
@@ -204,6 +218,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 
 import functools
 import time
+import zlib
 from pathlib import Path
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -230,6 +245,595 @@ from experiments.noise.noise_helpers import (
 from experiments.noise.n07_remediation import _predict_for_metric
 from kirby.noise_spec import GROUPED_STRATEGIES
 from kirby.utils.noise_estimation import get_noise_estimator, smooth_by_scores
+# Plan section 2 and 3 (2026-09-25): the D-versus-D' rows, the disk caches,
+# the similarity axis and the random / shuffled controls. Read their module
+# docstrings before changing anything below that calls them.
+from experiments.noise import d_vs_dprime as dvd
+from experiments.noise import noise_cache as nc
+from experiments.noise import similarity_space as ss
+from experiments.noise.controls import (
+    controls_enabled, random_twin, shuffled_twin)
+
+
+# ===========================================================================
+# SHARED BY n23-n31, added 2026-09-25 (plan sections 1-3).
+#
+# WHY IT LIVES IN THIS FILE. The change that added it was limited to the
+# files n23-n31, so it could not go into d_vs_dprime.py or similarity_space.py,
+# where it belongs. n24, n25, n26, n27, n29, n30 and n31 import it from here.
+# TODO(similarity-sweep 2026-09-25): move RowSink and PassCheckpoint into
+# d_vs_dprime.py and model_similarity_spaces into similarity_space.py.
+#
+# What is here:
+#   RowSink                 the per-fold D-versus-D' rows (d_vs_dprime),
+#                           resumed from the keys already on disk
+#   PassCheckpoint          the experiment's own accumulators, saved after
+#                           every pass, so a killed run resumes where it
+#                           stopped instead of from the start
+#   fit_score_cached        one downstream fit and its held-out score, through
+#                           noise_cache when the model is seeded
+#   swept_similarity        the similarity settings x ks beyond today's
+#   model_similarity_spaces the features each similarity setting reads, for
+#                           one downstream model on one fold
+#   control_twins           random_twin / shuffled_twin, when
+#                           KIRBY_NOISE_CONTROLS=1
+# ===========================================================================
+
+# The downstream models whose fit noise_cache may store: they are seeded, so
+# a stored prediction is the prediction a refit would give. Taken from
+# noise_cache.cached_fit_predict's docstring ("rf, svm, lightgbm and
+# xgboost"). dnn is left out: its fit goes through torch, and a stored copy of
+# a fit that is not reproducible would freeze one draw of it.
+CACHEABLE_MODELS = ('rf', 'svm', 'lightgbm', 'xgboost')
+
+# The similarity_setting value on a row whose method read no neighbours at
+# all, and the value on a row computed exactly as the experiment computed it
+# before 2026-09-25: neighbours in the model's own matrix, the process-wide
+# distance, each consumer's own neighbour count (label_smooth and knn_smooth 9,
+# the neighbour detectors and prox_smooth 10; similarity_space docstring).
+NO_NEIGHBOURS = 'none'
+TODAY_SIMILARITY = f'{ss.MODEL_INPUT.name}|k=today'
+
+
+def ensure_dprime_models(models):
+    """`models` plus rf and svm, the models every D-versus-D' row needs
+    (d_vs_dprime.DEFAULT_MODELS; owner decision 2026-09-25: "RF and SVM at
+    least"). The default list, _shared.DOWNSTREAM_MODELS, already holds both,
+    so a default run is unchanged; a caller that asked for fewer models gets
+    these two added, and the result file's `models` says so."""
+    out = list(models)
+    for m in dvd.DEFAULT_MODELS:
+        if m not in out:
+            out.append(m)
+    return out
+
+
+def _nan(v):
+    return float('nan') if v is None else float(v)
+
+
+def rows_path(output_dir, exp_full_name, dataset_name, condition=None):
+    """<output>/<exp_full_name>/<dataset>[__condition].rows.jsonl -- beside the
+    result file run_all writes (<dataset>[__condition].json)."""
+    sfx = f'__{condition}' if condition else ''
+    return os.path.join(str(output_dir), exp_full_name,
+                        f'{dataset_name}{sfx}.rows.jsonl')
+
+
+class RowSink:
+    """The D-versus-D' rows of one run (plan section 2), written per fold.
+
+    add() builds one row with d_vs_dprime.make_row, so every row carries the
+    metric and lower_is_better from get_domain_metric and a signed `gain`.
+    flush() appends the rows added since the last flush with
+    d_vs_dprime.append_rows (flushed and fsynced), so a killed run keeps every
+    fold it finished. A row whose key (d_vs_dprime.KEY_FIELDS) is already on
+    disk is not written again, so a resumed run adds only what is missing.
+
+    A rows file written from other data is moved aside, not appended to: the
+    file carries a sidecar <rows>.fingerprint.json holding
+    _shared.input_fingerprint(data, config), and a mismatch renames both to
+    <name>.stale-<unix time>. Without it a row key computed on old labels
+    would block the new row with the same key.
+
+    output_dir None (a smoke, a direct caller with nowhere to write) keeps the
+    rows in memory, in `self.rows`.
+    """
+
+    def __init__(self, output_dir, exp_full_name, dataset_name, *, experiment,
+                 metric, condition=None, data=None, config=None):
+        self.dataset = str(dataset_name)
+        self.experiment = str(experiment)
+        self.metric_name = metric[0]
+        self.lower_is_better = metric[2]
+        self.path = (None if output_dir is None else
+                     rows_path(output_dir, exp_full_name, dataset_name,
+                               condition))
+        self.rows = []
+        self._pending = []
+        self._pending_keys = set()
+        self.n_written = 0
+        self.n_already_on_disk = 0
+        self.moved_aside = None
+        if self.path is not None:
+            self._check_fingerprint(data, config)
+        self.done = dvd.done_keys(self.path) if self.path else set()
+
+    def _check_fingerprint(self, data, config):
+        import json
+        from experiments._shared import input_fingerprint, fingerprint_mismatch
+        fp = convert_numpy(input_fingerprint(data, config)) if data else {}
+        side = self.path + '.fingerprint.json'
+        if os.path.exists(self.path):
+            why = None
+            if os.path.exists(side):
+                try:
+                    with open(side) as fh:
+                        why = fingerprint_mismatch(json.load(fh), fp)
+                except (OSError, ValueError) as exc:
+                    why = f'its fingerprint could not be read ({exc})'
+            elif fp:
+                why = 'it carries no fingerprint'
+            if why:
+                stamp = int(time.time())
+                self.moved_aside = f'{self.path}.stale-{stamp}'
+                os.replace(self.path, self.moved_aside)
+                if os.path.exists(side):
+                    os.replace(side, f'{side}.stale-{stamp}')
+                print(f"  rows file {self.path}: {why}; moved to "
+                      f"{self.moved_aside} and started again")
+        if fp:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(side, 'w') as fh:
+                json.dump(fp, fh, sort_keys=True)
+
+    def add(self, *, method, method_setting, similarity_setting, model_input,
+            model, noise_condition, level, draw, fold, score_D, score_Dprime,
+            score_clean):
+        row = dvd.make_row(
+            dataset=self.dataset, experiment=self.experiment,
+            method=str(method), method_setting=str(method_setting),
+            similarity_setting=str(similarity_setting),
+            model_input=str(model_input), model=str(model),
+            noise_condition=noise_condition, level=level, draw=draw,
+            fold=int(fold), metric=self.metric_name,
+            lower_is_better=self.lower_is_better,
+            score_D=_nan(score_D), score_Dprime=_nan(score_Dprime),
+            score_clean=_nan(score_clean))
+        key = dvd.row_key(row)
+        if key in self.done or key in self._pending_keys:
+            self.n_already_on_disk += int(key in self.done)
+            return
+        self._pending.append(row)
+        self._pending_keys.add(key)
+
+    def flush(self):
+        if not self._pending:
+            return 0
+        if self.path is not None:
+            dvd.append_rows(self.path, self._pending)
+        else:
+            self.rows.extend(self._pending)
+        self.done |= self._pending_keys
+        n = len(self._pending)
+        self.n_written += n
+        self._pending, self._pending_keys = [], set()
+        return n
+
+    def summary(self):
+        return {'rows_file': self.path,
+                'rows_written_this_run': int(self.n_written),
+                'rows_already_on_disk_not_rewritten': int(
+                    self.n_already_on_disk),
+                'rows_file_moved_aside_as_stale': self.moved_aside,
+                'row_fields': list(dvd.ROW_FIELDS),
+                'what_a_row_is': (
+                    'one (method, method setting, similarity setting, model '
+                    'input, model, condition, level, draw, fold): the model '
+                    "fitted on D and on D', scored on the same held-out fold "
+                    "in the dataset's own metric, and the model fitted on the "
+                    'clean training labels beside them. gain is positive when '
+                    "D' beat D, read with lower_is_better. The similarity "
+                    'setting ends in |k=<neighbour count>; k=today is each '
+                    "consumer's own count before 2026-09-25, and 'none' means "
+                    'the method read no neighbours.')}
+
+
+class PassCheckpoint:
+    """The experiment's accumulators, written after every finished pass.
+
+    An experiment that saved only at the end lost everything on a kill. This
+    pickles a dict of the accumulators plus the set of finished pass keys to
+    <output>/<exp>/_checkpoints/<dataset>[__condition].pkl, atomically, after
+    each pass. On the next run with the SAME key the dict comes back and the
+    finished passes are skipped; any other key starts from nothing.
+
+    The key is a hash of: _shared.input_fingerprint(data, config), the run's
+    own settings (the caller passes them), noise_cache.process_settings(),
+    KIRBY_SIMILARITY_SETTINGS, KIRBY_NOISE_CONTROLS, and the bytes of the
+    experiment's own source file, so an edit to the experiment invalidates a
+    half-finished run instead of mixing old and new passes. ⛔ An edit to a
+    module it imports (n07, noise_helpers, _shared) is NOT in the key; wipe
+    the _checkpoints directory after one, the locked rule for every cache.
+
+    output_dir None: nothing is written and load() returns None.
+    clear() is called once the result is complete.
+    """
+
+    def __init__(self, output_dir, exp_full_name, dataset_name, *, key,
+                 source_file, condition=None, data=None, config=None):
+        import hashlib
+        import json
+        self.path = None
+        if output_dir is None:
+            return
+        sfx = f'__{condition}' if condition else ''
+        self.path = os.path.join(str(output_dir), exp_full_name,
+                                 '_checkpoints', f'{dataset_name}{sfx}.pkl')
+        from experiments._shared import input_fingerprint
+        with open(source_file, 'rb') as fh:
+            src = hashlib.blake2b(fh.read(), digest_size=16).hexdigest()
+        full = {'run': key,
+                'fingerprint': (convert_numpy(input_fingerprint(data, config))
+                                if data else None),
+                'process': nc.process_settings(),
+                'similarity_env': os.environ.get('KIRBY_SIMILARITY_SETTINGS'),
+                'controls': controls_enabled(),
+                'source': src}
+        blob = json.dumps(full, sort_keys=True, default=repr)
+        self.digest = hashlib.blake2b(blob.encode(), digest_size=20).hexdigest()
+
+    def load(self):
+        import pickle
+        if self.path is None or not os.path.exists(self.path):
+            return None
+        try:
+            with open(self.path, 'rb') as fh:
+                got = pickle.load(fh)
+        except Exception as exc:
+            print(f"  checkpoint {self.path} could not be read ({exc}); "
+                  f"starting from nothing")
+            return None
+        if got.get('digest') != self.digest:
+            print(f"  checkpoint {self.path} was written by a different run "
+                  f"(data, settings or code changed); starting from nothing")
+            return None
+        return got.get('state')
+
+    def save(self, state):
+        import pickle
+        import tempfile
+        if self.path is None:
+            return
+        d = os.path.dirname(self.path)
+        os.makedirs(d, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=d, prefix='.tmp_')
+        try:
+            with os.fdopen(fd, 'wb') as fh:
+                pickle.dump({'digest': self.digest, 'state': state}, fh,
+                            protocol=pickle.HIGHEST_PROTOCOL)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def clear(self):
+        if self.path is not None and os.path.exists(self.path):
+            os.unlink(self.path)
+
+
+def fit_score_cached(dataset_name, model_name, factory, X_tr, y_tr, X_va, y_va,
+                     metric_fn, metric_name, sample_weight=None):
+    """(held-out score, None) or (None, why) for one downstream fit.
+
+    A model in CACHEABLE_MODELS goes through noise_cache.cached_fit_predict,
+    which fits factory() on the same arrays and predicts with the same rule as
+    n07._predict_for_metric (noise_cache.predict_mode_for), so a stored value
+    is bit-identical to a refit. Any other model is fitted here, every time,
+    as before. Used for the fits plan section 3 lists as repeated: the
+    no-cleaning fit on D and the clean-label fit."""
+    try:
+        if model_name in CACHEABLE_MODELS:
+            pred = nc.cached_fit_predict(
+                dataset_name, model_name, factory, X_tr, y_tr, X_va,
+                sample_weight=sample_weight,
+                predict_mode=nc.predict_mode_for(metric_name))
+        else:
+            m = factory()
+            if sample_weight is None:
+                m.fit(X_tr, y_tr)
+            else:
+                m.fit(X_tr, y_tr, sample_weight=np.asarray(sample_weight))
+            pred = _predict_for_metric(m, X_va, metric_name)
+        return float(metric_fn(y_va, pred)), None
+    except Exception as exc:
+        return None, f'{type(exc).__name__}: {exc}'
+
+
+def swept_similarity(available_spaces=None):
+    """[(row label, SimilaritySetting, k)] for every setting beyond today's.
+
+    Today's path -- neighbours in the model's own matrix, each consumer's own
+    k -- is the experiment's existing loop and always runs; its rows carry
+    TODAY_SIMILARITY. This is what is swept ON TOP of it:
+    similarity_space.settings_from_env() (KIRBY_SIMILARITY_SETTINGS; unset or
+    'all' is every setting, owner decision 2026-09-25) crossed with
+    SWEPT_KS = (5, 9, 10, 20). 'model_input' alone returns [], so a run under
+    KIRBY_SIMILARITY_SETTINGS=model_input computes exactly what it computed
+    before 2026-09-25. A MODEL_INPUT entry in a comma list is today's path
+    and adds nothing here.
+    """
+    out = []
+    for s in ss.settings_from_env(available_spaces):
+        if s.space == ss.MODEL_INPUT_SPACE:
+            continue
+        for k in ss.SWEPT_KS:
+            out.append((f'{s.name}|k={int(k)}', s, int(k)))
+    return out
+
+
+def model_similarity_spaces(dataset_name, data, *, model_name, factory,
+                            base_reps, hybrid_train, train_idx, val_idx,
+                            y_train, groups_train, metric, task_type,
+                            model_input_train):
+    """({space: standardised training matrix}, {space: why it is missing})
+    for ONE downstream model on ONE fold: the spaces similarity_space reads.
+
+      model_input        the matrix the model is fitted on in this cell,
+                         read by forest_proximity
+      base_1, base_2     this model's rank-1 and rank-2 single
+                         representations (_shared.noise_base_reps_by_model),
+                         standardised on the fold's training rows
+                         (noise_cache.cached_scaled, float64 as every
+                         experiment here casts)
+      base_k_aug_<st>    each base plus augmented features, built the way c21
+                         builds B_aug (similarity_space.base_aug_blueprint),
+                         for st in capped and uncapped, through
+                         noise_cache.cached_hybrid_for_fold with the model in
+                         the accept test, as c21 passes it (c21:925-929). The
+                         augmentation pool is data['augmentations'] minus the
+                         base itself (c21:429). The labels are `y_train` --
+                         the ones the experiment holds, noisy under injection
+                         (owner decision: importance and selection from the
+                         noisy labels).
+      hybrid, hybrid_similarity
+                         the experiment's own per-model build for this fold,
+                         handed in as `hybrid_train` {space: matrix}; never
+                         rebuilt here.
+
+    A space that cannot be built is left out and its reason returned, never
+    faked (similarity_space.neighbour_lists then reports it unavailable).
+    Only training rows are returned: every consumer here reads training
+    neighbours only.
+    """
+    from sklearn.preprocessing import StandardScaler as _SS
+    metric_name, metric_fn, lower_is_better = metric
+    reps = data['reps']
+    augs = data.get('augmentations') or {}
+    spaces = {'model_input': model_input_train}
+    why = {}
+    for i in (1, 2):
+        rn = base_reps[i - 1] if base_reps and len(base_reps) >= i else None
+        if rn is None or rn not in reps:
+            why[f'base_{i}'] = (f'{model_name} has no rank-{i} single '
+                                f'representation')
+            for st in ss.AUG_STRATEGIES:
+                why[ss.aug_space_name(i, st)] = why[f'base_{i}']
+            continue
+        X_tr_b, _ = nc.cached_scaled(dataset_name, reps[rn], train_idx,
+                                     val_idx, dtype=np.float64)
+        spaces[f'base_{i}'] = X_tr_b
+        aug_names = [a for a in augs if a != rn]
+        for st in ss.AUG_STRATEGIES:
+            an = ss.aug_space_name(i, st)
+            if not aug_names:
+                why[an] = (f'{dataset_name} loads no augmentation '
+                           f'representation other than {rn}')
+                continue
+            try:
+                bp = ss.base_aug_blueprint(
+                    rn, int(np.shape(reps[rn])[1]), metric_name=metric_name,
+                    task_type=task_type, lower_is_better=lower_is_better,
+                    strategy=st)
+                got = nc.cached_hybrid_for_fold(
+                    dataset_name,
+                    {rn: np.asarray(reps[rn][train_idx], dtype=np.float64)},
+                    {rn: np.asarray(reps[rn][val_idx], dtype=np.float64)},
+                    y_train, bp, groups_train, factory(), metric_fn,
+                    lower_is_better, model_name=model_name,
+                    metric_name=metric_name, train_idx=train_idx,
+                    augmentations_train={a: np.asarray(augs[a])[train_idx]
+                                         for a in aug_names},
+                    augmentations_val={a: np.asarray(augs[a])[val_idx]
+                                       for a in aug_names})
+            except Exception as exc:
+                why[an] = f'the augmented build raised {type(exc).__name__}: {exc}'
+                continue
+            if got is None or got[0] is None:
+                why[an] = 'the augmented build returned nothing on this fold'
+                continue
+            spaces[an] = _SS().fit_transform(np.asarray(got[0]))
+    for sp in ('hybrid', 'hybrid_similarity'):
+        X = (hybrid_train or {}).get(sp)
+        if X is None:
+            why[sp] = f'no {sp} matrix was built for {model_name} on this fold'
+        else:
+            spaces[sp] = X
+    return spaces, why
+
+
+def smiles_for(data, idx):
+    """The fold's SMILES for tanimoto_ecfp4, or None when the dataset has
+    none (similarity_space then reports the space unavailable)."""
+    smi = data.get('smiles')
+    if smi is None:
+        return None
+    return [smi[int(i)] for i in np.asarray(idx)]
+
+
+def setting_neighbours(dataset_name, setting, spaces_train, y_train, *,
+                       exclude_groups, smiles_train, is_clf):
+    """noise_cache.cached_neighbours for one setting, training rows only."""
+    return nc.cached_neighbours(
+        dataset_name, setting, spaces_train=spaces_train, spaces_val=None,
+        y_train=y_train, exclude_groups=exclude_groups,
+        smiles_train=smiles_train, is_clf=is_clf)
+
+
+def as_cleanup_dict(X_tr_s, y_tr, *, keep=None, labels=None, weight=None):
+    """A cleanup's output in the shape controls.py and n07 use (X, y,
+    sample_weight, keep, label_column), for the experiments whose cleanups
+    return something else."""
+    y_tr = np.asarray(y_tr)
+    if keep is not None:
+        keep = np.asarray(keep, dtype=bool)
+        return {'X': X_tr_s[keep], 'y': y_tr[keep], 'sample_weight': None,
+                'keep': keep, 'label_column': None}
+    if weight is not None:
+        return {'X': X_tr_s, 'y': y_tr, 'sample_weight': np.asarray(weight),
+                'keep': None, 'label_column': None}
+    lab = y_tr if labels is None else np.asarray(labels)
+    return {'X': X_tr_s, 'y': lab, 'sample_weight': None, 'keep': None,
+            'label_column': lab}
+
+
+def control_twins(cleaned, X_tr_s, y_tr, seed, *, is_clf=False, rerun=None):
+    """[(control name, twin dict or None, why None)] for one D', or [] when
+    KIRBY_NOISE_CONTROLS is not 1 (controls.controls_enabled).
+
+    random_twin: the same number of molecules touched, chosen at random; with
+    `rerun` it is the method's own rule on randomly flagged molecules
+    (controls.random_twin). shuffled_twin: the corrections permuted. On a
+    CLASS label a permuted label change need not be a class
+    (controls.shuffled_twin docstring), so shuffled_twin is refused there and
+    random_twin needs `rerun`; the refusal is returned, not hidden.
+    """
+    if not controls_enabled() or cleaned is None:
+        return []
+    out = []
+    label_move = (cleaned.get('keep') is None
+                  and cleaned.get('sample_weight') is None
+                  and cleaned.get('label_column') is not None)
+    if is_clf and label_move and rerun is None:
+        out.append(('random_twin', None,
+                    'a permuted class-label change need not be a class; this '
+                    'cleanup offers no rerun'))
+    else:
+        try:
+            tw, _n = random_twin(cleaned, X_tr_s, y_tr, seed, rerun=rerun)
+            out.append(('random_twin', tw,
+                        None if tw is not None else 'the method touched no molecule'))
+        except Exception as exc:
+            out.append(('random_twin', None, f'{type(exc).__name__}: {exc}'))
+    if is_clf and label_move:
+        out.append(('shuffled_twin', None,
+                    'a permuted class-label change need not be a class'))
+    else:
+        tw = shuffled_twin(cleaned, X_tr_s, y_tr, seed)
+        out.append(('shuffled_twin', tw,
+                    None if tw is not None else 'the method touched no molecule'))
+    return out
+
+
+def fit_cleaned(factory, cleaned, X_va, y_va, metric_fn, metric_name):
+    """(score, None) or (None, why): one fit on a cleanup dict, passing the
+    weight only when there is one -- n07._evaluate_fold's rule."""
+    try:
+        m = factory()
+        if cleaned.get('sample_weight') is None:
+            m.fit(cleaned['X'], cleaned['y'])
+        else:
+            m.fit(cleaned['X'], cleaned['y'],
+                  sample_weight=cleaned['sample_weight'])
+        return float(metric_fn(y_va, _predict_for_metric(m, X_va,
+                                                         metric_name))), None
+    except Exception as exc:
+        return None, f'{type(exc).__name__}: {exc}'
+
+
+def cleanup_reads_setting(cleanup, setting):
+    """Whether n07.cleaned_training_set reads `setting`'s neighbour list for
+    this cleanup: label_smooth and knn_smooth read any setting; prox_smooth
+    reads only forest_proximity (n07:722-733, which refuses the rest)."""
+    if cleanup in ('label_smooth', 'knn_smooth'):
+        return True
+    if cleanup == 'prox_smooth':
+        return setting.space == ss.FOREST_SPACE
+    return False
+
+
+# The cleanups whose TODAY path reads neighbours in the model's own matrix
+# (n07:826-917): label_smooth and knn_smooth through make_nearest_neighbors,
+# prox_smooth through its own forest proximity.
+TODAY_NEIGHBOUR_CLEANUPS = ('label_smooth', 'knn_smooth', 'prox_smooth')
+
+
+def correction_targets_cached(dataset_name, X_tr_s, y_tr, groups, want):
+    """n07.correction_targets with its two cacheable halves cached.
+
+    'oof' goes through noise_cache.cached_oof_predict with the call n07 makes
+    (n07:529: oof_predict(X, y, groups, n_splits=min(REPAIR_OOF_SPLITS, n)),
+    seed 0), so it is shared with every experiment that computes the same
+    out-of-fold LightGBM target for the same draw (plan section 3). 'gp' and
+    'quantile' go through noise_cache.cached under kind 'correction_targets':
+    both estimators are seeded (random_state=42), and a result with a failed
+    half is returned and not stored. An empty `want` is refused rather than
+    handed to correction_targets, which reads an empty want as all three
+    (n24's note at the same call).
+    """
+    from experiments.noise.n07_remediation import (
+        correction_targets, REPAIR_OOF_SPLITS)
+    want = set(want or ())
+    if not want:
+        return {}
+    out = {}
+    if 'oof' in want:
+        try:
+            out['oof'] = nc.cached_oof_predict(
+                dataset_name, X_tr_s, y_tr, groups,
+                n_splits=min(REPAIR_OOF_SPLITS, len(y_tr)))
+        except Exception as exc:
+            print(f"      oof target failed: {type(exc).__name__}: {exc}")
+            out['oof'] = None
+    rest = sorted(want - {'oof'})
+    if rest:
+        key = {'X': nc.array_hash(X_tr_s), 'y': nc.array_hash(y_tr),
+               'groups': nc.array_hash(groups), 'want': rest}
+        out.update(nc.cached(
+            dataset_name, 'correction_targets', key,
+            lambda: correction_targets(X_tr_s, y_tr, groups=groups,
+                                       want=set(rest)),
+            store_if=lambda v: all(v.get(k) is not None for k in rest)))
+    return out
+
+
+def cached_base_cell(dataset_name, X_full, train_idx, val_idx):
+    """(X_tr_s, X_va_s) for a single-representation space: StandardScaler on
+    the fold's training rows, float64, through noise_cache.cached_scaled.
+    Bit-identical to StandardScaler().fit_transform(np.asarray(X[train],
+    float64)) -- casting then indexing and indexing then casting give the same
+    values."""
+    return nc.cached_scaled(dataset_name, X_full, train_idx, val_idx,
+                            dtype=np.float64)
+
+
+def cached_hybrid_cell(dataset_name, train_reps, val_reps, y_train, bp,
+                       groups_train, model_name, model, metric, train_idx,
+                       augmentations_train=None, augmentations_val=None):
+    """noise_helpers.hybrid_for_fold through noise_cache.cached_hybrid_for_fold.
+    model_name is None under a shareable recipe, where no model is passed."""
+    metric_name, metric_fn, lower_is_better = metric
+    return nc.cached_hybrid_for_fold(
+        dataset_name, train_reps, val_reps, y_train, bp, groups_train, model,
+        metric_fn, lower_is_better, model_name=model_name,
+        metric_name=metric_name, train_idx=train_idx,
+        augmentations_train=augmentations_train,
+        augmentations_val=augmentations_val)
 
 # Which per-molecule number the cleaning is keyed on. The first two predict a
 # spread per molecule. The third does not -- see the docstring. The fourth is
@@ -379,8 +983,17 @@ def _estimator_kwargs(source, groups_train, is_clf, n_folds, k):
     import inspect
     cls = get_noise_estimator.__globals__['ESTIMATOR_REGISTRY'][source]
     accepted = set(inspect.signature(cls.__init__).parameters)
+    # ⛔ `exclude_groups` ADDED 2026-09-25 (plan section 4). The neighbour
+    # family names the scaffold groups `exclude_groups`, not `groups`
+    # (n07._compute_noise_scores, n07:421-432), so this filter dropped them and
+    # activity_cliff_aware here scored a molecule against neighbours from its
+    # own scaffold family, while n07, n24 and n25 excluded them. The same
+    # detector gave different scores in different experiments. It is offered
+    # under both names now, as n07 does. THIS CHANGES n23's
+    # activity_cliff_aware numbers from before 2026-09-25 on every dataset
+    # with fold groups.
     want = {'n_folds': n_folds, 'groups': groups_train, 'k': k,
-            'metric': None}
+            'metric': None, 'exclude_groups': groups_train}
     if is_clf:
         want['is_clf'] = True
     return {p: v for p, v in want.items() if p in accepted}
@@ -391,6 +1004,36 @@ def _scored_out_of_fold(source):
     import inspect
     cls = get_noise_estimator.__globals__['ESTIMATOR_REGISTRY'][source]
     return 'n_folds' in set(inspect.signature(cls.__init__).parameters)
+
+
+OWN_TARGET = 'the source own oof prediction'
+
+
+def _uncertainty_cached(dataset_name, source, X_tr_s, y_tr, groups_train,
+                        is_clf, n_folds, neighbour_k=10):
+    """_uncertainty through noise_cache (plan section 3: "GP, quantile forest,
+    NGBoost -- the same class and arguments in n18, n23, n25 and n32").
+
+    Keyed on the content of X_tr_s, y_tr and the groups, the source, is_clf,
+    the inner fold count and k; the process settings (threads, distance) are
+    added by noise_cache.cached. Every estimator in SOURCES is seeded
+    (random_state=42; the torch ones call torch.manual_seed), so a stored
+    result is what a refit gives. A failed estimate (scores None) is returned
+    and not stored. dataset_name None bypasses the cache. The as_they_come
+    regime and the injected level-0 pass hand over the same labels, so they
+    share one entry, which is the repeat plan section 3 names for n23.
+    """
+    def _compute():
+        return _uncertainty(source, X_tr_s, y_tr, groups_train, is_clf,
+                            n_folds, neighbour_k=neighbour_k)
+    if dataset_name is None:
+        return _compute()
+    key = {'source': str(source), 'X': nc.array_hash(X_tr_s),
+           'y': nc.array_hash(y_tr), 'groups': nc.array_hash(groups_train),
+           'is_clf': bool(is_clf), 'n_folds': int(n_folds),
+           'k': int(neighbour_k)}
+    return tuple(nc.cached(dataset_name, 'n23_uncertainty', key, _compute,
+                           store_if=lambda v: v[0] is not None))
 
 
 def _uncertainty(source, X_tr_s, y_tr, groups_train, is_clf, n_folds,
@@ -423,7 +1066,7 @@ def _uncertainty(source, X_tr_s, y_tr, groups_train, is_clf, n_folds,
 
     target = getattr(est, 'predictions_', None)
     if target is not None and np.shape(target) == np.shape(y_tr):
-        return scores, np.asarray(target, dtype=float), 'the source own oof prediction'
+        return scores, np.asarray(target, dtype=float), OWN_TARGET
 
     # No denoised value of its own: move toward the neighbours' mean instead,
     # the same target n07.label_smooth uses.
@@ -590,7 +1233,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # directory had it; the same files read config['n_splits'] correctly two
     # lines away. Fixed 2026-09-20. An explicit kwarg still wins, which is what
     # a smoke or a direct caller uses.
-    downstream_models = list(
+    # rf and svm are added when the caller left them out: every D-versus-D'
+    # row needs them (ensure_dprime_models, owner decision 2026-09-25).
+    downstream_models = ensure_dprime_models(
         kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
@@ -947,12 +1592,83 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # arithmetic. The count is what said the winning arm was not removing the
     # molecules whose labels moved, and it is cheaper than one fit.
     removed_acc = {}
+    # The similarity sweep's detection readings (2026-09-25):
+    # sim_detection[level][space][model][source][similarity label] = [reading]
+    sim_detection = {}
+    # Why a similarity space could not be built, per (space, model); the
+    # first reason seen is kept.
+    sim_unavailable = {}
     t0 = time.time()
+
+    # ── Rows, checkpoints, the similarity axis (2026-09-25) ──
+    # The D-versus-D' rows of plan section 2, one file per condition next to
+    # the condition's result file (sweep_conditions writes
+    # <exp>/<dataset>__<condition>.json).
+    rows = RowSink(output_dir, 'n23_uncertainty_cleaning', dataset_name,
+                   experiment='n23', metric=(metric_name, metric_fn,
+                                             lower_is_better),
+                   condition=condition, data=data, config=config)
+    # n23 saved nothing until a condition finished: one condition measured
+    # 1,991 to 7,095 seconds locally (sweep_conditions docstring). The
+    # accumulators are now checkpointed after every (regime, level, draw,
+    # fold) and a rerun skips the ones already done.
+    ckpt = PassCheckpoint(
+        output_dir, 'n23_uncertainty_cleaning', dataset_name,
+        condition=condition, data=data, config=config,
+        source_file=__file__,
+        key={'regimes': list(regimes), 'sources': list(sources),
+             'drop_shares': list(drop_shares),
+             'move_strengths': list(move_strengths),
+             'move_methods': list(move_methods), 'est_folds': est_folds,
+             'neighbour_k': neighbour_k, 'models': list(downstream_models),
+             'base_reps': base_by_model, 'levels': kwargs.get('levels'),
+             'draws': kwargs.get('draws'), 'n_splits': n_folds})
+    done_passes = set()
+    _state = ckpt.load()
+    if _state:
+        acc, errors = _state['acc'], _state['errors']
+        detection_acc, est_seconds = _state['detection_acc'], _state['est_seconds']
+        target_src, removed_acc = _state['target_src'], _state['removed_acc']
+        sim_detection = _state['sim_detection']
+        sim_unavailable = _state['sim_unavailable']
+        done_passes = set(_state['done'])
+        print(f"  resumed from {ckpt.path}: {len(done_passes)} (regime, level, "
+              f"draw, fold) passes already done")
+    sim_axis = swept_similarity()
+    # The sources whose SCORE reads a neighbour list (only the neighbour
+    # estimators take precomputed_neighbors: noise_cache.NEIGHBOUR_DETECTORS).
+    nbr_sources = [s for s in sources if s in nc.NEIGHBOUR_DETECTORS]
+    results['similarity_sweep'] = {
+        'settings_env': os.environ.get('KIRBY_SIMILARITY_SETTINGS'),
+        'n_settings_times_k': len(sim_axis),
+        'ks': list(ss.SWEPT_KS),
+        'sources_whose_score_reads_neighbours': nbr_sources,
+        'what_is_swept': (
+            'Beyond today\'s path (TODAY_SIMILARITY on a row), every '
+            'similarity setting x k is run for: the sources whose score reads '
+            'neighbours (activity_cliff_aware), all arms, their move target '
+            'being the mean label of the k nearest neighbours in the '
+            'setting; and a source with no prediction of its own whose move '
+            'target fell back to the neighbours\' mean, its move arms only. '
+            'Neighbours for a SCORE exclude the molecule\'s scaffold group, '
+            'as the score does; neighbours for a TARGET do not, as today\'s '
+            'target does not (n23 _uncertainty). The sources that read no '
+            'neighbours are not swept: their rows carry similarity_setting '
+            '"none".'),
+    }
+
+    def _save_state():
+        ckpt.save({'acc': acc, 'errors': errors,
+                   'detection_acc': detection_acc, 'est_seconds': est_seconds,
+                   'target_src': target_src, 'removed_acc': removed_acc,
+                   'sim_detection': sim_detection,
+                   'sim_unavailable': sim_unavailable,
+                   'done': sorted(done_passes)})
 
     for regime in regimes:
         if regime not in passes:
             raise ValueError(f"n23: unknown regime {regime!r}")
-        acc[regime] = {}
+        acc.setdefault(regime, {})
         for level, draw in passes[regime]:
             lvl_key = 'none' if level is None else f'{level:g}'
             tag = (regime if level is None
@@ -962,9 +1678,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             spec = (None if regime != 'injected'
                     else noise_spec_for(dataset_name, condition, level,
                                         noise_seed=draw, is_clf=is_clf))
+            # What a row calls this pass.
+            row_cond = condition if regime == 'injected' else 'as_they_come'
+            row_level = None if level is None else float(level)
 
             for fold_i, (train_idx, val_idx) in enumerate(splits):
                 fold_key = f'l{lvl_key}d{draw}f{fold_i}'
+                pass_id = f'{regime}|{fold_key}'
+                if pass_id in done_passes:
+                    print(f"    fold {fold_i}: on disk in the checkpoint")
+                    continue
                 y_val = labels[val_idx]
                 g_tr = groups[train_idx] if groups is not None else None
 
@@ -981,6 +1704,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             f'{type(exc).__name__}: {exc}')
                         continue
                     y0 = np.asarray(y0, dtype=float)
+                # The clean training labels, for the score_clean column. In
+                # the as_they_come regime they ARE y0.
+                y_clean_tr = np.asarray(labels[train_idx], dtype=float)
 
                 train_reps = {k: np.asarray(v[train_idx], dtype=np.float64)
                               for k, v in reps.items()}
@@ -1007,10 +1733,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     _bcells = []
                     for _rn, _ms in base_rank_groups(
                             base_by_model, _k, downstream_models).items():
-                        sc = StandardScaler()
-                        _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                        sc.transform(val_reps[_rn]),
-                                        list(_ms)))
+                        # noise_cache.cached_scaled since 2026-09-25: the
+                        # scaled representation depends on the fold only.
+                        _Xt, _Xv = cached_base_cell(dataset_name, reps[_rn],
+                                                    train_idx, val_idx)
+                        _bcells.append((_Xt, _Xv, list(_ms)))
                     fold_spaces[_bsp] = _bcells
                 # One build per (family the pool holds, downstream model).
                 # hybrid_for_fold reads the objective off the recipe and drops
@@ -1032,11 +1759,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     for _bp_m, _mnames, _shareable in group_models_by_recipe(
                             {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                              for _m in downstream_models}, downstream_models):
-                        X_tr_h, X_va_h = hybrid_for_fold(
-                            train_reps, val_reps, y0, _bp_m, g_tr,
+                        # Through noise_cache.cached_hybrid_for_fold since
+                        # 2026-09-25: the same build for the same draw is
+                        # shared with n24, n25, n30-n35, n38, n40 and n41.
+                        X_tr_h, X_va_h = cached_hybrid_cell(
+                            dataset_name, train_reps, val_reps, y0, _bp_m,
+                            g_tr, None if _shareable else _mnames[0],
                             None if _shareable
                             else model_factories[_mnames[0]](),
-                            metric_fn, lower_is_better)
+                            (metric_name, metric_fn, lower_is_better),
+                            train_idx)
                         if X_tr_h is not None:
                             sh = StandardScaler()
                             _cells.append((sh.fit_transform(X_tr_h),
@@ -1044,6 +1776,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                            list(_mnames)))
                     if _cells:
                         fold_spaces[_sp] = _cells
+                # {model: {hybrid space: its training matrix}}, for the
+                # similarity spaces of the sweep below.
+                hybrid_by_model = {}
+                for _sp, _cs in fold_spaces.items():
+                    if _sp in BASE_SPACES:
+                        continue
+                    for _Xt, _Xv, _ms in _cs:
+                        for _m in _ms:
+                            hybrid_by_model.setdefault(_m, {})[_sp] = _Xt
 
                 # One pass per (space, feature matrix): once per distinct
                 # representation in each single-representation space, once per
@@ -1057,12 +1798,31 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     # failures must not overwrite each other under one key.
                     _ekey = (space if cell_models == list(downstream_models)
                              else f'{space}/{cell_models[0]}')
+                    # score_clean per model on this matrix: the model fitted
+                    # on the clean training labels (plan section 2). In the
+                    # as_they_come regime the clean labels are D, so the D
+                    # score below is used instead of a second identical fit.
+                    clean_score = {}
+                    if regime == 'injected':
+                        for mname in cell_models:
+                            s_c, _e = fit_score_cached(
+                                dataset_name, mname, model_factories[mname],
+                                X_tr_s, y_clean_tr, X_va_s, y_val, metric_fn,
+                                metric_name)
+                            clean_score[mname] = s_c
+                    # {model: the first no-cleaning score on this matrix},
+                    # the score_D of the similarity sweep's rows.
+                    d_score = {}
+                    # {source: (scores, target, target source)} from today's
+                    # path, reused by the sweep for a source whose score
+                    # reads no neighbours.
+                    today_by_source = {}
 
                     for source in sources:
                         t_est = time.time()
-                        scores, target, tsrc = _uncertainty(
-                            source, X_tr_s, y0, g_tr, is_clf, est_folds,
-                            neighbour_k=neighbour_k)
+                        scores, target, tsrc = _uncertainty_cached(
+                            dataset_name, source, X_tr_s, y0, g_tr, is_clf,
+                            est_folds, neighbour_k=neighbour_k)
                         est_seconds.setdefault(source, []).append(
                             time.time() - t_est)
                         if scores is None:
@@ -1071,6 +1831,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             print(f"      {_ekey}/{source}: {tsrc}")
                             continue
                         target_src.setdefault(source, set()).add(tsrc)
+                        today_by_source[source] = (scores, target, tsrc)
 
                         # Did the number find the molecules that really moved,
                         # before any cleaning ran? It costs no model fit.
@@ -1129,9 +1890,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                      .setdefault(source, {})
                                      .setdefault(arm, []).append(dict(_rm_row)))
                             for mname in cell_models:
-                                s, err = _fit_score(
-                                    model_factories[mname], Xc, yc, X_va_s,
-                                    y_val, metric_fn, metric_name)
+                                if shape == 'none':
+                                    # The no-cleaning fit is the same fit for
+                                    # every source; through noise_cache for a
+                                    # seeded model (plan section 3: "n23
+                                    # refits it 5 times per pass").
+                                    s, err = fit_score_cached(
+                                        dataset_name, mname,
+                                        model_factories[mname], Xc, yc,
+                                        X_va_s, y_val, metric_fn, metric_name)
+                                else:
+                                    s, err = _fit_score(
+                                        model_factories[mname], Xc, yc, X_va_s,
+                                        y_val, metric_fn, metric_name)
                                 if s is None:
                                     errors[f'{regime}|{lvl_key}|{_ekey}|'
                                            f'{source}|{arm}|{mname}|'
@@ -1139,7 +1910,265 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                     continue
                                 (src_cell.setdefault(arm, {})
                                          .setdefault(mname, {})[fold_key]) = s
+                                if shape == 'none':
+                                    d_score.setdefault(mname, s)
 
+                        # ── The D-versus-D' rows of today's path ──
+                        # One per (arm, model); score_D is this source's own
+                        # no-cleaning fit on the same matrix and fold.
+                        _reads_nbrs_score = source in nc.NEIGHBOUR_DETECTORS
+                        for arm, shape, setting, method in arms:
+                            if shape == 'none':
+                                continue
+                            _nb = (_reads_nbrs_score or
+                                   (shape == 'move' and tsrc != OWN_TARGET))
+                            for mname in cell_models:
+                                sD = (src_cell.get('none') or {}).get(
+                                    mname, {}).get(fold_key)
+                                sP = (src_cell.get(arm) or {}).get(
+                                    mname, {}).get(fold_key)
+                                if sD is None and sP is None:
+                                    continue
+                                rows.add(method=source, method_setting=arm,
+                                         similarity_setting=(
+                                             TODAY_SIMILARITY if _nb
+                                             else NO_NEIGHBOURS),
+                                         model_input=space, model=mname,
+                                         noise_condition=row_cond,
+                                         level=row_level, draw=draw,
+                                         fold=fold_i, score_D=sD,
+                                         score_Dprime=sP,
+                                         score_clean=clean_score.get(mname, sD))
+
+                        # ── Controls (KIRBY_NOISE_CONTROLS=1 only) ──
+                        # random_twin and shuffled_twin of every drop and move
+                        # arm, fitted per model and written as rows whose
+                        # method_setting ends |control=<twin>.
+                        if controls_enabled():
+                            for arm, shape, setting, method in arms:
+                                if shape == 'none':
+                                    continue
+                                try:
+                                    if shape == 'drop':
+                                        _cd = as_cleanup_dict(
+                                            X_tr_s, y0,
+                                            keep=drop_keep_mask(setting, scores))
+                                    else:
+                                        _g = cleaned_training_set(
+                                            shape, setting, X_tr_s, y0, scores,
+                                            target, method=method)
+                                        if _g is None:
+                                            continue
+                                        _cd = as_cleanup_dict(X_tr_s, y0,
+                                                              labels=_g[1])
+                                except Exception:
+                                    continue
+                                _seed = (int(draw), int(fold_i),
+                                         int(zlib.crc32(f'{source}|{arm}|{space}'
+                                                        .encode()) & 0x7FFFFFFF))
+                                for cname, tw, why in control_twins(
+                                        _cd, X_tr_s, y0, _seed, is_clf=is_clf):
+                                    for mname in cell_models:
+                                        if tw is None:
+                                            errors[f'{regime}|{lvl_key}|{_ekey}|'
+                                                   f'{source}|{arm}|{cname}|'
+                                                   f'f{fold_i}'] = why
+                                            continue
+                                        sP, err = fit_cleaned(
+                                            model_factories[mname], tw, X_va_s,
+                                            y_val, metric_fn, metric_name)
+                                        sD = (src_cell.get('none') or {}).get(
+                                            mname, {}).get(fold_key)
+                                        rows.add(
+                                            method=source,
+                                            method_setting=f'{arm}|control={cname}',
+                                            similarity_setting=(
+                                                TODAY_SIMILARITY
+                                                if (_reads_nbrs_score or (
+                                                    shape == 'move'
+                                                    and tsrc != OWN_TARGET))
+                                                else NO_NEIGHBOURS),
+                                            model_input=space, model=mname,
+                                            noise_condition=row_cond,
+                                            level=row_level, draw=draw,
+                                            fold=fold_i, score_D=sD,
+                                            score_Dprime=sP,
+                                            score_clean=clean_score.get(mname, sD))
+
+                    # ── The similarity sweep (2026-09-25, plan section 1) ──
+                    # Per downstream model, because each model's similarity
+                    # spaces are its own (its base_1/base_2, its hybrids).
+                    # The model is still fitted on THIS matrix: the model
+                    # input and the similarity space are separate axes.
+                    _sweep_sources = [
+                        s_ for s_ in sources if s_ in today_by_source and (
+                            s_ in nc.NEIGHBOUR_DETECTORS
+                            or today_by_source[s_][2] != OWN_TARGET)]
+                    if sim_axis and _sweep_sources:
+                        for mname in cell_models:
+                            _spaces_tr, _why = model_similarity_spaces(
+                                dataset_name, data, model_name=mname,
+                                factory=model_factories[mname],
+                                base_reps=base_by_model.get(mname),
+                                hybrid_train=hybrid_by_model.get(mname),
+                                train_idx=train_idx, val_idx=val_idx,
+                                y_train=y0, groups_train=g_tr,
+                                metric=(metric_name, metric_fn,
+                                        lower_is_better),
+                                task_type=task_type,
+                                model_input_train=X_tr_s)
+                            for _sp_u, _w in _why.items():
+                                sim_unavailable.setdefault(
+                                    _sp_u, {}).setdefault(mname, _w)
+                            _smi = smiles_for(data, train_idx)
+                            _lists = {}
+                            for label, sset, kk in sim_axis:
+                                if sset.name not in _lists:
+                                    _ex = setting_neighbours(
+                                        dataset_name, sset, _spaces_tr, y0,
+                                        exclude_groups=g_tr,
+                                        smiles_train=_smi, is_clf=is_clf)
+                                    _pl = (_ex if g_tr is None else
+                                           setting_neighbours(
+                                               dataset_name, sset, _spaces_tr,
+                                               y0, exclude_groups=None,
+                                               smiles_train=_smi,
+                                               is_clf=is_clf))
+                                    _lists[sset.name] = (_ex, _pl)
+                                nb_ex, nb_pl = _lists[sset.name]
+                                if not (nb_ex.get('available')
+                                        and nb_pl.get('available')):
+                                    sim_unavailable.setdefault(
+                                        sset.space, {}).setdefault(
+                                            mname, nb_ex.get('reason')
+                                            or nb_pl.get('reason'))
+                                    continue
+                                try:
+                                    _nidx, _ = ss.neighbours_at(nb_pl, kk)
+                                    s_target = np.mean(y0[_nidx], axis=1)
+                                except Exception as exc:
+                                    errors[f'{regime}|{lvl_key}|{_ekey}|{mname}|'
+                                           f'{label}|f{fold_i}|target'] = (
+                                        f'{type(exc).__name__}: {exc}')
+                                    continue
+                                for source in _sweep_sources:
+                                    t_scores, t_target, t_src = today_by_source[source]
+                                    if source in nc.NEIGHBOUR_DETECTORS:
+                                        try:
+                                            s_scores = nc.cached_detector_scores(
+                                                dataset_name, X_tr_s, y0,
+                                                is_clf=is_clf, detector=source,
+                                                groups=g_tr,
+                                                similarity_neighbours=nb_ex,
+                                                similarity_k=kk)
+                                        except Exception as exc:
+                                            errors[f'{regime}|{lvl_key}|{_ekey}|'
+                                                   f'{mname}|{source}|{label}|'
+                                                   f'f{fold_i}|estimate'] = (
+                                                f'{type(exc).__name__}: {exc}')
+                                            continue
+                                        if s_scores is None:
+                                            continue
+                                        s_scores = np.asarray(s_scores, dtype=float)
+                                        # A neighbour source has no prediction
+                                        # of its own: its target is the
+                                        # neighbours' mean, here in the setting.
+                                        s_tgt = s_target
+                                        _arms_here = [a for a in arms
+                                                      if a[1] != 'none']
+                                        if cmask is not None and \
+                                                detection_is_defined(spec.strategy):
+                                            det = detection_scores(
+                                                cmask, s_scores, spec.strategy)
+                                            if det is not None:
+                                                (sim_detection
+                                                 .setdefault(lvl_key, {})
+                                                 .setdefault(space, {})
+                                                 .setdefault(mname, {})
+                                                 .setdefault(source, {})
+                                                 .setdefault(label, [])
+                                                 .append(det))
+                                    else:
+                                        # Its score reads no neighbours; only
+                                        # its fallback move target did.
+                                        s_scores = t_scores
+                                        s_tgt = s_target
+                                        _arms_here = [a for a in arms
+                                                      if a[1] == 'move']
+                                    for arm, shape, setting, method in _arms_here:
+                                        try:
+                                            got = cleaned_training_set(
+                                                shape, setting, X_tr_s, y0,
+                                                s_scores, s_tgt, method=method)
+                                        except Exception as exc:
+                                            errors[f'{regime}|{lvl_key}|{_ekey}|'
+                                                   f'{mname}|{source}|{label}|'
+                                                   f'{arm}|f{fold_i}|clean'] = (
+                                                f'{type(exc).__name__}: {exc}')
+                                            continue
+                                        if got is None:
+                                            continue
+                                        sP, err = _fit_score(
+                                            model_factories[mname], got[0],
+                                            got[1], X_va_s, y_val, metric_fn,
+                                            metric_name)
+                                        if sP is None:
+                                            errors[f'{regime}|{lvl_key}|{_ekey}|'
+                                                   f'{mname}|{source}|{label}|'
+                                                   f'{arm}|f{fold_i}'] = err
+                                        sD = d_score.get(mname)
+                                        rows.add(method=source,
+                                                 method_setting=arm,
+                                                 similarity_setting=label,
+                                                 model_input=space,
+                                                 model=mname,
+                                                 noise_condition=row_cond,
+                                                 level=row_level, draw=draw,
+                                                 fold=fold_i, score_D=sD,
+                                                 score_Dprime=sP,
+                                                 score_clean=clean_score.get(
+                                                     mname, sD))
+                                        if not controls_enabled():
+                                            continue
+                                        _cd = (as_cleanup_dict(
+                                            X_tr_s, y0,
+                                            keep=drop_keep_mask(setting,
+                                                                s_scores))
+                                               if shape == 'drop' else
+                                               as_cleanup_dict(X_tr_s, y0,
+                                                               labels=got[1]))
+                                        _seed = (int(draw), int(fold_i), int(
+                                            zlib.crc32(f'{source}|{arm}|{space}|'
+                                                       f'{mname}|{label}'.encode())
+                                            & 0x7FFFFFFF))
+                                        for cname, tw, why in control_twins(
+                                                _cd, X_tr_s, y0, _seed,
+                                                is_clf=is_clf):
+                                            if tw is None:
+                                                continue
+                                            sPc, _e = fit_cleaned(
+                                                model_factories[mname], tw,
+                                                X_va_s, y_val, metric_fn,
+                                                metric_name)
+                                            rows.add(
+                                                method=source,
+                                                method_setting=(
+                                                    f'{arm}|control={cname}'),
+                                                similarity_setting=label,
+                                                model_input=space, model=mname,
+                                                noise_condition=row_cond,
+                                                level=row_level, draw=draw,
+                                                fold=fold_i, score_D=sD,
+                                                score_Dprime=sPc,
+                                                score_clean=clean_score.get(
+                                                    mname, sD))
+
+                # The fold is finished: its rows go to disk and the
+                # accumulators to the checkpoint, in that order, so a kill
+                # between the two re-runs the fold and adds no duplicate row.
+                rows.flush()
+                done_passes.add(pass_id)
+                _save_state()
                 print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
 
     results['per_regime'] = convert_numpy(acc)
@@ -1201,7 +2230,24 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['summary'] = convert_numpy(
         _summarise(acc, [a[0] for a in arms], downstream_models, metric_name,
                    lower_is_better, results['detection']))
+    # The similarity sweep's detection readings, averaged over the folds and
+    # draws of a level as `detection` is, and the spaces that could not be
+    # built with the reason (2026-09-25).
+    results['similarity_sweep']['detection'] = convert_numpy({
+        lvl: {sp: {m: {src: {lab: _mean_detection(rs)
+                             for lab, rs in by_lab.items()}
+                       for src, by_lab in by_src.items()}
+                   for m, by_src in by_m.items()}
+              for sp, by_m in by_sp.items()}
+        for lvl, by_sp in sim_detection.items()})
+    results['similarity_sweep']['spaces_unavailable'] = sim_unavailable
+    results['rows'] = rows.summary()
+    results['controls_run'] = bool(controls_enabled())
     _print_summary(results, metric_name)
+    print(f"  D-versus-D' rows: {rows.n_written} written this run to "
+          f"{rows.path or 'memory'}")
+    # The result is complete; the per-pass checkpoint is not needed again.
+    ckpt.clear()
     return results
 
 

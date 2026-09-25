@@ -125,7 +125,7 @@ import numpy as np
 from scipy.optimize import nnls
 from scipy.spatial.distance import cdist
 from sklearn.model_selection import GroupKFold, ParameterSampler
-from sklearn.neighbors import KNeighborsRegressor, NearestNeighbors
+from sklearn.neighbors import KNeighborsRegressor
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
@@ -152,6 +152,14 @@ from experiments.noise.n33_robust_training import _share
 from experiments.noise._ground_truth_providers import build_replicate_groups
 from kirby.noise_spec import GROUPED_STRATEGIES
 from kirby.utils.noisy_labels import oof_predict
+# The per-pass checkpoint, cached builds and the similarity axis shared by
+# n32-n41 (n32's shared block, 2026-09-25). n40 changes the MODEL, never the
+# training labels, so it writes no D-versus-D' rows: there is no D'.
+from experiments.noise.n32_iterative_and_dual_selection import (
+    downstream_model_list, fit_predict_cached, scaled_base_cells,
+    cached_hybrid, ledger_signature, PassLedger, restart_flag, sweep_settings,
+    sweep_ks, is_model_input, fold_similarity, _nc, _ss,
+)
 
 EXP_ID = 'n40_model_side_regularisation'
 
@@ -320,30 +328,76 @@ def seeded_model(name, factory, seed):
 
 # ── the Gamma estimate, Cp and the closed-form GP ──
 
-def gamma_sigma2(X, y, seed=0):
-    """noise_helpers.gamma_test in the matrix the model sees; subset above a cap."""
+def _sub_distance(dist_blocks, n, idx):
+    """The idx-by-idx block of a training distance given as row blocks
+    (n32.FoldSimilarity.distance_blocks), without holding the n x n matrix."""
+    idx = np.asarray(idx)
+    pos = np.full(n, -1)
+    pos[idx] = np.arange(idx.size)
+    D = np.empty((idx.size, idx.size))
+    step = _ss._chunk_rows(n)
+    for a in range(0, n, step):
+        b = min(n, a + step)
+        rows = idx[(idx >= a) & (idx < b)]
+        if rows.size:
+            D[pos[rows]] = dist_blocks(a, b)[rows - a][:, idx]
+    return D
+
+
+def gamma_sigma2(X, y, seed=0, k_max=GAMMA_K_MAX, dist_blocks=None):
+    """noise_helpers.gamma_test in the matrix the model sees; subset above a cap.
+
+    ⛔ THE DISTANCE CHANGED 2026-09-25. Until then this was cdist's default,
+    Euclidean, whatever --distance-metric said (plan section 4: "Euclidean
+    slips in unasked", n40:332). It is now the process-wide distance
+    (distance_config.scipy_metric, manhattan by default), which is what the
+    model_input similarity setting means everywhere else, as the owner asked
+    (2026-09-25). So the Gamma estimate, knn_k_cp and the two GP arms that read
+    it are NOT today's numbers under model_input.
+
+    k_max and dist_blocks, added 2026-09-25: the similarity sweep's k in place
+    of GAMMA_K_MAX, and a setting's distance (row blocks) in place of the
+    model-input matrix. The same seeded subset is taken either way."""
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
     idx = np.arange(len(y))
     if len(y) > GAMMA_MAX_MOLECULES:
         idx = np.random.RandomState(seed).choice(len(y), GAMMA_MAX_MOLECULES,
                                                  replace=False)
-    g = gamma_test(cdist(X[idx], X[idx]), y[idx], k_max=GAMMA_K_MAX)
+    if dist_blocks is None:
+        from kirby.similarity.distance_config import scipy_metric
+        _m, _kw = scipy_metric()
+        D = cdist(X[idx], X[idx], metric=_m, **_kw)
+    else:
+        D = _sub_distance(dist_blocks, len(y), idx)
+    g = gamma_test(D, y[idx], k_max=k_max)
     if g is None:
         return None, None
     g['n_used'] = int(len(idx))
     return max(float(g['intercept']), 0.0), g
 
 
-def knn_cp_choice(X, y, sigma2, k_grid=KNN_K_GRID):
+def knn_cp_choice(X, y, sigma2, k_grid=KNN_K_GRID, neighbour_idx=None):
     """k by Mallows Cp for equal-weight kNN: RSS/n + 2 sigma^2 / k.
 
     The in-sample fit counts the molecule itself as its first neighbour, so the
     smoother's trace is n / k and df / n = 1 / k.
+
+    ⛔ THE DISTANCE CHANGED 2026-09-25: a bare NearestNeighbors (Euclidean)
+    until then; now _shared.make_nearest_neighbors, the process-wide distance,
+    as gamma_sigma2 above. neighbour_idx, added the same day: a similarity
+    setting's lists (the molecule itself excluded), and the molecule is put
+    back in front as its own first neighbour, as the in-sample fit counts it.
     """
     ks = [k for k in k_grid if k <= len(y)]
-    nn = NearestNeighbors(n_neighbors=max(ks)).fit(X)
-    _, idx = nn.kneighbors(X)
+    if neighbour_idx is None:
+        from experiments._shared import make_nearest_neighbors
+        nn = make_nearest_neighbors(n_neighbors=max(ks)).fit(X)
+        _, idx = nn.kneighbors(X)
+    else:
+        nb = np.asarray(neighbour_idx)
+        idx = np.hstack([np.arange(len(y))[:, None], nb])
+        ks = [k for k in ks if k <= idx.shape[1]]
     cps = {}
     for k in ks:
         fit = y[idx[:, :k]].mean(axis=1)
@@ -491,6 +545,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"estimate, Cp and the GP noise term are defined on a number, so "
               f"n40 is regression only.")
         return {'skipped': 'not_regression', 'task_type': data['task_type']}
+    # sweep_conditions pops force_rerun; PassLedger reads restart_passes.
+    kwargs['restart_passes'] = bool(kwargs.get('force_rerun'))
     return sweep_conditions(
         _run_one_condition, EXP_ID, data, config, output_dir, dataset_name,
         default_conditions=list(DEFAULT_CONDITIONS), kwargs=kwargs,
@@ -525,8 +581,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     skip_knn = bool(kwargs.get('skip_knn', False))
     skip_stack = bool(kwargs.get('skip_stack', False))
 
-    downstream_models = list(
-        kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     downstream_models = [m for m in downstream_models if m in model_factories]
@@ -591,6 +646,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'not run: this dataset has no repeat measurements, so there is no '
             'per-molecule count to set a noise term from'),
         'gap_min_frac': GAP_MIN_FRAC,
+        'similarity_settings': [st.name for st in sweep_settings()],
+        'similarity_ks': list(sweep_ks(GAMMA_K_MAX)),
+        'similarity_note': (
+            'The Gamma estimate and knn_k_cp read neighbours in the process-wide '
+            'distance under model_input (Euclidean before 2026-09-25). Every '
+            'other (setting, k) adds, under arm fixed: knn_k5_uniform@<setting> '
+            '(a 5-neighbour mean in that setting), and knn_k_cp@, '
+            'gp_nugget_from_gamma@ and gp_nugget_cp@<setting>|k<k>, whose '
+            'sigma^2 is the Gamma intercept in that setting with k neighbours. '
+            'knn_k_cv is not swept: see the TODO at knn_k_cv. No D-versus-D\' '
+            'rows: n40 changes the model, not the training data.'),
         'claim_scope': (
             'The noise is injected, so every number is confined to this '
             'condition on this dataset. Held-out molecules are graded against '
@@ -692,6 +758,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     t0 = time.time()
     resid_sd_by_fold = {}
     clean_tuned_cache = {}
+    metric = (metric_name, metric_fn, lower_is_better)
+    sim_settings = [st for st in sweep_settings()]
+    sim_ks = sweep_ks(GAMMA_K_MAX)
+    # The per-pass checkpoint, 2026-09-25 (n32's PassLedger; no rows). The two
+    # in-run caches (resid_sd_by_fold, clean_tuned_cache) are not stored:
+    # their keys are not JSON, and both recompute to the same values.
+    ledger = PassLedger(output_dir, EXP_ID, dataset_name, condition,
+                        signature=ledger_signature(data, config, results,
+                                                   splits),
+                        restart=restart_flag(kwargs))
+    if ledger.restored():
+        st_ = ledger.restored()
+        acc, tails, pass_recs, errors, skips = (
+            st_['acc'], st_['tails'], st_['pass_recs'], st_['errors'],
+            st_['skips'])
+        print(f"  resumed {len(ledger.passes_done)} finished passes")
 
     def _store(lvl_key, space, arm, mname, pass_key, pred, y_val):
         s = float(metric_fn(y_val, pred))
@@ -708,6 +790,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  --- {condition} / level {lvl_key} / draw {draw} ---")
         for fold_i, (train_idx, val_idx) in enumerate(splits):
             pass_key = f'l{lvl_key}d{draw}f{fold_i}'
+            if ledger.pass_done(pass_key):
+                continue
             y_val = labels[val_idx]
             y_clean_tr = labels[train_idx]
             g_tr = groups[train_idx] if groups is not None else None
@@ -752,14 +836,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             # there.
             fold_spaces = {}
             for _sp in base_spaces:
-                _bcells = []
-                for _rn, _ms in base_rank_groups(
-                        base_by_model, int(_sp.split('_')[1]),
-                        downstream_models).items():
-                    sc = StandardScaler()
-                    _bcells.append((sc.fit_transform(train_reps[_rn]),
-                                    sc.transform(val_reps[_rn]), list(_ms)))
-                fold_spaces[_sp] = _bcells
+                # Standardised once per fold through noise_cache (2026-09-25).
+                fold_spaces[_sp] = scaled_base_cells(
+                    dataset_name, reps, train_idx, val_idx, base_by_model,
+                    int(_sp.split('_')[1]), downstream_models)
             for _sp in spaces:
                 if _sp in base_spaces:
                     continue
@@ -767,10 +847,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
-                    X_tr_h, X_va_h = hybrid_for_fold(
-                        train_reps, val_reps, y0, _bp_m, g_tr,
-                        None if _shareable else model_factories[_mnames[0]](),
-                        metric_fn, lower_is_better)
+                    # Cached per (fold, recipe, labels), 2026-09-25.
+                    X_tr_h, X_va_h = cached_hybrid(
+                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        _mnames[0], model_factories, metric, train_idx,
+                        _shareable)
                     if X_tr_h is None:
                         errors[f'{lvl_key}|{_sp}/{_mnames[0]}|d{draw}|f{fold_i}|build'] = (
                             'the hybrid could not be built')
@@ -780,6 +861,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                    list(_mnames)))
                 if _cells:
                     fold_spaces[_sp] = _cells
+
+            # The similarity spaces of this fold, from the noisy labels (plan
+            # section 1, 2026-09-25). The host model's spaces are read.
+            fsim = fold_similarity(
+                dataset_name, data, reps=reps, train_idx=train_idx,
+                val_idx=val_idx, y_train=y0, groups_train=g_tr,
+                base_by_model=base_by_model,
+                recipe_for_space_by_model=recipe_for_space_by_model,
+                model_factories=model_factories, metric=metric,
+                task_type=task_type)
 
             for space in spaces:
                 sp_rec = {'tuned': {}, 'seed_avg': {}}
@@ -794,7 +885,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         # clean and fixed
                         for arm, yy in (('clean', y_clean_tr), ('fixed', y0)):
                             try:
-                                pred = _fit_predict(fac(), X_tr_s, yy, X_va_s, metric_name)
+                                # Through noise_cache for a seeded model
+                                # (2026-09-25); the same prediction.
+                                pred = np.asarray(fit_predict_cached(
+                                    dataset_name, mname, fac, X_tr_s, yy,
+                                    X_va_s, metric_name), dtype=float)
                                 _store(lvl_key, space, arm, mname, pass_key, pred, y_val)
                                 if arm == 'fixed':
                                     fixed_val[mname] = pred
@@ -900,6 +995,40 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     except Exception as exc:
                         errors[f'{ekey}|gamma'] = f'{type(exc).__name__}: {exc}'
 
+                # ── the Gamma estimate under every other (setting, k) ──
+                # {name suffix: sigma^2}. model_input at GAMMA_K_MAX is the
+                # sigma2 above; its other ks and every other setting are here.
+                sim_sigma2, sim_lists = {}, {}
+                if not (skip_gp and skip_knn):
+                    sp_rec['gamma_by_similarity'] = {}
+                    for setting in sim_settings:
+                        try:
+                            if is_model_input(setting):
+                                blocks = None
+                            else:
+                                blocks, _n, why = fsim.distance_blocks(
+                                    setting, host, X_tr_s)
+                                if blocks is None:
+                                    sp_rec['gamma_by_similarity'][
+                                        setting.name] = {'unavailable': why}
+                                    continue
+                            for k in sim_ks:
+                                if is_model_input(setting) and k == GAMMA_K_MAX:
+                                    continue
+                                s2_k, g_k = gamma_sigma2(
+                                    X_tr_s, y0, seed=fold_i, k_max=k,
+                                    dist_blocks=blocks)
+                                nm = f'{setting.name}|k{k}'
+                                sp_rec['gamma_by_similarity'][nm] = (
+                                    None if g_k is None else
+                                    {kk: g_k[kk] for kk in ('intercept',
+                                                            'k_max', 'n_used')})
+                                if s2_k is not None:
+                                    sim_sigma2[nm] = (setting, s2_k)
+                        except Exception as exc:
+                            errors[f'{ekey}|gamma@{setting.name}'] = (
+                                f'{type(exc).__name__}: {exc}')
+
                 # ── kNN, k by Cp and by CV ──
                 if not skip_knn:
                     try:
@@ -923,6 +1052,58 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                                   'cp': {str(k): v for k, v in cps.items()}})
                     except Exception as exc:
                         errors[f'{ekey}|knn'] = f'{type(exc).__name__}: {exc}'
+                    # TODO(similarity-sweep 2026-09-25): knn_k_cv is not swept
+                    # over the similarity settings. Its inner folds need each
+                    # molecule's neighbours among the inner TRAINING rows only,
+                    # which a fold's lists do not give; building lists per
+                    # inner fold is a design choice (which space, rebuilt per
+                    # inner fold or restricted) left to the owner.
+                    # ── kNN under every other similarity setting ──
+                    kmax_knn = max(KNN_K_GRID)
+                    for nm, (setting, s2_k) in list(sim_sigma2.items()) + [
+                            (st.name, (st, None)) for st in sim_settings]:
+                        if is_model_input(setting):
+                            if s2_k is None:
+                                continue
+                            try:
+                                k_cp, cps = knn_cp_choice(X_tr_s, y0, s2_k)
+                                pred = KNeighborsRegressor(
+                                    n_neighbors=k_cp, weights='uniform') \
+                                    .fit(X_tr_s, y0).predict(X_va_s)
+                                _store(lvl_key, space, 'fixed',
+                                       f'knn_k_cp@{nm}', pass_key, pred, y_val)
+                            except Exception as exc:
+                                errors[f'{ekey}|knn_k_cp@{nm}'] = (
+                                    f'{type(exc).__name__}: {exc}')
+                            continue
+                        try:
+                            if setting.name not in sim_lists:
+                                wide = _ss.SimilaritySetting(
+                                    setting.space, setting.weighting,
+                                    setting.metric, k_max=kmax_knn)
+                                sim_lists[setting.name] = fsim.neighbours(
+                                    wide, host, X_tr_s, X_va_s)
+                            nb = sim_lists[setting.name]
+                            if not nb.get('available'):
+                                continue
+                            iv, _dv = nb['idx_val'], nb['dist_val']
+                            if s2_k is None:
+                                # knn_k5_uniform in this setting: the mean of
+                                # the 5 nearest training labels.
+                                kk = min(KNN_REFERENCE_K, iv.shape[1])
+                                _store(lvl_key, space, 'fixed',
+                                       f'knn_k5_uniform@{nm}', pass_key,
+                                       y0[iv[:, :kk]].mean(axis=1), y_val)
+                            else:
+                                k_cp, cps = knn_cp_choice(
+                                    X_tr_s, y0, s2_k,
+                                    neighbour_idx=nb['idx_train'])
+                                _store(lvl_key, space, 'fixed',
+                                       f'knn_k_cp@{nm}', pass_key,
+                                       y0[iv[:, :k_cp]].mean(axis=1), y_val)
+                        except Exception as exc:
+                            errors[f'{ekey}|knn@{nm}'] = (
+                                f'{type(exc).__name__}: {exc}')
 
                 # ── the GP arms ──
                 if not skip_gp:
@@ -956,6 +1137,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 a_cp, cps = gp_cp_choice(egp, y0, sigma2, grid + [a_g])
                                 _store(lvl_key, space, 'fixed', 'gp_nugget_cp', pass_key,
                                        egp.predict(X_va_s, a_cp), y_val)
+                                # The same two arms with sigma^2 from every
+                                # other (setting, k), 2026-09-25.
+                                for nm, (_st, s2_k) in sim_sigma2.items():
+                                    a_gk = s2_k / var_y
+                                    _store(lvl_key, space, 'fixed',
+                                           f'gp_nugget_from_gamma@{nm}',
+                                           pass_key, egp.predict(X_va_s, a_gk),
+                                           y_val)
+                                    a_cpk, _c = gp_cp_choice(
+                                        egp, y0, s2_k, grid + [a_gk])
+                                    _store(lvl_key, space, 'fixed',
+                                           f'gp_nugget_cp@{nm}', pass_key,
+                                           egp.predict(X_va_s, a_cpk), y_val)
                                 gp_rec.update({
                                     'gamma_noise_label_units': sigma2,
                                     'cp_noise_label_units': a_cp * var_y})
@@ -964,7 +1158,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             errors[f'{ekey}|gp'] = f'{type(exc).__name__}: {exc}'
                         # regression kriging on the host's residuals
                         try:
-                            p_oof = oof_predict(X_tr_s, y0, g_tr, n_splits=oof_splits)
+                            # Cached on the label hash (2026-09-25).
+                            p_oof = _nc.cached_oof_predict(
+                                dataset_name, X_tr_s, y0, g_tr,
+                                n_splits=oof_splits)
                             gp_r = make_gp().fit(X_tr_s, y0 - p_oof)
                             host_pred = (fixed_val.get('lightgbm') if host == 'lightgbm'
                                          else None)
@@ -1012,6 +1209,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 rec['per_space'][space] = sp_rec
 
             pass_recs.setdefault(lvl_key, []).append(rec)
+            ledger.finish_pass(pass_key, {'acc': acc, 'tails': tails,
+                                          'pass_recs': pass_recs,
+                                          'errors': errors, 'skips': skips})
             print(f"    level {lvl_key} draw {draw} fold {fold_i}: "
                   f"{rec['labels_moved']} of {rec['training_molecules']} labels "
                   f"moved [{time.time() - t0:.0f}s]")
@@ -1019,6 +1219,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['per_level'] = convert_numpy(acc)
     results['tails_per_level'] = convert_numpy(tails)
     results['per_pass'] = convert_numpy(pass_recs)
+    results['checkpoint'] = ledger.describe()
     if skips:
         results['arm_skips'] = skips
     if errors:
@@ -1064,6 +1265,17 @@ def _summarise(acc, models, metric_name, lower_is_better):
                 if g and b:
                     srow['extra_pairs'][f'{got}_vs_{base}'] = _paired(
                         b, g, lower_is_better)
+            # The similarity-sweep arms (2026-09-25), '<arm>@<setting>[|k<k>]',
+            # each paired against what its own arm is paired against.
+            for got in [a for a in fixed if '@' in a]:
+                stem = got.split('@', 1)[0]
+                for g0, base in EXTRA_PAIRS:
+                    if g0 != stem:
+                        continue
+                    g, b = fixed.get(got) or {}, fixed.get(base) or {}
+                    if g and b:
+                        srow['extra_pairs'][f'{got}_vs_{base}'] = _paired(
+                            b, g, lower_is_better)
             lrow[space] = srow
         out['per_level'][lvl] = lrow
     return out

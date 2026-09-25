@@ -94,6 +94,13 @@ from kirby.utils.noise_estimation import (
     LocalVarianceRatioEstimator,
     weights_from_scores,
 )
+# The similarity-sweep kit and the disk caches, added 2026-09-25 (plan
+# sections 1-3). See n07_remediation's SIMILARITY-SWEEP KIT block.
+from experiments.noise.n07_remediation import (
+    sweep_settings, sweep_ks, RowSink, sweep_context, similarity_sweep,
+    detector_scores_with, cleaned_from_weights, similarity_record,
+)
+from experiments.noise import noise_cache as _nc
 
 
 # Noise levels. `None` means the grid this dataset is anchored to in
@@ -1013,6 +1020,46 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     }
     zero_imp_acc = results['zero_importance_spaces']
     dup_cond_acc = results['duplicate_conditions']
+
+    # ── The similarity axis, added 2026-09-25 (plan sections 1-2) ──────────
+    # n12 already asks which distance finds a molecule's neighbours, through
+    # its own conditions above, which are unchanged: they weight the features
+    # by n12's own power-then-normalise rule (_weight_features) and every key
+    # they fill is what it was. The sweep below is the suite-wide axis on top:
+    # each estimator of ESTIMATOR_FACTORIES reads its neighbours from every
+    # similarity setting (similarity_space, weights through
+    # kirby.similarity.preprocessing.fold_weights) at every k in SWEPT_KS, and
+    # repairs with the same weighting as the conditions above
+    # (REPAIR_WEIGHT_METHOD at REPAIR_STRENGTH). The model input is each
+    # evaluation unit's own single representation, as above. One D-versus-D'
+    # row per (estimator, setting, k, model): RF, SVM and the unit's model.
+    #
+    # TODO(similarity-sweep 2026-09-25): the plan (section 1) says n12's own
+    # weighting copy is to be replaced by fold_weights. That changes every
+    # number the conditions above report (fold_weights normalises before the
+    # power, _weight_features after -- see its docstring), so it is not done
+    # here; the swept settings already go through fold_weights. Owner to say
+    # whether the legacy conditions move.
+    sim_settings = sweep_settings()
+    sink = RowSink(output_dir, 'n12_importance_weighted_distance',
+                   dataset_name, kwargs.get('noise_condition'))
+    # TODO(similarity-sweep 2026-09-25): the hybrid and hybrid_similarity
+    # similarity spaces use the one recipe this file reads, rf's
+    # (get_best_search_for_downstream(downstream_model='rf') above), for every
+    # evaluation unit's model. The plan says each model's own prediction-built
+    # hybrid; reading one recipe per model is a pool read per model. Owner to
+    # say whether rf's recipe stands in for every model here.
+    sim_recipes = {r['space']: (r['blueprint'], r['aug_condition'])
+                   for r in hybrid_recipes}
+    sim_detection = {}
+    sweep_ctx = sweep_context(
+        experiment='n12_importance_weighted_distance',
+        dataset_name=dataset_name, sink=sink, settings=sim_settings,
+        metric=(metric_name, metric_fn, lower_is_better), task_type=task_type,
+        condition=noise_condition, level=None, data=data,
+        factories=model_factories)
+    print(f"  Similarity axis: {len(sim_settings)} settings x ks "
+          f"{list(sweep_ks())}; rows -> {sink.path}")
     _dup_copied = results['duplicate_conditions_copied']
     features_in_space = results['features_in_space']
 
@@ -1060,13 +1107,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
             # The evaluation features, one scaled pair per single
             # representation any unit is fitted on, shared by those units.
+            # Cached 2026-09-25 (noise_cache.cached_scaled): the same
+            # StandardScaler arithmetic, stored once per (representation
+            # content, fold) across every level, draw and condition.
             _eval_by_rep = {}
             for _u, (_m, _k, _rn) in eval_units.items():
                 if _rn not in _eval_by_rep:
-                    scaler_eval = StandardScaler()
-                    _eval_by_rep[_rn] = (
-                        scaler_eval.fit_transform(reps[_rn][train_idx]),
-                        scaler_eval.transform(reps[_rn][val_idx]))
+                    _eval_by_rep[_rn] = _nc.cached_scaled(
+                        dataset_name, reps[_rn], train_idx, val_idx)
             eval_by_unit = {_u: _eval_by_rep[_rn]
                             for _u, (_m, _k, _rn) in eval_units.items()}
 
@@ -1074,13 +1122,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             # The clean fit has no noise in it, so it is the same on all three
             # draws of a fold. Score it on the first draw only, or clean_scores
             # carries three copies of every fold.
+            # Fitted through noise_cache.cached_fit_predict since 2026-09-25:
+            # the same fit and the same model.predict, stored once per
+            # (features, labels, model) and read back by the D-versus-D' rows.
             if noise_seed == _seeds[0]:
                 for _u in eval_units:
                     _xtr, _xva = eval_by_unit[_u]
-                    _mdl = unit_factories[_u]()
-                    _mdl.fit(_xtr, y_train_clean)
-                    clean_scores[_u].append(
-                        float(metric_fn(y_val, _mdl.predict(_xva))))
+                    clean_scores[_u].append(float(metric_fn(
+                        y_val, _nc.cached_fit_predict(
+                            dataset_name, eval_units[_u][0],
+                            unit_factories[_u], _xtr, y_train_clean, _xva))))
 
             # Inject noise (training only)
             _spec = noise_spec_for(dataset_name, noise_condition, sigma,
@@ -1090,13 +1141,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 groups=noise_groups, dataset_name=dataset_name)
             noise_provenance.setdefault(_spec.spec_id, _prov)
 
-            # Noisy baseline
+            # Noisy baseline, through the same cache.
             for _u in eval_units:
                 _xtr, _xva = eval_by_unit[_u]
-                _mdl = unit_factories[_u]()
-                _mdl.fit(_xtr, y_noisy)
-                noisy_scores[_u].append(
-                    float(metric_fn(y_val, _mdl.predict(_xva))))
+                noisy_scores[_u].append(float(metric_fn(
+                    y_val, _nc.cached_fit_predict(
+                        dataset_name, eval_units[_u][0], unit_factories[_u],
+                        _xtr, y_noisy, _xva))))
 
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
@@ -1263,6 +1314,52 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         if score is not None:
                             grid_acc[imp_method][cond_name][ek].append(score)
 
+            # ── The similarity sweep for this (level, fold, draw). ──
+            # One pass per evaluation unit: the model input is that unit's
+            # single representation, the similarity spaces are that unit's
+            # model's (its top 2, the two hybrids of the pool's recipes).
+            # Neighbour lists without group exclusion, as ESTIMATOR_FACTORIES
+            # are built above (no exclude_groups), so MODEL_INPUT at k=5, 10
+            # and 20 is the base_<k>_unweighted condition's list.
+            _g_tr = (groups[train_idx] if groups is not None else None)
+            for _u, (_m, _k_rank, _rn) in eval_units.items():
+                _xtr, _xva = eval_by_unit[_u]
+
+                def _dprimes(setting, lists, k, _xtr=_xtr):
+                    for est_name in ESTIMATOR_FACTORIES:
+                        sc = detector_scores_with(
+                            dataset_name, est_name, _xtr, y_noisy, lists, k,
+                            is_clf=is_clf)
+                        if sc is None:
+                            yield est_name, None, None
+                            continue
+                        if _cmask is not None:
+                            _det = detection_scores(_cmask, sc, noise_condition)
+                            if _det is not None:
+                                (sim_detection.setdefault(str(sigma), {})
+                                 .setdefault(est_name, {})
+                                 .setdefault(setting.name, {})
+                                 .setdefault(str(k), []).append(_det))
+                        try:
+                            w = weights_from_scores(
+                                sc, strength=REPAIR_STRENGTH,
+                                method=REPAIR_WEIGHT_METHOD)
+                        except Exception as exc:
+                            print(f"      {est_name} weights failed: {exc}")
+                            yield est_name, None, None
+                            continue
+                        yield (est_name,
+                               f'{REPAIR_WEIGHT_METHOD}_{REPAIR_STRENGTH}',
+                               cleaned_from_weights(_xtr, y_noisy, w))
+                similarity_sweep(
+                    sweep_ctx, model_name=_m, model_input=f'{_u}:{_rn}',
+                    X_tr=_xtr,
+                    X_va=_xva, y_tr_noisy=y_noisy, y_tr_clean=y_train_clean,
+                    y_val=y_val, train_idx=train_idx, val_idx=val_idx,
+                    groups_tr=_g_tr, fold=fold_idx - 1, draw=noise_seed,  # rows count folds from 0
+                    recipes=sim_recipes, base_reps=base_by_model.get(_m, []),
+                    make_dprimes=_dprimes, level=sigma)
+
         # Aggregate
         clean_by_model = {m: float(np.mean(v)) for m, v in clean_scores.items() if v}
         noisy_by_model = {m: float(np.mean(v)) for m, v in noisy_scores.items() if v}
@@ -1406,6 +1503,21 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     print(f"      {cond_name:25s}: avg_recovery={avg_r:+.1f}%, "
                           f"positive={n_pos}/{len(recoveries)}")
         print(f"    [{time.time() - t_sigma:.0f}s]")
+
+    # The similarity axis, 2026-09-25. Every key above is n12's own
+    # conditions, unchanged. The swept numbers are the D-versus-D' rows in
+    # results['similarity']['rows_file'] and, for detection,
+    # {level: {estimator: {setting: {k: mean detection reading over (fold,
+    # draw)}}}}.
+    results['similarity'] = similarity_record(
+        sim_settings, sink, spaces_unavailable=sweep_ctx['unavailable'],
+        repair=f'{REPAIR_WEIGHT_METHOD} at strength {REPAIR_STRENGTH}')
+    results['detection_by_similarity'] = {
+        _lv: {_e: {_sn: {_k: _mean_detection(_rows)
+                         for _k, _rows in _byk.items()}
+                   for _sn, _byk in _bys.items()}
+              for _e, _bys in _bye.items()}
+        for _lv, _bye in sim_detection.items()}
 
     # Summary
     results['summary'] = _compute_summary(results)

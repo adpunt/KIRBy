@@ -286,8 +286,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'measured by this file on the same folds, so those ARE comparable. '
         "results['budgets'] holds the predictive family alone and is "
         'unchanged.')
+    # Each (budget, family) cell is written to
+    # s08_optimal_dimension/<dataset>.partial.jsonl when it finishes and read
+    # back on the next attempt (2026-09-25; _checkpoint.py). The stored unit
+    # holds every key the cell writes into `results` (its row under 'budgets'
+    # and 'budgets_by_family', its two family rows, and the top-3 list when this
+    # cell was the one that reported it). A cell reads a finished search and
+    # rebuilds on deterministic folds with seeded models; no random state is
+    # shared between cells. A cell that failed or had no blueprint is not
+    # stored: it is retried.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's08_optimal_dimension', dataset_name),
+        run_identity('s08_optimal_dimension', dataset_name, data, config,
+                     kwargs=kwargs, budgets=list(budgets),
+                     families=list(families), n_sample=n_sample))
+
     for budget, family in [(_b, _f) for _b in budgets for _f in families]:
         print(f"\n  Budget={budget}, {family} family:")
+        if _ck.done(budget=budget, family=family):
+            _saved = _ck.get(budget=budget, family=family)
+            if _saved['top3_base_reps'] is not None:
+                results['top3_base_reps'] = _saved['top3_base_reps']
+            if _saved['top3_reported']:
+                _top3_reported = True
+            if _saved['pool_family'] is not None:
+                if family == PRIMARY_FAMILY:
+                    results['hybrid_family_by_budget'][budget] = \
+                        _saved['pool_family']
+                (results.setdefault('hybrid_family_by_budget_and_family', {})
+                    .setdefault(family, {}))[budget] = _saved['pool_family']
+            results['budgets_by_family'].setdefault(family, {})[budget] = \
+                _saved['cell']
+            if family == PRIMARY_FAMILY:
+                results['budgets'][budget] = _saved['cell']
+            continue
+        _top3_before = _top3_reported
+        _pool_family = None
         t0 = time.time()
 
         try:
@@ -634,6 +670,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             budget_result
         if family == PRIMARY_FAMILY:
             results['budgets'][budget] = budget_result
+        _ck.put({'cell': budget_result,
+                 'pool_family': (_pool_family if _meta else None),
+                 'top3_reported': bool(_top3_reported and not _top3_before),
+                 'top3_base_reps': (results.get('top3_base_reps')
+                                    if _top3_reported and not _top3_before
+                                    else None)},
+                budget=budget, family=family)
 
         scores_str = ', '.join(f"{mn}={model_means[mn]:.4f}" for mn in model_means
                                if not np.isnan(model_means[mn]))
@@ -668,6 +711,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         importance = None
 
     for rep_name, X in reps.items():
+        # Same sidecar: one unit per representation (2026-09-25). The running
+        # best below is re-derived from the stored sac_rho, exactly as the
+        # computed path derives it.
+        if _ck.done(per_rep=rep_name):
+            rep_result = _ck.get(per_rep=rep_name)
+            results['per_rep'][rep_name] = rep_result
+            sac_rep = rep_result['sac_rho']
+            if best_rep_name is None or sac_rep > best_rep_sac:
+                best_rep_sac = sac_rep
+                best_rep_name = rep_name
+            continue
         D_rep = compute_distance_matrix(X, standardize=True)
         sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample, is_clf=is_clf)
         viol_rep = violation_rate(D_rep, labels, k=5, is_clf=is_clf)
@@ -741,6 +795,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'knn_score': rep_model_means.get('knn', float('nan')),
         }
         results['per_rep'][rep_name] = rep_result
+        _ck.put(rep_result, per_rep=rep_name)
         if best_rep_name is None or sac_rep > best_rep_sac:
             best_rep_sac = sac_rep
             best_rep_name = rep_name

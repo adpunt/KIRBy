@@ -140,6 +140,14 @@ model, as n23 does since 2026-09-23. The hybrid is built on the training
 molecules at their mean labels, once per fold, and every arm shares it. So no
 offset reaches the feature choice. Whether it should is n20's kind of question.
 
+ROWS, CACHES, CHECKPOINT (2026-09-25, plan sections 2-3). Every arm but
+mean_label writes one D-versus-D' row per fold against mean_label; the labels
+are real, so score_clean is nan. The accumulators are checkpointed per fold;
+the scaled representations, hybrid builds and the offset fit's out-of-fold
+predictions go through noise_cache. controls.py's twins run for the two
+per-molecule label arms with KIRBY_NOISE_CONTROLS=1; the per-measurement arms
+have none (TODO at the row block).
+
 Usage:
     python n29_document_bias.py --dataset herg_ic50 --mode full
 """
@@ -151,6 +159,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 
 import functools
 import time
+import zlib
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -169,6 +178,15 @@ from experiments.noise.noise_helpers import (
     hybrid_for_fold, pool_recipe_per_downstream_model, group_models_by_recipe,
 )
 from kirby.utils.noisy_labels import oof_predict
+# The D-versus-D' rows, the per-fold checkpoint, the caches and the controls
+# (2026-09-25, plan sections 2-3). They live in n23 for the reason given at
+# the top of its shared block.
+from experiments.noise import noise_cache as nc
+from experiments.noise.controls import controls_enabled
+from experiments.noise.n23_uncertainty_cleaning import (
+    RowSink, PassCheckpoint, ensure_dprime_models, control_twins,
+    as_cleanup_dict, cached_base_cell, cached_hybrid_cell, NO_NEIGHBOURS,
+)
 
 # The four arms the check with known biases re-runs.
 CORE_ARMS = ('mean_label', 'per_record', 'per_record_bias',
@@ -395,8 +413,15 @@ def moment_variances(residual, rec_doc, eligible):
 
 def fit_document_offsets(X_rec, y_rec, rec_doc, g_rec, eligible, component,
                          n_iter=N_ITER, alpha=RIDGE_ALPHA,
-                         oof_splits=OOF_SPLITS, variance_trace=None):
+                         oof_splits=OOF_SPLITS, variance_trace=None,
+                         dataset_name=None):
     """The alternating fit. Returns (offsets, final residuals, trace).
+
+    dataset_name, added 2026-09-25 (plan section 3): given, each pass's
+    out-of-fold prediction goes through noise_cache.cached_oof_predict -- the
+    same call, stored. The first pass of the ridge fit and of the
+    random-effect fit hand over the same labels (every offset starts at 0),
+    so the second reads the first's. None computes as before.
 
     `trace` is the largest change in any offset on each pass, in label units.
     The residual is the RAW label minus the out-of-fold prediction of a model
@@ -412,7 +437,11 @@ def fit_document_offsets(X_rec, y_rec, rec_doc, g_rec, eligible, component,
     residual = None
     for _ in range(int(n_iter)):
         b = offsets_per_record(offsets, rec_doc)
-        oof = oof_predict(X_rec, y_rec - b, g_rec, n_splits=oof_splits)
+        if dataset_name is None:
+            oof = oof_predict(X_rec, y_rec - b, g_rec, n_splits=oof_splits)
+        else:
+            oof = nc.cached_oof_predict(dataset_name, X_rec, y_rec - b, g_rec,
+                                        n_splits=oof_splits)
         residual = y_rec - oof
         if alpha == 'fitted':
             s2, t2 = moment_variances(residual, rec_doc, eligible)
@@ -615,7 +644,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                            y_mean))
     largest_train = max(int(np.isin(rec_mol, tr).sum()) for tr, _ in splits)
 
-    downstream_models = list(
+    # rf and svm are added when the caller left them out: every D-versus-D'
+    # row needs them (ensure_dprime_models, owner decision 2026-09-25).
+    downstream_models = ensure_dprime_models(
         kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
     model_factories = get_model_factories(
         downstream_models, task_type='regression', n_samples=largest_train)
@@ -723,8 +754,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     errors = {}
     t0 = time.time()
 
+    # ── Rows and the per-fold checkpoint (2026-09-25) ──
+    # D is the arm every other one is paired against, mean_label: one row per
+    # molecule, the mean of its measurements. Every other arm is a D'. The
+    # labels are real, so no clean labels exist and score_clean is nan. Rows
+    # grade every held-out molecule (the 'all' view); the 'isolated' view
+    # stays in the result file only.
+    _metric = (metric_name, metric_fn, lower_is_better)
+    rows = RowSink(output_dir, 'n29_document_bias', dataset_name,
+                   experiment='n29', metric=_metric, condition=kwargs.get('tag'),
+                   data=data, config=config)
+    ckpt = PassCheckpoint(
+        output_dir, 'n29_document_bias', dataset_name,
+        condition=kwargs.get('tag'), data=data, config=config,
+        source_file=__file__,
+        key={'n_iter': n_iter, 'alpha': alpha, 'n_boot': n_boot,
+             'oof_splits': oof_splits, 'models': list(downstream_models),
+             'base_reps': base_by_model, 'spaces': list(spaces),
+             'n_splits': n_folds})
+    done_folds = set()
+    _state = ckpt.load()
+    if _state:
+        acc, errors = _state['acc'], _state['errors']
+        results['per_fold'] = _state['per_fold']
+        if _state.get('known_bias_check') is not None:
+            results['known_bias_check'] = _state['known_bias_check']
+        done_folds = set(_state['done'])
+        print(f"  resumed from {ckpt.path}: {len(done_folds)} folds already "
+              f"done")
+
     for fold_i, (tr, va) in enumerate(splits):
         fk = f'f{fold_i}'
+        if fk in done_folds:
+            print(f"    fold {fold_i}: on disk in the checkpoint")
+            continue
         tr_set = np.zeros(n_mol, dtype=bool)
         tr_set[tr] = True
         rec_tr = np.where(tr_set[rec_mol])[0]
@@ -787,19 +850,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             for _rn, _ms in base_rank_groups(base_by_model, _k,
                                              downstream_models).items():
-                sc = StandardScaler()
-                cells.append((f'base_{_k}', sc.fit_transform(ent_tr[_rn]),
-                              sc.transform(ent_va[_rn]), list(_ms)))
+                # noise_cache.cached_scaled since 2026-09-25.
+                _Xt, _Xv = cached_base_cell(dataset_name, ent_reps[_rn], tr, va)
+                cells.append((f'base_{_k}', _Xt, _Xv, list(_ms)))
         for sp in spaces:
             if sp.startswith('base_'):
                 continue
             for bp_m, mnames, shareable in group_models_by_recipe(
                     {m: recipe_for_space_by_model.get(m, {}).get(sp)
                      for m in downstream_models}, downstream_models):
-                X_tr_h, X_va_h = hybrid_for_fold(
-                    ent_tr, ent_va, y_mean[tr], bp_m, ent_groups[tr],
+                # noise_cache.cached_hybrid_for_fold since 2026-09-25.
+                X_tr_h, X_va_h = cached_hybrid_cell(
+                    dataset_name, ent_tr, ent_va, y_mean[tr], bp_m,
+                    ent_groups[tr], None if shareable else mnames[0],
                     None if shareable else model_factories[mnames[0]](),
-                    metric_fn, lower_is_better)
+                    _metric, tr)
                 if X_tr_h is None:
                     errors[f'{fk}|{sp}/{mnames[0]}|build'] = (
                         'the hybrid could not be built on this fold')
@@ -816,7 +881,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 offsets, resid, trace = fit_document_offsets(
                     X_rec_tr, y_rec_tr, rec_doc_tr, g_rec_tr, eligible,
                     component, n_iter=n_iter, alpha=alpha,
-                    oof_splits=oof_splits)
+                    oof_splits=oof_splits, dataset_name=dataset_name)
             except Exception as exc:
                 errors[f'{fk}|{ckey}|offsets'] = f'{type(exc).__name__}: {exc}'
                 continue
@@ -846,7 +911,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 off_re, _r, trace_re = fit_document_offsets(
                     X_rec_tr, y_rec_tr, rec_doc_tr, g_rec_tr, eligible,
                     component, n_iter=n_iter, alpha='fitted',
-                    oof_splits=oof_splits, variance_trace=var_trace)
+                    oof_splits=oof_splits, variance_trace=var_trace,
+                    dataset_name=dataset_name)
                 b_rec_re = offsets_per_record(off_re, rec_doc_tr)
                 vre = np.array([off_re[d] for d in eligible], dtype=float)
                 fold_block['per_space'][ckey]['random_effect'] = {
@@ -901,6 +967,65 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                          .setdefault(arm, {}).setdefault(m, {}))[fk] = float(
                             metric_fn(y_va_all[isolated], pred[isolated]))
 
+            # ── The D-versus-D' rows of this matrix (2026-09-25) ──
+            # within_document_rank is written under xgboost, paired against
+            # mean_label's xgboost, as the summary pairs it.
+            for m in cell_models:
+                sD = (acc['all'].get(space, {}).get(ARM_TO_BEAT, {})
+                      .get(m, {}).get(fk))
+                for arm in ARMS:
+                    if arm == ARM_TO_BEAT:
+                        continue
+                    sP = (acc['all'].get(space, {}).get(arm, {})
+                          .get(m, {}).get(fk))
+                    if sP is None:
+                        continue
+                    rows.add(method=arm, method_setting=(
+                                 f'ridge_alpha={alpha:g}|n_iter={n_iter}'),
+                             similarity_setting=NO_NEIGHBOURS,
+                             model_input=space, model=m, noise_condition='none',
+                             level=None, draw=0, fold=fold_i, score_D=sD,
+                             score_Dprime=sP, score_clean=None)
+            # ── Controls (KIRBY_NOISE_CONTROLS=1 only) ──
+            # The two arms that keep one row per molecule and change its label
+            # get controls.py's twins: the label change dealt to random
+            # molecules, and permuted.
+            # TODO(similarity-sweep 2026-09-25): per_record_bias,
+            # per_record_random_effect and within_document_rank train on one
+            # row PER MEASUREMENT, so D' has other rows than D and
+            # controls.py's twins (which permute a change over D's rows) are
+            # not defined for them. The natural control -- permuting the
+            # fitted offsets across documents -- is a design decision for the
+            # owner and is not built.
+            if controls_enabled():
+                for arm in ('mean_label_bias_corrected',
+                            'document_quantile_map'):
+                    if arm not in sets:
+                        continue
+                    _cd = as_cleanup_dict(X_tr_e, y_mean[tr],
+                                          labels=sets[arm][1])
+                    _seed = (int(fold_i), int(zlib.crc32(
+                        f'{ckey}|{arm}'.encode()) & 0x7FFFFFFF))
+                    for cname, tw, why in control_twins(_cd, X_tr_e,
+                                                        y_mean[tr], _seed):
+                        if tw is None:
+                            errors[f'{fk}|{ckey}|{arm}|{cname}'] = why
+                            continue
+                        for m in cell_models:
+                            s_, err = _fit_score(model_factories[m], tw['X'],
+                                                 tw['y'], X_va_e, y_va_all,
+                                                 metric_fn)
+                            sD = (acc['all'].get(space, {})
+                                  .get(ARM_TO_BEAT, {}).get(m, {}).get(fk))
+                            rows.add(method=arm, method_setting=(
+                                         f'ridge_alpha={alpha:g}|n_iter='
+                                         f'{n_iter}|control={cname}'),
+                                     similarity_setting=NO_NEIGHBOURS,
+                                     model_input=space, model=m,
+                                     noise_condition='none', level=None,
+                                     draw=0, fold=fold_i, score_D=sD,
+                                     score_Dprime=s_, score_clean=None)
+
             # ── The check with known biases: fold 0, base_1, first model ──
             # In the first model's rank-1 single representation.
             if (fold_i == 0 and space == 'base_1'
@@ -917,6 +1042,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     base_by_model[downstream_models[0]][0])
 
         results['per_fold'][fk] = convert_numpy(fold_block)
+        # The fold is finished: its rows to disk, then the accumulators.
+        rows.flush()
+        done_folds.add(fk)
+        ckpt.save({'acc': acc, 'errors': errors,
+                   'per_fold': results['per_fold'],
+                   'known_bias_check': results.get('known_bias_check'),
+                   'done': sorted(done_folds)})
         print(f"    fold {fold_i} done [{time.time() - t0:.0f}s]")
 
     results['scores'] = convert_numpy(acc)
@@ -924,7 +1056,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['_errors'] = errors
     results['summary'] = convert_numpy(_summarise(
         acc, downstream_models, metric_name, lower_is_better))
+    results['rows'] = rows.summary()
+    results['controls_run'] = bool(controls_enabled())
     _print_summary(results, metric_name)
+    print(f"  D-versus-D' rows: {rows.n_written} written this run to "
+          f"{rows.path or 'memory'}")
+    ckpt.clear()
     return results
 
 

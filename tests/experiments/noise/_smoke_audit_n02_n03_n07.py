@@ -19,6 +19,14 @@ for _v in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
            'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS'):
     os.environ.setdefault(_v, '1')
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+# 2026-09-25: the noise experiments sweep every similarity setting by default
+# (KIRBY_SIMILARITY_SETTINGS unset = all 66, plan section 1). This smoke checks
+# what each run() computed before that axis existed, so it runs today's
+# setting alone, and it writes its caches under a temporary directory, never
+# the real KIRBY_CACHE_DIR.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+import tempfile as _tempfile
+os.environ['KIRBY_CACHE_DIR'] = _tempfile.mkdtemp(prefix='kirby_smoke_cache_')
 
 import sys
 import re
@@ -87,7 +95,11 @@ def test_n07_inject_noise_clf_flips_classes():
 def test_n07_per_rep_call_sites_pass_is_clf():
     """Source check: the PER-REP block's _evaluate_fold + _inject_noise calls
     must pass is_clf. This is the exact P0#1 regression."""
-    src = inspect.getsource(n07.run)
+    # _run_one_condition, not run(): since 2026-09-23 run() is the condition
+    # sweep (noise_helpers.sweep_conditions) and the per-rep block lives in
+    # the single-condition body, so this check failed at HEAD with "marker
+    # not found" before it reached a call site. Fixed 2026-09-25.
+    src = inspect.getsource(n07._run_one_condition)
     # Isolate the per-rep block (after the 'Per-rep conditions' marker).
     marker = 'Per-rep conditions'
     assert marker in src, "per-rep block marker not found"

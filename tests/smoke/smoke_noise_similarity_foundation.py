@@ -13,7 +13,14 @@ Checks, each printed PASS / FAIL / SKIP with the numbers behind it:
       to what _knn_indices returns gives identical scores.
   (c) every cache wrapper: the second call is a hit and returns bit-identical
       arrays; KIRBY_NOISE_CACHE=0 gives the same numbers.
-  (d) enumerate_settings gives 50 settings when every space is available.
+  (b2) noise_cache.cached_detector_scores with the MODEL_INPUT lists (built
+      with exclude_groups=groups) equals the similarity_neighbours=None path
+      for each neighbour detector; a non-MODEL_INPUT setting changes the
+      scores; cross_val given a list is refused. Added 2026-09-25.
+  (d) enumerate_settings gives 66 settings when every space is available
+      (8 feature spaces x 4 weightings x 2 distances + Tanimoto + forest;
+      50 before the augmented space split into capped and uncapped on
+      2026-09-25), and settings_from_env reads KIRBY_SIMILARITY_SETTINGS.
   (e) d_vs_dprime's gain is positive when D' helped, for an rmse dataset and
       an auc dataset, with the direction read from get_domain_metric.
   (f) resume: done_keys skips rows already written, and a row cut off by a
@@ -196,10 +203,8 @@ X_tr_s, _ = zs(reps['repA'])
 for cls in (NeighborResidualEstimator, LocalVarianceRatioEstimator,
             DistanceWeightedResidualEstimator, ActivityCliffAwareEstimator):
     if 'precomputed_neighbors' not in inspect.signature(cls.__init__).parameters:
-        report(f"b {cls.__name__}", None,
-               "precomputed_neighbors is not an argument: "
-               "src/kirby/utils/noise_estimation.py had uncommitted edits "
-               "from another session, so it was not edited")
+        report(f"b {cls.__name__}", False,
+               "precomputed_neighbors is not an argument of the estimator")
         continue
     for eg in (None, g_tr):
         d, i = _knn_indices(X_tr_s, 10, None, exclude_groups=eg,
@@ -209,6 +214,45 @@ for cls in (NeighborResidualEstimator, LocalVarianceRatioEstimator,
             X_tr_s, y_noisy[tr]).noise_scores_
         report(f"b {cls.__name__} exclude_groups={'yes' if eg is not None else 'no'}",
                same(a, b), "identical scores")
+
+# (b2) through noise_cache.cached_detector_scores, similarity_neighbours=
+_mi_g = ss.neighbour_lists(ss.MODEL_INPUT, spaces_train={'model_input': X_tr_s},
+                           spaces_val=None, y_train=y_noisy[tr],
+                           exclude_groups=g_tr)
+_XC_tr, _ = zs(reps['repC'])
+_b1_g = ss.neighbour_lists(ss.SimilaritySetting('base_1', 'none', 'euclidean'),
+                           spaces_train={'base_1': _XC_tr}, spaces_val=None,
+                           y_train=y_noisy[tr], exclude_groups=g_tr)
+for _det in ('neighbor_residual', 'local_variance_ratio', 'distance_weighted',
+             'activity_cliff_aware'):
+    _a = nc.cached_detector_scores('smoke_b2', X_tr_s, y_noisy[tr],
+                                   detector=_det, groups=g_tr)
+    _b = nc.cached_detector_scores('smoke_b2', X_tr_s, y_noisy[tr],
+                                   detector=_det, groups=g_tr,
+                                   similarity_neighbours=_mi_g)
+    _c = nc.cached_detector_scores('smoke_b2', X_tr_s, y_noisy[tr],
+                                   detector=_det, groups=g_tr,
+                                   similarity_neighbours=_b1_g)
+    _c9 = nc.cached_detector_scores('smoke_b2', X_tr_s, y_noisy[tr],
+                                    detector=_det, groups=g_tr,
+                                    similarity_neighbours=_b1_g,
+                                    similarity_k=5)
+    report(f"b2 cached_detector_scores {_det}",
+           same(_a, _b) and not same(_a, _c) and not same(_c, _c9),
+           f"MODEL_INPUT lists bit-identical to None; base_1 lists in another "
+           f"representation move the scores (max change "
+           f"{float(np.max(np.abs(_a - _c))):.3g}); k=5 differs from k=10")
+_refused = []
+for _det, _lists in (('cross_val', _mi_g), ('neighbor_residual', _mi_g)):
+    try:
+        nc.cached_detector_scores('smoke_b2', X_tr_s, y_noisy[tr],
+                                  detector=_det, groups=np.arange(N_TR) % 3,
+                                  similarity_neighbours=_lists)
+    except ValueError:
+        _refused.append(_det)
+report("b2 refusals", _refused == ['cross_val', 'neighbor_residual'],
+       f"refused: {_refused} (cross_val reads no neighbour list; lists that "
+       f"break the caller's groups are refused)")
 
 # ---------------------------------------------------------------------------
 # (c) cache wrappers
@@ -307,10 +351,46 @@ report("c unavailable space", (not un['available']) and un['idx_train'] is None,
 # ---------------------------------------------------------------------------
 settings = ss.enumerate_settings()
 names = [s.name for s in settings]
-report("d enumerate_settings", len(settings) == 50 and len(set(names)) == 50,
+_n_wo = len(ss.enumerate_settings([s for s in ss.ALL_SPACES
+                                   if s != 'hybrid_similarity']))
+report("d enumerate_settings", len(settings) == 66 and len(set(names)) == 66
+       and _n_wo == 58 and ss.SWEPT_KS == (5, 9, 10, 20)
+       and all(sp in ss.FEATURE_SPACES for sp in (
+           'base_1_aug_capped', 'base_1_aug_uncapped',
+           'base_2_aug_capped', 'base_2_aug_uncapped')),
        f"{len(settings)} settings, {len(set(names))} distinct names; without "
-       f"hybrid_similarity: "
-       f"{len(ss.enumerate_settings([s for s in ss.ALL_SPACES if s != 'hybrid_similarity']))}")
+       f"hybrid_similarity: {_n_wo}; SWEPT_KS={ss.SWEPT_KS}")
+_e_all = ss.settings_from_env(env={})
+_e_all2 = ss.settings_from_env(env={'KIRBY_SIMILARITY_SETTINGS': 'all'})
+_e_mi = ss.settings_from_env(env={'KIRBY_SIMILARITY_SETTINGS': 'model_input'})
+_e_list = ss.settings_from_env(env={'KIRBY_SIMILARITY_SETTINGS':
+                                    'base_1_aug_capped|treeshap|manhattan, '
+                                    'tanimoto_ecfp4|none|tanimoto,'
+                                    'model_input|none|process,'
+                                    'hybrid_similarity|none|manhattan'},
+                               available_spaces=[s for s in ss.ALL_SPACES
+                                                 if s != 'hybrid_similarity'])
+try:
+    ss.settings_from_env(env={'KIRBY_SIMILARITY_SETTINGS': 'base_1|nope|x'})
+    _bad = False
+except ValueError:
+    _bad = True
+report("d settings_from_env", len(_e_all) == 66 and len(_e_all2) == 66
+       and _e_mi == [ss.MODEL_INPUT]
+       and [s.name for s in _e_list] == ['base_1_aug_capped|treeshap|manhattan',
+                                         'tanimoto_ecfp4|none|tanimoto',
+                                         'model_input|none|process'] and _bad,
+       f"unset {len(_e_all)}, 'all' {len(_e_all2)}, 'model_input' "
+       f"{[s.name for s in _e_mi]}, list gave {[s.name for s in _e_list]} "
+       f"(hybrid_similarity dropped as unavailable); a bad name raises")
+for _st in ss.AUG_STRATEGIES:
+    _bpa = ss.base_aug_blueprint('repA', 30, metric_name='rmse',
+                                 task_type='regression', lower_is_better=True,
+                                 strategy=_st)
+    report(f"d base_aug_blueprint {_st}",
+           _bpa.augmentation_strategy == _st and _bpa.budget == 30
+           and list(_bpa.reps) == ['repA'],
+           f"space name {ss.aug_space_name(1, _st)}")
 
 # ---------------------------------------------------------------------------
 # (e) gain sign, direction from get_domain_metric

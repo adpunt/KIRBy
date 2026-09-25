@@ -797,6 +797,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['families'] = list(families) if families else [None]
     results['lineages_asked'] = list(lineages)
 
+    # Each (lineage, budget, family) cell is written to
+    # s02_hybrid_similarity/<dataset>.partial.jsonl when it finishes and read
+    # back on the next attempt (2026-09-25; _checkpoint.py). A cell reads a
+    # finished search and rebuilds the hybrid on each fold; nothing in it draws
+    # from a random state shared with another cell (every sampler here is
+    # seeded), so a cell read back holds the numbers a fresh computation gives.
+    # A cell that recorded fold_reselection_error is not stored: it is retried.
+    # The per-representation baselines above are recomputed every attempt,
+    # because best_rep_sac and the weighted comparator feed every cell.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's02_hybrid_similarity', dataset_name),
+        run_identity('s02_hybrid_similarity', dataset_name, data, config,
+                     kwargs=kwargs, weight_methods=weight_methods,
+                     budgets=budgets, families=results['families'],
+                     lineages=list(lineages)))
+
     for _lineage, _distance in (('general', False), ('general_distance', True)):
         if _lineage not in lineages:
             continue
@@ -810,6 +828,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if _fam:
                     _label += f", {_fam} family"
                 print(f"\n  -- {_label} --")
+                _ckey = dict(lineage=_lineage, budget=budget, family=_fam)
+                if _ck.done(**_ckey):
+                    budget_block[_fam or 'pool_choice'] = _ck.get(**_ckey)
+                    continue
                 budget_block[_fam or 'pool_choice'] = _score_pool_cell(
                     reps, labels, groups,
                     dataset_name=dataset_name, task_type=task_type,
@@ -821,6 +843,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     best_rep_sac_weighted=best_rep_sac_weighted,
                     best_rep_name_weighted=best_rep_name_weighted,
                     family=_fam)
+                if 'fold_reselection_error' not in budget_block[_fam or 'pool_choice']:
+                    _ck.put(budget_block[_fam or 'pool_choice'], **_ckey)
             # The cell kept under the budget key is the one every existing
             # reader expects: one dict with best_sac, weight_methods and
             # fold_reselection on it. When more than one family was scored,

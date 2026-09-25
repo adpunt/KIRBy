@@ -372,8 +372,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             return KNeighborsClassifier(n_neighbors=k)
         return KNeighborsRegressor(n_neighbors=k)
 
-    def _evaluate_condition(get_Xy_fn, pre_scaled=False):
+    # Every kNN condition below (each representation unweighted and weighted,
+    # the pool's per-fold single representation, each pool hybrid arm) is one
+    # call of _evaluate_condition. Its result is written to
+    # s04_activity_cliffs/<dataset>.partial.jsonl when the call returns and
+    # read back on the next attempt (2026-09-25; _checkpoint.py). A condition
+    # is a pure function of the folds, the labels and the pool read: no random
+    # state is shared between conditions. A condition in which any fold's
+    # features raised while building, or that scored no fold (None), is not
+    # stored, so it is retried.
+    from experiments._checkpoint import (
+        Checkpoint, experiment_sidecar, run_identity)
+    _ck = Checkpoint(
+        experiment_sidecar(output_dir, 's04_activity_cliffs', dataset_name),
+        run_identity('s04_activity_cliffs', dataset_name, data, config,
+                     kwargs=kwargs, budget=budget, knn_k=knn_k,
+                     weight_exponent=weight_exponent))
+
+    def _evaluate_condition(get_Xy_fn, pre_scaled=False, ck_name=None):
         """Run CV for a condition, return cliff/noncliff metrics."""
+        if ck_name is not None and _ck.done(condition=ck_name):
+            return _ck.get(condition=ck_name)
+        _threw = []
         fold_all, fold_cliff, fold_noncliff = [], [], []
         fold_rmse_all, fold_rmse_cliff, fold_rmse_noncliff = [], [], []
         # Positional per-fold metrics for fold_reselection, one slot per split so
@@ -411,6 +431,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # from a genuinely empty fold (X_tr is None below).
                 print(f"      cliff CV fold build failed: "
                       f"{type(exc).__name__}: {exc}")
+                _threw.append(fold_i)
                 _drop_fold()
                 continue
             if X_tr is None:
@@ -479,6 +500,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             out['rmse_all'] = float(np.mean(fold_rmse_all))
             out['rmse_cliff'] = float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan')
             out['rmse_noncliff'] = float(np.mean(fold_rmse_noncliff)) if fold_rmse_noncliff else float('nan')
+        if ck_name is not None and not _threw:
+            _ck.put(out, condition=ck_name)
         return out
 
     # --- Precompute per-fold feature importance per rep (hoisted from lambda) ---
@@ -506,7 +529,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Unweighted
         def _get_rep(tr, va, yt, fold_i, _X=X_rep):
             return _X[tr], _X[va]
-        res = _evaluate_condition(_get_rep)
+        res = _evaluate_condition(_get_rep, ck_name=f'per_rep|{rep_name}|uw')
         if res:
             results['per_rep'][rep_name] = res
             # Plain single-rep kNN is a baseline arm for fold_reselection (model=knn).
@@ -522,7 +545,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 w = np.maximum(imp_arr, 0) ** weight_exponent
                 scaler = StandardScaler()
                 return scaler.fit_transform(_X[tr]) * w, scaler.transform(_X[va]) * w
-            res_w = _evaluate_condition(_get_rep_w, pre_scaled=True)
+            res_w = _evaluate_condition(_get_rep_w, pre_scaled=True,
+                                        ck_name=f'per_rep|{rep_name}|w')
             if res_w:
                 results['per_rep'][rep_name]['score_cliff_weighted'] = res_w['score_cliff']
                 results['per_rep'][rep_name]['score_all_weighted'] = res_w['score_all']
@@ -561,7 +585,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 return None, None
             return reps[_rname][tr], reps[_rname][va]
 
-        res_pb = _evaluate_condition(_get_pool_base)
+        res_pb = _evaluate_condition(_get_pool_base, ck_name='pool_base|uw')
         res_pb_w = None
         if res_pb:
             def _get_pool_base_w(tr, va, yt, fold_i):
@@ -577,7 +601,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 return (scaler.fit_transform(_X[tr]) * w,
                         scaler.transform(_X[va]) * w)
 
-            res_pb_w = _evaluate_condition(_get_pool_base_w, pre_scaled=True)
+            res_pb_w = _evaluate_condition(_get_pool_base_w, pre_scaled=True,
+                                           ck_name='pool_base|w')
             results['pool_base_rep'] = {
                 'reps_by_fold': {str(_fi): _pool_base_by_fold.get(_fi)
                                  for _fi in sorted(_pool_base_by_fold)},
@@ -681,8 +706,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 return (scaler_w.fit_transform(X_tr_h) * w,
                         scaler_w.transform(X_va_h) * w)
 
-            res = _evaluate_condition(_get_arm_uw)
-            res_w = _evaluate_condition(_get_arm_w, pre_scaled=True)
+            res = _evaluate_condition(_get_arm_uw, ck_name=f'arm|{_arm}|uw')
+            res_w = _evaluate_condition(_get_arm_w, pre_scaled=True,
+                                        ck_name=f'arm|{_arm}|w')
 
             _entry = {
                 'objective': _obj,

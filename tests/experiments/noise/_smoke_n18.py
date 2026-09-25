@@ -35,6 +35,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # here than every core; the switch is the repository's own, read by
 # kirby/hybrid.py:78.
 os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
+# The similarity sweep and the noise cache, both added 2026-09-25. A smoke runs
+# today's behaviour -- neighbours in the model-input matrix only -- unless the
+# caller names settings in KIRBY_SIMILARITY_SETTINGS, and it never reads or
+# writes $KIRBY_CACHE_DIR/noise_cache: a cached build would hide the spy.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+os.environ.setdefault('KIRBY_NOISE_CACHE', '0')
 
 import tempfile
 
@@ -110,22 +116,27 @@ def no_recipe(*a, **k):
 def run_it(data, name, captured_labels=None, **kw):
     """One n18 run with a fixed recipe standing in for the precomputed pool."""
     real_lookup = n18.get_best_search_for_downstream
-    real_build = n18.hybrid_for_fold
+    import experiments.noise.noise_helpers as _nh
+    real_build = _nh.hybrid_for_fold
     n18.get_best_search_for_downstream = fake_recipe(sorted(data['reps']))
     if captured_labels is not None:
+        # n18 builds through noise_cache.cached_hybrid_for_fold since
+        # 2026-09-25, which calls noise_helpers.hybrid_for_fold, so the spy
+        # sits there; KIRBY_NOISE_CACHE=0 (top of this file) makes every build
+        # reach it.
         def spy(train_reps, val_reps, y_train, bp, groups_train, model,
-                metric_fn, lower_is_better):
+                metric_fn, lower_is_better, **kw):
             captured_labels.append(np.asarray(y_train, dtype=float).copy())
             return real_build(train_reps, val_reps, y_train, bp, groups_train,
-                              model, metric_fn, lower_is_better)
-        n18.hybrid_for_fold = spy
+                              model, metric_fn, lower_is_better, **kw)
+        _nh.hybrid_for_fold = spy
     try:
         return n18.run(data, {'n_splits': 4}, OUT, name,
                        models=['rf'], detectors=['neighbor_residual'],
                        base_reps={'rf': ['toy', 'second']}, **kw)
     finally:
         n18.get_best_search_for_downstream = real_lookup
-        n18.hybrid_for_fold = real_build
+        _nh.hybrid_for_fold = real_build
 
 
 def test_nothing_injected():

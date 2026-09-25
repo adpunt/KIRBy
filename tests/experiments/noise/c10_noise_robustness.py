@@ -440,6 +440,12 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         results['top2_by_cell'][str(_key)] = _cell
 
     results['search_failures'] = search_failures
+    # TODO(similarity-sweep 2026-09-25): every score in c10 comes from a
+    # find_best_hybrid search per (condition, level) with label_noise=, and the
+    # prelim runs set KIRBY_NO_COLD_SEARCH=1. Those noisy-label searches are
+    # not in the precompute, so under that setting a cell whose search is not
+    # already stored is refused and lands in search_failures. Whether c10 runs
+    # in the prelim sweep, and with which searches, is the owner's call.
     _any_cell = next(iter(cells.values()), None)
     results['excluded_folds'] = _any_cell['excluded_folds'] if _any_cell else None
     results['scores_are'] = (
@@ -706,6 +712,21 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     # One condition only -- feature stability re-runs the whole allocation at every
     # level, so the full set would be eleven times the cost for a question that is
     # about the level, not the shape.
+    # Each (level, fold) selection is written to a checkpoint as it finishes
+    # and read back on resume (2026-09-25; n07.FoldCheckpoint). c10 wrote its
+    # result once, at the end. The searches themselves are already stored by
+    # find_best_hybrid (cache=True), so this is the one piece of work a
+    # resumed run would otherwise redo in full. c10 changes no training data
+    # and finds no neighbours, so it has no similarity setting to sweep and
+    # writes no D-versus-D' rows.
+    from experiments.noise.n07_remediation import FoldCheckpoint
+    from experiments._shared import input_fingerprint
+    ckpt = FoldCheckpoint(output_dir, 'c10_noise_robustness', dataset_name,
+                          tag='stability', fingerprint={
+                              'input': input_fingerprint(data, config),
+                              'noise_seed': int(noise_seed),
+                              'budget': budget_for_stability})
+
     for strategy in strategies[:1]:
         features_by_level = {}
         _levels_stability = _levels_for(strategy)
@@ -728,6 +749,10 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             y_noisy_full = _noisy_column(_spec_for(strategy, level))
             for fold_idx, (train_idx, val_idx) in enumerate(
                     _cv_split(groups, n_folds, sample_X, labels)):
+                _stored = ckpt.get([strategy, float(level), int(fold_idx)])
+                if _stored is not None:
+                    fold_features.append({(r, int(i)) for r, i in _stored})
+                    continue
                 y_train = np.asarray(y_noisy_full)[train_idx]
 
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
@@ -759,6 +784,8 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                             for idx in rep_info['selected_indices']:
                                 selected.add((rep_name, int(idx)))
                     fold_features.append(selected)
+                    ckpt.put([strategy, float(level), int(fold_idx)],
+                             sorted([r, int(i)] for r, i in selected))
                 except Exception as _e:
                     print(f"    level={level} fold {fold_idx}: rebuild failed, "
                           f"{type(_e).__name__}: {_e}")
@@ -840,6 +867,15 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 counts_str = ", ".join(
                     f"{r}={np.mean(c):.0f}" for r, c in sorted(rep_counts.items()))
                 print(f"      level={level:.1f}: {counts_str}")
+
+    # 2026-09-25: c10 finds no neighbours and changes no training data, so no
+    # similarity setting is swept here; the checkpoint is recorded.
+    results['similarity'] = {
+        'swept': False,
+        'why_not_swept': ('c10 finds no neighbours and changes no training '
+                          'data; its scores are held-out search scores'),
+        'checkpoint_file': ckpt.path,
+        'selections_read_back': ckpt.n_resumed}
 
     # --- Summary table ---
     # auc_norm = normalised area under the retention curve. It is already

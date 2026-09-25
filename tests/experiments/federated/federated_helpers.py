@@ -12,6 +12,7 @@ Config: RF / LightGBM / MLP, 1-fold scaffold CV, fast search.
 Rep lists reused from complexity_helpers.DATASET_REPS.
 """
 
+import json
 import sys
 import os
 import time
@@ -2944,7 +2945,8 @@ def _experiment_full_name(exp_id: str) -> str:
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
-            pruning_mode: str = 'default_pruning'):
+            pruning_mode: str = 'default_pruning',
+            force_rerun: bool = False):
     """Load data once and run all federated experiments.
 
     Args:
@@ -2959,6 +2961,12 @@ def run_all(dataset_name: str, output_dir: str,
             to all models, no n_samples gate. Most fed experiments use
             create_hybrid directly per silo and bypass the cache, so this
             only affects the precompute_hybrid_searches calls below.
+        force_rerun: recompute every experiment. Default False RESUMES: an
+            experiment whose <output>/<experiment>/<dataset>.json exists,
+            holds a measurement and carries an input_fingerprint matching the
+            data just loaded is skipped -- the same rule as noise and
+            similarity run_all. Added 2026-09-25; before, every resubmission
+            re-ran every experiment from the start.
     """
     if not _FLUID_AVAILABLE:
         print("ERROR: FLuID not available. Federated experiments require FLuID.")
@@ -3141,21 +3149,64 @@ def run_all(dataset_name: str, output_dir: str,
                             '_precompute_errors', dataset_name)
 
     # What each result file below is stamped with: the row count, the label and
-    # group hashes, the split count and the representation list. federated has
-    # no resume path, so nothing reads this yet; it is here so a file can be
-    # told apart from one written under a different fold grouping.
+    # group hashes, the split count and the representation list, and what the
+    # resume check below compares a file on disk against (2026-09-25).
+    # ⛔ When every requested experiment loads its own data (all_self_loading)
+    # `data` is a stand-in with no rows, so the fingerprint cannot see a change
+    # in the data those experiments load; --force-rerun is the way to redo them.
     _fingerprint = input_fingerprint(data, config)
+
+    from experiments._shared import (
+        experiment_result_is_empty, fingerprint_mismatch)
 
     # ── Run experiments ──
     results = {}
     for exp_id in experiments:
+        # Resume, the same rule as noise_helpers.run_all and
+        # similarity_helpers.run_all: skip an experiment whose output exists,
+        # holds a measurement, and was computed from the same data
+        # (input_fingerprint). A file that will not parse, records nothing, or
+        # whose fingerprint differs is recomputed. force_rerun recomputes
+        # always. Added 2026-09-25.
+        _out_json = os.path.join(
+            output_dir, _experiment_full_name(exp_id), f"{dataset_name}.json")
+        if not force_rerun and os.path.exists(_out_json) \
+                and os.path.getsize(_out_json) > 0:
+            try:
+                with open(_out_json) as _f:
+                    _prev = json.load(_f)
+                _why = ('records no measurement'
+                        if experiment_result_is_empty(_prev,
+                                                      classify_unmarked=True)
+                        else fingerprint_mismatch(
+                            _prev.get('input_fingerprint'), _fingerprint))
+            except (ValueError, OSError) as _e:
+                _why = f'could not be read ({_e})'
+            if _why:
+                print(f"  RERUN {exp_id}: existing output {_why} — "
+                      f"recomputing ({_out_json})")
+            else:
+                print(f"  RESUME {exp_id}: already done — skipping "
+                      f"({_out_json})")
+                results[exp_id] = {'resumed': True}
+                continue
+
         print(f"\n{'~' * 70}")
         t_exp = time.time()
 
+        # An experiment that cannot be imported is a FAILED experiment, not a
+        # skip (2026-09-25): recorded with its traceback so run_dataset.py
+        # writes it to <output>/_errors/ and exits 1.
         try:
             mod = _import_experiment(exp_id)
-        except (ImportError, KeyError) as e:
-            print(f"  SKIP {exp_id}: import failed ({e})")
+        except Exception as e:
+            import traceback
+            print(f"  {exp_id} FAILED: import failed "
+                  f"({type(e).__name__}: {e})")
+            traceback.print_exc()
+            results[exp_id] = {'error': str(e) or type(e).__name__,
+                               'error_kind': f'import:{type(e).__name__}',
+                               'traceback': traceback.format_exc()}
             continue
 
         try:
@@ -3198,7 +3249,27 @@ def run_all(dataset_name: str, output_dir: str,
             print(f"  {exp_id} FAILED: {e}")
             import traceback
             traceback.print_exc()
-            results[exp_id] = {'error': str(e)}
+            results[exp_id] = {'error': str(e) or type(e).__name__,
+                               'error_kind': type(e).__name__,
+                               'traceback': traceback.format_exc()}
+
+        except SystemExit as e:
+            # SystemExit is not an Exception; a library calling sys.exit()
+            # would end the run with nothing said. Same handling as
+            # complexity_helpers.run_all (complexity_helpers.py:1242-1263),
+            # added 2026-09-25.
+            print(f"  {exp_id} FAILED: a library called sys.exit({e.code}) "
+                  f"instead of raising. Caught so the remaining experiments "
+                  f"still run.")
+            import traceback
+            traceback.print_exc()
+            results[exp_id] = {
+                'error': f'SystemExit({e.code}) — a library exited the process',
+                'error_kind': 'SystemExit',
+                'traceback': traceback.format_exc()}
+
+        except KeyboardInterrupt:
+            raise
 
     total = time.time() - t0
     print(f"\n{'=' * 70}")

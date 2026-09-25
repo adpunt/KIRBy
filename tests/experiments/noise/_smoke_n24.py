@@ -67,6 +67,13 @@ from experiments.noise.n07_remediation import cleaned_training_set
 OUT = tempfile.mkdtemp(prefix='n24_smoke_')
 FAIL = []
 
+# 2026-09-25: n24 now caches through noise_cache under KIRBY_CACHE_DIR, so the
+# toy entries go to a temporary directory, as
+# tests/smoke/smoke_noise_similarity_foundation.py does. Every test but
+# test_similarity_sweep runs today's path only; that one names its settings.
+os.environ['KIRBY_CACHE_DIR'] = tempfile.mkdtemp(prefix='n24_smoke_cache_')
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+
 # How many molecules the toy dataset carries. KIRBY_SMOKE_N is the repository's
 # own row cap and it is read here for the same purpose.
 try:
@@ -591,6 +598,106 @@ def test_per_model_spaces():
           str(r.get('_errors'))[:300])
 
 
+# ── the similarity sweep, the D-versus-D' rows, the resume (2026-09-25) ─────
+
+# Two settings, not the 66: a smoke checks the wiring, not the science.
+SWEEP_SETTINGS = ('base_1|none|manhattan', 'tanimoto_ecfp4|none|tanimoto')
+
+
+def _toy_smiles(n):
+    """Distinct parseable SMILES, one per molecule, for tanimoto_ecfp4."""
+    out = []
+    for i in range(n):
+        out.append('C' * (1 + i % 9) + 'O' * (i % 3) + 'N' * ((i // 27) % 3)
+                   + 'C(=O)' * ((i // 81) % 3))
+    return out
+
+
+def test_similarity_sweep():
+    """Plan sections 1 and 2 on n24.
+
+    Under a named list of settings the sweep writes one row per (setting, k)
+    for the neighbour detector's arms, and for the neighbour cleanups only
+    under cross_val; today's path keeps its own rows; a row already on disk
+    is not written again; and every row carries the metric direction.
+    """
+    import json
+    from experiments.noise import similarity_space as ss
+    from experiments.noise.n23_uncertainty_cleaning import (
+        TODAY_SIMILARITY, NO_NEIGHBOURS)
+    print("\nthe similarity sweep and the D-versus-D' rows:")
+    data = make_data(seed=3)
+    data['smiles'] = _toy_smiles(len(data['labels']))
+    prev = os.environ.get('KIRBY_SIMILARITY_SETTINGS')
+    os.environ['KIRBY_SIMILARITY_SETTINGS'] = ','.join(SWEEP_SETTINGS)
+    kw = dict(models=['rf'], base_reps={'rf': ['aaa', 'bbb']},
+              detectors=['neighbor_residual', 'cross_val'], flag_rates=[0.10],
+              random_seeds=[0], levels=[0.5], draws=[0])
+    try:
+        r = run_it(data, 'toy_sweep', **kw)
+        path = os.path.join(OUT, 'n24_delete_or_keep', 'toy_sweep.rows.jsonl')
+        rows = [json.loads(l) for l in open(path)] if os.path.exists(path) else []
+    finally:
+        if prev is None:
+            os.environ.pop('KIRBY_SIMILARITY_SETTINGS', None)
+        else:
+            os.environ['KIRBY_SIMILARITY_SETTINGS'] = prev
+    check('rf and svm are both in the run (ensure_dprime_models)',
+          {'rf', 'svm'} <= set(r['models']), str(r['models']))
+    check('rows were written to the rows file', len(rows) > 0, path)
+    labels = {f'{s}|k={k}' for s in SWEEP_SETTINGS for k in ss.SWEPT_KS}
+    nr = {x['similarity_setting'] for x in rows
+          if x['method_setting'].startswith('neighbor_residual')}
+    check('neighbor_residual has rows under every setting x k, and today\'s',
+          labels | {TODAY_SIMILARITY} <= nr,
+          f'missing {sorted((labels | {TODAY_SIMILARITY}) - nr)}')
+    cv_sweep = {x['method'] for x in rows
+                if x['method_setting'].startswith('cross_val')
+                and x['similarity_setting'] in labels}
+    check('under cross_val the sweep ran only the cleanups that read '
+          'neighbours', cv_sweep == {'label_smooth', 'knn_smooth'},
+          str(sorted(cv_sweep)))
+    cv_none = {x['method'] for x in rows
+               if x['method_setting'].startswith('cross_val')
+               and x['similarity_setting'] == NO_NEIGHBOURS}
+    check('cross_val with a cleanup that reads no neighbours is labelled '
+          '"none"', 'remove' in cv_none and 'label_smooth' not in cv_none,
+          str(sorted(cv_none)))
+    check('every row carries the direction and a gain signed by it',
+          all(x['lower_is_better'] is True for x in rows)
+          and all((x['gain'] != x['gain']) or abs(
+              x['gain'] - (x['score_D'] - x['score_Dprime'])) < 1e-12
+                  for x in rows), 'rmse: lower wins')
+    today = {(x['method'], x['method_setting'], x['fold']): x['score_Dprime']
+             for x in rows if x['similarity_setting'] == TODAY_SIMILARITY
+             and x['method'] == 'remove'}
+    moved = [x for x in rows if x['method'] == 'remove'
+             and x['similarity_setting'] == 'base_1|none|manhattan|k=5'
+             and today.get((x['method'], x['method_setting'], x['fold']))
+             != x['score_Dprime']]
+    check('a sweep setting changes what remove deletes, so its score moves',
+          bool(moved), f'{len(moved)} rows differ from today\'s')
+    check('the unavailable spaces are named with a reason',
+          'hybrid' in (r['similarity_sweep'].get('spaces_unavailable') or {}),
+          str(sorted(r['similarity_sweep'].get('spaces_unavailable') or {})))
+    # The resume rule, without a second run: a sink opened on the same file
+    # holds every key, and adding a row that is already there writes nothing.
+    from experiments.noise.n23_uncertainty_cleaning import RowSink
+    from experiments._shared import get_domain_metric
+    sink = RowSink(OUT, 'n24_delete_or_keep', 'toy_sweep', experiment='n24',
+                   metric=get_domain_metric(data), data=data,
+                   config={'n_splits': 3})
+    x = rows[0]
+    sink.add(**{k: x[k] for k in ('method', 'method_setting',
+                                   'similarity_setting', 'model_input',
+                                   'model', 'noise_condition', 'level', 'draw',
+                                   'fold', 'score_D', 'score_Dprime',
+                                   'score_clean')})
+    check('a row already on disk is not written again',
+          sink.flush() == 0 and len(sink.done) == len(rows),
+          f'{len(sink.done)} keys on disk, {len(rows)} rows')
+
+
 if __name__ == '__main__':
     print(f"toy dataset: {SMOKE_N} molecules (KIRBY_SMOKE_N)")
     test_the_control()
@@ -602,6 +709,7 @@ if __name__ == '__main__':
     test_injury_share()
     test_condition_guard()
     test_per_model_spaces()
+    test_similarity_sweep()
     print("\n" + "=" * 60)
     if FAIL:
         print(f"SMOKE FAILED ({len(FAIL)}): {FAIL}")

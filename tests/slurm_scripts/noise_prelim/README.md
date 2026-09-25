@@ -1,5 +1,12 @@
 # Noise prelim: sample HTC scripts
 
+**2026-09-25: the four-stage runbook is `../runbook/README.md`.** Stage 1 there
+(`stage1_prelim_noise.py`) is the sweep: every noise experiment, every
+condition, full folds and levels, one array task per experiment and condition.
+The files here remain the one-fold, one-level check that a run is repeatable
+and reads the precompute (`check_one.sbatch`), which the runbook uses as its
+first step.
+
 Samples for plan section 7, item 2. Run them your own way; nothing here is
 wired into `submit_*.sh`, `run_dataset.py` or the precompute. Written
 2026-09-25. None has been run on the cluster yet.
@@ -114,11 +121,19 @@ Not from the ARC pages; read these from the cluster:
 - Live wall limits on htc: `sinfo -M htc -o "%P %l %D %c %m"`
 - Your jobs on htc: `squeue -M htc -u $USER`
 
-`where_to_submit.sh` reports on the cluster of the login node you run it from.
+`where_to_submit.sh` reports on the cluster of the login node you run it from,
+except `--best-cluster-account`, which reads arc and htc both.
 
 Repo conventions these scripts follow:
 
-- Never `--account`.
+- No `--account` in any header. Fair share is per cluster and per account
+  (measured 2026-09-24: htc stat-cadd 0.0491, htc stat-ecr 0.0360, arc
+  stat-cadd 0.0326, arc stat-ecr 0.0195), so the account is added on the sbatch
+  line when wanted: `bash tests/slurm_scripts/where_to_submit.sh --best-cluster-account htc`
+  prints the cluster and account. Without one SLURM bills the default
+  association.
+- `KIRBY_SKIP_INSTALLS=1` before `. setup.sh` (full mode re-installs into the
+  shared venv).
 - No `--output`, so logs are SLURM's default `slurm-<jobid>.out`, or
   `slurm-<arrayid>_<task>.out` for the array.
 - `. setup.sh` from the repo root.

@@ -30,6 +30,12 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 os.environ.setdefault('KIRBY_LGBM_THREADS', '1')
+# The similarity sweep and the noise cache, both added 2026-09-25. A smoke runs
+# today's behaviour -- neighbours in the model-input matrix only -- unless the
+# caller names settings in KIRBY_SIMILARITY_SETTINGS, and it never reads or
+# writes $KIRBY_CACHE_DIR/noise_cache: a cached build would hide the spy.
+os.environ.setdefault('KIRBY_SIMILARITY_SETTINGS', 'model_input')
+os.environ.setdefault('KIRBY_NOISE_CACHE', '0')
 
 import tempfile
 import warnings
