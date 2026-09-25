@@ -385,20 +385,31 @@ one search configuration, distance weighted by lightgbm_gain throughout.
     lightgbm_gain     caco2     general_distance      0.3466    0.3656       +0.0197
     lightgbm_gain     herg_ki   general               0.3067    0.2693       -0.0671
     lightgbm_gain     herg_ki   general_distance      0.3109    0.2713       -0.0651
+    lightgbm_gain     adme_mdr1 general               0.3137    0.3071       -0.0414
+    lightgbm_gain     adme_mdr1 general_distance      0.2892    0.3061       -0.0424
     deeplift          herg_ki   general               0.1198    0.1408       -0.1956
     deeplift          herg_ki   general_distance      0.1131    0.1422       -0.1942
 
-Two things the three landed cells say. Weighting raises the correlation on
-caco2 and lowers it on herg_ki, and both lineages agree in sign and to within
-0.005 inside each dataset, so that split is between the datasets. And building
-the hybrid with deeplift instead of lightgbm_gain more than halves the
-correlation on herg_ki, 0.3067 to 0.1198 unweighted, which is a far larger
-move than the weighting makes.
+The lightgbm_gain row is complete on all three datasets, and its sign matches
+the shipped row above on all three: the hybrid beats the best single
+representation on caco2 and loses on herg_ki and adme_mdr1. The shipped row
+came from a twelve-configuration search and these from one configuration, so
+the magnitudes are not comparable, but the direction survives the smaller
+search.
 
-These cells use the one-configuration search; the stored run above used twelve,
-so they are comparable to each other and not to the shipped row. 6 of the 9
-build-importance cells are outstanding, and the 3 weighting cells have not
-started.
+Correcting what I wrote from the first two cells: I said both lineages agree
+inside each dataset on whether weighting helps. That holds on caco2 (both rise)
+and herg_ki (both fall), and fails on adme_mdr1, where general falls 0.3137 to
+0.3071 and general_distance rises 0.2892 to 0.3061. The two lineages disagree
+there about whether weighting helps at all. They still agree on the delta
+against the best single representation, -0.0414 and -0.0424.
+
+Building the hybrid with deeplift instead of lightgbm_gain more than halves the
+correlation on herg_ki, 0.3067 to 0.1198 unweighted, a far larger move than the
+weighting makes either way.
+
+These cells use the one-configuration search. 5 of the 9 build-importance cells
+are outstanding, and the 3 weighting cells have not started.
 
 **s04 — wins two of three once its levers open.** Held-out RMSE delta on cliff
 molecules, positive means the hybrid won:
