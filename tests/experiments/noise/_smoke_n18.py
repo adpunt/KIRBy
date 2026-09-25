@@ -122,7 +122,7 @@ def run_it(data, name, captured_labels=None, **kw):
     try:
         return n18.run(data, {'n_splits': 4}, OUT, name,
                        models=['rf'], detectors=['neighbor_residual'],
-                       base_rep='toy', **kw)
+                       base_reps={'rf': ['toy', 'second']}, **kw)
     finally:
         n18.get_best_search_for_downstream = real_lookup
         n18.hybrid_for_fold = real_build
@@ -143,9 +143,9 @@ def test_nothing_injected():
           and r['weights_reach_feature_selection'] is False)
     check('both spaces ran, and the base representation is named',
           r['hybrid_available'] is True
-          and r['spaces_run'] == ['base', 'hybrid']
-          and r['base_rep'] == 'toy',
-          f"{r['spaces_run']}, base {r['base_rep']}")
+          and r['spaces_run'] == ['base_1', 'base_2', 'hybrid']
+          and r['base_reps_by_model'] == {'rf': ['toy', 'second']},
+          f"{r['spaces_run']}, base {r['base_reps_by_model']}")
 
     for space in r['spaces_run']:
         blk = r['per_space'][space]['per_detector']['neighbor_residual']
@@ -159,7 +159,7 @@ def test_nothing_injected():
     # hardcodes a value fails on the grid rather than on the behaviour.
     _rate = str(r['flag_rates'][0])
     check('the two spaces are genuinely different feature spaces',
-          abs(r['per_space']['base']['per_detector']['neighbor_residual']
+          abs(r['per_space']['base_1']['per_detector']['neighbor_residual']
               [_rate]['per_model']['rf']['no_cleaning_mean']
               - r['per_space']['hybrid']['per_detector']['neighbor_residual']
               [_rate]['per_model']['rf']['no_cleaning_mean']) > 1e-9)
@@ -184,7 +184,8 @@ def test_finds_a_real_error(clean_result):
     print("\nlabels that really are wrong:")
     data = make_data(wrong_fraction=0.20, seed=2)
     r = run_it(data, 'toy_wrong')
-    check('it ran in both spaces', r['spaces_run'] == ['base', 'hybrid'],
+    check('it ran in every space',
+          r['spaces_run'] == ['base_1', 'base_2', 'hybrid'],
           str(r['spaces_run']))
 
     for space in r['spaces_run']:
@@ -322,7 +323,7 @@ def test_runs_without_a_recipe():
     try:
         r = n18.run(data, {'n_splits': 3}, OUT, 'toy_no_recipe',
                     models=['rf'], detectors=['neighbor_residual'],
-                    base_rep='toy', flag_rates=[0.10])
+                    base_reps={'rf': ['toy']}, flag_rates=[0.10])
     finally:
         n18.get_best_search_for_downstream = real
 
@@ -330,13 +331,13 @@ def test_runs_without_a_recipe():
     check('it records that no hybrid was available, and why',
           r['hybrid_available'] is False
           and 'precomputed pool' in r['hybrid_unavailable_reason'])
-    check('the base representation still ran', r['spaces_run'] == ['base'],
+    check('the single representation still ran', r['spaces_run'] == ['base_1'],
           str(r['spaces_run']))
     check('no hybrid row was written',
           'hybrid' not in r['per_space']
           and 'hybrid' not in r['summary']['per_space'])
 
-    blk = (r['per_space']['base']['per_detector']['neighbor_residual']
+    blk = (r['per_space']['base_1']['per_detector']['neighbor_residual']
            [str(r['flag_rates'][0])])
     row = blk['per_model']['rf']
     # `cleanups` is what this task type ran, which is seven on a regression set
@@ -354,9 +355,43 @@ def test_runs_without_a_recipe():
           f"{row['no_cleaning_mean']:.4f}")
     check('the summary still counts settings in the base space',
           all(v.get('settings_scored', 0) > 0
-              for v in r['summary']['per_space']['base']['per_cleanup'].values()),
+              for v in r['summary']['per_space']['base_1']['per_cleanup'].values()),
           str({c: v.get('settings_scored')
-               for c, v in r['summary']['per_space']['base']['per_cleanup'].items()}))
+               for c, v in r['summary']['per_space']['base_1']['per_cleanup'].items()}))
+
+
+def test_base_reps_are_top_two_per_model():
+    """The comparison is each model's own top 2 by its stored score, not a
+    fixed list. Owner's decision 2026-09-25."""
+    print("\nthe single-representation comparison (2026-09-25):")
+    from types import SimpleNamespace
+    from experiments._shared import noise_base_reps_by_model
+    search = SimpleNamespace(
+        metric_name='spearman', lower_is_better=False,
+        baselines={'onehot': {'rf': 0.35, 'svm': 0.50},
+                   'saprot': {'rf': 0.59, 'svm': 0.30},
+                   'esmc': {'rf': 0.52, 'svm': 0.45},
+                   'sim_all': {'rf': 0.99, 'svm': 0.99}},
+        baseline_fold_scores={})
+    got, missing = noise_base_reps_by_model(
+        {'rf': search, 'svm': search, 'dnn': None}, ['rf', 'svm', 'dnn'],
+        reps=['onehot', 'saprot', 'esmc', 'sim_all'], verbose=False)
+    check('rf gets its own top 2', got.get('rf') == ['saprot', 'esmc'],
+          str(got.get('rf')))
+    check('svm gets its own top 2, a different pair',
+          got.get('svm') == ['onehot', 'esmc'], str(got.get('svm')))
+    check('a sim_* treatment is never the comparison',
+          all('sim_all' not in v for v in got.values()))
+    check('a model with no stored search gets none, with a reason',
+          'dnn' not in got and 'dnn' in missing, str(missing))
+    got2, _ = noise_base_reps_by_model({'rf': search}, ['rf'],
+                                       reps=['onehot', 'esmc'], verbose=False)
+    check('a representation this run did not load is skipped',
+          got2.get('rf') == ['esmc', 'onehot'], str(got2.get('rf')))
+    import experiments._shared as S
+    check('the fixed preference list is gone',
+          not hasattr(S, 'NOISE_BASE_REP_PREFERENCE')
+          and not hasattr(S, 'pick_noise_base_rep'))
 
 
 def test_one_build_per_recipe_not_per_model():
@@ -448,6 +483,7 @@ if __name__ == '__main__':
     test_shuffled_control(dirty, clean)
     test_qm9_is_marked()
     test_runs_without_a_recipe()
+    test_base_reps_are_top_two_per_model()
     test_one_build_per_recipe_not_per_model()
     print("\n" + "=" * 60)
     if FAIL:
