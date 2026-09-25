@@ -92,11 +92,16 @@ def no_recipe(*a, **k):
     return None, None
 
 
+# Every model's top 2 single representations, given directly: rank 1 'toy',
+# rank 2 'second'.
+BASE_REPS = {m: ['toy', 'second'] for m in n40.DOWNSTREAM_MODELS}
+
+
 def run_one(data, name, recipe=no_recipe, **kw):
     real = n40.get_best_search_for_downstream
     n40.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        kw.setdefault('base_reps', BASE_REPS)
         kw.setdefault('models', MODELS)
         return n40._run_one_condition(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
@@ -143,7 +148,9 @@ def test_tuner_never_sees_held_out():
     splits = list(cv_split(data['groups'], 3, data['reps']['toy'], labels, mode='full'))
     bases = []
     for tr, va in splits:
-        bases.append((StandardScaler().fit_transform(data['reps']['toy'][tr]), tr, va))
+        for rn in ('toy', 'second'):
+            bases.append((StandardScaler().fit_transform(data['reps'][rn][tr]),
+                          tr, va))
     bad_rows, bad_clean, n_clean = 0, 0, 0
     for X, y in calls:
         match = [(tr, va) for B, tr, va in bases
@@ -166,7 +173,7 @@ def test_full_runs():
     print("\nfull runs:")
     res = run_one(make_data(), 'toy', levels=[0.0, 0.5], draws=[0],
                   noise_condition='gaussian')
-    lv = res['per_level']['0.5']['base']
+    lv = res['per_level']['0.5']['base_1']
     want = {'clean': MODELS, 'fixed': MODELS, 'retuned': MODELS,
             'tuned_clean_reused': MODELS, 'seed_one': ['lightgbm'],
             'seed_avg': ['lightgbm'], 'rf_1000_trees': ['rf']}
@@ -181,24 +188,30 @@ def test_full_runs():
     miss = [x for x in extras if len(lv['fixed'].get(x, {})) != 3]
     check('5b. the stack, every GP and every kNN arm is scored', not miss,
           f'missing {miss}; errors {list(res.get("_errors", {}).items())[:3]}')
-    t = res['tails_per_level']['0.5']['base']['retuned']['rf']
+    t = res['tails_per_level']['0.5']['base_1']['retuned']['rf']
     check('5c. tail scores are written beside each score',
           all(v and 'tail_rmse_top' in v for v in t.values()))
-    sp = res['per_pass']['0.5'][0]['per_space']['base']
+    sp = res['per_pass']['0.5'][0]['per_space']['base_1']
     check('5d. the chosen settings, the Gamma estimate and the stack weights '
           'are written', 'rf' in sp['tuned'] and 'gamma' in sp
           and 'stack_weights' in sp and 'k_cp' in sp['knn'])
-    s = res['summary']['per_level']['0.5']['base']
+    s = res['summary']['per_level']['0.5']['base_1']
     check('5e. the summary pairs arms against fixed and the extra pairs',
           'retuned' in s['per_model']['rf']['per_arm']
           and 'gp_nugget_cp_vs_gp_ml_nugget' in s['extra_pairs']
           and 'lightgbm' in s['stack'])
+    check('5e2. base_1 and base_2 both ran, and each model\'s pair is named',
+          res['spaces_run'] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second'] for m in MODELS}
+          and 'base_rep' not in res
+          and set(res['per_level']['0.5']['base_2']['fixed']) >= set(MODELS),
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
     check('5f. no errors', not res.get('_errors'),
           str(list(res.get('_errors', {}).items())[:3]))
     check('5g. at level 0 clean equals fixed',
-          all(np.isclose(res['per_level']['0']['base']['clean']['rf'][k],
-                         res['per_level']['0']['base']['fixed']['rf'][k])
-              for k in res['per_level']['0']['base']['fixed']['rf']))
+          all(np.isclose(res['per_level']['0']['base_1']['clean']['rf'][k],
+                         res['per_level']['0']['base_1']['fixed']['rf'][k])
+              for k in res['per_level']['0']['base_1']['fixed']['rf']))
 
     rd = run_one(make_data(), 'toy_rel', levels=[0.3], draws=[0],
                  noise_condition='dense_oofmse', skip_tuning=True, skip_gp=True,
@@ -209,6 +222,10 @@ def test_full_runs():
         ok.append(abs(r['injected_rms_label_units'] - want_rms) < 0.35 * want_rms)
     check('6. dense_oofmse injects level x the written residual SD squared',
           ok and all(ok), f'{sum(ok)} of {len(ok)} folds')
+    check('6b. the residual SD is measured in the first model\'s rank-1 '
+          'representation, and that is written',
+          rd.get('resid_sd_rep') == 'toy' and rd.get('resid_sd_rep_chosen_as'),
+          str(rd.get('resid_sd_rep')))
 
     real = n40.gp_max_samples
     n40.gp_max_samples = lambda: 50
@@ -218,7 +235,7 @@ def test_full_runs():
                      skip_knn=True, skip_stack=True)
     finally:
         n40.gp_max_samples = real
-    fx = rc['per_level']['0.5']['base']['fixed']
+    fx = rc['per_level']['0.5']['base_1']['fixed']
     check('7. above the GP cap every GP arm is skipped with its reason',
           'gp_ml_nugget' not in fx and rc.get('arm_skips')
           and all('GP cap' in v for v in rc['arm_skips'].values()))
@@ -226,7 +243,7 @@ def test_full_runs():
     rr = run_one(make_data(repeats=True), 'toy_rep', levels=[0.5], draws=[0],
                  noise_condition='gaussian', skip_tuning=True, skip_knn=True,
                  skip_stack=True)
-    fx = rr['per_level']['0.5']['base']['fixed']
+    fx = rr['per_level']['0.5']['base_1']['fixed']
     check('8. with repeat measurements both molecule-mean GP arms run',
           rr['repeat_measurements']
           and len(fx.get('gp_means_ml_nugget', {})) == 3
@@ -255,7 +272,7 @@ def test_sweep():
     real = n40.get_best_search_for_downstream
     n40.get_best_search_for_downstream = no_recipe
     try:
-        kw = dict(models=['rf'], levels=[0.5], draws=[0], base_rep='toy',
+        kw = dict(models=['rf'], levels=[0.5], draws=[0], base_reps=BASE_REPS,
                   skip_tuning=True, skip_gp=True, skip_knn=True, skip_stack=True)
         idx = n40.run(make_data(), {'n_splits': 3}, OUT, 'toy_sweep', **dict(kw))
         again = n40.run(make_data(), {'n_splits': 3}, OUT, 'toy_sweep', **dict(kw))
@@ -284,8 +301,10 @@ def test_the_command_line():
         capture_output=True, text=True)
     wanted = ('--dataset', '--noise-condition', '--levels', '--draws',
               '--tune-n-iter', '--skip-tuning', '--skip-gp', '--models',
-              '--exp-folds', '--base-rep')
+              '--exp-folds')
     missing = [f for f in wanted if f not in out.stdout]
+    check('12b. --base-rep is gone', out.returncode == 0
+          and '--base-rep' not in out.stdout)
     check('12. the parser lists every flag', out.returncode == 0 and not missing,
           f'missing {missing}' if missing else f'{len(wanted)} flags present')
 

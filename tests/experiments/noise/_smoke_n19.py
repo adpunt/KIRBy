@@ -41,6 +41,14 @@ import experiments.noise.n17_replicate_removal as n17
 import experiments.noise.n19_measurement_count as n19
 
 OUT = tempfile.mkdtemp(prefix='n19_smoke_')
+
+# ⛔ THE POOL LOOKUP IS STUBBED. There is no precomputed pool for these toy
+# datasets, and the real lookup then runs a cold search over them. MEASURED
+# 2026-09-25: that search reached a DNN fit (kirby/models/dnn.py:194) and hung
+# for over four hours at 0% CPU. The single representations are named through
+# `base_reps`, so nothing here needs the stored search; every run is in base_1
+# (and base_2 where two are named) only, as _smoke_n23 does.
+n19.get_best_search_for_downstream = lambda *a, **k: (None, None)
 FAIL = []
 
 
@@ -284,7 +292,7 @@ def test_refusals():
           r2.get('skipped') == 'not_regression', str(r2)[:90])
 
 
-def _cell(res, build, cond, model='rf', space='base'):
+def _cell(res, build, cond, model='rf', space='base_1'):
     return (res['summary']['per_label_build'][build]['per_space'][space]
             ['per_model'][model]['per_condition'][cond])
 
@@ -293,7 +301,7 @@ def test_end_to_end():
     print("\nend to end — the count carries the precision:")
     data, ks, sigma = count_carries_precision(n_ent=400, seed=3)
     r = n19.run(data, {'n_splits': 4}, OUT, 'toy_count',
-                models=['rf'], base_rep='toy', n_draws=2, oof_splits=3,
+                models=['rf'], base_reps={'rf': ['toy']}, n_draws=2, oof_splits=3,
                 model_arms=[])
     check('it ran', 'summary' in r, str(r.get('skipped', ''))[:60])
     if 'summary' not in r:
@@ -326,7 +334,7 @@ def test_end_to_end():
     print("\nend to end — the spread carries the precision:")
     data2, ks2, sigma2 = spread_carries_precision(n_ent=400, seed=4)
     r2 = n19.run(data2, {'n_splits': 4}, OUT, 'toy_spread',
-                 models=['rf'], base_rep='toy', n_draws=2, oof_splits=3,
+                 models=['rf'], base_reps={'rf': ['toy']}, n_draws=2, oof_splits=3,
                 model_arms=[])
     check('it ran', 'summary' in r2, str(r2.get('skipped', ''))[:60])
     if 'summary' not in r2:
@@ -448,19 +456,36 @@ def test_fit_noise_variance():
 def test_new_conditions_end_to_end():
     print("\nend to end — the four added conditions and the model arms:")
     data, ks, sigma = count_carries_precision(n_ent=240, seed=5)
+    # A second representation, so base_2 runs too: the features plus noise.
+    _rng = np.random.default_rng(55)
+    data['reps']['toy_noisy'] = (data['reps']['toy']
+                                 + _rng.normal(0, 1.0, data['reps']['toy'].shape))
     r = n19.run(data, {'n_splits': 3}, OUT, 'toy_new_arms',
-                models=['rf'], base_rep='toy', n_draws=1, oof_splits=3,
-                label_builds=['averaged'])
+                models=['rf'], base_reps={'rf': ['toy', 'toy_noisy']},
+                n_draws=1, oof_splits=3, label_builds=['averaged'])
     check('it ran', 'summary' in r, str(r.get('skipped', ''))[:60])
     if 'summary' not in r:
         return
+    check('the single-representation comparison is the two named, in order',
+          r['spaces_run'][:2] == ['base_1', 'base_2']
+          and r['base_reps_by_model'] == {'rf': ['toy', 'toy_noisy']}
+          and 'base_rep' not in r,
+          f"{r['spaces_run']}, {r.get('base_reps_by_model')}")
+    check('the model arms name the representation they ran on in each',
+          r['model_arms_base_reps'] == {'base_1': 'toy', 'base_2': 'toy_noisy'},
+          str(r.get('model_arms_base_reps')))
+    u1 = _cell(r, 'averaged', 'untouched', space='base_1')['mean']
+    u2 = _cell(r, 'averaged', 'untouched', space='base_2')['mean']
+    check('base_1 and base_2 are different feature matrices',
+          np.isfinite(u1) and np.isfinite(u2) and abs(u1 - u2) > 1e-9,
+          f'untouched {u1:.4f} in base_1, {u2:.4f} in base_2')
     for cond in ('invvar_weighted', 'count_feature',
                  'invvar_and_count_feature', 'spread_pooled_weighted'):
         c = _cell(r, 'averaged', cond)
         check(f'{cond} scored every fold untouched scored',
               c['n_folds_paired'] == 3, f"{c['n_folds_paired']} of 3")
     fits = (r['per_draw']['0']['per_label_build']['averaged']['per_space']
-            ['base']['fitted_noise_variance'])
+            ['base_1']['fitted_noise_variance'])
     slopes = [f['slope_fitted'] for f in fits]
     # Every measurement scatters by 4, so one measurement carries variance 16
     # and the slope should sit near it. Out-of-fold error from 160 molecules is
@@ -469,11 +494,17 @@ def test_new_conditions_end_to_end():
     check('the fitted slope sits near the variance the data was built with',
           all(4.0 < s < 64.0 for s in slopes),
           f"{[round(s, 1) for s in slopes]} against 16")
-    arms = r['summary']['model_arms']['per_label_build']['averaged']['base']
+    arms = r['summary']['model_arms']['per_label_build']['averaged']['base_1']
     for arm, plain in n19.MODEL_ARM_PAIRS.items():
         check(f'{arm} is paired against {plain} on every fold',
               arms.get(arm, {}).get('n_folds_paired') == 3,
               str(arms.get(arm, {}).get('n_folds_paired')))
+    arms2 = r['summary']['model_arms']['per_label_build']['averaged']['base_2']
+    check('the model arms ran in base_2 too',
+          all(arms2.get(a, {}).get('n_folds_paired') == 3
+              for a in n19.MODEL_ARM_PAIRS),
+          str({a: arms2.get(a, {}).get('n_folds_paired')
+               for a in n19.MODEL_ARM_PAIRS}))
     check('nothing in the model arms is paired against a downstream model',
           all(v['against'] in n19.MODEL_ARMS for v in arms.values()))
     bb = r['per_draw']['0']['per_label_build']['averaged']
@@ -529,7 +560,7 @@ def test_interval_aft_skip_under_single():
     # every single label rests on one measurement: zero width everywhere.
     data, ks, _ = count_carries_precision(n_ent=180, seed=6)
     r = n19.run(data, {'n_splits': 3}, OUT, 'toy_aft_skip', models=['rf'],
-                base_rep='toy', n_draws=1, oof_splits=3, model_arms=aft,
+                base_reps={'rf': ['toy']}, n_draws=1, oof_splits=3, model_arms=aft,
                 label_builds=['single', 'averaged'])
     check('it ran', 'summary' in r, str(r.get('skipped', ''))[:60])
     if 'summary' not in r:
@@ -545,11 +576,11 @@ def test_interval_aft_skip_under_single():
               == v['n_training_molecules'] > 0 for v in skips.values()),
           str([(v['n_training_molecules_with_zero_width_interval'],
                 v['n_training_molecules']) for v in skips.values()]))
-    arms_s = blk_s['per_space']['base']['model_arms']
+    arms_s = blk_s['per_space']['base_1']['model_arms']
     check('single: the interval arm has no score, the point arm has all',
           arms_s['xgboost_interval_aft']['n_folds'] == 0
           and arms_s['xgboost_aft_point']['n_folds'] == 3)
-    row_s = r['summary']['model_arms']['per_label_build']['single']['base'][
+    row_s = r['summary']['model_arms']['per_label_build']['single']['base_1'][
         'xgboost_interval_aft']
     check('single: the summary pairs nothing and counts the skipped folds',
           row_s['n_folds_paired'] == 0 and row_s['n_folds_skipped'] == 3
@@ -558,7 +589,7 @@ def test_interval_aft_skip_under_single():
     blk_a = r['per_draw']['0']['per_label_build']['averaged']
     check('averaged: no skip record',
           not blk_a.get('model_arm_skips'), str(blk_a.get('model_arm_skips')))
-    row_a = r['summary']['model_arms']['per_label_build']['averaged']['base'][
+    row_a = r['summary']['model_arms']['per_label_build']['averaged']['base_1'][
         'xgboost_interval_aft']
     check('averaged: the interval arm is still fitted and paired on every fold',
           row_a['n_folds_paired'] == 3 and row_a['n_folds_skipped'] == 0,
@@ -573,14 +604,14 @@ def test_interval_aft_skip_under_single():
     ks2 = rng.choice([2, 4, 8], size=n_ent, p=[.4, .3, .3])
     data2 = _rows(X_ent, truth, np.full(n_ent, 1.0), ks2, rng)
     r2 = n19.run(data2, {'n_splits': 3}, OUT, 'toy_aft_twice', models=['rf'],
-                 base_rep='toy', n_draws=1, oof_splits=3, model_arms=aft,
+                 base_reps={'rf': ['toy']}, n_draws=1, oof_splits=3, model_arms=aft,
                  label_builds=['single'])
     check('it ran with molecules measured twice', 'summary' in r2,
           str(r2.get('skipped', ''))[:60])
     if 'summary' not in r2:
         return
     blk2 = r2['per_draw']['0']['per_label_build']['single']
-    row2 = r2['summary']['model_arms']['per_label_build']['single']['base'][
+    row2 = r2['summary']['model_arms']['per_label_build']['single']['base_1'][
         'xgboost_interval_aft']
     check('single with real intervals: no skip, paired on every fold',
           not blk2.get('model_arm_skips') and row2['n_folds_paired'] == 3,

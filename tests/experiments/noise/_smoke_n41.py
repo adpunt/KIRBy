@@ -91,7 +91,9 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n41.get_best_search_for_downstream
     n41.get_best_search_for_downstream = recipe
     try:
-        kw.setdefault('base_rep', 'toy')
+        # Every model's top 2 single representations, given directly.
+        kw.setdefault('base_reps', {m: ['toy', 'second']
+                                    for m in n41.DOWNSTREAM_MODELS})
         kw.setdefault('noise_condition', n41.DEFAULT_NOISE_CONDITION)
         kw.setdefault('detectors', NO_CLEANLAB)
         return n41._run_one_condition(data, {'n_splits': 3}, OUT, name, **kw)
@@ -208,19 +210,19 @@ def test_full_runs():
     res = run_it(make_data(), 'toy', models=['rf', 'lightgbm'],
                  noise_condition='sparse_dprime_p10', levels=[0.0, 4.0],
                  draws=[0], random_seeds=[0, 1])
-    lv = res['per_level']['4']['base']
+    lv = res['per_level']['4']['base_1']
     missing = [a for a in res['arms'] if a not in lv]
     check('8. every arm is scored at level 4', not missing,
           f'missing {missing}' if missing else f"{len(res['arms'])} arms")
-    det = res['detection']['4']['base']
+    det = res['detection']['4']['base_1']
     no_auroc = [d for d in NO_CLEANLAB
                 if d not in det or not np.isfinite(det[d]['detection_auroc'])]
     check('8b. every detector is graded, with an AUROC', not no_auroc,
           ', '.join(f"{d} {det[d]['detection_auroc']:.2f}" for d in det))
     check('8c. the conformal score finds a 4-residual-SD shift well above chance',
           det['rescaled_residual']['detection_auroc'] > 0.8)
-    bh0 = res['bh']['0']['base']
-    bh4 = res['bh']['4']['base']
+    bh0 = res['bh']['0']['base_1']
+    bh4 = res['bh']['4']['base_1']
     check('8d. BH records are written at level 0 and at level 4, for every q',
           all(f'{c}_q{q:g}' in bh0 and f'{c}_q{q:g}' in bh4
               for c in RC for q in n41.BH_QS))
@@ -250,14 +252,25 @@ def test_full_runs():
     recs = res['fold_records']['4']
     check('8f. the residual SD the shift was sized by is written per fold',
           all(r.get('resid_sd_label_units', 0) > 0 for r in recs))
-    tails = res['tails']['4']['base'][f'remove_{RC[0]}_q0.1']['rf']
+    check('8f2. it is measured in the first model\'s rank-1 representation, '
+          'and that is written',
+          res.get('resid_sd_rep') == 'toy' and res.get('resid_sd_rep_chosen_as'),
+          str(res.get('resid_sd_rep')))
+    check('8f3. base_1 and base_2 both ran, and each model\'s pair is named',
+          res['spaces_run'] == ['base_1', 'base_2']
+          and res['base_reps_by_model'] == {m: ['toy', 'second']
+                                            for m in ['rf', 'lightgbm']}
+          and 'base_rep' not in res
+          and 'no_cleaning' in res['per_level']['4']['base_2'],
+          f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
+    tails = res['tails']['4']['base_1'][f'remove_{RC[0]}_q0.1']['rf']
     check('8g. tail scores are written for every scored pass',
           len(tails) == 3 and all('tail_rmse_top' in v for v in tails.values()))
-    s = res['summary']['per_level']['4']['base']['rf']['per_arm']
+    s = res['summary']['per_level']['4']['base_1']['rf']['per_arm']
     check('8h. every flag arm is paired against its two random twins',
           all(len(s[f'{a}_{c}_q{q:g}']['vs_random_flags']) == 2
               for a in n41.ACTIONS for c in RC for q in n41.BH_QS))
-    z = res['per_level']['0']['base']
+    z = res['per_level']['0']['base_1']
     check('8i. an arm with no flags carries no_cleaning\'s score, not a gap',
           all(set(z[a]['rf']) == set(z['no_cleaning']['rf']) for a in res['arms']
               if a != 'clean'))
@@ -268,7 +281,7 @@ def test_full_runs():
                    detectors=['rescaled_residual'])
     check('9. with replicate groups the trusted calibration set is run',
           'trusted' in res_t['calibration_sets']
-          and 'remove_trusted_q0.1' in res_t['per_level']['4']['base'],
+          and 'remove_trusted_q0.1' in res_t['per_level']['4']['base_1'],
           str(res_t['fold_records']['4'][0].get('trusted_calibration')))
 
     res_h = run_it(make_data(), 'toy', recipe=fake_recipe(['toy', 'second']),
@@ -316,8 +329,10 @@ def test_the_command_line():
          '--help'], capture_output=True, text=True)
     wanted = ('--dataset', '--noise-condition', '--levels', '--draws',
               '--bh-qs', '--detectors', '--random-seeds', '--models',
-              '--exp-folds', '--base-rep', '--tag')
+              '--exp-folds', '--tag')
     missing = [f for f in wanted if f not in out.stdout]
+    check('12b. --base-rep is gone', out.returncode == 0
+          and '--base-rep' not in out.stdout)
     check('12. the parser lists every flag',
           out.returncode == 0 and not missing,
           f'missing {missing}' if missing else f'{len(wanted)} flags present')

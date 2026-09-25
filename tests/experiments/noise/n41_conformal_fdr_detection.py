@@ -98,6 +98,18 @@ molecules against their UNTOUCHED labels.
 When BH flags nothing, the arm's training set IS no_cleaning's, and its score is
 written as no_cleaning's for that pass: a tie, not a missing pass.
 
+THE FEATURE SPACES. base_1 and base_2 are each downstream model's top 2 single
+representations, ranked by that model's own score in the stored search
+(_shared.noise_base_reps_by_model, owner's decision 2026-09-25); `base_reps_by_model`
+names them. Then one hybrid per family of stored search. A model the pool holds
+no search for has neither.
+A relative condition sizes its shift by lightgbm's out-of-fold residual SD on
+the fold's clean training labels. That SD must be one number for every space, so
+it is measured in ONE representation, `resid_sd_rep`: the rank-1 single
+representation of the first downstream model that has one. That choice was made
+on 2026-09-25 when the fixed preference list was deleted; the owner has not
+signed it off.
+
 WHAT THIS CANNOT SAY. The noise is injected, so every number is confined to the
 named condition. The false-flag share is measured against the injector's mask.
 
@@ -122,7 +134,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
-    get_best_search_for_downstream, pick_noise_base_rep,
+    get_best_search_for_downstream,
+    noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
 )
 from experiments.dataset_policy import (
@@ -489,8 +502,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     if not downstream_models:
         raise RuntimeError("n41: no downstream model could be built.")
 
-    base_rep_name = (kwargs.get('base_rep')
-                     or pick_noise_base_rep(reps, dataset_name))
+    # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
+    # caller). None means: rank them from the stored search, below.
+    base_reps_override = kwargs.get('base_reps')
     noise_groups = noise_groups_for(data)[0]
     if condition in GROUPED_STRATEGIES and noise_groups is None:
         raise RuntimeError(
@@ -501,7 +515,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         dose_units = 'label SDs of upward shift'
     elif condition in RELATIVE_CONDITIONS:
         dose_units = ('residual SDs: lightgbm out-of-fold residual on the '
-                      'fold\'s clean training labels, base space')
+                      'fold\'s clean training labels, in resid_sd_rep')
     else:
         dose_units = noise_dose_units(dataset_name)
 
@@ -513,7 +527,6 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
                             else kwargs['draws']),
         'models': downstream_models,
-        'base_rep': base_rep_name,
         'arms': arm_names,
         'arm_to_beat': 'no_cleaning',
         'detectors': detectors,
@@ -551,8 +564,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'fold_records': {},
     }
 
-    sample_X = reps[base_rep_name]
-    splits = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+    splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
+                           mode=mode))
 
     by_model, no_recipe = pool_recipe_per_downstream_model(
         functools.partial(
@@ -584,7 +597,35 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         for r in recipes_by_model.get(_m, ()):
             if r['space'] not in _ordered:
                 _ordered.append(r['space'])
-    spaces = ('base',) + tuple(_ordered)
+
+    # ── The single-representation comparison, per downstream model ──
+    if base_reps_override is not None:
+        base_by_model = {m: list(base_reps_override[m])
+                         for m in downstream_models if base_reps_override.get(m)}
+        base_missing = {m: 'not given by the caller' for m in downstream_models
+                        if m not in base_by_model}
+    else:
+        base_by_model, base_missing = noise_base_reps_by_model(
+            {m: d['search'] for m, d in by_model.items()}, downstream_models,
+            reps=reps, dataset_name=dataset_name)
+    results['base_reps_by_model'] = base_by_model
+    results['base_reps_missing'] = base_missing
+    base_spaces = tuple(
+        f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
+        if base_rank_groups(base_by_model, _k, downstream_models))
+    # The one representation a relative condition's residual SD is measured
+    # in (module docstring, THE FEATURE SPACES).
+    _ref_model = next((m for m in downstream_models if base_by_model.get(m)),
+                      None)
+    resid_sd_rep = base_by_model[_ref_model][0] if _ref_model else None
+    if condition in RELATIVE_CONDITIONS:
+        results['resid_sd_rep'] = resid_sd_rep
+        results['resid_sd_rep_chosen_as'] = (
+            f'rank-1 single representation of {_ref_model}, the first '
+            f'downstream model that has one' if _ref_model else
+            'none: no downstream model has a single representation, so no '
+            'residual SD can be measured and nothing is injected')
+    spaces = base_spaces + tuple(_ordered)
     results['hybrid_available'] = bool(_ordered)
     if _ordered:
         results['hybrid_recipe_by_model'] = convert_numpy({
@@ -600,11 +641,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     else:
         results['hybrid_unavailable_reason'] = (
             (f"the pool lookup RAISED {results['hybrid_lookup_error']}; the "
-             f"pool was never read. Every arm ran in the base representation.")
+             f"pool was never read. Every arm ran in the single "
+             f"representations only.")
             if results['hybrid_lookup_error'] else
             (f'no recipe came back from pool subset {POOL_SUBSET!r} for any '
-             f'downstream model. Every arm ran in the base representation.'))
-        print("  no hybrid recipe; base representation only")
+             f'downstream model. Every arm ran in the single representations '
+             f'only.'))
+        print("  no hybrid recipe; single representations only")
     results['spaces_run'] = list(spaces)
 
     passes = _levels_and_draws(dataset_name, condition,
@@ -637,9 +680,6 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                           for k, v in reps.items()}
             val_reps = {k: np.asarray(v[val_idx], dtype=np.float64)
                         for k, v in reps.items()}
-            sc = StandardScaler()
-            X_base_tr = sc.fit_transform(train_reps[base_rep_name])
-            X_base_va = sc.transform(val_reps[base_rep_name])
             fold_rec = {'pass': pass_key}
             try:
                 if condition in SHIFT_ONLY_CONDITIONS:
@@ -647,8 +687,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         labels, train_idx=train_idx, condition=condition,
                         delta_sd=level, seed=draw * 1000 + fold_i)
                 elif condition in RELATIVE_CONDITIONS:
-                    s_r, _ = oof_residual_sd(X_base_tr, y_clean_tr, groups=g_tr,
-                                             n_splits=oof_splits)
+                    if resid_sd_rep is None:
+                        raise RuntimeError(results['resid_sd_rep_chosen_as'])
+                    s_r, _ = oof_residual_sd(
+                        StandardScaler().fit_transform(train_reps[resid_sd_rep]),
+                        y_clean_tr, groups=g_tr, n_splits=oof_splits)
                     fold_rec['resid_sd_label_units'] = s_r
                     y0, cmask, prov = inject_relative_train_labels(
                         labels, train_idx=train_idx, condition=condition,
@@ -687,10 +730,21 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         f'qualify, under {MIN_CALIBRATION}')
             rec_acc.setdefault(lvl_key, []).append(fold_rec)
 
-            fold_spaces = {'base': [(X_base_tr, X_base_va,
-                                     list(downstream_models))]}
+            # Each single-representation space holds one matrix per distinct
+            # representation at that rank, shared by the models that rank it
+            # there.
+            fold_spaces = {}
+            for _sp in base_spaces:
+                _bcells = []
+                for _rn, _ms in base_rank_groups(
+                        base_by_model, int(_sp.split('_')[1]),
+                        downstream_models).items():
+                    sc = StandardScaler()
+                    _bcells.append((sc.fit_transform(train_reps[_rn]),
+                                    sc.transform(val_reps[_rn]), list(_ms)))
+                fold_spaces[_sp] = _bcells
             for _sp in spaces:
-                if _sp == 'base':
+                if _sp in base_spaces:
                     continue
                 _cells = []
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
@@ -976,8 +1030,6 @@ def main():
                         help='Comma-separated random-flag replicates')
     parser.add_argument('--exp-folds', type=int, default=None,
                         help='Outer folds. Overrides the 1 or 5 --mode gives')
-    parser.add_argument('--base-rep', type=str, default=None,
-                        help="Base representation. Default: pick_noise_base_rep's")
     parser.add_argument('--tag', type=str, default=None,
                         help='Extra text on the result filename')
     args = parser.parse_args()
@@ -999,8 +1051,6 @@ def main():
         kw['detectors'] = [x.strip() for x in args.detectors.split(',')]
     if args.random_seeds:
         kw['random_seeds'] = [int(x) for x in args.random_seeds.split(',')]
-    if args.base_rep:
-        kw['base_rep'] = args.base_rep
 
     if args.tag:
         kw.setdefault('noise_condition', DEFAULT_NOISE_CONDITION)
