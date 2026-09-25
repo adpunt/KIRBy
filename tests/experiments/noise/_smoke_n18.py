@@ -254,6 +254,54 @@ def test_counts_are_sane(r):
               if c in row and row[c]['folds_scored'] > 1))
 
 
+def test_shuffled_control(dirty, clean):
+    """The detector's own ranking must beat the same scores dealt at random
+    where the labels really are wrong, and must not where none are."""
+    print("\nthe shuffled-score control (2026-09-25):")
+    for space in dirty['spaces_run']:
+        ctrl = dirty['per_space'][space].get('shuffled_control')
+        check(f'{space}: the control block is written', bool(ctrl))
+        if not ctrl:
+            continue
+        rows = [by_seed
+                for by_rate in ctrl.values()
+                for by_model in by_rate.values()
+                for by_c in by_model.values()
+                for c, by_seed in by_c.items()]
+        check(f'{space}: every seed is its own row',
+              all(set(bs) == {str(s) for s in dirty['shuffle_seeds']}
+                  for bs in rows), f'{len(rows)} settings')
+        check(f'{space}: score-free cleanups are not re-run',
+              not any(c in n18.SCORE_FREE_CLEANUPS
+                      for by_rate in ctrl.values()
+                      for by_model in by_rate.values()
+                      for by_c in by_model.values() for c in by_c))
+        # remove at the highest flag rate: 20% wrong labels, 20% removed. A
+        # detector that finds them has to beat removing the same count at random.
+        rate = str(max(dirty['flag_rates']))
+        rm = ctrl['neighbor_residual'][rate]['rf'].get('remove', {})
+        beat = [row['real_minus_shuffled'] for row in rm.values()]
+        check(f'{space}: on wrong labels, remove beats random removal for '
+              f'every seed', bool(beat) and all(b > 0 for b in beat),
+              str([round(b, 4) for b in beat]))
+        s_d = dirty['summary']['shuffled_control']['per_space'][space]
+        s_c = clean['summary']['shuffled_control']['per_space'][space]
+        d_beat = sum(v['settings_where_real_beat_shuffled_on_most_folds']
+                     for by_seed in s_d.values() for v in by_seed.values())
+        c_beat = sum(v['settings_where_real_beat_shuffled_on_most_folds']
+                     for by_seed in s_c.values() for v in by_seed.values())
+        check(f'{space}: the real ranking beats random more often on wrong '
+              f'labels than on clean ones', d_beat > c_beat,
+              f'wrong labels {d_beat}, clean labels {c_beat}')
+
+    r = run_it(make_data(n=200, wrong_fraction=0.0, seed=4), 'toy_noctrl',
+               flag_rates=[0.10], shuffle_seeds=[])
+    check('an empty seed list switches the control off',
+          all(not any(by_rate[str(0.1)]['rf']
+                      for by_rate in [v for v in sp['shuffled_control'].values()])
+              for sp in r['per_space'].values()))
+
+
 def test_qm9_is_marked():
     print("\nthe control:")
     data = make_data(n=200, wrong_fraction=0.0, seed=3)
@@ -397,6 +445,7 @@ if __name__ == '__main__':
     clean = test_nothing_injected()
     dirty = test_finds_a_real_error(clean)
     test_counts_are_sane(dirty)
+    test_shuffled_control(dirty, clean)
     test_qm9_is_marked()
     test_runs_without_a_recipe()
     test_one_build_per_recipe_not_per_model()
