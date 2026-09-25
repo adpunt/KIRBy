@@ -393,8 +393,19 @@ one search configuration, distance weighted by lightgbm_gain throughout.
     deeplift          herg_ki   general_distance      0.1131    0.1422       -0.1942
     deeplift          adme_mdr1 general               0.1838    0.2407       -0.1078
     deeplift          adme_mdr1 general_distance      0.1839    0.2562       -0.0922
+    treeshap          herg_ki   general               0.3136    0.2791       -0.0573
+    treeshap          herg_ki   general_distance      0.3128    0.2793       -0.0571
 
-Both rows are complete on all three datasets, 12 of the 18 landed cells.
+The lightgbm_gain and deeplift rows are complete on all three datasets. The
+first treeshap cell landed 2026-09-25; its other two datasets are still running.
+
+On herg_ki, where all three methods now have a number, treeshap sits with
+lightgbm_gain and not with deeplift. Unweighted it reads 0.3136 and 0.3128
+against lightgbm_gain's 0.3067 and 0.3109, and deeplift's 0.1198 and 0.1131.
+Weighting moves it the same direction as lightgbm_gain too, down to 0.2791 and
+0.2793, where deeplift's rises. So the split on this dataset is deeplift
+against the two tree-based methods, not a spread across three. Whether that
+holds on caco2 and adme_mdr1 is not yet measured.
 
 The lightgbm_gain row's sign matches the shipped row above on all three
 datasets: the hybrid beats the best single representation on caco2 and loses on
@@ -422,8 +433,9 @@ hurts on herg_ki, and splits on adme_mdr1, where general falls 0.3137 to 0.3071
 and general_distance rises 0.2892 to 0.3061. That split is why my earlier claim
 here, that both lineages agree inside each dataset, was wrong.
 
-These cells use the one-configuration search. 3 of the 9 build-importance cells
-are outstanding, all treeshap, and the 3 weighting cells have not started.
+These cells use the one-configuration search. 2 of the 9 build-importance cells
+are outstanding, treeshap on caco2 and adme_mdr1, and the 3 weighting cells have
+not started.
 
 **s04 — wins two of three once its levers open.** Held-out RMSE delta on cliff
 molecules, positive means the hybrid won:
