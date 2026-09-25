@@ -287,7 +287,7 @@ queued — the owner capped local compute and the current queue is still drainin
 | exp | kind | smoke tested / debugged | methods to optimise | optimisation done |
 |---|---|---|---|---|
 | s01 | investigation | yes, 3/3 datasets | no — it is the comparator s02 is measured against | n/a |
-| s02 | method | yes, 3/3 | yes | **still NO, but the blocker is gone.** `weight_methods` was stuck on lightgbm_gain because SIMILARITY_EXTRA always supplied it; `KIRBY_S02_WEIGHT_METHODS` fixes that (2026-09-25) and 3 jobs are queued, 0 landed. Separately, a build-importance sweep is 5 of 9 cells in |
+| s02 | method | yes, 3/3 | yes | **build importance SWEPT 2026-09-25, 9/9 cells** — 3 methods x 3 datasets x 2 lineages; treeshap within 0.014 of lightgbm_gain everywhere, deeplift 1.57-5.11x below both. **Distance weighting still NOT swept**: `weight_methods` was stuck on lightgbm_gain because SIMILARITY_EXTRA always supplied it; `KIRBY_S02_WEIGHT_METHODS` fixes that and 3 jobs are queued, 0 landed |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
 | s04 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the 4-rep pool understated the HYBRID, not the comparator |
 | s05 | method | yes, 3/3 | yes | **SWEPT 2026-09-24** — 24 cells: 2 voting x 4 exponents x 3 datasets, k swept within |
