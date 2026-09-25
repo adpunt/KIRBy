@@ -613,8 +613,23 @@ def measurement_counts_for_rows(data):
 def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                          is_clf=False, groups=None, strength=None,
                          targets=None, measurement_counts=None,
-                         dataset_name=None):
+                         dataset_name=None, similarity_neighbours=None,
+                         similarity_k=None):
     """What one of the cleanups hands the downstream fit, before any fit runs.
+
+    similarity_neighbours / similarity_k, added 2026-09-25 (plan section 1:
+    the features neighbours are found in is its own axis). None, the default,
+    is the unchanged code path: label_smooth, knn_smooth and prox_smooth find
+    neighbours in X_tr_s exactly as before. Given the dict
+    similarity_space.neighbour_lists returns, label_smooth and knn_smooth read
+    their neighbours from it instead of fitting make_nearest_neighbors on
+    X_tr_s, and prox_smooth does too when the setting is forest_proximity.
+    similarity_k is how many neighbours; None keeps today's count, which is
+    NOT the same for the three: label_smooth and knn_smooth query
+    min(10, n-1) rows including the molecule itself and drop the first, so 9
+    neighbours; prox_smooth takes min(10, n-1), so 10. Handing in the
+    MODEL_INPUT setting's lists reproduces today's numbers bit for bit
+    (tests/smoke/smoke_noise_similarity_foundation.py).
 
     Hoisted out of `_evaluate_fold` on 2026-09-17 so that `n20` can apply the
     same cleanup to the labels the RECIPE SEARCH sees, not only to the labels the
@@ -682,6 +697,32 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
     fall back to.
     """
     flag_percentile = 100.0 * (1.0 - float(noise_fraction))
+
+    # A similarity setting only means something to the three cleanups that
+    # read neighbours. Handed to any other cleanup, or a non-forest setting
+    # handed to prox_smooth, it would be ignored, and every setting of a sweep
+    # would write the same numbers under 50 different similarity labels. So
+    # that is refused. MODEL_INPUT is today's behaviour for every cleanup and
+    # is always accepted. Added in review 2026-09-25.
+    if similarity_neighbours is not None:
+        _sp = (similarity_neighbours.get('setting') or {}).get('space')
+        if _sp != 'model_input':
+            _reads = {'label_smooth': True, 'knn_smooth': True,
+                      'prox_smooth': _sp == 'forest_proximity'}
+            if not _reads.get(strategy, False):
+                raise ValueError(
+                    f"cleaned_training_set: {strategy!r} does not read "
+                    f"neighbours from the similarity setting {_sp!r}, so the "
+                    f"result would be today's numbers filed under that "
+                    f"setting. Pass similarity_neighbours=None (or the "
+                    f"MODEL_INPUT lists) for it.")
+
+    def _given_neighbours(k_today):
+        # The neighbour indices from the caller's similarity setting, as
+        # (n_tr, k) into the training rows with the molecule itself excluded.
+        from experiments.noise.similarity_space import neighbours_at
+        k = k_today if similarity_k is None else int(similarity_k)
+        return neighbours_at(similarity_neighbours, k)[0]
 
     if strategy == 'remove':
         threshold = np.percentile(noise_scores, flag_percentile)
@@ -824,22 +865,28 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                 'keep': None, 'label_column': y_new}
 
     if strategy == 'label_smooth':
+        if similarity_neighbours is not None:
+            _nbrs = _given_neighbours(min(10, len(y_tr) - 1) - 1)
         if is_clf:
             # Label smooth uses neighbor means — use neighbor mode for clf
-            nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
-            nn.fit(X_tr_s)
-            _, nbr_idx = nn.kneighbors(X_tr_s)
+            if similarity_neighbours is None:
+                nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
+                nn.fit(X_tr_s)
+                _, nbr_idx = nn.kneighbors(X_tr_s)
+                _nbrs = nbr_idx[:, 1:]
             from scipy.stats import mode as scipy_mode
-            nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
+            nbr_modes = scipy_mode(y_tr[_nbrs], axis=1).mode.ravel()
             # Only correct high-noise-score samples
             threshold = np.percentile(noise_scores, flag_percentile)
             y_smoothed = y_tr.copy()
             y_smoothed[noise_scores >= threshold] = nbr_modes[noise_scores >= threshold]
         else:
-            nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
-            nn.fit(X_tr_s)
-            _, nbr_idx = nn.kneighbors(X_tr_s)
-            nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
+            if similarity_neighbours is None:
+                nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
+                nn.fit(X_tr_s)
+                _, nbr_idx = nn.kneighbors(X_tr_s)
+                _nbrs = nbr_idx[:, 1:]
+            nbr_means = np.mean(y_tr[_nbrs], axis=1)
             y_smoothed = smooth_by_scores(
                 y_tr, noise_scores, nbr_means,
                 alpha=0.5 if strength is None else float(strength),
@@ -850,16 +897,20 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
     if strategy == 'knn_smooth':
         threshold = np.percentile(noise_scores, flag_percentile)
         flagged = noise_scores >= threshold
-        nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
-        nn.fit(X_tr_s)
-        _, nbr_idx = nn.kneighbors(X_tr_s)
+        if similarity_neighbours is None:
+            nn = make_nearest_neighbors(n_neighbors=min(10, len(y_tr) - 1))
+            nn.fit(X_tr_s)
+            _, nbr_idx = nn.kneighbors(X_tr_s)
+            _nbrs = nbr_idx[:, 1:]
+        else:
+            _nbrs = _given_neighbours(min(10, len(y_tr) - 1) - 1)
         if is_clf:
             from scipy.stats import mode as scipy_mode
-            nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
+            nbr_modes = scipy_mode(y_tr[_nbrs], axis=1).mode.ravel()
             y_corrected = y_tr.copy()
             y_corrected[flagged] = nbr_modes[flagged]
         else:
-            nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
+            nbr_means = np.mean(y_tr[_nbrs], axis=1)
             y_corrected = y_tr.copy()
             y_corrected[flagged] = nbr_means[flagged]
         return {'X': X_tr_s, 'y': y_corrected, 'sample_weight': None,
@@ -901,11 +952,20 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # The forest sees the training labels AS THEY ARE, corrupted and all.
         # Fitting it on anything cleaner would hand the neighbour list the
         # answer the experiment is asking it to find.
-        leaves = forest_leaf_ids(X_tr_s, y_tr, is_clf)
-        D = forest_proximity_distance(leaves)
-        np.fill_diagonal(D, np.inf)          # never its own neighbour
-        k = min(10, n_tr - 1)
-        nbr_idx = np.argsort(D, axis=1)[:, :k]
+        _given_forest = (similarity_neighbours is not None
+                         and (similarity_neighbours.get('setting') or {}).get(
+                             'space') == 'forest_proximity')
+        if _given_forest:
+            # The caller's forest_proximity lists: the same forest and the same
+            # row sort as the four lines below (similarity_space.py), held as
+            # a k_max list so no n x n matrix is built here.
+            nbr_idx = _given_neighbours(min(10, n_tr - 1))
+        else:
+            leaves = forest_leaf_ids(X_tr_s, y_tr, is_clf)
+            D = forest_proximity_distance(leaves)
+            np.fill_diagonal(D, np.inf)          # never its own neighbour
+            k = min(10, n_tr - 1)
+            nbr_idx = np.argsort(D, axis=1)[:, :k]
         y_corrected = np.asarray(y_tr).copy()
         if is_clf:
             from scipy.stats import mode as scipy_mode
