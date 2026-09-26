@@ -400,6 +400,12 @@ def _published_source_calls(data_dir=None):
             f"{sdf_path} is not on this machine, so the four published hERG "
             f"collections cannot be read", {'n_groups': 0})
 
+    # pandas 2.2 moved get_adjustment; rdkit's PandasTools still reads the old
+    # name and dies on import (federated_helpers.py has the full note, 2026-09-26).
+    import pandas.io.formats.format as _pd_fmt
+    if not hasattr(_pd_fmt, 'get_adjustment'):
+        from pandas.io.formats.printing import get_adjustment as _ga
+        _pd_fmt.get_adjustment = _ga
     from rdkit.Chem import PandasTools
     from rdkit.Chem.inchi import MolToInchi, InchiToInchiKey
     from rdkit import RDLogger
