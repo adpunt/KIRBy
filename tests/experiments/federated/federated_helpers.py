@@ -60,6 +60,19 @@ for _candidate in _fluid_server_candidates:
 _fluid_path = os.environ.get('FLUID_PATH', _fluid_default)
 sys.path.insert(0, _fluid_path)
 
+# FLuID imports rdkit.Chem.PandasTools, whose PandasPatcher reads
+# pandas.io.formats.format.get_adjustment. pandas 2.2 (constraints.txt pins
+# 2.2.0) moved it to pandas.io.formats.printing, so the import died on the
+# server with AttributeError, 2026-09-26. Point the old name at the new one
+# when it is missing; nothing else reads it.
+try:
+    import pandas.io.formats.format as _pd_fmt
+    if not hasattr(_pd_fmt, 'get_adjustment'):
+        from pandas.io.formats.printing import get_adjustment as _ga
+        _pd_fmt.get_adjustment = _ga
+except Exception:
+    pass
+
 try:
     import FLuID as fluid
     # Patch FLuID's module-level display binding (imported from IPython)
