@@ -1302,6 +1302,31 @@ the same winner the s05 sweep found independently, under a different search
 configuration here, so the absolute numbers differ from the 0.6257 recorded
 below and the ranking does not.
 
+**Voting measured on its own, and the gain grows with the neighbour count.**
+The distance-voting cell at exponent 0 landed on herg_ki 2026-09-26. At
+exponent 0 no feature is weighted in either cell, so the pair differs in the
+voting scheme and nothing else -- a cleaner isolation than s05's, where the
+exponent varied alongside. rmse in pKi, lower better:
+
+    k    uniform vote   distance vote   distance minus uniform
+    5          0.6182          0.6147            -0.0035
+    7          0.6175          0.6093            -0.0082
+    10         0.6265          0.6141            -0.0124
+    15         0.6376          0.6218            -0.0159
+    25         0.6632          0.6402            -0.0230
+
+Distance voting wins at all five counts, and the margin widens monotonically
+from 0.0035 at 5 neighbours to 0.0230 at 25. Both schemes get worse as the
+neighbourhood widens, but uniform degrades faster: 0.6182 to 0.6632 across the
+range against 0.6147 to 0.6402.
+
+The best of all ten numbers is distance voting at 7 neighbours, 0.6093, against
+uniform voting at 7 neighbours at 0.6175. So on this dataset the two settings
+the shipped configuration got wrong -- uniform voting, and 5 or 10 neighbours --
+cost 0.0082 pKi together at their own best.
+
+This is one dataset. caco2 and adme_mdr1 have not landed.
+
 ## The s05 sweep, COMPLETE: 24 of 24 cells
 
 Two voting schemes x four importance exponents x three datasets, with neighbour
