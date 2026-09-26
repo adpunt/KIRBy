@@ -41,6 +41,9 @@
 #   --max-concurrent N       %N on each noise array (default 40)
 #   --account A              default: best fair share on htc (where_to_submit.sh)
 #   --no-hold-stage4
+#   --hold-stage3 / --no-hold-stage3   default: held when stage 2 is not in
+#                            --stages (the trials were run by srun, so there is
+#                            no job for stage 3 to wait on; you release it)
 #   --dry-run                print every sbatch line; submit nothing
 set -uo pipefail
 
@@ -52,7 +55,7 @@ EMAIL=adelaide.punt@stcatz.ox.ac.uk
 BIG_RE='^(nt_|gb_|tcga_|kiba$|bindingdb_kd$|qm9$)'
 
 TRIAL=""; FED_TRIAL="caco2"; FULL=""; FED_FULL="lhasa_herg caco2 logd"
-STAGES="1 2 3 4"; SIM=""; MAXC=40; ACCOUNT=""; HOLD4=true; DRY=false
+STAGES="1 2 3 4"; SIM=""; MAXC=40; ACCOUNT=""; HOLD4=true; HOLD3=""; DRY=false; HOLD_NOW=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --trial)               TRIAL=$2; shift 2 ;;
@@ -64,6 +67,8 @@ while [[ $# -gt 0 ]]; do
         --max-concurrent)      MAXC=$2; shift 2 ;;
         --account)             ACCOUNT=$2; shift 2 ;;
         --no-hold-stage4)      HOLD4=false; shift ;;
+        --hold-stage3)         HOLD3=true; shift ;;
+        --no-hold-stage3)      HOLD3=false; shift ;;
         --dry-run)             DRY=true; shift ;;
         -h|--help)             sed -n '2,45p' "$0"; exit 0 ;;
         *) echo "unknown option $1"; exit 2 ;;
@@ -111,6 +116,7 @@ submit() {
                --mail-user="$EMAIL" --mail-type=FAIL
                --export="ALL,KIRBY_REPO=${REPO},KIRBY_NO_PULL=1,KIRBY_SKIP_INSTALLS=1,KIRBY_NO_COLD_SEARCH=1,PRUNING_MODE=calibrated${exports:+,$exports}")
     [ -n "$deps" ] && cmd+=(--dependency="afterany:${deps}")
+    $HOLD_NOW && cmd+=(--hold)
     cmd+=("$@")
     if $DRY; then
         echo "    ${cmd[*]}" >&2; echo "DRY"
@@ -165,7 +171,9 @@ fi
 
 # ── stage 3 ──
 if [[ " $STAGES " == *" 3 "* ]]; then
-    echo; echo "== stage 3: full suite except noise, after stage 2"
+    if [ -z "$HOLD3" ]; then [[ " $STAGES " == *" 2 "* ]] && HOLD3=false || HOLD3=true; fi
+    HOLD_NOW=$HOLD3
+    echo; echo "== stage 3: full suite except noise$( [ -n "$S2" ] && echo ', after stage 2')$( $HOLD3 && echo ', HELD until you release it')"
     for C in complexity similarity; do
         for D in $FULL; do
             J=$(submit "x_${C}_${D}" "$(mem_for "$D")" "$(join_deps "$(pc_ids "$D")" "$S2")" "" \
@@ -186,6 +194,13 @@ if [[ " $STAGES " == *" 3 "* ]]; then
             "$HERE/opig_one.sh" "$N")
         echo "  opig_${N}: ${J:-FAILED}"
     done < <(bash "$HERE/opig_one.sh" --list | sed 's/reads://')
+fi
+
+HOLD_NOW=false
+if [[ " $STAGES " == *" 3 "* ]] && ${HOLD3:-false} && ! $DRY; then
+    IDS3=$(awk '$1 ~ /^(x_|opig_)/ {print $2}' "$RECORD" | paste -sd, -)
+    echo "  release stage 3 when the srun trials look right:  scontrol -M htc release ${IDS3}"
+    echo "release stage 3: scontrol -M htc release ${IDS3}" >> "$RECORD"
 fi
 
 # ── stage 4 ──
