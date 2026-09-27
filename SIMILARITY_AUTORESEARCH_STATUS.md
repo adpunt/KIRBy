@@ -294,7 +294,7 @@ queued — the owner capped local compute and the current queue is still drainin
 | s06 | method | yes, 3/3 twice | yes | **yes** — 4 levers, 2,628 cells; comparator re-pointed 2026-09-25 to the quantity s06 measures |
 | s08 | investigation | yes, 3/3 twice | no | n/a |
 | s09 | investigation | **yes, ran 2026-09-21 on all three** | no | n/a |
-| s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **partial, sweep in flight** — 3 levers swept (k, q-RASAR k, length-scale start); weight convention and normalize_y still at ONE value. 24 cells queued for exponent x voting x dataset, 0 landed; the 3 uniform-exponent-0 cells are degenerate by construction (every weight is 1 and voting is uniform, so both arms are identical) |
+| s10 | method | **yes, 2026-09-23 — first full run on all three** | yes | **SWEPT 2026-09-27, 24/24 cells** — 4 exponents x 2 voting schemes x 3 datasets, k swept within each. Distance voting wins all 12 matched pairs; exponent 1.0 worst on all three; best exponent dataset-dependent. Weight convention and normalize_y remain at ONE value. The 3 uniform-exponent-0 cells are controls, degenerate by construction |
 | s11 | method | yes, 3/3 at two budgets | yes | **UNBLOCKED 2026-09-24** — all 11 arms, 3 datasets, matched pairs. Length-scale start swept; label direction fixed 2026-09-25 (caco2 was hunting the WRONG end). ⛔ on caco2 two of the three seeds return one area shared by all 11 conditions, so its ranking rests on one seed — see the section above |
 | s12 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the hybrid's margin roughly doubles on all three |
 | s13 | method | yes, 3/3 | yes | **retrieval SWEPT** — neighbour count (9 cells) + coefficient (12 cells). Clustering undefined on a reseed |
@@ -1389,9 +1389,9 @@ the same winner the s05 sweep found independently, under a different search
 configuration here, so the absolute numbers differ from the 0.6257 recorded
 below and the ranking does not.
 
-**The sweep at 20 of 24 cells, 2026-09-27.** Best weighted hybrid arm in each
-cell, rmse in each dataset's own units, lower better. Distance minus uniform is
-negative when distance voting wins:
+**The sweep COMPLETE, 24 of 24 cells, 2026-09-27.** Best weighted hybrid arm in
+each cell, rmse in each dataset's own units, lower better. Distance minus
+uniform is negative when distance voting wins:
 
     herg_ki     uniform  distance   difference
     exponent 0   0.6175    0.6093      -0.0082
@@ -1408,17 +1408,22 @@ negative when distance voting wins:
     adme_mdr1   uniform  distance   difference
     exponent 0   0.5103    0.5066      -0.0037
     exp 0.25     0.5010    0.4979      -0.0031
-    exp 0.5      0.4983        --           --
+    exp 0.5      0.4983    0.4952      -0.0031
+    exp 1.0      0.5062    0.5027      -0.0034
 
-Distance voting wins all ten matched pairs that have both halves, by 0.0031 to
-0.0091. caco2 is complete at 8 of 8 cells and herg_ki at 8 of 8; adme_mdr1 has
-5 of 8. Exponent 1.0 is the worst exponent wherever it has landed: herg_ki
-0.6298 uniform and 0.6222 distance against 0.6172 and 0.6082 at 0.25, caco2
-0.3348 uniform against 0.3291 at 0.5.
+**Distance voting wins all twelve matched pairs**, by 0.0031 to 0.0091. The
+margin is stable within each dataset across all four exponents, so the voting
+scheme and the weighting exponent are independent levers and not an interaction.
 
-Best cell per dataset so far: herg_ki distance at exponent 0.25, 0.6082; caco2
-distance at exponent 0.5, 0.3235; adme_mdr1 distance at exponent 0.25, 0.4979.
-Distance voting on all three, and the best exponent differs by dataset.
+**Exponent 1.0 is worst on all three datasets** under both voting schemes. The
+best exponent is 0.25 on herg_ki and 0.5 on caco2 and adme_mdr1, so it is
+dataset-dependent and has no value worth hardcoding.
+
+Best cell per dataset, all three distance voting:
+
+    herg_ki     distance, exponent 0.25   0.6082
+    caco2       distance, exponent 0.5    0.3235
+    adme_mdr1   distance, exponent 0.5    0.4952
 
 ⛔ These numbers are close enough to the s05 sweep's to need checking before
 either is called a replication of the other. On herg_ki s05 recorded -0.0082,
