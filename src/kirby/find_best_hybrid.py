@@ -8294,6 +8294,12 @@ def _find_best_hybrid_inner(
     # honest setting, in which the hybrid has no more access to ground truth than
     # a base representation does. See the `tier` note below.
     label_noise: Optional[Any] = None,
+    # Scaffold family per molecule, from kirby.noise_spec.assign_noise_groups
+    # (dataset_policy.noise_groups_for) -- NOT `groups`, the fold grouping.
+    # Needed only when label_noise is grouped_wider or grouped_shifted, which
+    # corrupt whole scaffold families; without it those two conditions raise.
+    # Every other condition ignores it.
+    noise_groups: Optional[np.ndarray] = None,
     # An already-built training label column, full length, that the search TRAINS
     # on while it is still SCORED on `labels`. This is the same thing label_noise
     # produces, except the caller built it instead of a NoiseSpec drawing it — a
@@ -8863,7 +8869,13 @@ def _find_best_hybrid_inner(
         # Injected per fold on each fold's training rows, from those rows alone
         # (kirby.noise_spec.inject_training_rows). It used to be one column drawn
         # over every label, so the held-out labels set the amount of noise.
-        _train_labels = TrainingNoise(labels, label_noise, is_clf=_is_clf_noise)
+        if noise_groups is not None and len(noise_groups) != len(labels):
+            raise ValueError(
+                f"find_best_hybrid: noise_groups has {len(noise_groups)} entries "
+                f"and labels has {len(labels)}; pass one scaffold family per "
+                f"molecule, for the whole dataset.")
+        _train_labels = TrainingNoise(labels, label_noise, is_clf=_is_clf_noise,
+                                      groups=noise_groups)
         # The corrupted label column itself, not just the condition's NAME.
         # spec_id records the strategy, the level and the seeds; it records
         # nothing about the numbers those produced. So a change to the injector

@@ -321,6 +321,9 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 n_folds=n_folds,
                 augmentations=augmentations or None,
                 label_noise=spec,
+                # Scaffold families for grouped_wider / grouped_shifted; the
+                # search raised on both before it could be given them.
+                noise_groups=noise_groups,
                 cache=True,
                 verbose=False,
             )
