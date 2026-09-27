@@ -1282,23 +1282,30 @@ varied. Both arms weight the SAME hybrid -- the unweighted number is
 0.3067 in both, to sixteen digits -- so the only thing that differs is which
 importance method multiplies the features inside the distance.
 
-    dataset   weighting method   unweighted   weighted   weighted minus
-                                                            best single rep
-    herg_ki   lightgbm_gain          0.3067     0.2693        -0.0671
-    herg_ki   deeplift               0.3067     0.2424        -0.0940
-    caco2     lightgbm_gain          0.3586     0.3704        +0.0244
-    caco2     deeplift               0.3586     0.2840        -0.0620
+    dataset     weighting method   unweighted   weighted   weighted minus
+                                                              best single rep
+    herg_ki     lightgbm_gain          0.3067     0.2693        -0.0671
+    herg_ki     deeplift               0.3067     0.2424        -0.0940
+    caco2       lightgbm_gain          0.3586     0.3704        +0.0244
+    caco2       deeplift               0.3586     0.2840        -0.0620
+    adme_mdr1   lightgbm_gain          0.3137     0.3071        -0.0414
+    adme_mdr1   deeplift               0.3137     0.2713        -0.0772
 
-Weighting by deeplift is worse than weighting by lightgbm_gain on both
-datasets, and the gap is large: 0.2424 against 0.2693 on herg_ki, 0.2840
-against 0.3704 on caco2.
+All three datasets. Within each one the unweighted number is identical to
+sixteen digits, so the hybrid is the same and only the weighting differs.
 
-caco2 separates them more sharply than herg_ki does. There, lightgbm_gain
-weighting RAISES the correlation, 0.3586 to 0.3704, while deeplift weighting
-drops it to 0.2840. So the same operation on the same features helps under one
-importance method and hurts under the other, and the difference between the two
-weightings, 0.0864, is larger than the whole effect of weighting under
-lightgbm_gain. On herg_ki both weightings fall below the unweighted 0.3067.
+**Weighting by lightgbm_gain beats weighting by deeplift on all three, and the
+gap is larger than the effect of weighting itself.** lightgbm_gain minus
+deeplift, weighted: herg_ki 0.0269, caco2 0.0864, adme_mdr1 0.0358. Under
+lightgbm_gain, weighting moves the correlation by 0.0374, 0.0118 and 0.0066
+respectively. So on caco2 and adme_mdr1 the choice of weighting method matters
+more than whether the features are weighted at all.
+
+caco2 separates them most sharply: lightgbm_gain weighting RAISES the
+correlation, 0.3586 to 0.3704, while deeplift weighting drops it to 0.2840. The
+same operation on the same features helps under one importance method and hurts
+under the other. On herg_ki and adme_mdr1 both weightings fall below unweighted,
+so there the choice is only between degrees of harm.
 
 This is the cleaner half of the deeplift question. The build sweep showed
 deeplift builds a much worse hybrid, 0.1198 against 0.3067 unweighted. Here the
