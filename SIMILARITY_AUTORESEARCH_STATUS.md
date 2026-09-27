@@ -1309,19 +1309,30 @@ same operation on the same features helps under one importance method and hurts
 under the other. On herg_ki and adme_mdr1 both weightings fall below unweighted,
 so there the choice is only between degrees of harm.
 
-**★ The ranking of the three methods REVERSES between the two roles.** On
-herg_ki, building the hybrid: treeshap 0.3136 and lightgbm_gain 0.3067 sit
-together and deeplift trails at 0.1198. Weighting the distance on one fixed
-hybrid: lightgbm_gain 0.2693, then deeplift 0.2424, then treeshap last at
-0.2263. treeshap is the closest match to lightgbm_gain when it chooses which
-features to keep and the worst of the three when it decides how much each one
-weighs.
+**RETRACTED, same day: "the ranking reverses between the two roles".** I wrote
+that from herg_ki alone, where weighting put lightgbm_gain 0.2693 first, then
+deeplift 0.2424, then treeshap last at 0.2263 -- the opposite of the build
+sweep, where treeshap sits with lightgbm_gain. caco2 landed next and does not
+agree: there treeshap weighting gives 0.3670 against lightgbm_gain's 0.3704 and
+deeplift's 0.2840, so treeshap sits with lightgbm_gain exactly as it does when
+building. One dataset was not enough to claim a reversal and I should not have.
 
-So a method that builds a good hybrid does not thereby weight a good distance,
-and the two roles have to be chosen separately. This also corrects the reading
-the build sweep invited, that the two tree-based methods are interchangeable:
-they are, for building, and they are not, for weighting. treeshap on caco2 and
-adme_mdr1 has not landed, so the reversal is one dataset so far.
+What the two landed datasets do support, weighted correlation, best first:
+
+    herg_ki     lightgbm_gain 0.2693   deeplift 0.2424   treeshap 0.2263
+    caco2       lightgbm_gain 0.3704   treeshap 0.3670   deeplift 0.2840
+    adme_mdr1   lightgbm_gain 0.3071   deeplift 0.2713   treeshap not landed
+
+lightgbm_gain is first on all three. Which of the other two comes second flips
+by dataset: treeshap is last on herg_ki and second on caco2, by a margin of
+0.0830 over deeplift there. So the gap between second and third is real and its
+direction is dataset-dependent, which is the same shape as every other lever in
+this suite.
+
+Whether weighting helps at all also splits by dataset and not by method. On
+caco2 both tree-based methods raise the correlation, lightgbm_gain 0.3586 to
+0.3704 and treeshap to 0.3670, while deeplift drops it to 0.2840. On herg_ki all
+three fall below the unweighted 0.3067.
 
 This is the cleaner half of the deeplift question. The build sweep showed
 deeplift builds a much worse hybrid, 0.1198 against 0.3067 unweighted. Here the
