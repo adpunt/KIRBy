@@ -1275,6 +1275,34 @@ uniform against distance voting, and the neighbour list — so nothing here can 
 attributed to the exponent. The within-run pattern across k is clean, because
 inside one run only k varies.
 
+## deeplift as a WEIGHTING method segfaults on three OpenMP runtimes, fixed
+
+2026-09-27. The three s02 weighting jobs each computed lightgbm_gain, printed
+its numbers, then died entering deeplift. Twelve attempts each, twelve
+segfaults, always at the same point, so both reached MAX_RESTARTS and gave up.
+
+The crash report timestamped the same minute names the fault. Three OpenMP
+runtimes are loaded in one process: `libomp.dylib` from a Python wheel,
+`libomp.dylib` from Homebrew at /usr/local/Cellar/libomp/21.1.7 which LightGBM
+links, and `libiomp5.dylib` which torch brings. A worker thread launched by
+libiomp5 calls libomp's `__kmp_suspend_initialize_thread` and dereferences
+0x580. EXC_BAD_ACCESS, SIGSEGV.
+
+So it is not deeplift. deeplift ran cleanly in all three build-importance
+cells, where torch never shares a process with LightGBM. It is the two
+libraries meeting, which only happens when one run computes both weighting
+methods.
+
+Fixed by `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE` on
+the three jobs: with one thread the worker threads in that stack trace are
+never launched. `KIRBY_LGBM_THREADS=1` was already set and does not help, since
+it caps LightGBM's own job count and not the OpenMP runtime. After the fix all
+three jobs pass the point they died at; herg_ki is inside deeplift with zero
+segfaults. Pre-fix logs kept as `<name>.log.presegfix`.
+
+⛔ Any experiment that computes a tree importance and a torch importance in one
+process is exposed to this. Only s02's weighting loop does it today.
+
 ## The s10 exponent-and-voting sweep: the control cell is exact, and k=7 replicates
 
 First of 24 cells landed 2026-09-25: uniform voting at importance exponent 0 on
@@ -1316,15 +1344,16 @@ negative when distance voting wins:
     exponent 0   0.3336    0.3279      -0.0057
     exp 0.25     0.3303    0.3249      -0.0055
     exp 0.5      0.3291    0.3235      -0.0056
-    exp 1.0      0.3348        --           --
+    exp 1.0      0.3348    0.3303      -0.0045
 
     adme_mdr1   uniform  distance   difference
     exponent 0   0.5103    0.5066      -0.0037
     exp 0.25     0.5010    0.4979      -0.0031
     exp 0.5      0.4983        --           --
 
-Distance voting wins all nine matched pairs that have both halves, by 0.0031 to
-0.0091. Exponent 1.0 is the worst exponent wherever it has landed: herg_ki
+Distance voting wins all ten matched pairs that have both halves, by 0.0031 to
+0.0091. caco2 is complete at 8 of 8 cells and herg_ki at 8 of 8; adme_mdr1 has
+5 of 8. Exponent 1.0 is the worst exponent wherever it has landed: herg_ki
 0.6298 uniform and 0.6222 distance against 0.6172 and 0.6082 at 0.25, caco2
 0.3348 uniform against 0.3291 at 0.5.
 
