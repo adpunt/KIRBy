@@ -884,90 +884,9 @@ Across representations, SNS correlated at $\rho > 0.90$ with the ECFP4 fingerpri
 To assess the interaction between uncertainty estimation and label noise, we posed three questions. First, whether uncertainty rise with label noise, as measured by the mean $u_i$ over held-out molecules at the highest noise level
 divided by its value with no added noise, in each replicate or fold. The second pertains to models who report separate aleatoric and epistemic components. We divided the increase of mean epistemic uncertainty between the highest level of noise and clean labels by the mean of the aleatoric component to determine how each responds to label noise. A ratio near 0 means the added noise was attributed to the labels while a ratio of 1 or above means the epistemic component grew as much or more. We also compared the mean aleatoric component with the standard deviation of the injected noise. The third question we had was whether per-sample uncertainty values track injected label noise, as measured by the Spearman correlation between $u_i$ and $|\epsilon_i|$ over out-of-fold training molecules, per fold and per noise level. We also report the Spearman correlation between $u_i$ and the absolute error of the prediction. Finally, we asked whether dividing a molecule's out-of-fold absolute error by $u_i$ ranks the corrupted labels better than the error alone, and report the difference between the two Spearman correlations with $|\epsilon_i|$.
 
-% [MOVED] from Chapter 2, Evaluation methodology. OLD STUDY: NDS, Kendall's W, the R^2 <= 0.6 gate. Superseded by the
-% [PAPER] text above; kept here for you to delete or salvage.
-Pairwise statistical comparisons between deterministic and probabilistic architecture counterparts (e.g., NN-$\alpha$ vs NN-$\alpha$ BNN variants, RF vs QRF) were conducted using the Wilcoxon signed-rank test, with $\alpha = 0.05$ (two-sided). To assess whether model rankings remain consistent across different noise injection strategies, we computed Kendall's coefficient of concordance (Kendall's W), which ranges from 0 (no agreement) to 1 (complete agreement). Values above 0.7 indicate strong agreement in rankings across strategies.
-
-% Edit mark
-To evaluate the effect of label noise, we examined model performance degradation under increasing artificial noise with $\sigma \in \{0, 0.1, 0.2, \ldots, 1.0\}$ using the Noise Degradation Slope (NDS), calculated as the slope of R$^2$ versus noise level:
-$$
-\text{NDS} = \frac{dR^2}{d\sigma}.
-$$
-
-Values closer to zero indicate that noise has less of an effect on performance, negative values indicate a higher sensitivity to noise. Positive slopes, which were not observed in this study, would indicate that the noise \textit{improves} model performance. Configurations with baseline R$^2 \leq 0.6$ were excluded from robustness analysis, as poor performance on clean labels tends to remain poor for noisy labels as well, producing misleadingly shallow or even positive slopes that represent poor performance across the board.
-
-A two-way analysis of variance (ANOVA) decomposition was conducted separately for each noise strategy to identify the relative contributions of molecular representation and model architecture choice on both predictive performance and noise robustness. We chose ANOVA with $\eta^2$ effect sizes rather than pairwise significance tests because our primary question is variance attribution: how much of the variation in robustness is explained by model architecture versus molecular representation. Pairwise tests can establish whether two models differ significantly but cannot partition the total variance among factors---the key distinction our analysis requires. This per-strategy approach avoids inappropriate aggregation across fundamentally different noise types. For a given metric $y$ (either $R^2$ at fixed noise or NDS):
-$$
-y_{ijr} = \mu + \alpha_i + \beta_j + (\alpha\beta)_{ij} + \epsilon_{ijr},
-$$
-where $\alpha_i$ represents the effect of model architecture $i$, $\beta_j$ represents the effect of molecular representation $j$, $(\alpha\beta)_{ij}$ is the interaction term, and $\epsilon_{ijr}$ is the residual for replicate $r$.
-
-The proportion of variance explained by each factor was calculated as the effect size $\eta^2$:
-$$
-\eta^2_{\text{factor}} = \frac{SS_{\text{factor}}}{SS_{\text{total}}},
-$$
-using Type I (sequential) sum of squares, where $SS$ denotes the sum of squares. Both factors (model architecture and molecular representation) are treated as fixed effects, and the 10 experimental replicates per scenario provide the error term.
-
-ANOVA relies on the assumption that observations both within and across groups are independence. Across the whole set of models and representations in this study, some pairs produced similar predictions that are not independent. This causes the residual degrees of freedom to increase, while the residual sum of squares barely moves. To handle this issue, we computed pairwise Spearman rank correlations between all models and between all representations across noise strategies. Models whose profiles correlated at $\rho > 0.99$ with another model were excluded, including quantile regression forests (QRF), which were very similar to RF, as well as different NN architectures. The GP model was also excluded because different kernels are used for different molecular representations. This was not a problem with SVM as the RBF was used across all representations. 
-
-Across representations, SNS correlated at $\rho > 0.90$ with the ECFP4 fingerprint and was excluded to avoid inflating representation degrees of freedom, as both encode overlapping circular substructure information. We also computed intraclass correlation coefficients ICC(1,1) for all model pairs. ICC(1,1) measures the proportion of total variance attributable to between-subject differences, with values near 1.0 indicating that two models rank configurations almost identically. The full redundancy and ICC tables are reported in Appendices~\ref{app:noise:sec:model_redundancy}--\ref{app:noise:sec:model_icc}.
-
-\begin{table}[htbp]
-\centering
-\small
-\begin{tabular}{p{2.5cm} p{4.5cm} p{6cm}}
-\toprule
-\textbf{Metric} & \textbf{Definition} & \textbf{Used to assess} \\
-\midrule
-RMSE
-  & $\sqrt{\frac{1}{N}\sum_i (y_i - \hat{y}_i)^2}$
-  & Predictive accuracy (lower is better) \\
-$R^2$
-  & $1 - \frac{\sum_i (y_i - \hat{y}_i)^2}{\sum_i (y_i - \bar{y})^2}$
-  & Variance explained by the model; comparable across datasets and noise levels \\
-NDS
-  & $dR^2 / d\sigma$ (slope of $R^2$ vs $\sigma$)
-  & Robustness to label noise; values near zero indicate stability, more negative values indicate sensitivity \\
-Wilcoxon signed-rank
-  & Paired non-parametric test, $\alpha=0.05$ (two-sided)
-  & Pairwise comparison of probabilistic vs deterministic counterparts (e.g.\ NN-$\alpha$ vs BNN-$\alpha$) \\
-Kendall's $W$
-  & Coefficient of concordance, $[0, 1]$
-  & Stability of model rankings across noise strategies; $W > 0.7$ indicates strong agreement \\
-ANOVA $\eta^2$
-  & $SS_{\text{factor}} / SS_{\text{total}}$ (Type~I)
-  & Variance attribution to model architecture vs molecular representation \\
-ICC(1,1)
-  & Intraclass correlation, $[0, 1]$
-  & Profile-level redundancy between models prior to ANOVA \\
-Spearman's $\rho$
-  & Rank correlation, $[-1, 1]$
-  & Calibration of predicted uncertainty against (i) absolute error and (ii) injected noise magnitude \\
-Coverage
-  & $\frac{1}{N}\sum_i \mathbb{1}[|y_i - \hat{y}_i| \le k\hat{u}_i]$
-  & Fraction of test points whose true value lies within $\hat{y}\pm k\hat{u}$; targets 68\% at $k=1$, 95\% at $k=2$ \\
-ECE
-  & $\sum_b \frac{|B_b|}{N}\,|\bar{u}_b - \bar{e}_b|$
-  & Calibration of predicted uncertainty: deviation between binned predicted uncertainty and mean error (lower is better) \\
-\bottomrule
-\end{tabular}
-\caption{Summary of metrics used in this study, their definitions, and their
-intended interpretation. $\hat{y}_i$ and $\hat{u}_i$ denote the predicted
-value and predicted uncertainty for sample $i$; $\sigma$ is the noise scaling
-factor.}% [XREF 2026-09-27] removed the reference to tab:regression_noise, which no longer exists.
-\label{tab:metrics_summary}
-\end{table}
-
-% [CR 322-326] retention, kept because the outline asks for it as a numbered equation and
-% NI only names it in prose.
-% TODO(latex): line reads `\times 100%.` -- the bare % comments out the period. Preserved
-% verbatim; change to `100\%` when you touch it.
-Retention percentage was also used to measure the proportion of baseline performance preserved in higher-noise conditions:
-$$
-\text{Retention}(\%) = \frac{R^2(\sigma_{\max})}{R^2(\sigma_{\min})} \times 100%.
-$$
-High retention values represent stronger noise robustness. 
-
+% [XREF 2026-09-27] DELETED the earlier study's evaluation text that had moved here from Chapter 2
+% (Wilcoxon/Kendall's W, NDS, the R^2 <= 0.6 gate, the old ANOVA and redundancy paragraphs, the old
+% metrics table, retention). The [PAPER] text above is the current version. Recoverable from git (0d4c798).
 
 \section{Representation governs clean performance, architecture governs robustness}
 
