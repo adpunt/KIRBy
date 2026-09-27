@@ -47,6 +47,12 @@
 %% Figures
 \usepackage{graphicx}
 \usepackage{subcaption}
+% [2026-09-27] float: the appendix items use [H]. graphicspath: their PNGs live in
+% thesis_appendix/noise/figures/ (thesis_appendix/README.md). \aucnorm: used by the Chapter 3
+% text copied from paper.tex, which defines it the same way.
+\usepackage{float}
+\graphicspath{{./}{thesis_appendix/noise/figures/}}
+\newcommand{\aucnorm}{\ensuremath{\mathrm{AUC}_{\mathrm{norm}}}}
 
 %% Drafting aids -- delete \usepackage{todonotes} (and the \todo calls) before submission
 \usepackage[colorinlistoftodos]{todonotes}
@@ -108,8 +114,10 @@ referenced.
 
 \vspace{0.8cm}
 \noindent
-This thesis includes work carried out in collaboration. Chapters~\ref{chap:robustness}
-and~\ref{chap:uq} are adapted from a jointly authored manuscript, Punt, A., Hanser, T.,
+% [2026-09-27] NEW LANGUAGE: was 'Chapters~\ref{chap:robustness} and~\ref{chap:uq} are adapted'; the
+% uncertainty chapter was merged into Chapter 3.
+This thesis includes work carried out in collaboration. Chapter~\ref{chap:robustness}
+is adapted from a jointly authored manuscript, Punt, A., Hanser, T.,
 Werner, S., and Morris, G.M., in preparation for the \textit{Journal of Cheminformatics}.
 A signed Statement of Authorship covering that work is included below. Chapters~\ref{chap:why}
 and~\ref{chap:similarity} include work carried out with Lhasa Limited and with the Oxford Protein

@@ -1,0 +1,44 @@
+% Thesis appendix item: model_icc
+% Seeded on 2026-09-27 from qsar_qm_models/supplementary/items/model_icc.tex by thesis_appendix/seed_from_paper.py.
+% From here on this copy is edited independently of the paper. Rules: thesis_appendix/README.md.
+% The lines below, down to the first blank line, are the PAPER copy's header, kept for
+% provenance. They describe the paper file, not this one: in particular a GENERATED
+% notice there does not apply here, and this copy may be edited by hand.
+% Supplementary item: model_icc
+% Split out of additional_files.tex on 2026-09-27, where it was Additional file 4 (ICC(1,1) (was Supp Table S5)).
+% Content unchanged apart from: the heading line removed (the build writes it), the old
+% 'Table S*/Figure S*' caption prefix replaced by \SuppFile{}, and the label renamed to supp:model_icc.
+% Rules: supplementary/README.md.
+
+\begin{table}[H]
+\centering
+\caption{\textbf{Intraclass correlation coefficients (ICC(1,1)) for model pairs with ICC $\geq 0.5$, assessing within-family consistency of noise degradation slope (NDS) profiles on the QM9 HOMO--LUMO gap.}
+ICC(1,1) measures the proportion of total variance attributable to between-configuration differences; values near 1.0 indicate that two models rank configurations almost identically. Lower (more negative) NDS indicates faster degradation under noise. The Family column groups each pair: ``Tree'' (both tree-based), ``$\alpha$/$\beta$'' (architecture-pair partners such as BNN-$\alpha$/BNN-$\beta$), ``$\alpha$'' (both share the $\alpha$ neural-network backbone), or ``Cross'' (cross-family pair).}
+\label{app:noise:model_icc}
+\small
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Model A} & \textbf{Model B} & \textbf{$n$} & \textbf{ICC(1,1)} & \textbf{Mean $|\Delta$NDS$|$} & \textbf{Family} \\
+\midrule
+LightGBM & XGBoost & 8 & 0.944 & 0.0060 & Tree \\
+BNN-$\alpha$ & BNN-$\beta$ & 6 & 0.846 & 0.0101 & $\alpha$/$\beta$ \\
+QRF & RF & 7 & 0.810 & 0.0216 & Tree \\
+VBLL-$\alpha$ & VBLL-$\beta$ & 4 & 0.782 & 0.0108 & $\alpha$/$\beta$ \\
+QRF & XGBoost & 7 & 0.754 & 0.0157 & Tree \\
+LightGBM & QRF & 7 & 0.743 & 0.0133 & Tree \\
+VBLL-$\alpha$ & LightGBM & 4 & 0.698 & 0.0115 & Cross \\
+VBLL-$\beta$ & SVM & 4 & 0.689 & 0.0133 & Cross \\
+RF & XGBoost & 8 & 0.678 & 0.0212 & Tree \\
+VBLL-$\alpha$ & XGBoost & 4 & 0.656 & 0.0133 & Cross \\
+BNN-$\alpha$ & VBLL-$\alpha$ & 4 & 0.604 & 0.0134 & $\alpha$ \\
+LightGBM & RF & 8 & 0.586 & 0.0244 & Tree \\
+LightGBM & VBLL-$\beta$ & 4 & 0.577 & 0.0174 & Cross \\
+LightGBM & SVM & 8 & 0.561 & 0.0117 & Cross \\
+BNN-$\alpha$ & VBLL-$\beta$ & 4 & 0.552 & 0.0123 & $\alpha$/$\beta$ \\
+VBLL-$\beta$ & XGBoost & 4 & 0.544 & 0.0195 & Cross \\
+VBLL-$\alpha$ & QRF & 4 & 0.540 & 0.0229 & Cross \\
+VBLL-$\alpha$ & SVM & 4 & 0.522 & 0.0124 & Cross \\
+Gauche & VBLL-$\beta$ & 3 & 0.519 & 0.0113 & Cross \\
+\bottomrule
+\end{tabular}
+\end{table}

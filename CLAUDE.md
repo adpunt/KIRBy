@@ -150,3 +150,15 @@ reading the replies, not measuring them.
 - Do not prune the search space for compute. Cutting an axis, arm, budget or dataset
   needs a stated reason: degenerate, broken, or undefined. A theory about why something
   will lose is not a reason.
+
+## Thesis files
+
+- The one thesis outline is `THESIS_OUTLINE.md` in this repo, next to `thesis.tex`. There is no
+  other live outline; `~/Documents/Theses/THESIS_OUTLINE_2026-06-10_original.md` is an archive.
+- Appendix tables and figures live one per file in `thesis_appendix/` (read
+  `thesis_appendix/README.md` first). They are copies of the NoiseInject paper's Additional files
+  (`qsar_qm_models/supplementary/`), seeded once and then edited separately. Never cite one by a
+  typed number; use its `app:noise:sec:<name>` label.
+- Comments marked `% [SPLIT 2026-09-27]` in `thesis.tex` record text that was moved or newly
+  written when the uncertainty chapter was merged into Chapter 3 and the Background/Methods split
+  was made.

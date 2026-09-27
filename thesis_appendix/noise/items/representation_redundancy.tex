@@ -1,0 +1,63 @@
+% Thesis appendix item: representation_redundancy
+% Seeded on 2026-09-27 from qsar_qm_models/supplementary/items/representation_redundancy.tex by thesis_appendix/seed_from_paper.py.
+% From here on this copy is edited independently of the paper. Rules: thesis_appendix/README.md.
+% The lines below, down to the first blank line, are the PAPER copy's header, kept for
+% provenance. They describe the paper file, not this one: in particular a GENERATED
+% notice there does not apply here, and this copy may be edited by hand.
+% Supplementary item: representation_redundancy
+% Split out of additional_files.tex on 2026-09-27, where it was Additional file 3 (Pairwise representation NDS correlations (was Supp Table S4)).
+% Content unchanged apart from: the heading line removed (the build writes it), the old
+% 'Table S*/Figure S*' caption prefix replaced by \SuppFile{}, and the label renamed to supp:representation_redundancy.
+% Rules: supplementary/README.md.
+
+{\scriptsize
+\begin{longtable}{llccc}
+\caption{\textbf{Pairwise Spearman rank correlations between representation noise degradation slope (NDS) profiles on the QM9 HOMO--LUMO gap.}
+``Rep A'' and ``Rep B'' label each pair of molecular representations, both treated symmetrically. Checkmarks indicate pairs where one representation was excluded from the ANOVA.}
+\label{app:noise:representation_redundancy}\\
+\toprule
+\textbf{Rep.\ A} & \textbf{Rep.\ B} & \textbf{$n$} & \textbf{$\rho$} & \textbf{Excluded} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Rep.\ A} & \textbf{Rep.\ B} & \textbf{$n$} & \textbf{$\rho$} & \textbf{Excluded} \\
+\midrule
+\endhead
+ECFP4 & Morgan & 60 & 0.995 & \checkmark \\
+MHGGNN & Morgan & 48 & 0.994 & \checkmark \\
+Rand.~SMILES & SMILES & 16 & 0.994 & \checkmark \\
+Rand.~SMILES & SNS & 16 & 0.994 & \checkmark \\
+ECFP4 & MHGGNN & 54 & 0.993 &  \\
+ECFP4 & SNS & 56 & 0.992 & \checkmark \\
+Morgan & SNS & 52 & 0.992 & \checkmark \\
+MHGGNN & SNS & 44 & 0.991 & \checkmark \\
+PDV & ECFP4 & 72 & 0.990 &  \\
+PDV & MHGGNN & 48 & 0.989 &  \\
+SMILES & SNS & 52 & 0.988 & \checkmark \\
+Morgan & Rand.~SMILES & 16 & 0.988 & \checkmark \\
+Morgan & SMILES & 54 & 0.988 & \checkmark \\
+PDV & Morgan & 54 & 0.986 & \checkmark \\
+PDV & Rand.~SMILES & 12 & 0.986 & \checkmark \\
+PDV & SNS & 50 & 0.984 & \checkmark \\
+ECFP4 & SMILES & 72 & 0.984 &  \\
+Mol2Vec & Morgan & 48 & 0.982 & \checkmark \\
+MHGGNN & Mol2Vec & 54 & 0.982 &  \\
+ECFP4 & Mol2Vec & 54 & 0.982 &  \\
+PDV & PDV (binary) & 72 & 0.980 & \checkmark \\
+MHGGNN & SMILES & 48 & 0.980 &  \\
+PDV & Mol2Vec & 48 & 0.979 &  \\
+ECFP4 & Rand.~SMILES & 16 & 0.979 & \checkmark \\
+PDV & SMILES & 66 & 0.978 &  \\
+MHGGNN & PDV (binary) & 54 & 0.972 & \checkmark \\
+Mol2Vec & SNS & 44 & 0.969 & \checkmark \\
+Mol2Vec & SMILES & 48 & 0.966 &  \\
+ECFP4 & PDV (binary) & 78 & 0.965 & \checkmark \\
+Morgan & PDV (binary) & 60 & 0.962 & \checkmark \\
+PDV (binary) & SNS & 56 & 0.961 & \checkmark \\
+Mol2Vec & PDV (binary) & 54 & 0.956 & \checkmark \\
+MHGGNN & Rand.~SMILES & 16 & 0.956 & \checkmark \\
+PDV (binary) & SMILES & 72 & 0.941 & \checkmark \\
+PDV (binary) & Rand.~SMILES & 16 & 0.929 & \checkmark \\
+Mol2Vec & Rand.~SMILES & 16 & 0.891 & \checkmark \\
+\bottomrule
+\end{longtable}}

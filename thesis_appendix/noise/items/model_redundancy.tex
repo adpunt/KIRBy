@@ -1,0 +1,85 @@
+% Thesis appendix item: model_redundancy
+% Seeded on 2026-09-27 from qsar_qm_models/supplementary/items/model_redundancy.tex by thesis_appendix/seed_from_paper.py.
+% From here on this copy is edited independently of the paper. Rules: thesis_appendix/README.md.
+% The lines below, down to the first blank line, are the PAPER copy's header, kept for
+% provenance. They describe the paper file, not this one: in particular a GENERATED
+% notice there does not apply here, and this copy may be edited by hand.
+% Supplementary item: model_redundancy
+% Split out of additional_files.tex on 2026-09-27, where it was Additional file 2 (Pairwise model NDS correlations (was Supp Table S3)).
+% Content unchanged apart from: the heading line removed (the build writes it), the old
+% 'Table S*/Figure S*' caption prefix replaced by \SuppFile{}, and the label renamed to supp:model_redundancy.
+% Rules: supplementary/README.md.
+
+{\scriptsize
+\begin{longtable}{llccc}
+\caption{\textbf{Pairwise Spearman rank correlations between model noise degradation slope (NDS) profiles on the QM9 HOMO--LUMO gap ($\rho \geq 0.95$).}
+``Model A'' and ``Model B'' label each pair, both treated symmetrically. Checkmarks indicate pairs where one model was excluded from the ANOVA due to near-redundancy. Gauche (RBF) pairs omitted (all $\rho = 1.0$, $n = 6$, PDV-only artifact).}
+\label{app:noise:model_redundancy}\\
+\toprule
+\textbf{Model A} & \textbf{Model B} & \textbf{$n$} & \textbf{$\rho$} & \textbf{Excluded} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Model A} & \textbf{Model B} & \textbf{$n$} & \textbf{$\rho$} & \textbf{Excluded} \\
+\midrule
+\endhead
+VBLL-$\beta$ & NGBoost & 18 & 0.998 &  \\
+LightGBM & XGBoost & 46 & 0.998 &  \\
+Gauche & VBLL-$\beta$ & 18 & 0.996 & \checkmark \\
+QRF & RF & 40 & 0.995 & \checkmark \\
+VBLL-$\alpha$ & LightGBM & 24 & 0.992 &  \\
+RF & XGBoost & 46 & 0.989 &  \\
+NGBoost & XGBoost & 40 & 0.988 &  \\
+NGBoost & RF & 40 & 0.987 &  \\
+LightGBM & RF & 46 & 0.986 &  \\
+VBLL-$\beta$ & SVM & 24 & 0.986 &  \\
+QRF & XGBoost & 40 & 0.986 & \checkmark \\
+NGBoost & QRF & 34 & 0.986 & \checkmark \\
+VBLL-$\alpha$ & NGBoost & 18 & 0.986 &  \\
+VBLL-$\alpha$ & XGBoost & 24 & 0.984 &  \\
+LightGBM & NGBoost & 40 & 0.984 &  \\
+LightGBM & QRF & 40 & 0.984 & \checkmark \\
+VBLL-$\alpha$ & VBLL-$\beta$ & 24 & 0.983 &  \\
+NN-$\alpha$ & NN-$\beta$ & 52 & 0.983 &  \\
+LightGBM & SVM & 46 & 0.982 &  \\
+BNN-$\beta$ & SVM & 34 & 0.981 &  \\
+VBLL-$\alpha$ & SVM & 24 & 0.979 &  \\
+BNN-$\alpha$ & VBLL-$\beta$ & 24 & 0.979 &  \\
+VBLL-$\alpha$ & QRF & 24 & 0.978 & \checkmark \\
+SVM & XGBoost & 46 & 0.978 &  \\
+BNN-$\alpha$ & BNN-$\beta$ & 36 & 0.977 &  \\
+BNN-$\alpha$ & SVM & 34 & 0.976 &  \\
+VBLL-$\alpha$ & Gauche & 18 & 0.975 & \checkmark \\
+VBLL-$\alpha$ & RF & 24 & 0.975 &  \\
+QRF & SVM & 40 & 0.974 & \checkmark \\
+BNN-$\alpha$ & VBLL-$\alpha$ & 24 & 0.974 &  \\
+LightGBM & VBLL-$\beta$ & 24 & 0.973 &  \\
+VBLL-$\alpha$ & BNN-$\beta$ & 24 & 0.972 &  \\
+Gauche & SVM & 40 & 0.972 & \checkmark \\
+Gauche & XGBoost & 44 & 0.970 & \checkmark \\
+NGBoost & SVM & 40 & 0.970 &  \\
+NN-$\alpha$ & BNN-$\beta$ & 36 & 0.970 &  \\
+Gauche & LightGBM & 42 & 0.969 & \checkmark \\
+RF & SVM & 46 & 0.969 &  \\
+BNN-$\beta$ & VBLL-$\beta$ & 24 & 0.968 &  \\
+VBLL-$\beta$ & QRF & 24 & 0.966 & \checkmark \\
+NN-$\alpha$ & BNN-$\alpha$ & 36 & 0.965 &  \\
+VBLL-$\beta$ & XGBoost & 24 & 0.965 &  \\
+NN-$\beta$ & SVM & 46 & 0.962 &  \\
+NN-$\alpha$ & SVM & 46 & 0.960 &  \\
+Gauche & NGBoost & 34 & 0.959 & \checkmark \\
+LightGBM & BNN-$\beta$ & 36 & 0.959 &  \\
+BNN-$\alpha$ & NN-$\beta$ & 36 & 0.958 &  \\
+BNN-$\alpha$ & QRF & 28 & 0.956 & \checkmark \\
+Gauche & QRF & 34 & 0.956 & \checkmark \\
+VBLL-$\beta$ & RF & 24 & 0.955 &  \\
+Gauche & RF & 40 & 0.954 & \checkmark \\
+BNN-$\beta$ & XGBoost & 34 & 0.953 &  \\
+BNN-$\beta$ & QRF & 28 & 0.952 & \checkmark \\
+NN-$\alpha$ & VBLL-$\beta$ & 24 & 0.952 &  \\
+NN-$\beta$ & BNN-$\beta$ & 36 & 0.952 &  \\
+BNN-$\alpha$ & LightGBM & 36 & 0.951 &  \\
+NN-$\beta$ & VBLL-$\beta$ & 24 & 0.950 &  \\
+BNN-$\alpha$ & Gauche & 30 & 0.950 & \checkmark \\
+\bottomrule
+\end{longtable}}
