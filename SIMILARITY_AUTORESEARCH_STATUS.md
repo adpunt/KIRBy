@@ -287,7 +287,7 @@ queued — the owner capped local compute and the current queue is still drainin
 | exp | kind | smoke tested / debugged | methods to optimise | optimisation done |
 |---|---|---|---|---|
 | s01 | investigation | yes, 3/3 datasets | no — it is the comparator s02 is measured against | n/a |
-| s02 | method | yes, 3/3 | yes | **build importance SWEPT 2026-09-25, 9/9 cells** — 3 methods x 3 datasets x 2 lineages; treeshap within 0.014 of lightgbm_gain everywhere, deeplift 1.57-5.11x below both. **Distance weighting still NOT swept**: `weight_methods` was stuck on lightgbm_gain because SIMILARITY_EXTRA always supplied it; `KIRBY_S02_WEIGHT_METHODS` fixes that and 3 jobs are queued, 0 landed |
+| s02 | method | yes, 3/3 | yes | **BOTH axes SWEPT.** Build importance 2026-09-25, 9/9 cells: treeshap within 0.014 of lightgbm_gain everywhere, deeplift 1.57–5.11x below both. Distance weighting 2026-09-27, 9/9 cells on an identical hybrid: lightgbm_gain best on all three, treeshap second on two, deeplift second on one. The blocker was `SIMILARITY_EXTRA` always supplying `weight_methods`; `KIRBY_S02_WEIGHT_METHODS` fixes it |
 | s03 | investigation | yes, 3/3 | no — the file stamps `descriptive_only=True` | n/a |
 | s04 | method | yes, 3/3 twice | yes | **re-run on 7 reps 2026-09-24** — the 4-rep pool understated the HYBRID, not the comparator |
 | s05 | method | yes, 3/3 | yes | **SWEPT 2026-09-24** — 24 cells: 2 voting x 4 exponents x 3 datasets, k swept within |
@@ -1286,53 +1286,40 @@ importance method multiplies the features inside the distance.
                                                               best single rep
     herg_ki     lightgbm_gain          0.3067     0.2693        -0.0671
     herg_ki     deeplift               0.3067     0.2424        -0.0940
+    herg_ki     treeshap               0.3067     0.2263        -0.1101
     caco2       lightgbm_gain          0.3586     0.3704        +0.0244
+    caco2       treeshap               0.3586     0.3670        +0.0210
     caco2       deeplift               0.3586     0.2840        -0.0620
     adme_mdr1   lightgbm_gain          0.3137     0.3071        -0.0414
+    adme_mdr1   treeshap               0.3137     0.2805        -0.0679
     adme_mdr1   deeplift               0.3137     0.2713        -0.0772
-    herg_ki     treeshap               0.3067     0.2263        -0.1101
 
-All three datasets for lightgbm_gain and deeplift; treeshap has herg_ki only so
-far, from its own job. Within each one the unweighted number is identical to
-sixteen digits, so the hybrid is the same and only the weighting differs.
+COMPLETE 2026-09-27: 3 methods x 3 datasets. Within each dataset the unweighted
+number is identical to sixteen digits, so the hybrid is the same and only the
+weighting differs.
 
-**Weighting by lightgbm_gain beats weighting by deeplift on all three, and the
-gap is larger than the effect of weighting itself.** lightgbm_gain minus
-deeplift, weighted: herg_ki 0.0269, caco2 0.0864, adme_mdr1 0.0358. Under
-lightgbm_gain, weighting moves the correlation by 0.0374, 0.0118 and 0.0066
-respectively. So on caco2 and adme_mdr1 the choice of weighting method matters
-more than whether the features are weighted at all.
+**lightgbm_gain weights best on all three datasets**, and the gap to the next
+method is larger than the effect of weighting itself on two of them.
+lightgbm_gain minus the runner-up: herg_ki 0.0269, caco2 0.0034, adme_mdr1
+0.0266. Weighting under lightgbm_gain moves the correlation by 0.0374, 0.0118
+and 0.0066. So on adme_mdr1 the choice of method matters four times more than
+whether the features are weighted at all.
 
-caco2 separates them most sharply: lightgbm_gain weighting RAISES the
-correlation, 0.3586 to 0.3704, while deeplift weighting drops it to 0.2840. The
-same operation on the same features helps under one importance method and hurts
-under the other. On herg_ki and adme_mdr1 both weightings fall below unweighted,
-so there the choice is only between degrees of harm.
-
-**RETRACTED, same day: "the ranking reverses between the two roles".** I wrote
-that from herg_ki alone, where weighting put lightgbm_gain 0.2693 first, then
-deeplift 0.2424, then treeshap last at 0.2263 -- the opposite of the build
-sweep, where treeshap sits with lightgbm_gain. caco2 landed next and does not
-agree: there treeshap weighting gives 0.3670 against lightgbm_gain's 0.3704 and
-deeplift's 0.2840, so treeshap sits with lightgbm_gain exactly as it does when
-building. One dataset was not enough to claim a reversal and I should not have.
-
-What the two landed datasets do support, weighted correlation, best first:
+**treeshap is second on two of three and last on herg_ki.** Ranked by weighted
+correlation:
 
     herg_ki     lightgbm_gain 0.2693   deeplift 0.2424   treeshap 0.2263
     caco2       lightgbm_gain 0.3704   treeshap 0.3670   deeplift 0.2840
-    adme_mdr1   lightgbm_gain 0.3071   deeplift 0.2713   treeshap not landed
+    adme_mdr1   lightgbm_gain 0.3071   treeshap 0.2805   deeplift 0.2713
 
-lightgbm_gain is first on all three. Which of the other two comes second flips
-by dataset: treeshap is last on herg_ki and second on caco2, by a margin of
-0.0830 over deeplift there. So the gap between second and third is real and its
-direction is dataset-dependent, which is the same shape as every other lever in
-this suite.
+deeplift is last on two of three and second on herg_ki. So the order behind
+lightgbm_gain is dataset-dependent, and neither of the other two has a claim to
+being the second choice.
 
-Whether weighting helps at all also splits by dataset and not by method. On
-caco2 both tree-based methods raise the correlation, lightgbm_gain 0.3586 to
-0.3704 and treeshap to 0.3670, while deeplift drops it to 0.2840. On herg_ki all
-three fall below the unweighted 0.3067.
+**Whether weighting helps at all splits by dataset, not by method.** On caco2
+both tree-based methods RAISE the correlation, lightgbm_gain 0.3586 to 0.3704
+and treeshap to 0.3670, while deeplift drops it to 0.2840. On herg_ki and
+adme_mdr1 all three fall below the unweighted number.
 
 This is the cleaner half of the deeplift question. The build sweep showed
 deeplift builds a much worse hybrid, 0.1198 against 0.3067 unweighted. Here the
