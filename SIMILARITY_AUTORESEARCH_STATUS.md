@@ -1275,6 +1275,35 @@ uniform against distance voting, and the neighbour list — so nothing here can 
 attributed to the exponent. The within-run pattern across k is clean, because
 inside one run only k varies.
 
+## s02 weighting, first result: the hybrid is identical, the weighting is not
+
+herg_ki landed 2026-09-27, the first cell where `weight_methods` actually
+varied. Both arms weight the SAME hybrid -- the unweighted number is
+0.3067 in both, to sixteen digits -- so the only thing that differs is which
+importance method multiplies the features inside the distance.
+
+    weighting method   hybrid unweighted   hybrid weighted   weighted minus
+                                                             best single rep
+    lightgbm_gain               0.3067            0.2693         -0.0671
+    deeplift                    0.3067            0.2424         -0.0940
+
+Weighting by deeplift is worse than weighting by lightgbm_gain, 0.2424 against
+0.2693, and both are below the unweighted 0.3067. On this dataset weighting the
+distance hurts whichever method does it, and deeplift hurts it more.
+
+This is the cleaner half of the deeplift question. The build sweep showed
+deeplift builds a much worse hybrid, 0.1198 against 0.3067 unweighted. Here the
+hybrid is held fixed and deeplift is still the worse weighting, so the two
+effects are separate and both point the same way.
+
+⛔ treeshap is NOT in this table. It raised
+`'google.protobuf...FieldDescriptor' object has no attribute 'is_repeated'`
+while importing transformers' TensorFlow half, and only when it runs after
+deeplift in the same process -- it succeeded in all three build-importance
+cells, where it runs alone. It now has its own jobs, `s02ts_*`, with no torch
+importance ahead of it. The three `s02wm_*` jobs were narrowed to
+lightgbm_gain and deeplift so their retries stop failing on it.
+
 ## deeplift as a WEIGHTING method segfaults on three OpenMP runtimes, fixed
 
 2026-09-27. The three s02 weighting jobs each computed lightgbm_gain, printed
