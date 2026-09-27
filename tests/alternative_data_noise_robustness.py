@@ -827,6 +827,7 @@ from kirby.representations.molecular import (
     create_chemberta
 )
 from kirby.noise_robustness import robustness_metrics
+from kirby.noise_spec import inject_training_rows
 from noiseInject import CONDITIONS, DoseError, NoiseInjectorRegression
 
 # One definition of each, in a module that does NOT import torch, so the
@@ -2555,14 +2556,15 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
     if _censoring:
         dose_reference_sd = 1.0
     else:
-        dose_reference_sd = float(np.std(_col.y))
+        # The CLEAN TRAINING labels of this fold, as the paper's Methods say.
+        # This was np.std(_col.y), every label in the dataset, so the held-out
+        # labels set how much noise the training labels received (fixed
+        # 2026-09-27).
+        dose_reference_sd = float(np.std(np.asarray(y_train, dtype=float)))
         if not np.isfinite(dose_reference_sd) or dose_reference_sd <= 0:
             raise RunIntegrityError(
                 f"the clean label spread is {dose_reference_sd}, so a "
                 f"level expressed as a fraction of it has no meaning.")
-
-    def _dose(level):
-        return float(level) * dose_reference_sd
 
     # The level-free SHAPE, off the same single column, then indexed. It used to
     # be computed on this fold's arrays with `reference=y_train` and
@@ -2571,8 +2573,13 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
     # whole column keeps that property by construction -- there is one
     # distribution and one affected set -- and needs no reference plumbing.
     pattern_injector = _injector_for(condition, 0.0)
-    _pattern_all = pattern_injector.noise_scale(_col.y, dose_reference_sd,
-                                                groups=_col.groups)
+    # reference / reference_groups: the censoring limit and the grouped-wider
+    # families are the ones the TRAINING labels were given (inject_training_rows).
+    _pattern_all = pattern_injector.noise_scale(
+        _col.y, dose_reference_sd, reference=np.asarray(y_train, dtype=float),
+        groups=_col.groups,
+        reference_groups=(None if _col.groups is None
+                          else _col.groups[_col.train_rows]))
     tr_pattern = _pattern_all[_col.train_rows]
     te_pattern = _pattern_all[_col.test_rows]
 
@@ -2618,11 +2625,19 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, condition, s
         # pairs on a 600-molecule split (RERUN_PLAN.md 3.3a). QM9 has one split
         # and has always drawn once over its training column; this is what
         # matching it means when there are five (3.3b).
-        result = injector.inject_verbose(_col.y, _dose(sigma), groups=_col.groups)
-        y_noisy = result.y_noisy[_col.train_rows]
-        tr_scale = result.noise_scale[_col.train_rows]
-        eps = result.epsilon[_col.train_rows]
-        te_scale = result.noise_scale[_col.test_rows]
+        #
+        # The amount, the censoring limit and the grouped-wider families come
+        # from this fold's clean TRAINING labels (paper.tex, Methods); the random
+        # draws are still made once over the whole column, so a molecule keeps
+        # its draw across folds. Fixed 2026-09-27: all three came from every
+        # label in the dataset.
+        result, _scale_all = inject_training_rows(
+            injector, _col.y, _col.train_rows, sigma, groups=_col.groups,
+            is_censoring=_censoring, return_all_scale=True)
+        y_noisy = result.y_noisy
+        tr_scale = result.noise_scale
+        eps = result.epsilon
+        te_scale = _scale_all[_col.test_rows]
         if provenance is not None:
             provenance[sigma] = result.as_row()
 
@@ -2786,19 +2801,25 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
     if _censoring:
         dose_reference_sd = 1.0
     else:
-        dose_reference_sd = float(np.std(_col.y))
+        # The CLEAN TRAINING labels of this fold, as the paper's Methods say.
+        # This was np.std(_col.y), every label in the dataset, so the held-out
+        # labels set how much noise the training labels received (fixed
+        # 2026-09-27).
+        dose_reference_sd = float(np.std(np.asarray(y_train, dtype=float)))
         if not np.isfinite(dose_reference_sd) or dose_reference_sd <= 0:
             raise RunIntegrityError(
                 f"the clean label spread is {dose_reference_sd}, so a "
                 f"level expressed as a fraction of it has no meaning.")
 
-    def _dose(level):
-        return float(level) * dose_reference_sd
-
     # See run_tree_experiment: one draw over the whole column, then indexed.
     pattern_injector = _injector_for(condition, 0.0)
-    _pattern_all = pattern_injector.noise_scale(_col.y, dose_reference_sd,
-                                                groups=_col.groups)
+    # reference / reference_groups: the censoring limit and the grouped-wider
+    # families are the ones the TRAINING labels were given (inject_training_rows).
+    _pattern_all = pattern_injector.noise_scale(
+        _col.y, dose_reference_sd, reference=np.asarray(y_train, dtype=float),
+        groups=_col.groups,
+        reference_groups=(None if _col.groups is None
+                          else _col.groups[_col.train_rows]))
     tr_pattern = _pattern_all[_col.train_rows]
     te_pattern = _pattern_all[_col.test_rows]
 
@@ -2814,11 +2835,15 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
         injector = _injector_for(condition, sigma)
         # One realisation over the whole column, indexed by dataset position --
         # see run_tree_experiment and RERUN_PLAN.md 3.3b.
-        result = injector.inject_verbose(_col.y, _dose(sigma), groups=_col.groups)
-        y_noisy = result.y_noisy[_col.train_rows]
-        tr_scale = result.noise_scale[_col.train_rows]
-        eps = result.epsilon[_col.train_rows]
-        te_scale = result.noise_scale[_col.test_rows]
+        # Amount, censoring limit and grouped-wider families from the clean
+        # TRAINING labels -- see run_tree_experiment.
+        result, _scale_all = inject_training_rows(
+            injector, _col.y, _col.train_rows, sigma, groups=_col.groups,
+            is_censoring=_censoring, return_all_scale=True)
+        y_noisy = result.y_noisy
+        tr_scale = result.noise_scale
+        eps = result.epsilon
+        te_scale = _scale_all[_col.test_rows]
         if provenance is not None:
             provenance[sigma] = result.as_row()
 
@@ -2856,9 +2881,16 @@ def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
             # indexed, for the same reason the training stream is: a molecule
             # that is validation in one fold and training in another must not
             # carry two different corruptions of the same label.
-            y_val_used = _injector_for(condition, sigma,
-                                       stream='validation').inject_verbose(
-                _col.y, _dose(sigma), groups=_col.groups).y_noisy[_col.val_rows]
+            #
+            # Amount and censoring limit from the clean TRAINING labels
+            # (reference_idx), grouped-wider families chosen among the
+            # validation molecules. Both came from every label in the dataset
+            # until 2026-09-27.
+            y_val_used = inject_training_rows(
+                _injector_for(condition, sigma, stream='validation'),
+                _col.y, _col.val_rows, sigma, groups=_col.groups,
+                is_censoring=_censoring,
+                reference_idx=_col.train_rows).y_noisy
         else:
             y_val_used = y_val
 

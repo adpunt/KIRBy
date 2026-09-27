@@ -396,28 +396,19 @@ def inject_train_labels(y_all, spec, *, train_idx, is_clf=False, groups=None,
     "did the estimator find the corrupted molecules". `provenance` describes the
     whole-column draw, so it is the same row whichever fold asked for it.
 
-    A MOLECULE'S CORRUPTION IS A PROPERTY OF THE MOLECULE
-    -----------------------------------------------------
-    The draw runs ONCE over the whole label column and the training rows are
-    indexed out of the result. It used to run on each fold's training labels, so
-    a molecule got different noise depending on which fold it landed in.
-    Measured on 600 molecules over five scaffold folds at level 0.5: 600 of 600
-    molecules carried more than one corrupted value, under gaussian, outlier_p10,
-    grouped_wider and grouped_shifted alike, and the delivered amount ranged from
-    4.9% apart across folds (gaussian) to 23.9% (grouped_shifted). Drawing once
-    gives 0 of 600 and one delivered amount.
+    WHAT IS TAKEN FROM THE TRAINING LABELS
+    --------------------------------------
+    As the NoiseInject paper's Methods say: the level is a fraction of the
+    standard deviation of this fold's clean TRAINING labels, the censoring limit
+    is set from the clean training labels, and grouped-wider widens families
+    covering 20% of the training molecules. Until 2026-09-27 all three came from
+    the whole label column, so the held-out labels set how the training labels
+    were corrupted. See `kirby.noise_spec.inject_training_rows`.
 
-    Two things follow from the whole-column draw and are not separately
-    negotiable, because there is no fold-free alternative to either:
-      - the amount is solved against the FULL column's clean spread, not the
-        fold's training spread;
-      - the cut-point for a label-keyed condition (censoring) is the full
-        column's quantile, not the fold's.
-
-    This is `RERUN_PLAN.md` 3.3b in ~/repos/qsar_qm_models, settled by the author
-    2026-09-04, and the gate is `tests/test_noise_is_a_property_of_the_molecule.py`.
-    `tests/alternative_data_noise_robustness.py` moved to it at commit dd58f4f;
-    the noise suite moved 2026-09-12.
+    The random draws are still made over the whole column and depend on no label,
+    so a molecule keeps the same draw in every fold it trains in (RERUN_PLAN.md
+    3.3b, 2026-09-04). The gate is
+    `tests/test_noise_is_a_property_of_the_molecule.py`.
 
     Held-out molecules are never read here: only `train_idx` is returned. A
     molecule that is held out in one fold and training in another is corrupted in
@@ -440,8 +431,7 @@ def inject_train_labels(y_all, spec, *, train_idx, is_clf=False, groups=None,
     import warnings
     import numpy as np
     from noiseInject import DoseError, DoseWarning
-    from kirby.noise_spec import make_noisy_labels, make_noisy_labels_verbose, \
-        noise_provenance_row
+    from kirby.noise_spec import make_noisy_train_labels, noise_provenance_row
 
     y_all = np.asarray(y_all)
     train_idx = np.asarray(train_idx)
@@ -455,14 +445,15 @@ def inject_train_labels(y_all, spec, *, train_idx, is_clf=False, groups=None,
                 f"draw runs over the whole column.")
 
     if is_clf:
-        y_noisy_all = make_noisy_labels(y_all, spec, is_clf=True)
-        mask_all = (y_noisy_all != y_all)
-        return (y_noisy_all[train_idx], mask_all[train_idx],
+        y_noisy_train, _ = make_noisy_train_labels(y_all, spec, train_idx,
+                                                   is_clf=True)
+        return (y_noisy_train, y_noisy_train != y_all[train_idx],
                 {'noise_spec_id': spec.spec_id})
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always', DoseWarning)
-        res = make_noisy_labels_verbose(y_all, spec, groups=groups)
+        _, res = make_noisy_train_labels(y_all, spec, train_idx, is_clf=False,
+                                         groups=groups)
     for w in caught:
         if issubclass(w.category, DoseWarning):
             raise DoseError(
@@ -476,13 +467,12 @@ def inject_train_labels(y_all, spec, *, train_idx, is_clf=False, groups=None,
         # one of them that actually moved. For the five shape-only conditions that is
         # all of them — the question of WHERE the noise is is undefined there, not
         # answered with an empty mask.
-        mask_all = np.asarray(res.epsilon) != 0.0
+        mask_train = np.asarray(res.epsilon) != 0.0
     else:
-        mask_all = scale > (scale.min() + 1e-12)
-    y_noisy_all = np.asarray(res.y_noisy)
+        mask_train = scale > (scale.min() + 1e-12)
     prov = noise_provenance_row(res, spec)
-    prov.update(_already_there(dataset_name, y_all, spec))
-    return y_noisy_all[train_idx], mask_all[train_idx], prov
+    prov.update(_already_there(dataset_name, y_all[train_idx], spec))
+    return np.asarray(res.y_noisy), mask_train, prov
 
 
 def _already_there(dataset_name, y_clean, spec):

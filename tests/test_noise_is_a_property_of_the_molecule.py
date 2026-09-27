@@ -13,12 +13,23 @@ fold. RERUN_PLAN.md 3.3a measured the damage on a 600-molecule five-fold split:
 1,688 of 2,400 molecule-fold pairs received different noise from the same
 molecule in an earlier fold.
 
+AMENDED 2026-09-27. The whole-column draw also took the noise amount, the
+censoring limit and the grouped-wider families from every label, held-out ones
+included, where the NoiseInject paper's Methods take all three from the clean
+TRAINING labels. The runner now calls kirby.noise_spec.inject_training_rows: the
+random DRAW is still one per molecule, but the constants that scale it come from
+each fold's training labels, so the injected VALUE differs between folds by that
+constant. What stays a property of the molecule is the draw.
+
 This test fits nothing, needs no data files and does not import torch, so it runs
 on a login node. It runs both schemes on the same folds and asserts:
 
-  * the OLD scheme disagrees with itself across folds -- so the test is measuring
-    something real and would not pass vacuously;
-  * the NEW scheme gives every molecule exactly one value, in every condition;
+  * the OLD per-fold scheme draws differently across folds -- so the test is
+    measuring something real and would not pass vacuously;
+  * the NEW scheme gives every molecule exactly one random draw (the injected
+    error divided by its noise scale), in every condition;
+  * the NEW scheme's training noise does not change when the held-out labels do,
+    and its amount is the level times the TRAINING labels' standard deviation;
   * _ColumnView refuses a mis-threaded index rather than silently handing a
     molecule someone else's noise -- which is the Gaussian-process subsample
     trap in 3.3b.
@@ -41,6 +52,9 @@ sys.path.insert(0, str(HERE))
 # there is still one definition of each.
 import noise_column as runner
 
+sys.path.insert(0, str(HERE.parent / 'src'))
+from kirby.noise_spec import inject_training_rows  # noqa: E402
+
 N_MOL = 600
 N_FOLDS = 5
 LEVEL = 0.5
@@ -61,28 +75,51 @@ def fixture():
     return y, groups
 
 
-def epsilon_per_fold(y, groups, condition, per_fold):
-    """{molecule position: set of epsilons it received across the folds}.
+def draw_per_fold(y, groups, condition, per_fold):
+    """{molecule position: set of random draws it received across the folds}.
+
+    The draw is the injected error divided by the molecule's noise scale: the
+    level-free random number, with the training-derived constants divided out.
 
     per_fold=True reproduces the old scheme -- inject on the fold's own training
-    labels. per_fold=False is the new one -- inject over the whole column and
-    index.
+    labels, a fresh draw per fold. per_fold=False is what the runner does now,
+    inject_training_rows.
     """
     seen = {}
     gkf = GroupKFold(n_splits=N_FOLDS)
-    sd = float(np.std(y))
     for train_rows, _test_rows in gkf.split(y, y, groups):
         inj = runner._injector_for(condition, LEVEL)
         if per_fold:
             res = inj.inject_verbose(y[train_rows], LEVEL * float(np.std(y[train_rows])),
                                      groups=groups[train_rows])
-            eps = np.asarray(res.epsilon)
         else:
-            res = inj.inject_verbose(y, LEVEL * sd, groups=groups)
-            eps = np.asarray(res.epsilon)[train_rows]
-        for pos, e in zip(train_rows, eps):
-            seen.setdefault(int(pos), set()).add(round(float(e), 12))
+            res = inject_training_rows(inj, y, train_rows, LEVEL, groups=groups)
+        draw = np.asarray(res.epsilon) / np.asarray(res.noise_scale)
+        for pos, d in zip(train_rows, draw):
+            seen.setdefault(int(pos), set()).add(round(float(d), 9))
     return seen
+
+
+def held_out_labels_leak(y, groups, condition):
+    """Problems found when the held-out labels change: [] if none."""
+    problems = []
+    gkf = GroupKFold(n_splits=N_FOLDS)
+    for fold, (train_rows, test_rows) in enumerate(gkf.split(y, y, groups)):
+        base = inject_training_rows(runner._injector_for(condition, LEVEL),
+                                    y, train_rows, LEVEL, groups=groups)
+        y2 = y.copy()
+        y2[test_rows] = y2[test_rows] * 3.0 + 10.0
+        moved = inject_training_rows(runner._injector_for(condition, LEVEL),
+                                     y2, train_rows, LEVEL, groups=groups)
+        if not np.array_equal(base.epsilon, moved.epsilon):
+            problems.append(f"{condition} fold {fold}: the training noise changed "
+                            f"when only the held-out labels did")
+        want = LEVEL * float(np.std(y[train_rows]))
+        if not np.isclose(base.target_dose_label_units, want):
+            problems.append(f"{condition} fold {fold}: asked for "
+                            f"{base.target_dose_label_units:.6f}, the level times the "
+                            f"training standard deviation is {want:.6f}")
+    return problems
 
 
 def report(condition, seen, label):
@@ -100,14 +137,18 @@ def main():
           f"{len(set(groups))} scaffold groups\n")
 
     for condition in CONDITIONS:
-        old = report(condition, epsilon_per_fold(y, groups, condition, True), 'per fold (old)')
-        new = report(condition, epsilon_per_fold(y, groups, condition, False), 'one column (new)')
+        old = report(condition, draw_per_fold(y, groups, condition, True), 'per fold (old)')
+        new = report(condition, draw_per_fold(y, groups, condition, False), 'training (new)')
 
         if new != 0:
             FAILURES.append(
                 f"{condition}: {new} molecule(s) received more than one distinct "
-                f"noise value under the one-column draw. A molecule's corruption "
-                f"is supposed to be a property of the molecule (3.3b).")
+                f"random draw. A molecule's draw is supposed to be a property of "
+                f"the molecule (3.3b).")
+        leaks = held_out_labels_leak(y, groups, condition)
+        print(f"    held-out labels changed: "
+              f"{'training noise unchanged, amount from training labels' if not leaks else leaks[0]}")
+        FAILURES.extend(leaks)
         if old == 0:
             FAILURES.append(
                 f"{condition}: the OLD per-fold scheme agreed with itself, so this "
@@ -143,8 +184,9 @@ def main():
         for f in FAILURES:
             print(f"  - {f}")
         return 1
-    print("PASS — every molecule carries one injected noise value across all folds, "
-          "in every condition, and a mis-threaded index is refused.")
+    print("PASS — every molecule carries one random draw across all folds, in every "
+          "condition; the training noise ignores the held-out labels; and a "
+          "mis-threaded index is refused.")
     return 0
 
 
