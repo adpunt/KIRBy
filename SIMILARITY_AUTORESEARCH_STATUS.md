@@ -1302,6 +1302,44 @@ the same winner the s05 sweep found independently, under a different search
 configuration here, so the absolute numbers differ from the 0.6257 recorded
 below and the ranking does not.
 
+**The sweep at 20 of 24 cells, 2026-09-27.** Best weighted hybrid arm in each
+cell, rmse in each dataset's own units, lower better. Distance minus uniform is
+negative when distance voting wins:
+
+    herg_ki     uniform  distance   difference
+    exponent 0   0.6175    0.6093      -0.0082
+    exp 0.25     0.6172    0.6082      -0.0091
+    exp 0.5      0.6183    0.6120      -0.0063
+    exp 1.0      0.6298    0.6222      -0.0076
+
+    caco2       uniform  distance   difference
+    exponent 0   0.3336    0.3279      -0.0057
+    exp 0.25     0.3303    0.3249      -0.0055
+    exp 0.5      0.3291    0.3235      -0.0056
+    exp 1.0      0.3348        --           --
+
+    adme_mdr1   uniform  distance   difference
+    exponent 0   0.5103    0.5066      -0.0037
+    exp 0.25     0.5010    0.4979      -0.0031
+    exp 0.5      0.4983        --           --
+
+Distance voting wins all nine matched pairs that have both halves, by 0.0031 to
+0.0091. Exponent 1.0 is the worst exponent wherever it has landed: herg_ki
+0.6298 uniform and 0.6222 distance against 0.6172 and 0.6082 at 0.25, caco2
+0.3348 uniform against 0.3291 at 0.5.
+
+Best cell per dataset so far: herg_ki distance at exponent 0.25, 0.6082; caco2
+distance at exponent 0.5, 0.3235; adme_mdr1 distance at exponent 0.25, 0.4979.
+Distance voting on all three, and the best exponent differs by dataset.
+
+⛔ These numbers are close enough to the s05 sweep's to need checking before
+either is called a replication of the other. On herg_ki s05 recorded -0.0082,
+-0.0091, -0.0063 and -0.0070 across the four exponents; this sweep gives
+-0.0082, -0.0091, -0.0063 and -0.0076. Three of the four match to four
+decimals. Whether s05 and s10 are scoring the same quantity here, or two
+quantities that happen to agree, is NOT established, and nothing above should
+be presented as two independent measurements until it is.
+
 **Voting measured on its own, and the gain grows with the neighbour count.**
 The distance-voting cell at exponent 0 landed on herg_ki 2026-09-26. At
 exponent 0 no feature is weighted in either cell, so the pair differs in the
