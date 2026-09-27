@@ -1290,8 +1290,10 @@ importance method multiplies the features inside the distance.
     caco2       deeplift               0.3586     0.2840        -0.0620
     adme_mdr1   lightgbm_gain          0.3137     0.3071        -0.0414
     adme_mdr1   deeplift               0.3137     0.2713        -0.0772
+    herg_ki     treeshap               0.3067     0.2263        -0.1101
 
-All three datasets. Within each one the unweighted number is identical to
+All three datasets for lightgbm_gain and deeplift; treeshap has herg_ki only so
+far, from its own job. Within each one the unweighted number is identical to
 sixteen digits, so the hybrid is the same and only the weighting differs.
 
 **Weighting by lightgbm_gain beats weighting by deeplift on all three, and the
@@ -1306,6 +1308,20 @@ correlation, 0.3586 to 0.3704, while deeplift weighting drops it to 0.2840. The
 same operation on the same features helps under one importance method and hurts
 under the other. On herg_ki and adme_mdr1 both weightings fall below unweighted,
 so there the choice is only between degrees of harm.
+
+**★ The ranking of the three methods REVERSES between the two roles.** On
+herg_ki, building the hybrid: treeshap 0.3136 and lightgbm_gain 0.3067 sit
+together and deeplift trails at 0.1198. Weighting the distance on one fixed
+hybrid: lightgbm_gain 0.2693, then deeplift 0.2424, then treeshap last at
+0.2263. treeshap is the closest match to lightgbm_gain when it chooses which
+features to keep and the worst of the three when it decides how much each one
+weighs.
+
+So a method that builds a good hybrid does not thereby weight a good distance,
+and the two roles have to be chosen separately. This also corrects the reading
+the build sweep invited, that the two tree-based methods are interchangeable:
+they are, for building, and they are not, for weighting. treeshap on caco2 and
+adme_mdr1 has not landed, so the reversal is one dataset so far.
 
 This is the cleaner half of the deeplift question. The build sweep showed
 deeplift builds a much worse hybrid, 0.1198 against 0.3067 unweighted. Here the
