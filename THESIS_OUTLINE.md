@@ -397,300 +397,1101 @@ their old headings, followed by the merged uncertainty section.
 - thesis.tex: the old uncertainty chapter's conclusions were appended here, unchanged.
 
 
-CHAPTER 4  A METHOD FOR BUILDING ADAPTIVE HYBRID REPRESENTATIONS  (about 26 to 32 pages)
-The method chapter for the second half, introduced once and referred back to thereafter.
-Source: the method's implementation and the design experiments behind its defaults.
+CHANGES ON 2026-09-27 (second half: Chapters 4 to 7, rewritten from brainDumpOutline.txt)
+- Old Chapters 4 (method), 5 (why hybrids help) and 6 (similarity and label noise) are replaced
+  by three new chapters: 4, the flaws of the similarity assumption (a motivation chapter, no new
+  method); 5, building adaptive hybrid representations (method, datasets, complexity, OPIG and
+  federated results); 6, hybrid representations applied to similarity and label noise. Chapter 7
+  keeps its place and now carries the closing argument from the brain dump.
+- Old 4.1 (the LNL motivation) moves to 4.4. Old 4.2 to 4.6 move into 5.2 and 5.3. Old 5.2 to
+  5.7 fold into 5.5 to 5.8. Old 6.2 and 6.3 fold into 6.2 to 6.5.
+- Every Chapter 4 fact about the engine was re-checked against src/ on 2026-09-27. The old
+  outline was wrong in 15 places (greedy, mlp, ridge, per-model budget caps, "top-3", evaluator
+  list, pruning, blueprint contents); the corrected values are in 5.2.
+- Section 1.5 (the other chat's half) still describes the old Chapters 4 to 7 and needs the new
+  four. So do 1.3 (no questions for Chapters 4 to 6) and the Abbreviations list (new terms:
+  budget, allocation method, internal evaluator, downstream model, blueprint, objective, LNL).
 
-4.1  Motivation: the failure of similarity-based noise handling
-- An exploratory study adapted twelve learning-with-noisy-labels methods to regression
-  (tested over 221 configurations across methods, loss functions, distance metrics, and
-  representations) and found that those relying on molecular distance or similarity were the
-  worst performers; every one of the twenty worst-performing configurations for noise
-  retention used a distance metric, across standard metrics (Euclidean, Manhattan, cosine,
-  Mahalanobis) and the chemistry-aware Tanimoto coefficient, and molecular representation
-  choice explained even less variance under these methods.
-- The likely cause, in the terms of Definition 2.2: a single representation carries many
-  uninformative dimensions, so pairwise distances are dominated by noise and the
-  similarity assumption breaks down. This is the motivation for the method; it is
-  exploratory, not a reported result, and the noisy-label question is measured properly in
-  Chapter 6.
+MARKERS USED BELOW (grep for them)
+- [DIAGRAM ...]   a figure for Adelaide to draw, with what it needs to show.
+- TODO(lit)       literature still to find; the claim is hers, the sources are not yet in refs.bib.
+- TODO(prelim)    a preliminary number from a laptop run on a cut-down search. Every one of these
+                  will be replaced by the server results. The method next to it is final.
+- CHECK           two sources disagree (a file against the code, or the "Promising experiments"
+                  file against its own logs). Says what each side says; not resolved.
 
-4.2  The adaptive hybrid representation
-- We define the adaptive hybrid representation (thereafter the hybrid representation, or
-  the method where unambiguous): rather than choosing one representation, it assembles a
-  single feature set by selecting the most informative features from several
-  representations at once, chosen for the dataset and model in hand, before the final model
-  is trained. It prepares better inputs for standard downstream models rather than
-  introducing a new model.
-- The idea of combining representations is not itself new; the contribution is that the
-  method poses this combination as a search-space optimisation problem and solves it
-  automatically. The space is the product of component representations, feature-importance
-  methods, allocation methods, internal evaluators, downstream models, and feature budgets,
-  and per-fold caching is what makes the search over it affordable. The formulation is not
-  specific to chemistry: it applies to any supervised learning task for which several
-  representations of the same inputs are available.
-- Review of existing approaches: multi-view learning shows that naive concatenation of
-  views overfits on small samples (Xu, Tao and Xu 2013); prior QSAR fusion either combines
-  predictions (Valsecchi et al. 2020), concatenates whole fingerprints (Xie et al. 2020),
-  or hybridizes feature selection and feature learning only when subsets are complementary
-  (Ponzoni et al. 2017). The hybrid representation generalizes these by selecting features
-  across many representations under a budget.
-
-4.3  The method as a search
-- The search ranges over six axes: the component representations; the feature-importance
-  method used to rank features within each representation; the allocation method that
-  divides a feature budget across representations; the internal evaluator used to score
-  candidate feature sets during the search; the downstream model; and the feature budget
-  itself. The contribution is not the notion of a combined representation but the automated
-  search over this large combinatorial space, together with the per-fold caching that makes
-  it affordable; the same machinery serves any supervised task with multiple representations.
-  Figure 4.1 lays out the pipeline.
-- The searchable downstream models are random forest, XGBoost, ridge, k-nearest
-  neighbours, LightGBM, MLP, SVM, and the Gaussian process, with CatBoost, DNN, CNN, BNN,
-  and NGBoost available when requested by name. Feature budgets span roughly 10 to 2,000
-  features, filtered per model by a maximum-budget cap (the GP is capped at 1,000, SVM and
-  the neural models lower). The allocation methods are greedy forward selection,
-  performance-weighted (with softmax, power-law, top-k, rank, score-gap, and
-  diversity-penalised entropy weighting schemes), dominant-greedy, fixed equal split,
-  two-stage, and stability-selection. The internal evaluators are match-the-downstream-model
-  or an explicit ridge, RF, SVM, LightGBM, or MLP.
-- The feature-importance methods are SHAP-family and gradient or permutation importances:
-  treeshap, xgboost_gain, lightgbm_gain, permutation, kernelshap, deeplift,
-  integrated_gradients, and gradientshap. Mutual information was implemented but removed for
-  poor recall; mRMR and recursive feature elimination are not implemented. The classical
-  feature-selection literature the approach is positioned against includes mRMR's
-  relevance-versus-redundancy criterion (Peng, Long and Ding 2005) and SVM-RFE (Guyon et al.
-  2002); the importance methods used here build on model-based importance (Breiman 2001),
-  with Guyon and Elisseeff 2003 for the goals of selection (performance, cost,
-  interpretability).
-- The search also supports capabilities beyond the six core axes: augmentation strategies
-  (uncapped, capped, greedy-ablation, all, none) that append small auxiliary feature sets
-  beyond the budget; fine-tuned per-fold representation factories (rep_factories) that fold
-  learned or LoRA embeddings into the search with their own per-fold embedding cache; and a
-  two-phase refinement of step-size-sensitive greedy allocations.
-
-4.4  Blueprints and explainability
-- A completed search is stored as a compact, reusable recipe, the blueprint, holding exactly:
-  the representations, the allocation method, the importance method, the feature budget, the
-  internal evaluator, the step size, the number of folds, the seed, the metric, the task
-  type, the augmentation strategy, and the per-representation scores. Because the blueprint
-  stores the recipe rather than the data, it can be saved and reapplied to new molecules.
-- The blueprint does not store the selected feature indices; those are recovered when the
-  blueprint is refitted on data, which re-runs selection deterministically from the recipe
-  and seed (a saved blueprint is the recipe, the fitted selection is a separate object).
-- Named-feature attribution is real: a feature-name registry resolves each selected column
-  back to its representation and a named feature, including ECFP and MACCS bits mapped to
-  SMARTS substructures, so a prediction traces back to specific, named features. Learned
-  embedding dimensions, where the registry has no chemical name, fall back to the bare
-  representation name plus the dimension index, so attribution is only as rich as the
-  registry. Figure 4.2.
-
-4.5  Default settings
-- The design experiments that fix the defaults: which allocation methods and
-  feature-importance methods to keep (Altmann et al. 2010 document the bias of naive
-  permutation importance, motivating careful choice), whether the internal evaluator should
-  match the downstream model, and how aggressively the search can be pruned. The current
-  defaults are a top-3 performance-weighted allocation, lightgbm_gain importance, a step
-  size of 5, and 5-fold cross-validation; pruning is handled by an adaptive multi-stage
-  schedule that drops the worst allocation-importance pairs per model after the first fold,
-  with a floor that keeps a best configuration for every model, rather than by separate
-  speed tiers. Results to be added as these are finalized; Table 4.1.
-
-4.6  Implementation
-- Caching and reuse that make the search tractable, and reproducibility.
-- Results note: the second-half results (Chapters 4 to 6) are pending a full re-run.
-  Earlier cached results were invalidated by a caching defect, since fixed, that combined
-  non-deterministic data splits, malformed cache keys, and unsafe concurrent cache writes;
-  the experiments are being re-run from scratch and the results will be added once the
-  re-run completes.
-- With the method defined, Chapter 5 asks the first empirical questions: when does the
-  hybrid representation beat the best single representation, and why.
-
-4.7  Conclusion
-- The chapter has defined the adaptive hybrid representation, the search that builds it,
-  and the blueprint that stores it. Chapter 5 turns to when and why it helps.
+Writing rules for the results (from the brain dump, applied to every TODO(prelim) section):
+name the pattern, give the numbers in the dataset's own metric, no size adjectives in either
+direction ("small", "large", "only", "modest"). The preliminary searches were cut to 5
+representations, 3 folds, 1 importance method, 1 internal evaluator, budgets 100 and 250, rf and
+svm (/Volumes/seagate/kirby_localrun/env.sh, KIRBY_LOCAL_GRID). The full runs search the whole
+space; the text says the preliminary grid was cut, and does not say the effects are small.
 
 
-CHAPTER 5  WHY HYBRID REPRESENTATIONS HELP: COMPLEXITY, EXPLAINABILITY, AND EXTENSION
-(about 28 to 32 pages)
-The first of the two method papers, building directly on Chapter 4. (Results pending a full
-re-run, as set out in Chapter 4.)
+CHAPTER 4  THE FLAWS OF THE SIMILARITY ASSUMPTION  (about 15 to 20 pages)
+A motivation chapter. It does not introduce a method. It argues, with small measurements, that
+(i) standard base representations carry many features that do not vary on a given dataset and
+cannot tell some molecules apart, (ii) similarity computed over those representations inherits
+both problems, and (iii) methods that rely on that similarity, including the learning-with-
+noisy-labels (LNL) methods from the confirmation report, fail as a consequence. Every result in
+this chapter is smaller than Chapter 3. The chapter ends by stating what a representation would
+need to fix this, which Chapter 5 builds.
+Opening note (Dablander's convention): 4.4 reuses the confirmation report's LNL study; say so and
+cite it.
+
+4.1  Introduction
+- Bridge from Chapter 3: under noise, the model governed robustness and the representation
+  governed clean performance. This chapter asks what the representation contributes to methods
+  that compare molecules to one another rather than predict from them.
+- Research questions, stated as bullets at the end of the introduction:
+  (1) On a given dataset, how many of a standard representation's features vary, and how many
+      molecules does it map to the same vector?
+  (2) How well does distance in each representation track differences in the property?
+  (3) Do methods that rely on that distance (noise detection by neighbours, distance-based LNL
+      methods) do better than methods that do not?
+- Related work on similarity and structure-activity landscapes goes here, not in Chapter 2:
+  Chapter 2.3 already defines the similarity assumption and activity cliffs. This section adds
+  the modelability literature: MODI (Golbraikh et al.), Sheridan et al. "Experimental error,
+  kurtosis, activity cliffs, and methodology", van Tilborg et al. 2022 (MoleculeACE),
+  Medina-Franco "Activity cliffs: facts or artifacts?" (activity cliffs are sometimes dismissed as
+  measurement error; removing them loses information). TODO(lit): only van Tilborg 2022 is cited
+  in thesis.tex so far; the other three are not in refs.bib.
+
+4.2  Flaws in standard base representations
+Lead with this (brain dump). One subsection per flaw, each with one small measurement.
+
+4.2.1  Most features do not vary on a given dataset
+- The argument: a 2048-bit ECFP4 is built for all of chemistry. On one dataset from one chemical
+  series most bits are off in almost every molecule. The features that matter for the task are a
+  small subset, and which subset depends on the task.
+- Evidence already measured (counted from /Volumes/seagate/kirby_cache/rep_cache/<ds>/<rep>.npy
+  on 2026-09-27; CHECK: the pipeline reads a second cache, reps/<sha>, first, so these matrices may
+  not be byte-identical to what the runs used). Each row is one dataset and representation;
+  "constant" counts features with one value in every molecule; ">=95%" counts features where one
+  value covers at least 95% of the molecules:
+    herg_ki (1,412 molecules): ecfp4 2048 features, 105 constant, 1,815 at >=95%
+                               top_torsion 2048, 1,012 constant, 1,747 at >=95%
+                               atom_pair 2048, 201 constant, 977 at >=95%
+                               mordred 1613, 242 constant, 336 at >=95%
+                               pdv 200, 21 constant, 55 at >=95%
+                               rdkfp 2048, 0 constant, 18 at >=95%
+    caco2 (2,158):  ecfp4, 194 constant, 1,826 at >=95%
+    logd (5,028):   ecfp4, 39 constant, 1,834 at >=95%
+    qm9 (9,978):    ecfp4, 0 constant, 1,997 at >=95%
+- Planned statistic (not run; about 20 lines, same masks as
+  src/kirby/utils/feature_filtering.py:14): the same three counts for every representation in
+  every molecular pool (herg_ki, caco2, logd, qm9, adme_rlm, adme_mdr1), on the reps/<sha> cache
+  the pipeline reads. Table 4.1: one row per dataset, one column per representation.
+- Literature this puts numbers under: Dablander's thesis says, without a count, that "in common
+  real-world molecular data sets, the least frequent substructures usually only appear in a few
+  compounds" (p. 112; also pp. 121-122). His count is of substructures before hashing; this one is
+  of the 2048 bits after hashing.
+- Caveat to state in the text: a constant feature does not change Tanimoto (bits off in both
+  molecules are ignored) and adds zero to a Euclidean or Manhattan distance on standardised
+  features. What does distort those distances is near-constant features: after standardisation
+  they take large values on the few molecules that have them. So the argument is about the
+  >=95% column, not the constant column.
+
+4.2.2  Hash collisions: one bit, several substructures
+- ECFP folds each substructure identifier into 2048 bits, so bits are shared by unrelated
+  substructures (Rogers and Hahn 2010; Dablander et al. 2024, Sort & Slice; Gütlein and Kramer
+  2016, filtered circular fingerprints, refs.bib key Gtlein2016).
+- Planned statistic (not run; no code in KIRBy): median number of bits set per molecule, and the
+  share of occupied bits that more than one distinct substructure identifier hashes into,
+  computed from the unfolded Morgan identifiers. On herg_ki, caco2, logd.
+
+4.2.3  Molecules the representation cannot tell apart
+- Evidence already measured: tests/experiments/opig_shared_vectors_census.py, results
+  tests/results/comparisons/opig_shared_vectors_census.csv (16 Sep). It fits no model and splits
+  every tie into repeated input, all-zero row, or genuine merge.
+  - herg_ki (1,412 molecules after InChIKey deduplication): ecfp4, atom_pair, pdv and mordred
+    each give 56 molecules an identical vector, and all 56 differ only in stereochemistry. maccs
+    gives 377 molecules (26.7%) an identical vector. chembert, grover, mhg_gnn and the 3D
+    representations give 0.
+  - logd (5,028): ecfp4 merges 641 molecules (633 stereo-only); maccs merges 2,343 (46.6%).
+  - caco2 (2,158): ecfp4 merges 179 (177 stereo-only); maccs merges 804 (37.3%).
+  - The cost on herg_ki: the best score any model could reach is R2 0.998 on ecfp4 and 0.978 on
+    maccs; the widest label spread inside one tied group is 0.57 pKi (ecfp4) and 0.78 pKi (maccs).
+  - Learned models merge too: the ChemBERTa-77M-MTR tokeniser gives 72 of 1,415 herg_ki
+    molecules identical token ids (~/repos/qsar_qm_models/results/chemberta_collisions.json).
+  - CHECK: smited ties 56 molecules in the 16 Sep file and 52 in the 18 Sep re-run.
+- Literature: GNN expressivity is bounded by the 1-WL test and some non-isomorphic graphs map to
+  the same vector (Xu et al.; Morris et al.; Dablander thesis pp. 35-38).
+- Planned extension (not run): the same census on qm9 and adme_mdr1.
+
+4.2.4  Learned embeddings cannot be read chemically (a short point)
+- An embedding feature has no chemical name; the feature-name registry
+  (src/kirby/importance/hybrid.py:259-296) resolves it only to "representation name + dimension
+  index". Dablander calls pooled GNN vectors "obscure real numbers that cannot be directly
+  interpreted" (p. 41).
+- Planned statistic (not run; no code exists): for each embedding feature, the largest absolute
+  Spearman correlation with any of the 200 PDV descriptors; report how many features exceed 0.8.
+
+4.2.5  Different representations carry different information
+- This is the reason to combine them (sets up Chapter 5). Evidence already measured, from the
+  f26 redundancy results (tests/experiments/results/f26_redundancy_penalty_*.json): the
+  Spearman correlation between two representations' pairwise distances over the same molecule
+  pairs. Median over all representation pairs: herg_ki 0.315, logd 0.388,
+  flab_thermo_tresanco 0.509, tcga_luad_vs_lusc 0.106. Least alike on herg_ki: graph_kernel and
+  mordred, 0.019. Most alike: mordred and pdv, 0.720.
+- CHECK before quoting: the f26 pools predate the signed-off 10-representation pools (herg_ki
+  there includes chemberta, maccs and molformer, and omits atom_pair and chembert).
+- Table 4.2 (Dablander's Table 2.4 as a model): one row per representation family, what it
+  encodes, and its weaknesses on these measurements. Covers small molecules only here; the other
+  domains' representations are in 5.4.
+
+4.3  Flaws in similarity and other pairwise computations
+- The argument: a distance compares every feature. If most features are irrelevant to the task,
+  most of the distance is irrelevant to the task, and a fixed measure cannot know which features
+  matter for which property. The similarity assumption holds only relative to a measure
+  (Maggiora et al. 2014), and the measure is fixed by the representation.
+- Replace the confirmation report's "exponential growth in the number of irrelevant pairwise
+  interactions" (paper.tex:784, copied to thesis.tex:1265): no result or citation supports it.
+  The literature statement is distance concentration in high dimensions (Beyer et al. 1999;
+  Aggarwal et al. 2001), which the planned statistic below measures. TODO(lit): Beyer 1999 is not
+  in refs.bib.
+- Distance definitions: the eight metrics already written with formulas in thesis.tex:1665-1681
+  (Euclidean, Manhattan, cosine, Chebyshev, Canberra, correlation, Bray-Curtis, Mahalanobis) move
+  here, plus Tanimoto (Bajusz et al. 2015, in refs.bib).
+- Evidence already measured:
+  - Distance against property difference. s01 (tests/experiments/similarity/s01_similarity_
+    baseline.py; results tests/results_local_sim/s01_similarity_baseline/, 18 Sep): Spearman of
+    Manhattan distance against absolute activity difference over 5,000 sampled molecule pairs.
+    herg_ki: ecfp4 0.049, pdv 0.089, atom_pair 0.072, maccs 0.030. caco2: ecfp4 0.163, pdv 0.193,
+    atom_pair 0.225. adme_mdr1: ecfp4 0.231, pdv 0.227, atom_pair 0.280.
+  - Local against global. On herg_ki, predicting each molecule's activity from its 5 nearest
+    neighbours under ECFP4-count Tanimoto reaches Spearman 0.709
+    (tests/experiments/similarity_metrics/aggregate_experiment.json), against 0.05 for all pairs.
+    The text must say which of the two the argument is about: nearest neighbours carry signal
+    that the all-pairs correlation does not show.
+  - Fingerprint distance against structure. The same ECFP4-count Tanimoto agrees with
+    maximum-common-substructure distance at Spearman 0.043 on herg_ki; the RDKit fingerprint at
+    -0.334. On logd, 0.37 (ECFP4-count) and 0.46 (torsion).
+  - Activity cliffs. At ECFP4 Tanimoto >= 0.55 and an activity gap of at least twice the labels'
+    median absolute deviation (similarity_helpers.py:695 with calibration off): herg_ki 451 of
+    1,412 molecules (31.9%) sit in 710 cliff pairs; caco2 1,625 of 2,158 (75.3%); adme_mdr1 125 of
+    2,641 (4.7%).
+  - CHECK: SIMILARITY_AUTORESEARCH_STATUS.md:377-399 implies the best importance-weighted single
+    representation on herg_ki scores about 0.33 on the s01 statistic; s01 gives 0.03-0.09 for
+    unweighted single representations. Not established what explains the gap.
+- Planned statistics (not run):
+  - Distance concentration: relative contrast (d_max - d_min)/d_min per query molecule, and the
+    skew of how often each molecule appears among others' 5 nearest neighbours (Radovanovic et al.
+    2010). Code exists at c15_ml_theory_depth.py:199 but has run only on antibody datasets; it
+    standardises first, so also compute it on raw Tanimoto.
+  - Neighbour disagreement between representations: Jaccard overlap of each molecule's 5 nearest
+    neighbours under ecfp4, pdv and one learned embedding. No code exists.
+  - Activity cliffs at the MoleculeACE thresholds (Tanimoto >= 0.9, gap >= 1 log unit).
+- [DIAGRAM D4.1] Two panels on one dataset (herg_ki). Left: activity difference against Tanimoto
+  similarity for sampled pairs, binned (the Patterson 1996 similarity-property plot). Right: the
+  same pairs under a second representation. Shows that "similar" pairs differ in property as much
+  as dissimilar ones, and that the two representations disagree about which pairs are similar.
+
+4.4  Consequences for methods that rely on similarity
+The LNL results from the confirmation report are the negative example.
+
+4.4.1  The exploratory LNL study (confirmation report)
+- Source: /Users/apunt/Downloads/Confirmation_Report/paper.tex:666-775. QM9 HOMO-LUMO gap, 10,000
+  molecules, scaffold splits; Gaussian noise sigma 0 to 1.0 on the training labels only; five
+  representations (ECFP4, Sort & Slice, PDV, canonical and randomised SMILES); 12 LNL methods
+  adapted to regression, 221 configurations.
+- Finding (paper.tex:721): methods that use a distance metric did worst. All 20 configurations
+  with the lowest noise retention used one; none reached both clean R2 > 0.6 and retention > 80%.
+  The methods that did not use distance did better: DivideMix retained 86.7%, small-loss 84.2%,
+  the uncertainty curriculum 82.7%, heteroscedastic GP 79.0% at sigma = 0.6.
+- Existing prose: thesis.tex:1250-1266 (moves here from old Chapter 4.1). Fix the doubled full
+  stop at 1255.
+- CHECK, three things before quoting:
+  (1) Which distance metrics ran. paper.tex:676 says Tanimoto on ECFP4 and Euclidean on PDV;
+      paper.tex:721 lists Euclidean, Manhattan, cosine, Mahalanobis and Tanimoto; the job names in
+      ~/Downloads/experiments/slurm_scripts/ contain only euclidean, mahalanobis and tanimoto.
+  (2) Sample size. The 8 Mahalanobis commands used -n 5000, not 10,000.
+  (3) The 221 count and the top-20 claim cannot be recomputed locally: the raw CSVs were on the
+      server ($DATA/results/comprehensive_noise_study/, unverified).
+- The ANOVA line ("distance metric usage is the dominant factor in variance in R2") has no effect
+  size anywhere in the report.
+
+4.4.2  Noise detection by neighbours
+- Confirmation report Chapter 5 (paper.tex:1028-1146): 8 of 860 cleaning configurations improved
+  R2 at both sigma = 0.3 and 0.6; paper.tex:1144 "the concept of using a sample's neighbors to
+  determine its ground truth is flawed". Caveat: its hybrid rows used greedy allocation, which is
+  cut, so only the single-representation rows can be cited.
+- Sample-removal file tests/results_server/noise_robustness_v3/qm9/all_results.csv (816 rows;
+  pdv, mhggnn, and a 100-feature hybrid of the two; 8 distance metrics). Recovery = (R2 after
+  cleaning - R2 noisy)/(R2 clean - R2 noisy). Neighbour-based removal: 157 of 768 configurations
+  had positive recovery; median recovery at sigma = 0.3 was -2.06 (pdv), -2.15 (mhggnn), -2.12
+  (hybrid). The z-score filter, which reads no distance, gave the only positive non-neighbour
+  rows (pdv +0.12 at sigma = 0.3).
+- Current code, same pattern on an antibody dataset: in n09's preliminary run
+  (flab_thermo_tresanco, onehot input), distance_selection is the lowest of the 12 LNL methods at
+  both noise levels (Spearman 0.1790 at 0.5x against 0.4534 for the plain network). TODO(prelim).
+- Neighbour-based detection of injected noise on herg_ki: detection AUROC 0.646-0.669 averaged
+  over the noise grid, about 0.59-0.62 at sigma = 0.3, across 6 single and 6 fused distances;
+  fusing metrics never leaves the single-metric range (aggregate_experiment.json).
+- Planned control (not run; one new argument): DistanceBasedSelection
+  (src/kirby/utils/lnl_methods.py:722) with neighbours from ECFP4, from PDV, and from random
+  molecules via its precomputed_neighbors hook. If ECFP4 neighbours do no better than random
+  neighbours, that is the chapter's cleanest single result.
+
+4.4.3  Other standard uses of similarity that the same flaw reaches
+- k-nearest-neighbour prediction; applicability domain (distance to the training set; s06 gives
+  Spearman of distance against error +0.30 on herg_ki, +0.21 caco2, +0.38 adme_mdr1 at shipped
+  settings, from SIMILARITY_AUTORESEARCH_STATUS.md:455-475, a dated document, re-check);
+  activity-cliff detection; diversity selection and clustering for splits; nearest-neighbour
+  weighting in federated ensembles (FLuID weights each site's prediction by fingerprint distance,
+  5.8). TODO(lit): one citation each.
+
+4.5  What a representation would need
+- Short. From 4.2-4.4: features chosen for the task, from several representations that disagree,
+  with the irrelevant ones removed before any distance is taken. That is the adaptive hybrid
+  representation of Chapter 5.
+- Brain dump's origin story, as the bridge: the first version selected features only to compute
+  similarity; the selected sets also worked as ordinary model inputs, which made the selection
+  itself the method.
+
+4.6  Conclusion
+- One paragraph per research question, then the bridge.
+
+
+CHAPTER 5  BUILDING ADAPTIVE HYBRID REPRESENTATIONS  (about 40 to 50 pages)
+The method chapter and the first set of results. Planned as the first of the two hybrid papers.
+Results are preliminary; the methods are final (they are what the code does).
 
 5.1  Introduction
-- When does a hybrid representation beat the best single representation, what is the
-  mechanism, can its feature choices be explained and shown stable, and does it keep
-  working as new embeddings arrive and when data is held by separate parties.
-- Review of existing approaches: Niazi and Mariam 2023 (high-dimensional redundancy and PCA
-  as the standard response), Xie et al. 2020 (conjoint fingerprints), and Valsecchi et al.
-  2020 (prediction-level consensus).
+5.1.1  Combining representations: what exists
+- TODO(lit), the main literature gap in the second half. Adelaide is doing the review. Recorded
+  here from what thesis.tex already cites, so nothing is lost:
+  - Concatenation and fingerprint fusion: Xie2020 (conjoint fingerprints), Laufktter2019
+    (structural plus bioactivity fingerprints), Turkina2025 (fusion across six fingerprints by
+    feature importance; the closest prior work). All in refs.bib. thesis.tex:1309-1315.
+  - Early, late and intermediate fusion, multiple kernel learning: Stahlschmidt2022, Deng2023,
+    Steyaert2023, Wang2021 (MOGONET), Zhang2024, Gonen2011, Cichonska2018 (thesis.tex:1319,
+    1623). Only Deng2023 is in refs.bib.
+  - "No single representation wins": Deng2023 (62,820 models), Jiang2021, Mayr2018, Kenlay2024,
+    Schmirler2024, ElNahhas2025 (thesis.tex:1520-1523). Only Deng2023 in refs.bib.
+  - Named in the old outline but never cited: Xu, Tao and Xu 2013 (multi-view learning overfits
+    on small samples), Valsecchi et al. 2020 (consensus of predictions), Ponzoni et al. 2017
+    (hybrid feature selection and learning).
+  - 39 keys cited in the old Chapters 4 to 7 have no bib entry anywhere (thesis.tex header points
+    to KIRBy/PAPER_REFERENCES.md, which does not exist). List in the thesis.tex audit of
+    2026-09-27.
+- The brain dump's claim: most prior combination is simple concatenation, and a concatenated
+  representation scores between its components because it adds as much irrelevant information as
+  relevant. The argument is to combine and filter at the same time.
+  - Evidence that exists: c11's pca_matched arm (every representation concatenated, then PCA to
+    the hybrid's width) is below the best single representation in 53 of 54 (dataset, model)
+    rows over 9 datasets and 6 models (tests/results/c11_ensemble_vs_hybrid/, May 2026, old pools,
+    includes mlp). The antibody geometry survey (7 structure-geometry groups concatenated onto
+    the best single representation) went down on 7 of 8 datasets, median -0.0528
+    (GEOMETRY_SURVEY_RESULT_2026_09_11.md, a dated document; result files not on this machine).
+  - Gap: no plain two-representation concatenation test exists on the current pools (the
+    rep-pruning "concat test" in REP_PRUNING_LOG.md:22-23 has no per-pair results). Planned small
+    local test: for each molecular dataset, concatenate each pair of its top 3 representations,
+    score with rf and dnn, and report where the concatenation lands between its two parts.
 
-5.2  When it helps
-- The core question: does the hybrid beat the best single representation, and does the
-  optimal feature budget vary by downstream model? A model-by-budget grid over the cached
-  search answers both, with a two-way ANOVA over model, budget, and their interaction.
-  Figure 5.1 (model-by-budget heatmap) and Table 5.1 (best-per-model delta against the best
-  single representation).
-- The headline is the cross-domain summary: across small-molecule, antibody, and
-  gene-expression tasks, does the hybrid win consistently? Each task contributes a paired
-  per-fold delta against the best single representation, combined with a Wilcoxon test and
-  per-domain win rates. Figure 5.2 (forest of per-task deltas with the Wilcoxon result) and
-  Table 5.2.
+5.1.2  Other ways to use several representations
+- Dimensionality reduction that merges features rather than selects them (PCA). TODO(lit):
+  Niazi and Mariam 2023 named in the old outline, not in refs.bib.
+- Ensembling: one model per representation, predictions pooled. Compared directly in 5.4 (c11).
+- Classical feature selection (mRMR, Peng et al. 2005; RFE, Guyon et al. 2002; Guyon and
+  Elisseeff 2003). Compared directly in 5.5 (c17). TODO(lit): none in refs.bib.
+- Why this method differs from pooling all features into one selection: the budget is split per
+  representation first. Evidence in 5.2.3 (allocation method and representation count): some
+  datasets are best with 2 or 3 representations, others with all 10.
+- Selecting features also shrinks the input, and models differ in how many features they want and
+  which. Evidence in 5.5.
+- Prior art on label-driven selection to address head-on: Dablander (thesis p. 138) found that
+  unsupervised Sort & Slice beat two label-based bit-selection methods and suggested label-based
+  selection may overfit. The hybrid ranks features by importance on training labels, so 5.9
+  (overfitting) answers this.
 
-5.3  Why it helps
-- The mechanism comparison isolates "more features chosen well" from "any compression to the
-  same width" by running one model on three matched-dimensionality inputs: the best single
-  representation, a PCA-of-concatenation, and the hybrid. The PCA control is the ablation
-  reviewers will expect. Figure 5.3.
-- The more interesting angle is information-theoretic: the mutual information with the target
-  per selected dimension as the budget grows, against random selection and a
-  matched-dimensionality null. If the hybrid packs more target-relevant information per
-  dimension than the alternatives, that is the mechanism. mRMR (Peng, Long and Ding 2005) and
-  RFE (Guyon et al. 2002) are named as the classical alternatives the approach is positioned
-  against, not as implemented baselines. Figure 5.4.
+5.1.3  The hybrid, and two ways to use it for similarity
+- Definition 5.1 (adaptive hybrid representation): a feature set assembled by selecting features
+  from several base representations, under a budget (the maximum number of features), chosen for
+  the dataset and downstream model by a search. It prepares inputs for standard models; it is not
+  a model. NAMING (decided 2026-09-27): "adaptive hybrid representation", usually just
+  "hybrid". "KIRBy" only when referring to the repository.
+- Its intended use: representations that say different things about the molecule (PDV, ECFP4,
+  graph embeddings, sequence embeddings), with the features for this task picked from all of them.
+- Two uses for similarity, both returned to in Chapter 6: (a) build an ordinary hybrid and compute
+  distances in it; (b) change what the search optimises, so the hybrid is chosen for how well each
+  molecule's activity is predicted from its 5 nearest neighbours (objective='similarity'; the
+  "similarity hybrid").
+- Research questions for the chapter, as bullets.
 
-5.4  Explainability and stability
-- SHAP on the best hybrid, mapped through the Chapter 4 feature-name registry, aggregates
-  importance by source representation and traces predictions to named features, with the
-  caveat that learned-embedding dimensions resolve only to a name plus a dimension index.
-  Figure 5.5.
-- A feature-set stability analysis (Nogueira's index with a confidence interval, plus
-  fold-to-fold Jaccard) checks that the selection is consistent across folds. It is an
-  experiment-level analysis, not a core-engine output. Table 5.3.
+5.1.4  Blueprints and what they tell a chemist
+- A finished search is saved as a blueprint (5.2.6; results in 5.6). Features from PDV and substructure
+  fingerprints are named, so a blueprint says which chemistry the model uses. That works both ways:
+  it can point to parts of the molecule involved in binding, or confirm that the selection is
+  picking chemically sensible features. Embedding features have no chemical name (4.2.4).
+- Other applications that could use a task-specific similarity: TODO, list (nearest-neighbour
+  prediction, applicability domain, noise detection, clustering for splits, federated weighting,
+  generative model inputs).
 
-5.5  Breadth across domains
-- To make the "applied well beyond molecular similarity" claim concrete, the method is
-  carried across small molecules, antibodies (Trastuzumab-HER2 binding, Ginkgo
-  developability), protein affinity (Graphinity antibody-antigen ddG), and gene-expression
-  (the TCGA foundation-model comparison), each under its own splitting protocol. Whether the
-  advantage holds is summarised in one aggregate comparison. Figure 5.6.
+5.1.5  Beyond small molecules
+- The selection needs only supervised learning with several vector representations of the same
+  inputs: tabular data in general. One-hot sequence encodings work but are sparse; sequence
+  embeddings are recommended over one-hot (onehot worked on antibodies).
+- Applied here to antibodies (strong preliminary results; 5.7), reactions and nucleotides
+  (proof of concept), gene expression.
+- Requirements for a dataset: enough samples, and base representations whose features carry
+  importance. On tasks where every representation already scores poorly there were not enough
+  useful features to improve on (brain dump; TODO: point to the specific runs).
 
-5.6  Forward compatibility: absorbing new embeddings
-- The mechanism is light: a new embedding is added by registering an embed function and one
-  dispatch line, after which the search gives it budget only if its features are selected.
-  The interesting test is whether a new embedding earns budget above two
-  matched-dimensionality null controls, a same-dimensionality random Gaussian matrix and a
-  row-shuffled copy, which separate genuine signal from dimensionality and content;
-  significance via Wilcoxon per dataset and Friedman across datasets. A second strand tests
-  whether a saved blueprint transfers across folds and, where dimensions line up, across
-  datasets. The symmetric direction, whether the hybrid improves a weak new embedding, is
-  future work (Section 7.2). Figure 5.7 and Table 5.4.
+5.2  Methods: the hybrid search (find_best_hybrid)
+Every fact below is from src/ as of 2026-09-27. Line numbers are src/kirby/find_best_hybrid.py
+unless marked hybrid.py.
 
-5.7  Federated data (with Lhasa)
-- A smaller, applied section: is sharing only which features matter competitive with
-  ensembling each party's separate model on a shared hERG benchmark, including under unequal
-  per-party noise? The shareable anchor splits hERG into clustered silos with label noise
-  rising across silos, and contrasts privacy-preserving feature-importance sharing against
-  similarity-weighted, performance-weighted, and distillation ensembles. A real-source variant
-  repeats the contrast on public ChEMBL plus two proprietary Lhasa silos, reported under a
-  data-availability caveat (the Lhasa data is not redistributable and the comparison depends
-  on Lhasa's FLuID code). A demonstration, not a new method. Figure 5.8 and Tables 5.5 and 5.6.
-- Review of existing approaches: McMahan et al. 2017 (FedAvg, sharing model updates not raw
-  data), the MELLODDY consortium (Heyndrickx et al. 2023, cross-pharma federated QSAR), and
-  FL-QSAR (Chen et al. 2020).
+5.2.1  From base representations to a hybrid
+- Inputs: one matrix per base representation (one row per molecule), labels, groups for
+  splitting, the metric (required), the task type, the budgets.
+- Folds: group-aware, 5 by default (DEFAULT_N_FOLDS, 3664); cached per dataset.
+- Per fold, on the fold's training rows only: an 80/20 group-aware internal split
+  (internal_holdout_split, hybrid.py:5662). Feature importance per representation and each
+  representation's standalone score are computed on the internal training part.
+- Allocation: the budget is divided across representations in proportion to weights computed from
+  their standalone scores (allocate_performance_weighted, hybrid.py:1602), by largest remainder.
+  Scores are first rescaled so zero means "adds nothing over predicting the training mean"
+  (hybrid.py:1767-1770). Each representation then contributes its top-k features by importance,
+  stopping at the last feature with importance above zero, so a hybrid can be narrower than its
+  budget (hybrid.py:436-441). The global-pool variant (allocate_weighted_global, hybrid.py:2195)
+  lets each representation offer candidates in proportion to its weight and ranks the pooled
+  candidates once.
+- Each configuration is scored: the downstream model is fitted on the fold's training rows and
+  scored on its held-out rows. Result: best configuration per (downstream model, budget).
+- Reported comparison: nested_cv_evaluate (10397) runs the whole search inside each outer
+  training fold and scores the winner and the single representations on the untouched outer fold.
+- Fold-local preprocessing (median imputation, standardising on training-fold statistics only):
+  existing prose thesis.tex:1362 (Ambroise2002, Vabalas2019).
+- [DIAGRAM D5.1] The pipeline: several base representations -> per fold: importance per
+  representation, standalone score per representation -> allocation splits the budget -> top
+  features from each -> hybrid -> downstream model -> held-out score. Show the outer folds, the
+  internal 80/20 split inside each training fold, and where the blueprint is saved. (Old TODO at
+  thesis.tex:1432.)
 
-5.8  Conclusion
-- Having tested when the hybrid representation helps, why, whether it can be explained, and
-  how it extends, Chapter 6 returns to the problem that began the second half.
+5.2.2  The search space: every axis, as a product
+State it the way Dablander does: axes, values, and the total count of configurations.
+- Base representations: whatever the dataset's pool holds; 10 per dataset for 14 of the 16
+  datasets (DATASET_REPS, tests/experiments/complexity/complexity_helpers.py:136).
+- Representation count: 2, 3, 5 or the whole pool (DEFAULT_REP_COUNTS, 3028). Replaced the
+  retired top_2/top_3/top_5 names.
+- Importance methods: deeplift, lightgbm_gain, treeshap (3633). Eight are implemented
+  (hybrid.py:4629); five others (permutation, kernelshap, xgboost_gain, integrated_gradients,
+  gradientshap) are not searched.
+- Allocation methods: performance_weighted (linear weights), power_2 (squared), softmax_T1,
+  rank_exp_d0.3 (rank with exponential decay), wglobal_power2 (squared weights, global pool)
+  (3642-3648). Greedy is cut (hybrid.py:461-485). Two-stage and stability-selection exist but are
+  never dispatched.
+- Internal evaluators (the model that scores candidate hybrids inside the search): match (the
+  downstream model itself), rf, lightgbm, dnn (3663).
+- Downstream models: rf, lightgbm, dnn, xgboost, svm (2679-2927). knn, gp, ngboost available by
+  name only. mlp, ridge, catboost, cnn, bnn are off. mlp was cut 2026-09-18 and replaced by dnn.
+- Budgets: 10, 25, 50, 100, 250, 500, 1000, 2000 features (tests/experiments/_shared.py:494).
+  Each budget is a maximum. No per-model feature cap (MODEL_MAX_BUDGET is empty, 3728); svm and
+  gp have caps on training rows (10,000 and 1,000).
+- Objective: predictive (default), similarity, predictive_corr, struct_fid, or a weighted blend
+  (1795-1860). Chosen per call, not swept inside one call.
+- Augmentation strategy: none, uncapped, capped (5.2.4). A separate call each.
+- Step size and two-phase refinement: read only by the greedy family, so they have no effect on
+  any default search. The blueprint still stores step size.
+- Total: configurations per (dataset, fold, objective, augmentation strategy) = count of each
+  axis multiplied. FRAMEWORK_FINALIZATION.md §7.2 (dated document) gives 162 configurations at
+  the fast tier and 3,060 at full over three budgets; dataset_policy.py:650-655 gives 816 against
+  8,160 per condition. CHECK: recompute from the code for the text, and state the number of fits.
+- Table 5.1: one row per axis, its values, the fast-tier values, and where it is set.
 
-CHAPTER 6  MOLECULAR SIMILARITY AND LABEL NOISE  (about 24 to 28 pages)
-The second method paper, closing the loop opened in Chapters 3 and 4. (Results pending a
-full re-run, as set out in Chapter 4.)
+5.2.3  Why each axis is swept
+The brain dump asks for the reason for each axis, with results showing that datasets and models
+disagree. Source: the f33 pruning record, tests/results/framework/f33_pruning/{flab_thermo_
+tresanco, herg_ki, humanness_therapeutic, logd, tcga_brca_pam50}.json: 5,100 configurations each,
+5 folds, budgets 25/50/100/150/300, 10 representations, no augmentation. A cell is one
+(downstream model, budget), 25 per dataset; the cell's winner is the best mean over 5 folds.
+- Downstream model and budget: the best configuration is dnn at budget 50 on flab_thermo_
+  tresanco (Spearman 0.6696), svm at 300 on herg_ki (RMSE 0.5589 pKi), lightgbm at 50 on
+  humanness_therapeutic (AUROC 0.9723), dnn at 300 on logd (RMSE 0.4170), dnn at 150 on
+  tcga_brca_pam50 (weighted F1 0.9097). Within flab_thermo_tresanco, svm peaks at 300 features and
+  dnn, lightgbm and rf at 50.
+- Allocation method, cells won out of 25 (performance_weighted / power_2 / softmax_T1 /
+  rank_exp_d0.3 / wglobal_power2): flab 3/0/2/6/14; herg_ki 3/6/1/2/13; humanness 4/7/3/6/5;
+  logd 2/2/0/1/20; pam50 2/4/2/3/14.
+- Representation count, cells won out of 25 (2 / 3 / 5 / all 10): flab 2/1/5/17; herg_ki
+  0/2/13/10; humanness 7/14/4/0; logd 17/5/0/3; pam50 0/3/8/14. If only one count had been
+  searched, the best score falls short: flab 0.0256 Spearman (count 2) or 0.0190 (all 10);
+  herg_ki 0.0125 RMSE (count 2); pam50 0.0086 weighted F1 (all 10).
+- Importance method, cells won out of 25 (lightgbm_gain / treeshap / deeplift): flab 15/10/0;
+  herg_ki 14/11/0; humanness 12/12/1; logd 8/0/17; pam50 21/3/1.
+- Internal evaluator, most frequent winner: dnn on flab (12 of 25), rf on herg_ki (14) and
+  humanness (14), lightgbm on logd (10), lightgbm then dnn on pam50 (9, 7).
+- Pooling all features into one selection against a quota per representation. Two records
+  disagree:
+  - c32 (/Volumes/seagate/kirby_cache/c32_allocation_cross/, 9 datasets, lightgbm/rf/catboost,
+    budgets 500 and 1,000; 54 cells, 32 strategies each): the winner used a per-representation
+    quota in 38 of 54 cells and the global pool in 16.
+  - f33 (above): wglobal_power2, the only global method of five, wins 66 of 125 cells.
+  - The two differ in three things at once: budgets (500/1,000 against 25-300), models (c32 has
+    catboost, no dnn or svm), and how many global arms (16 of 32 against 1 of 5).
+- [DIAGRAM D5.2] One small-multiple per axis (allocation, representation count, importance,
+  evaluator), datasets on one side, cells won as bars. Shows that no setting wins on every
+  dataset.
+
+5.2.4  Augmentation: improving one dominant representation
+- Use case: one representation already dominates and a full hybrid adds little. Keep it at full
+  width and admit a few features from the others.
+- How it works (hybrid.py:6036 onward): candidates from other representations are ranked by how
+  well each correlates with what a model on the base representation gets wrong (out-of-fold
+  residuals of a 50-tree forest; residual_correlation, the default, pinned 2026-09-10). The top 50
+  candidates are offered. Blocks of 0, 5, 10, 20 or 40 are scored on the internal split; 0 wins
+  ties. uncapped appends the block outside the budget; capped replaces the base's weakest features
+  so the total stays within the budget.
+- Wrapper find_best_single_rep_augmented (8046) exists but has no caller; f24 and c21 build the
+  same arrangement themselves.
+- No admission gate. One was built (a near-copy test and a shuffle test) and removed on
+  2026-09-28 (920bbb8): the near-copy test did not improve scores and the shuffle test did
+  not stop noise features.
+- Decoys used to test admission (tests/experiments/_shared.py:4911): __gaussian__ (pure noise, as
+  wide as all real donors) and __echo__ (64 base features with 5% jitter). The right count taken
+  is 0.
+
+5.2.5  Fast tier and adaptive pruning
+- Fast tier (speed='fast'; lists 3020-3031): downstream models rf, lightgbm, dnn; importance
+  lightgbm_gain only; allocation performance_weighted, power_2, rank_exp_d0.3; representation
+  counts 3 and all. Same lists for every dataset. A fast run can be topped up to a full one.
+  Evidence behind the lists (f33, from the code comments): dropping deeplift changed only logd
+  (0.4905 to 0.4930 RMSE) and deeplift was about half the run time; adding dnn moved logd from
+  0.4930 to 0.4273; adding svm moved herg_ki from 0.5776 to 0.5599; adding xgboost changed nothing;
+  wglobal_power2 was 71.0% of logd's 14.45 hours.
+- Adaptive pruning (DEFAULT_PRUNING_SCHEDULE, 3747-3848; off by default since 2026-09-13):
+  - Every configuration is scored on folds 0 and 1 first.
+  - At budget 100, within each (model, internal evaluator, representation count), the worst half
+    of (allocation, importance) pairs are dropped at all higher budgets; at least one pair is kept.
+  - Then votes, one axis at a time: a value that is among the best in fewer than a cut-off share
+    of groups is dropped from the remaining folds (allocation: best 2, 20%; representation count:
+    best 1, 10%; importance: best 2, 20%; internal evaluator: best 3, 10%). A vote can never delete
+    every value of an axis.
+  - On the f33 record it cut 30% of the hours (130.4 to 91.5 over five datasets) and changed no
+    (model, budget) best score. Voting after fold 0 alone was not safe (pam50's fold 0 takes four
+    distinct values across 5,100 configurations).
+- CHECK: find_best_hybrid.py:3733-3738 says every pruning number is uncalibrated; the comments at
+  3761-3845 say they were set from f33.
+- [DIAGRAM D5.3] The pruning schedule as a funnel: all configurations on folds 0-1 -> checkpoint
+  at budget 100 drops half the pairs -> per-axis votes -> survivors on folds 2-4.
+
+5.2.6  Blueprints
+- What is stored (Blueprint, 1397-1561): the representation pool, allocation method, importance
+  method, budget, internal evaluator, fold count, seed, metric and direction, task type,
+  objective, representation count, all augmentation settings; and as data, each representation's
+  score, the augmentation features kept per fold, and each representation's feature count per
+  fold.
+- Rebuilding (apply_blueprint, 9570) re-runs the selection on the rows given, and needs labels.
+  On different molecules it can select different features. To apply to unlabelled molecules,
+  reuse the features a labelled fit chose (apply_feature_selection).
+- Feature names (FEATURE_NAME_REGISTRY, importance/hybrid.py:259-296): pdv and other descriptor
+  sets are named; ECFP bits resolve to an atom environment; MACCS keys are named; embeddings
+  resolve to representation plus dimension index. atom_pair, avalon, graph_kernel, mordred and
+  every learned molecular representation fall through to dimension indices. Decision for
+  Adelaide: add names for mordred and atom_pair before the blueprint results (5.6).
+
+5.3  Methods: experimental setup
+5.3.1  Datasets
+- Table 5.2 (Dablander's Table 5.1 as the model): one row per dataset, grouped by domain.
+  Fields: source and citation; measurement and unit, and label transform; task type (class
+  balance for classification); n after curation; metric and direction; splitting and groups;
+  representation pool; one sentence of chemical or biological rationale. Curation (deduplication
+  rules, counts before and after) goes in Appendix A.
+- The 16, from the loaders and tests/experiments/dataset_policy.py (n from running the loaders
+  locally on 2026-09-27 unless marked):
+  Small-molecule ADME and toxicity, regression, RMSE, Murcko scaffold GroupKFold, 5 folds:
+    herg_ki     1,412 molecules, pKi (4.07-9.41); ChEMBL CHEMBL240 Ki, binding assays, median
+                pChEMBL per compound, compounds with SD > 1.0 dropped; 769 scaffolds
+    caco2       2,158, log10 efflux ratio; OpenADMET ExpansionRx; labels clipped at their 1st and
+                99th percentiles by the loader; 1,086 scaffolds
+    logd        5,028, LogD; OpenADMET ExpansionRx; same clipping; 2,413 scaffolds
+    adme_rlm    3,053, log RLM CLint; Polaris biogen/adme-fang-v1 (Fang et al.); 2,625 scaffolds
+    adme_mdr1   2,641, log MDR1-MDCK efflux ratio; same source; 2,318 scaffolds
+  Quantum, regression, RMSE:
+    qm9         10,000 drawn (9,978 in DATASET_STATUS.md, unverified), HOMO-LUMO gap; Murcko
+                scaffold GroupKFold 5 on one seed-42 draw (the noise chapter's ten replicates are
+                a different pipeline)
+  Reactions, regression (yield %), RMSE, grouped by additive:
+    buchwald_hartwig  3,955 reactions, Ahneman et al. 2018; 22 additive groups
+    bh_doyle_plates   4,312 (287 of 4,599 dropped for a missing aryl halide); 24 groups. The
+                      name says plates but the code groups by additive, not plate
+  Antibodies:
+    flab_expression_koenig  4,275, expression enrichment, Spearman; FLAb, Koenig et al. 2017 (G6
+                            anti-VEGF scan); grouped by first mutation position mod 5
+    flab_thermo_tresanco    672, melting temperature (39.0-98.2 C), Spearman; FLAb, Tresanco
+                            2023 (NbThermo, unverified); 95% sequence-identity clusters (309)
+    humanness_therapeutic   564, binary (198 human, 366 non-human), AUROC; BioPhi (Prihoda et
+                            al. 2022); 95% identity clusters. Loader docstring says 549
+    tz_her2_binary          5,000 drawn from 524K, binary (1,639 binders), AUROC; Chinery et al.
+                            2024; edit-distance shells from the wild-type CDRH3 (10)
+  Nucleotides, binary, MCC, grouped by chromosome:
+    nt_H3K4me3       18,244 (registry, unverified); NT Revised (InstaDeep)
+    nt_promoter_tata 5,274 (registry, unverified); same source
+  Gene expression and other TCGA data, grouped by tissue source site, StratifiedGroupKFold 5:
+    tcga_luad_vs_lusc  1,017 (registry says 1,016), binary, AUROC; UCSC Xena/Toil
+    tcga_brca_pam50    821 in the local cache (registry says 900), 4 classes (LumA, LumB,
+                       Basal, Her2), weighted F1
+- Classification datasets use StratifiedGroupKFold; regression uses GroupKFold; no random-split
+  fallback (tests/experiments/_shared.py:2034-2103).
+- CHECK, disagreements to settle in the text:
+  - Chapter 3 gives LogD 5,039, Caco-2 2,161, hERG 1,415; the KIRBy loaders give 5,028, 2,158,
+    1,412 (InChIKey deduplication, probably; unverified). Appendix A must say which curation each
+    chapter used.
+  - thesis.tex:1474 says R2 for reaction yield; the code uses RMSE.
+  - thesis.tex:1480 says "5-fold GroupKFold throughout"; classification uses StratifiedGroupKFold.
+  - thesis.tex:1484 TODO says reactions by template, TCGA by patient, antibodies by VH identity;
+    the code groups reactions by additive, TCGA by tissue source site, and antibodies by heavy and
+    light chain together at 95% identity.
+- Best single representation per dataset and model: the f26 files carry some
+  (tests/experiments/results/f26_redundancy_penalty_*.json) but used pre-pruning pools. Fill
+  Table 5.2's last column from the server runs. TODO(prelim).
+
+5.3.2  Representations by domain
+- Not a list: for each domain, what the representation families encode and why they were
+  chosen, then the pool. Each pool of 10 came from a pruning step recorded in REP_PRUNING_LOG.md
+  (2026-07-18 to 08-23; a dated document).
+  - Small molecules: hashed substructure fingerprints (ecfp4, avalon, atom_pair, top_torsion),
+    predefined keys (maccs), graph-kernel histograms (graph_kernel), computed descriptors (pdv,
+    mordred), pretrained graph encoders (grover, mhg_gnn, graphmvp), pretrained SMILES and SELFIES
+    language models (molformer, smited, chembert, chemberta, selformer), mol2vec; 3D shape and
+    pharmacophore features (usr, usrcat, pharmacophore3d, coulomb_matrix) as augmentation only.
+  - Antibodies: hand-built encodings (onehot, blosum, aac), protein language models (esm2, esmc,
+    esm3, prot_t5, saprot), antibody language models (antiberty, ablang2, abroberta, igt5),
+    variants that pool a model differently (esm2_midlayers, esm2_early, esm2_per_cdr, *_cdr), and
+    mutation features.
+  - Reactions: condensed graph of reaction (cgr_morgan), reaction language models (rxnfp,
+    reactiont5), component identity (onehot_components), and any molecular representation applied
+    to reactants, products or their difference.
+  - Nucleotides: k-mer counts, tetranucleotide frequency, DNA foundation models (dnabert2,
+    nt_v2_250m, nt_v2_500m, hyenadna, grover_dna, mistral_dna).
+  - TCGA: expression foundation models (geneformer, bulkrnabert), methylation, copy number,
+    miRNA, protein array, slide-image embeddings.
+- How alike the representations are: f26 distance agreement (4.2.5) and the pruning step's
+  correlation of out-of-fold predictions (REP_PRUNING_LOG.md; logd's top 9 are all mutually
+  above 0.90; tcga has no pair at or above 0.95; every antibody *_cdr representation predicts
+  identically to its base). The brain dump asks for these here.
+- CHECK: chembert (256 features, jonghyunlee/ChemBERT_ChEMBL_pretrained) is not chemberta (384,
+  DeepChem/ChemBERTa-77M-MTR). chembert is in 4 pools (herg_ki, logd, qm9, adme_hlm); its cache
+  has never been checked against its builder.
+- CHECK: gene_geneformer and gene_geneformer_v2 have the same 1,152 features and distance
+  correlation 0.940; the v2 builder may have fallen back to v1 on the server.
+- Table 5.3: one row per representation, domain, what it encodes, number of features, source
+  model or citation. Pretraining corpora and citations are missing in code for most learned
+  models; TODO(lit).
+
+5.3.3  Models, metrics and error bars
+- Downstream models and their settings (a hyperparameter table, Dablander Tables 4.1/5.2 as the
+  model); internal evaluators and their settings (rf evaluator: 50 trees, depth 10; rf_exact:
+  the downstream forest's own 100 trees, max_features sqrt; hybrid.py:2851-2865).
+- Metrics per dataset as in 5.3.1. Results are the per-fold scores and their spread. No
+  significance tests, within or across datasets, and no confidence intervals (decided
+  2026-09-27). thesis.tex:1492 (Nadeau-Bengio, Wilcoxon, Friedman/Nemenyi) is to be deleted
+  when the thesis is restructured.
+- Compute: hours per dataset for the full search, and the hardware (Dablander gives both).
+
+5.3.4  Complexity experiments (methods, final)
+Each is a script in tests/experiments/complexity/. Stated as coded.
+- c11, hybrid against ensembles. Hybrid: a find_best_hybrid search on each outer fold's
+  training rows. Ensembles: one model per representation (or each representation's own best
+  model), membership top 3 or all, pooled by mean, median, trimmed, IQR- or MAD-filtered,
+  weighted, or top-3 mean, chosen on an inner 3-fold split. Controls: best single
+  representation, pca_matched (every representation concatenated, then PCA to the hybrid's
+  width), oracle_single (reads the held-out fold; an upper bound only). Reported comparison: for
+  each held-out fold, the budget with the best mean on the other folds, so the hybrid and the best
+  single representation pay the same selection cost (fold_reselection, _shared.py:1734).
+- c05, learning curves. Subsamples of 10, 25, 50, 75 and 100% of the molecules, drawn as whole
+  scaffold groups, 3 seeds. A search on each subsample, budgets capped at the training rows.
+  Delta = hybrid minus best single representation.
+- c17, hybrid against feature reduction at the same number of features. Five arms: the hybrid
+  (the stored rf recipe at that budget, rebuilt per fold), PCA, mRMR (capped at 200 features),
+  RFE (50-tree, depth-5 forest), random. All fitted on the fold's training rows; one downstream
+  model, a 100-tree random forest. Regression datasets only. CHECK: the recipe itself is chosen on
+  all rows (recipe_selected_on: 'all rows').
+- c23, does the internal evaluator need to match the downstream model? nested_cv_evaluate; each
+  outer fold searches with one evaluator. Conditions: same family, near family (rf with
+  lightgbm, svm with gp, dnn with a smaller dnn), far family, and the downstream rf's exact
+  settings (rf_exact). Deltas paired per outer fold. Widths must be matched.
+- c19, importance used during training. Each model's own recipe at budget 100. Conditions:
+  unweighted; features multiplied by the square root of importance, normalised to mean 1; each
+  molecule weighted by how far its label is from its 10 neighbours' mean; both; features above
+  the median importance only. Models rf, lightgbm, xgboost.
+- c21, augmenting one representation, with decoys. One base representation at full width,
+  candidates ranked by residual correlation from a pool of 50, blocks of 5/10/20/40, decoys
+  planted. Counts how many of each kind are admitted.
+- c33, does the search overfit? For each budget, the recipe is scored on untouched outer folds;
+  bias = inner-search score minus held-out score (positive means the search over-promised).
+  Budgets up to 8,000 and ratios 0.5-2.0 of the training rows.
+- c24, stability: Nogueira's stability index of the selected features across folds.
+
+5.3.5  Applied settings: OPIG and federated (methods, final)
+- OPIG experiments (tests/experiments/opig_*.py). Each needs a paragraph of background on the task.
+  - opig_blueprint_transfer: can a hybrid found on a large dataset be reused on a small one?
+    Source logd (5,028 molecules), target herg_ki (1,412). Pool: representations in both
+    datasets' pools with the same width (6: atom_pair, avalon, ecfp4, maccs, mordred, pdv). Four
+    arms per target fold: best single representation (searched on that fold's training rows),
+    native hybrid (searched on that fold), recipe transfer (logd's allocation, importance,
+    budget and evaluator; features re-selected on herg_ki), exact-feature transfer (logd's feature
+    indices applied unchanged). 5 group folds, RMSE, 5 downstream models.
+  - opig_scaffold_hybrid: the code's question is whether two mutation-difference representations
+    (dphyschem, 5 features; dphyschem_pos, 1,140) earn a place in the pool on antibody deep
+    mutational scans (flab_expression_koenig and three other FLAb sets). Evaluated with nested
+    cross-validation.
+  - Other OPIG experiments, one line each in the text: activity-cliff QSAR (replicates Dablander
+    et al. 2023 on D2, factor Xa, Mpro), CGR reaction representations, Ginkgo developability,
+    Graphinity DDG, humanness, trastuzumab enrichment, scaffold similarity, the shared-vector
+    census and remedy (4.2.3). opig_cdr_flexibility and opig_kingsmith_component_splits were cut
+    on 2026-09-23.
+- Federated, with Lhasa (tests/experiments/federated/).
+  - The standard process, as Lhasa's FLuID implements it (~/repos/lhasa/FLuID_POC/preprocessing/
+    FLuID.py): sites are k-means clusters of one dataset's fingerprints, with a share of molecules
+    reassigned at random; one teacher model per site trained on its own molecules; every teacher
+    labels a shared public set, each prediction weighted by the molecule's distance to that
+    teacher's data; the weighted labels train one student model. Only predictions on public
+    molecules cross between sites. TODO(lit): McMahan et al. 2017 (FedAvg), Heyndrickx et al. 2023
+    (MELLODDY), and Bassani2023 and Hanser2023 (Lhasa, both in refs.bib, not yet cited).
+  - KIRBy's federated feature selection (federated_feature_selection, federated_helpers.py:1328):
+    each site runs create_hybrid on its own molecules and reports feature indices, importances and
+    one validation score; a coordinator splits the total budget across sites in proportion to
+    score and drops features already taken. No molecule or raw feature crosses.
+  - fed03 Part A: three real hERG sources as sites (ChEMBL herg_ki, pKi >= 6.0 as blocker; Lhasa
+    training set, 7,772; Lhasa test set, 4,383), deduplicated across sites by InChIKey keeping the
+    ChEMBL copy. 5 scaffold-group folds over the pooled molecules. Search metric AUROC; reported
+    metric MCC. Arms: best single site; FLuID similarity ensemble; FLuID quality ensemble;
+    federated selection then one model on pooled molecules (C4); one model per site on the
+    fingerprint, predictions combined by FLuID's distance weighting (C8); the same on the selected
+    features (C9, added 2026-09-24, the arm that keeps molecules at their sites); naive pool;
+    hybrid on ecfp4 alone; one teacher per representation.
+  - CHECK: C8 fits on one 2,048-bit Morgan fingerprint; C9 fits on 100 features drawn from 6
+    representations. So C8 and C9 differ in two ways at once, width and source. The "Promising
+    experiments" file says C8 uses "all 6,000 numbers per molecule"; the code says 2,048.
+  - The Lhasa data is not redistributable and the comparison needs Lhasa's FLuID code; the
+    simulation uses the training molecules as the public set (a stated compromise).
+  - [DIAGRAM D5.4] Two rows. Top: standard FLuID (sites -> teachers -> public set labelled ->
+    student). Bottom: fed03 Part A C9 (sites -> each site's hybrid -> coordinator splits the
+    budget -> each site's model on the shared feature list -> distance-weighted predictions). Mark
+    what crosses between sites in each.
+
+5.4  Results: when the hybrid helps
+All TODO(prelim). The method is a search; the preliminary grids searched 2 to 6 configurations
+per model against 16 to 48 on the earlier larger grid.
+- Hybrid against ensembles (c11). flab_thermo_tresanco, Spearman, 5 folds, 32 configurations per
+  outer search (16 per model): lightgbm hybrid 0.6246, ensemble 0.6023, best single 0.4809; rf
+  hybrid 0.6364, ensemble 0.5984, best single 0.5896. On the small grid (3 folds): herg_ki rf
+  hybrid 0.6114 RMSE, ensemble 0.6146; svm 0.5736 against 0.6001 (best single 0.5979); caco2 svm
+  0.2827 against 0.2954; flab rf 0.6304 against 0.6182; flab lightgbm 0.5535 against 0.6323. The
+  hybrid is ahead of the ensemble in 5 of 6 (model, dataset) pairs on the small grid.
+- Hybrid against the best single representation by sample size (c05, flab_thermo_tresanco).
+  Delta, Spearman, at 67 / 168 / 336 / 504 / 672 molecules: lightgbm, larger grid +0.2204,
+  +0.0133, -0.0671, +0.0403, +0.0964; small grid n/a, -0.0343, -0.0994, -0.0548, +0.0443. rf,
+  larger grid -0.1512, -0.0077, +0.0154, +0.0090, +0.0224; small grid -0.0698, -0.0448, -0.0463,
+  +0.0345, +0.0320. At 67 molecules the training rows (about 45) are below every swept budget.
+  herg_ki (small grid): rf +0.0171, +0.0042, +0.0008; svm +0.0201, +0.0118, +0.0256. caco2: rf
+  -0.0037, +0.0022, +0.0086; svm +0.0105, +0.0112, +0.0149 (RMSE, positive = hybrid better).
+- CHECK: the "Promising experiments" file says the larger grid is positive at 3 of 8 points and
+  the small grid negative at 7 of 8. The files give 5 of 8 and 6 of 7.
+- Where the hybrid does not help: datasets where one representation dominates. That is expected;
+  the search should not manufacture a gain where selection has nothing to add. TODO(prelim):
+  name the datasets from the server runs.
+- The pattern to name: the hybrid's margin over the ensemble and the best single representation
+  grows with how many configurations the search covers. CHECK before writing it as one claim: the
+  "larger versus smaller search" comparison changes configuration count, fold count (5 against 3)
+  and representation width together, and the ensemble and single-representation arms get no
+  search, so part of the gap is the hybrid taking a maximum over more tries. c11 reselects the
+  budget with one fold held out, which charges for that on the budget axis only.
+
+5.5  Results: why the hybrid helps
+- Against feature reduction at the same number of features (c17), flab_thermo_tresanco, Spearman,
+  5 folds, 5 representations (6,528 features): budget 10: hybrid 0.5945, PCA 0.4860, RFE 0.4682,
+  random 0.2145; budget 50: 0.6131, 0.5225, 0.5689, 0.5094; budget 250: 0.6029, 0.4824, 0.6003,
+  0.5636. herg_ki at budget 10: hybrid 0.6304 RMSE, PCA 0.6776, hybrid ahead on all 5 folds. The
+  pattern: the hybrid is ahead of PCA at every budget; RFE reaches the hybrid at 250 features. At
+  budget 1,000 the arms are not width-matched (hybrid 376-434 features, PCA 536-537), so it is
+  not reported. TODO(prelim).
+- Does the internal evaluator need to match the downstream model (c23)? Small grid, held-out,
+  budgets 100 and 250: flab Spearman shipped rf evaluator 0.6132, rf_exact 0.6128; herg_ki RMSE
+  0.6124 and 0.6078. Configuration by configuration on inner-search scores, the exact match is
+  better in 7 of 18 on flab and 8 of 18 on herg_ki. Suite run at budget 250: flab rf, same family
+  0.6098, near family 0.6220, far family 0.6172. The pattern: the evaluator that best predicts
+  what the downstream model will do with a feature set is not always the downstream model itself.
+  TODO(prelim). CHECK: the "+0.0138" for exact match on the larger grid compares different
+  widths ([250, 250, 250, 1000, 380] against [1000, 1000, 250, 401, 250] features per fold).
+  Adelaide's note: this is informative rather than a negative; the text should say what it
+  implies for the default (match is one of four evaluators searched, so the search already covers
+  it).
+- Importance used during training (c19). For tree models the feature-weighting condition cannot
+  change anything: lightgbm_gain gives exactly zero importance to 66-78 of a 250-feature hybrid's
+  features on herg_ki, and a feature multiplied by zero is a constant no tree can split on, so on a
+  forest the condition is "delete about 27% of the features and rescale the rest". Suite run: flab
+  rf 0.6373 to 0.6360; herg_ki rf 0.6055 to 0.6097 RMSE; caco2 lightgbm 0.3006 to 0.2981. Where a
+  distance is used (k-nearest neighbours), weighting helps: herg_ki 0.6196 to 0.6111 RMSE, flab
+  0.4302 to 0.5081 Spearman, and shuffling the same weights across features makes it worse (0.6371,
+  0.3872). svm gets worse on both (herg_ki 0.5678 to 0.5861; flab 0.6356 to 0.6190). TODO(prelim).
+  CHECK: the kNN numbers come from a separate harness (loops/c19/arms.py), not c19's script, and
+  one fold carries the flab gain (fold 0, 0.3137 to 0.7226). Decision: kNN is not in c19's model
+  list; add it to the script if this goes in the thesis. The distance half of this result
+  belongs with c04 in 6.4.
+- Augmenting one representation (c21). flab_thermo_tresanco, saprot base, Spearman: rf 0.5683 to
+  0.5762, svm 0.5716 to 0.5830. Admitted per fold under rf: near-copy decoys 21, 11, 21; noise
+  decoys 7, 2, 1; real mutation features 12, 7, 18. herg_ki (mhg_gnn base): rf 0.6117 to 0.6124,
+  svm 0.5979 to 0.5983 RMSE. caco2 (graph_kernel base): rf 0.3188 to 0.3119, svm 0.3207 to 0.2975,
+  no noise decoy admitted. The pattern: the score moves, and more than half of what is admitted
+  on flab is decoy. TODO(prelim). CHECK: the
+  "Promising experiments" file says up to 20 are admitted; the code's blocks go to 40, and flab rf
+  fold 0 admitted 40.
+- Tree ensembles and neural networks want different numbers of features and different
+  representations (the brain dump's "small blueprint investigation"):
+  - Budget, from stored inner-search scores (result_db, 10-representation pools, 5 folds): on caco2
+    dnn is best at 2,000 features and still improving, rf at 250 and worse above it, lightgbm and
+    svm at 500; on flab_thermo_tresanco lightgbm and svm are best at 50, dnn and rf at 2,000 (409
+    realised). Held-out (c33, rf and svm only): herg_ki rf best at 250, svm at 941; flab rf 448,
+    svm 100. TODO(prelim).
+  - Representations, from f29 (each whole representation fed to each model, 5 folds): the rank
+    correlation of the 10 representations' scores between rf and dnn is 0.09 on
+    buchwald_hartwig, 0.22 caco2, 0.52 logd, 0.83 flab_expression_koenig, 0.95 tcga_brca_pam50;
+    between rf and xgboost 0.84-0.99. On caco2 dnn's best representation is mhg_gnn while all
+    four tree models pick graph_kernel or pdv.
+  - Planned: which features a tree hybrid and a dnn hybrid select on the same dataset (Jaccard
+    of selected features, by source representation). Nothing held-out exists yet.
+
+5.6  Results: blueprints on specific datasets
+- Deep dives: take the best hybrid on a dataset and ask whether its features match the
+  chemistry (explain_hybrid, importance/hybrid.py:474-560). Choose datasets where the selected
+  features are named (pdv, ecfp, maccs), so herg_ki, caco2 or logd. TODO(prelim).
+- Stability of the selection across folds (c24): Nogueira index 0.074 on flab_thermo_tresanco,
+  0.275 herg_ki, 0.447 caco2. TODO(prelim).
+- [DIAGRAM D5.5] For one herg_ki blueprint: the budget split across representations as a
+  stacked bar, and the top named features with their substructures drawn (for ECFP bits, the
+  atom environment on an example molecule).
+
+5.7  Results: OPIG
+- Blueprint transfer (logd to herg_ki), RMSE in pKi, positive delta = arm beat herg_ki's best
+  single representation: svm best single 0.6616, recipe 0.5678 (+0.0938), exact features 0.5824
+  (+0.0791); dnn 0.6594, 0.5943 (+0.0651), 0.6815 (-0.0222); lightgbm 0.6318, 0.6019 (+0.0300),
+  0.6005 (+0.0314); rf 0.5994, 0.6030 (-0.0037), 0.6197 (-0.0203); xgboost 0.6226, 0.6447
+  (-0.0222), 0.6277 (-0.0052). Native hybrid for reference: rf 0.6040, xgboost 0.6411, svm 0.5693,
+  dnn 0.6064, lightgbm 0.5925. The pattern: re-running the recipe transfers to the smaller dataset
+  on 3 of 5 models; copying the exact features beats the best single representation on 2 of 5.
+  That supports publishing a recipe found on a large dataset, not a feature list. TODO(prelim).
+  CHECK: the "Promising experiments" table puts "wins 3/5" under the exact-features column; the
+  run log (scratchpad/opig_verify/blueprint.log) gives recipe 3 of 5, exact features 2 of 5.
+  Per-fold spread of the exact-feature delta for dnn is 0.1823.
+- Hybrid against best single representation on an antibody deep mutational scan
+  (opig_scaffold_hybrid, flab_expression_koenig, 4,275 antibodies, 3 outer folds, reduced search):
+  delta in Spearman, dnn +0.0286, lightgbm +0.0431, rf +0.0366, svm +0.0287, xgboost +0.0257; best
+  single was prot_t5 on every model; the winning hybrids mix prot_t5, igt5, ablang2 and esm2 at
+  roughly 30/25/25/20. The mutation-difference representations this experiment was written for
+  were not selected by 9 of 15 winning recipes, so report it as a hybrid-against-best-single
+  result, not a result about those representations. TODO(prelim).
+- For each OPIG task included: background (what the task is and how it is used), the hybrid
+  result, and which features were selected.
+
+5.8  Results: federated
+- fed03 Part A, preliminary probe (herg_ki sites, 3 folds, seed 0, budget 100): one model per site
+  with distance-weighted predictions, on the fingerprint 0.4711 MCC, on the selected features
+  0.4981, ahead on all 3 folds; the same selection with the molecules pooled (C4) 0.5426; naive
+  pool 0.4995. The pattern: the selection gain survives keeping the molecules at their sites, at
+  about 60% of its pooled size (+0.027 against +0.043). TODO(prelim): single budget, one seed.
+  CHECK: the fingerprint arm and the selected arm differ in width and source at once (5.3.5);
+  add an arm with one model per site on all six representations to separate them.
+- Other Part A results after the metric fix (a dated memory note, re-check): C4 0.5355 against the
+  same selection computed on pooled molecules 0.5335; allocation rules within 0.004 MCC of one
+  another; budget 400 0.5485, 100 0.5426, 50 0.5287.
+- Attempts that did not work, briefly (brain dump: "failed attempts"):
+  - fed01, different label noise per site: removing even every truly flipped molecule gains at
+    most +0.0073 to +0.0677 MCC; every vote threshold for removing flagged molecules loses 0.03 to
+    0.11 (RESULTS.md, dated).
+  - fed02, each site holds one representation of the same molecules: on herg_ki the best single
+    site beats every combination; caco2 and logd each have a different winner (3 folds; fold spread
+    about ten times the gaps). The server run never completed.
+  - fed04, per-region feature importance on k-means sites: +0.0004 over 40 paired folds.
+  - fed05, antibody sites: the noisy site receives 8 features against 46 for each clean site.
+    CHECK: its C2 arm moves features between sites by raw array index, which RESULTS.md flags.
+
+5.9  Discussion
+- Does the search overfit? Arguments both ways (brain dump). For: features are chosen on the same
+  training labels the model sees; Dablander found label-driven bit selection did worse than an
+  unsupervised one. Against: c33 scores each budget's recipe on untouched outer folds, and the
+  inner search under-promised at every budget (bias -0.0095 to -0.0354 on flab, -0.0338 to
+  -0.0511 on herg_ki); c11 charges the hybrid and the best single representation the same cost
+  for choosing a budget. The robustness side: a model that learns from strong features drawn from
+  several sources is not relying on one representation's view. Existing prose:
+  thesis.tex:1626 (Ambroise2002, Cawley2010, Nogueira2018 and others, not in refs.bib).
+  TODO(prelim) for the c33 numbers.
+- Where hybrids do not help (one representation dominates): a sign that the search is not
+  inflating results where selection has nothing to add.
+
+5.10  Limitations
+- Compute and run time. Hours per dataset for the full search; wglobal_power2 alone was 71% of
+  logd's 14.45 hours on the f33 record.
+- A change to the data (different splits), a new representation or a new model means repeating
+  the search.
+- High cost before the gain is known; some datasets are not helped, and a standout
+  representation in the pool is a hint but not a guarantee.
+- Reproducibility is harder: the blueprint stores the recipe, and a rebuild on other molecules
+  can pick other features.
+- Simpler feature selection may be enough for some tasks.
+- Existing prose: thesis.tex:1865-1869 (small datasets, frozen-embedding ceiling, sparse
+  sequence encodings, engineering burden, the noise ceiling from Kramer2012). Re-check the
+  "no gain under about 200 molecules" claim; it predates the small-dataset allocation work.
+
+5.11  Conclusion
+- One paragraph per research question; bridge to Chapter 6.
+
+
+CHAPTER 6  HYBRID REPRESENTATIONS FOR SIMILARITY AND LABEL NOISE  (about 25 to 30 pages)
+Planned as the second hybrid paper. Results are preliminary; methods are final.
 
 6.1  Introduction
-- Recalling Definition 2.2 and the motivation of Chapter 4, this chapter measures how much
-  the notion of similarity depends on the representation, and whether the hybrid
-  representation gives a more property-aware similarity, then uses that to revisit the
-  noisy-label question Chapter 3 left open.
-- Review of existing approaches: van Tilborg et al. 2022 and Maggiora et al. 2014
-  (similarity depends on the representation), Aggarwal et al. 2001 (high-dimensional
-  distance concentration), and, for noise cleaning, Northcutt et al. 2021 (Confident
-  Learning, a model-confidence contrast to neighbour-based estimators), Brodley and Friedl
-  1999 (instance-selection filtering), and Wilson 1972 (edited nearest neighbours).
+- Short. Chapter 4 showed where the similarity assumption fails; Chapter 5 built a
+  representation chosen for the task. This chapter asks whether that representation repairs
+  what Chapter 4 found broken: similarity, noise detection and noise mitigation.
+- Research questions as bullets.
+- TODO(lit): Northcutt et al. 2021 (Confident Learning; northcutt2021confident in refs.bib, not
+  yet cited), Brodley and Friedl 1999, Wilson 1972 (not in refs.bib).
 
-6.2  Similarity and the representation
-- The premise is that similarity is representation-dependent: for each representation, the
-  similarity-activity correlation (Spearman of pairwise distance against absolute property
-  difference, with a permutation test) measures how well "similar" tracks "similar property".
-  Figure 6.1 (spread of the correlation across representations).
-- The central positive claim is that the hybrid's importance-weighted distance gives a more
-  property-aware similarity than the best single representation or a plain concatenation,
-  reported as a delta in that correlation and aggregated across datasets with a Wilcoxon test.
-  Figure 6.2 and Table 6.1.
+6.2  Methods
+6.2.1  Similarity in a hybrid
+- Two spaces: an ordinary hybrid (objective='predictive'), and a similarity hybrid
+  (objective='similarity': for each held-out molecule, its 5 nearest neighbours by distance in the
+  hybrid, taken from other scaffold groups; the molecule's activity predicted as their
+  distance-weighted mean; scored by Spearman against the truth, or 2(AUROC - 0.5) for
+  classification; no downstream model fitted; _readacross_objective_score, find_best_hybrid.py:
+  2079-2186; Manhattan distance by default).
+- Undefined on tcga_brca_pam50 (4 classes), tz_her2_multiclass, and tz_her2_binary (a held-out
+  block can hold one edit-distance shell, so no molecule has neighbours from another group);
+  dataset_policy.py:606-645. Similarity recipes exist only for the six molecular datasets.
+- CHECK: tests/precompute_hybrids.py:757-761 forces the whole pool for every non-predictive
+  objective, so the similarity precomputes never search representation count.
+- Importance-weighted distance: each feature scaled by the square root of its importance before
+  the distance (existing prose thesis.tex:1683-1687; CHECK the weight convention against the code).
+- [DIAGRAM D6.1] The two objectives side by side: predictive (hybrid -> downstream model ->
+  held-out score) and similarity (hybrid -> 5 nearest neighbours from other groups -> predicted
+  activity -> Spearman). Same search, different score.
 
-6.3  Noise estimation and mitigation inside the method
-- The flagship validates the noise estimators against real assay noise rather than injected
-  noise: on BindingDB, the per-(drug,target) replicate standard deviation of measured affinity
-  is the ground-truth noise signal, and the question is whether each estimator ranks samples in
-  agreement with that real disagreement, in the hybrid space versus the alternatives. This is
-  the chapter's external-validity anchor. Figure 6.3.
-- Supporting experiments: a Gaussian-process leave-one-out test of whether the hybrid space
-  separates genuine noise from activity cliffs (Figure 6.4); a remediation experiment measuring
-  how much clean-data performance is recovered by downweighting, label smoothing, and neighbour
-  smoothing (Figure 6.5); and the corrected learning-with-noisy-labels survey, the matured,
-  oracle-leak-free version of the exploratory Chapter 4 study, re-searching the feature mix per
-  noise level (Table 6.2).
-- The conceptual hinge between the chapter's two halves: neighbour-based noise detectors built
-  on the similarity assumption mistake activity cliffs for noise, and the question is whether
-  the hybrid distance reduces that contamination relative to single-representation baselines.
-  Table 6.3.
-- Calibration of the hybrid across feature budgets would tie the uncertainty thread of
-  Chapter 3 to the method; the conformal machinery exists (MAPIE split and cross-conformal, and
-  a Mondrian applicability-domain regressor) but the budget-sweep figure is planned, not yet
-  wired. Figure 6.6.
+6.2.2  Noise conditions
+- The conditions are defined once in Chapter 2.4 (the NoiseInject noise model). Table 6.1 (a
+  Dablander-style table the brain dump lacks): one row per noise type used in this chapter, what is
+  injected, its parameters, and which datasets. Covers Gaussian, outlier, grouped-shifted,
+  censoring, and real labels with nothing injected (src/kirby/noise_spec.py:96-134).
 
-6.4  Conclusion
-- Honest limits: where comparisons are best-case rather than fully blind, stated plainly,
-  with the fair comparison foregrounded. This closes the loop opened in Chapter 3; the
-  concluding chapter develops the open directions and draws the argument together.
+6.2.3  The three noise-mitigation experiments (final methods)
+Brain dump: three that look like they work, method by method. Chosen: detection-limit correction
+(n30), the twelve LNL methods (n09), cleaning labels as they come (n18).
+- Every experiment compares the hybrid against each downstream model's own top 2 single
+  representations (base_1, base_2), per the standing rule. CHECK: the preliminary runs below used
+  a fixed list instead (pick_noise_base_rep, deleted in 57dc506): onehot on flab_thermo_tresanco
+  and ecfp4 on herg_ki and caco2. The commit message says onehot is the worst of
+  flab_thermo_tresanco's 10 representations (0.3471 Spearman with rf). So every preliminary
+  "hybrid beats onehot/ecfp4" number is against a weak single representation, not the best one.
+- n30, correcting labels clipped at a detection limit (tests/experiments/noise/n30_censored_
+  likelihood.py). Condition: censoring (training labels past a limit set to the limit; test
+  labels untouched). Label arms: clean, clipped, constant_lift (every clipped label raised by one
+  amount estimated from the non-clipped training molecules), per_molecule_lift and its shuffled
+  control, truncated_normal_mean, drop_clipped, winsorising at 1.0/1.25/1.5. Model swaps:
+  xgboost_aft (a censored likelihood), rf_l1, lightgbm_huber. Spaces: base_1, base_2, and the hybrid
+  rebuilt per fold from the clipped labels. Recovery = (clipped - arm)/(clipped - clean), refused
+  when the gap is under 2% of the clean score.
+  CHECK: the probe's lift is limit + sd*phi(a)/(1-Phi(a)); the mean of a normal above the limit is
+  p + sd*phi(a)/(1-Phi(a)), smaller by (limit - p). n30 keeps both (constant_lift reproduces the
+  probe; truncated_normal_mean is the textbook mean).
+- n09, twelve LNL methods (n09_lnl_survey.py; methods in src/kirby/utils/lnl_methods.py:
+  2272-2288): small_loss, confident_learning, distance_selection, multistage_cleaning,
+  early_learning, uncertainty_curriculum, dividemix, meta_weight_net, mentornet,
+  contrast_to_divide, heteroscedastic_gp, evidential_kernel. Conditions: plain dnn and each method,
+  on the single representations, the hybrid, and the importance-weighted hybrid. The hybrid is
+  re-searched per noise level and fold on the noisy labels. dnn: layers 256/128/64, 200 epochs,
+  dropout 0.2. Table 6.2: one line per method saying what it does (the "Promising experiments"
+  file has these).
+- n18, cleaning labels as they come, nothing injected (n18_clean_the_real_labels.py). Cleanups:
+  remove, downweight, label_smooth, knn_smooth, oof_smooth, gp_smooth, quantile_clip. Flag rates
+  1%, 5%, 20%. Suspicion scores: neighbor_residual, cross_val. Spaces: base_1, base_2, the hybrid,
+  the similarity hybrid, each built once per fold on the uncleaned labels. QM9 is the control: its
+  labels come from a calculation. CHECK: the preliminary run swept 5 suspicion scores; the script
+  defines 2.
+- Existing prose to reuse: sample removal, noise estimation, label smoothing and weighting,
+  recovery rate (thesis.tex:1713-1817). Needs its "TODO: get sources" (1732) and the informal
+  first-person lines (1716) fixed.
+
+6.3  Results: similarity
+- Importance-weighted distance for k-nearest-neighbour prediction (c04, from the complexity suite,
+  moved here because it is a distance result). All representations concatenated; features scaled
+  by the square root of their importance, so zero-importance features drop out. k = 10, R2
+  weighted minus unweighted: flab_thermo_tresanco +0.2164 (unweighted -0.0375, weighted 0.1790),
+  caco2 +0.0546, herg_ki +0.0487 (10 representations, 5 folds). On the later 5-representation,
+  3-fold run: +0.0629, +0.0687, +0.0556. The pattern: on all three datasets, weighting by
+  importance gives a better distance than the raw features. TODO(prelim).
+- The kNN half of c19 (5.5) belongs with this.
+- The similarity hybrid as a predictor: in n18 the similarity hybrid is worse than the ordinary
+  hybrid for a random forest on all three datasets with no cleaning (herg_ki 0.6235 against 0.6029
+  RMSE; caco2 0.3226 against 0.3090; flab 0.6087 against 0.6279 Spearman). Expected: it is chosen
+  for neighbour prediction, not for a forest. TODO(prelim).
+- TODO: decide whether to add an s-series result (s02 weighting and s10 exponent-and-voting are
+  complete on three datasets per recent commits). "Promising experiments" has none.
+- [DIAGRAM D6.2] Same layout as D4.1 but in the similarity hybrid: activity difference against
+  distance for sampled pairs, single representation against hybrid.
+
+6.4  Results: noise detection and estimation
+- "Promising experiments" has no detection or estimation result. Evidence that exists (dated
+  files, re-check): on herg_ki with outlier noise on 10% of labels (chance precision 0.095), ten
+  single representations detect the noisy labels at average precision 0.4036-0.4326 and every
+  combination of them lands inside that range (/Volumes/seagate/local_noise_run/loop_headroom/
+  FINDINGS.md §4). Decision for Adelaide: include, or wait for n11/n21/n23.
+- The paradox to state: identifying which labels are noisy, and estimating how noisy, is possible
+  for outliers and systematic offsets; correcting them is a different problem (6.5).
+
+6.5  Results: noise mitigation, by noise type
+Method by method first, then by noise type. All TODO(prelim).
+6.5.1  Censoring: correcting labels clipped at a detection limit
+- herg_ki, top 10% of training labels (94 of 941) clipped at 6.86 pKi, RMSE on test molecules,
+  mean of 3 folds (rf / lightgbm / knn / svm): never clipped 0.6032 / 0.6087 / 0.6871 / 0.6841;
+  clipped 0.6588 / 0.6499 / 0.7158 / 0.7148; clipped then corrected 0.6118 / 0.6248 / 0.6937 /
+  0.6847; clipped molecules deleted 0.7706 / 0.7631 / 0.8037 / 0.8162. Also herg_ki at 25% and 40%
+  clipped and caco2 at 25%: the corrected labels beat the clipped labels in 48 of 48 comparisons
+  (every model, fold and condition). Share of the clipping damage recovered: 45-98% across 4
+  conditions and 4 models. Raising every clipped label by the same amount does as well as a
+  per-molecule amount (dealing the per-molecule amounts to the wrong molecules does as well too).
+  Deleting the clipped molecules is worse than keeping them clipped, on every model.
+- Source: the Seagate probe (loop_headroom/censoring_probe.py), on ecfp4. n30 is the suite
+  version and has not run.
+- Note for the text: real herg_ki is fetched with relation "=", so censored ChEMBL records are
+  filtered out; this mechanism is studied by injecting it. caco2 and logd are already clipped at
+  their 1st and 99th percentiles by the loader.
+
+6.5.2  Gaussian noise: twelve LNL methods (n09)
+- flab_thermo_tresanco, 672 antibodies, Spearman, mean of 3 folds. Noise standard deviation 0.5x
+  and 1.5x the labels' own (5.18 and 15.54 C against a spread of 10.12 C).
+  - Plain network, no added noise: onehot 0.4167, hybrid 0.5418, importance-weighted hybrid
+    0.5857.
+  - At 0.5x: neither input lost accuracy (onehot 0.4534, hybrid 0.5991); 0 of 12 methods beat the
+    plain network on either input.
+  - At 1.5x: onehot 0.2729, hybrid 0.4859, weighted hybrid 0.5118; 8 of 12 methods beat the plain
+    network on each input. The best method on onehot (small_loss, 0.3568) is below the plain
+    network on the hybrid (0.4859).
+  - The hybrid is ahead of onehot at every noise level, for the plain network and for all twelve
+    methods.
+  - The pattern: at the noise level where the methods help, the input changes the score more than
+    the method does. Per-method tables go to Appendix D.
+  - CHECK: onehot is the worst single representation on this dataset (6.2.3). The plain onehot
+    network ranges 0.257-0.644 across folds with no noise.
+
+6.5.3  Real labels, nothing injected: cleaning (n18)
+- Random forest, 3 folds, hybrid budget 50; each cell the mean over all settings run.
+  - herg_ki, RMSE: no cleaning ecfp4 0.6032, hybrid 0.6029, similarity hybrid 0.6235. Every cleanup
+    on every space is at or above its no-cleaning score (downweight on ecfp4 0.6040).
+  - caco2, RMSE: no cleaning 0.3242 / 0.3090 / 0.3226; downweight equals no cleaning on the hybrid
+    (0.3090); every other cleanup is above it.
+  - flab_thermo_tresanco, Spearman: no cleaning onehot 0.4068, hybrid 0.6279, similarity hybrid
+    0.6087. On the hybrid, every cleanup is above no cleaning (remove 0.6429, downweight 0.6407);
+    on onehot, every cleanup is below (remove 0.3498).
+- The pattern: on the two small-molecule datasets, cleaning real labels did not improve on leaving
+  them; on the antibody dataset the direction depends on the space. TODO(prelim).
+
+6.5.4  Outliers and grouped offsets
+- No preliminary result in "Promising experiments". Experiments that cover them: n07 (seven
+  corrections after detection, outlier_p05), n24 (delete or keep flagged molecules), n34 (one
+  offset per scaffold group, grouped_shifted), n29 (one offset per ChEMBL document). Decision for
+  Adelaide: which one, if any, goes in the first draft.
+
+6.5.5  By noise type (the discussion the brain dump asks for)
+- Gaussian noise is the standard assumption and the hardest to fix: every label carries some
+  error of unknown size and direction; a detector that compares a molecule to its neighbours
+  compares it to labels that are also noisy; even a correctly flagged label has no known
+  correction. Cleaned datasets often give worse models than the noisy ones they came from
+  (confirmation report; 4.4.2). Better similarity does not remove that problem.
+- Outliers are easier to find (a point that sticks out). Censoring has a known direction and a
+  known location, which is why one constant recovers most of the damage (6.5.1).
+- Practical takeaways (brain dump): what kind of noise do you suspect? Assays pooled from many
+  laboratories (shifted or systematic offsets); molecules from very different domains; a single
+  controlled experiment with a detection limit (censoring). If the source and amount are unknown,
+  what should you do?
+- [DIAGRAM D6.3] One panel per noise type (Gaussian, outlier, grouped-shifted, censoring): true
+  label against observed label, with the detectable part and the correctable part marked. Shows why
+  censoring is fixable and Gaussian is not.
+
+6.6  Conclusion
+- Short; limits stated plainly. Bridge to Chapter 7.
 
 
-CHAPTER 7  DISCUSSION AND FUTURE DIRECTIONS  (about 11 to 14 pages)
-The single closing chapter: it draws the argument together, recaps the contributions, then
-develops the main open directions. The back-matter Summary of Research Contributions
-follows separately.
+CHAPTER 7  DISCUSSION AND FUTURE DIRECTIONS  (about 12 to 15 pages)
+The closing argument from the brain dump, then limitations and next steps. Each chapter's own
+conclusions carry the detail (Dablander points readers to them the same way).
 
-7.1  Conclusions
-- The single line of the thesis: under label noise the model governs robustness and the
-  representation governs clean performance and the meaningfulness of uncertainty and
-  similarity; adapting the representation then makes prediction more robust, similarity
-  more property-aware, and noise estimation more reliable, while staying interpretable and
-  extendable.
-- Contributions, across three distinct software artifacts and their findings: the
-  NoiseInject benchmarking framework (released, MIT) and the noise-robustness and
-  uncertainty findings of Chapter 3; the standalone Rust and Python
-  chemical-processing and precompute pipeline for high-throughput feature extraction and
-  serialization, the apparatus behind those experiments, to be simplified and released
-  separately; and the KIRBy research codebase (pure Python), comprising the adaptive hybrid
-  representation and its blueprint, and the results on when and why it helps, on its
-  extension to new embeddings and federated data, and on similarity and label noise.
-- Closing remarks on what this means for choosing representations and models in noisy
-  settings.
+7.1  Summary
+- One paragraph per chapter: what it asked and what it found.
 
-7.2  Future directions
-- The directions that remain fall into a few groups, building on the same method.
-- Future work could make forward compatibility symmetric: testing whether the hybrid
-  representation improves a weak new embedding, not only whether the embedding improves the
-  hybrid set. This is a proposed direction, not a result of this thesis.
-- Carrying a blueprint across domains, and across noise distributions beyond Gaussian.
-- A fuller federated deployment with Lhasa, and extending the noise-estimation work from
-  regression to classification endpoints.
+7.2  Handling noise realistically
+- Model the noise before choosing a method: noise is not only Gaussian, and if it is, that is the
+  hardest case.
+
+7.3  No single method fits every dataset
+- Methods for learning with noisy labels exist; mitigation is harder; both depend on the data,
+  the amount and type of noise, the number of samples, and whether the features describe the data.
+- Count, across the thesis, the results where datasets preferred different settings: allocation
+  method, representation count, importance method, internal evaluator, downstream model, budget
+  (5.2.3); the best representation changing with the noise condition (Chapter 3, 3.5).
+- What the thesis provides is a way to test: methods that might work, and a procedure that gives
+  a supervised task its best chance by choosing the features for that task, instead of a new
+  architecture tuned to one problem.
+
+7.4  Simple is often better
+- Chapter 3: the most consistently noise-robust models were random forests and other tree
+  ensembles; neural networks varied (standout pairs exist, such as NGBoost on PDV). TODO: re-check
+  the NGBoost/PDV example against Chapter 3's current text (3.4: NGBoost has the highest AUC_norm on
+  all six representations under Gaussian noise).
+- Chapter 5: the best hybrids often use fewer features than the largest budget; k-nearest
+  neighbours with a small, task-relevant feature set does better than on raw features (6.3).
+- Complex noise-mitigation methods that had no effect: say which, without method-level detail
+  (n09 at 0.5x noise: 0 of 12 beat the plain network; fed01; the confirmation report's
+  distance methods). Why methods that work on images or financial data do not carry to molecular
+  assay data. TODO(lit).
+- Methods tuned to one problem do not generalise; simple ones do not either (feature selection
+  needs tuning per dataset). The range of tasks (binding affinity, ADME, antibodies) is why models
+  are used at all; over-optimising to one loses generality.
+
+7.5  Limitations
+- Noise mitigation: with unknown noise on every label and no ground truth, correcting labels is
+  hard; outlier and systematic-error detection are possible.
+- Recommendation: learning with noisy labels over direct mitigation. Models can adapt to noise
+  during training more reliably than a per-sample guess at the error's direction. They can be paired
+  with uncertainty estimation where it is reliable: per-sample uncertainty tracks noise weakly
+  (Chapter 3, 3.8: per-molecule correlation between -0.16 and 0.16 under six of seven conditions),
+  while the overall level of uncertainty rises with the amount of noise.
+- The search's cost and reproducibility (5.10).
+
+7.6  Future directions
+- Classification and label flipping.
+- Other uses of hybrid features: they worked, indirectly, in the federated setting (5.8); as
+  inputs to generative models, and what the search would optimise for that task.
+- A faster search: it is too heavy to be practical as it stands.
+- From the old outline, kept: forward compatibility made symmetric (does the hybrid improve a weak
+  new embedding?); carrying a blueprint across domains; a fuller federated deployment with Lhasa.
+- Existing prose: thesis.tex:1871-1896 (the confirmation report's next steps, partly done; the
+  "what this means in practice" paragraph).
 
 
 SUMMARY OF RESEARCH CONTRIBUTIONS
 - A short closing list (following the peer theses): the NoiseInject paper and the planned
-  hybrid-representation papers, the UK-QSAR conference presentation, the OPIG Blopig posts,
-  and the three distinct open-source software artifacts (NoiseInject, MIT, released; the
-  standalone Rust and Python chemical-processing and precompute pipeline, to be simplified
-  and released separately; and the KIRBy research codebase, pure Python).
+  hybrid-representation papers (Chapters 5 and 6), the UK-QSAR conference presentation, the OPIG
+  Blopig posts, and the three distinct open-source software artifacts (NoiseInject, MIT,
+  released; the standalone Rust and Python chemical-processing and precompute pipeline, to be
+  simplified and released separately; and the KIRBy research codebase, pure Python).
+- thesis.tex:1911 carries the old second paper title; typos "prepration" (1919, 1922) and "Posted
+  presented" (1925).
 
 
 BIBLIOGRAPHY
 - Author-year style, about 180 to 220 entries.
+- 39 keys cited in thesis.tex's second half have no entry in refs.bib or sn_bibliography.bib.
+  Fang2022 is cited at thesis.tex:1523 for GNN embeddings but is the CVPR federated-noise paper;
+  that sentence needs Fang et al. 2022, GEM (Nature Machine Intelligence).
 
 
 APPENDICES
-- A: datasets and curation (Chapters 3 to 6): QM9, LogD, Caco-2, hERG, and the second-half
-  datasets, with per-dataset provenance, accession numbers, and DOIs.
+- A: datasets and curation (Chapters 3 to 6): QM9, LogD, Caco-2, hERG, and the sixteen datasets
+  of Chapter 5, with per-dataset provenance, curation counts before and after, accession numbers,
+  and DOIs. Must say which curation each chapter used (Chapter 3's 5,039/2,161/1,415 against
+  KIRBy's 5,028/2,158/1,412).
 - B: the supplementary tables and figures for Chapter 3. Each is one file in
   KIRBy/thesis_appendix/noise/items/, listed in thesis_appendix/noise/INDEX.md, and placed in
   thesis.tex as its own section with the label app:noise:sec:<name>. They were copied on
@@ -704,30 +1505,15 @@ APPENDICES
   Cited by the paper text but not built yet: variant_models_assay (the six variant models on the
   three assay datasets) and counterparts_assay (the T11 counterpart tables for logD, Caco-2 and
   hERG Ki).
-- C: the method's full search space and the design-experiment tables behind its defaults
-  (Chapter 4). The full vocabulary: downstream models (rf, xgboost, ridge, knn, lightgbm,
-  mlp, svm, gp, with optional catboost, dnn, cnn, bnn, ngboost); feature budgets (roughly 10
-  to 2,000, per-model capped); allocation methods (greedy, performance-weighted with its
-  weighting schemes, dominant-greedy, fixed, two-stage, stability-selection); importance
-  methods (treeshap, xgboost_gain, lightgbm_gain, permutation, kernelshap, deeplift,
-  integrated_gradients, gradientshap); internal evaluators (match, or rf/svm/lightgbm/mlp);
-  augmentation strategies; and the exact blueprint fields.
-- D: extended result tables for the second-half chapters (Chapters 5 to 6), organised by the
-  featured experiments: the cross-domain summary (per-task hybrid-versus-best-single deltas
-  with the Wilcoxon test and per-domain win rates); the information-theoretic decomposition
-  (mutual information per dimension against feature budget, with the PCA, random, and
-  matched-dimensionality-null controls); the explainability and attribution tables (per-
-  representation SHAP importance and named top features, with the feature-set stability index
-  and fold-to-fold Jaccard); the forward-compatibility tables (per-new-representation
-  contribution deltas against the random-Gaussian and row-shuffled nulls, with the
-  blueprint-transfer ladder); the federated comparator tables (feature-importance sharing
-  versus the similarity-weighted, performance-weighted, and distillation ensembles, under
-  unequal per-party noise, plus the real-source three-silo comparison under its data-
-  availability caveat); the similarity-activity correlation tables (per-representation
-  correlation and the hybrid-versus-best-single delta with cross-dataset significance); the
-  BindingDB ground-truth-noise table (estimator-by-space agreement with replicate-variance
-  ground truth); and the remediation and noise-estimation tables (recovery of clean-data
-  performance per estimator, representation, and noise level).
+- C: the hybrid search's full space and the design-experiment tables behind its defaults
+  (Chapter 5): the values in 5.2.2, the f33 cells-won tables of 5.2.3, the c32 allocation cross,
+  the fast-tier evidence, the pruning schedule, and the exact blueprint fields. thesis.tex's
+  Appendix C comment still lists greedy, dominant-greedy and mlp.
+- D: extended result tables for Chapters 4 to 6: Chapter 4's per-representation feature counts,
+  tie census and distance-activity tables; Chapter 5's per-dataset hybrid-against-best-single
+  tables, c17 per budget, c23, c19, c21 with decoy counts, blueprint transfer per fold, fed03 arms;
+  Chapter 6's per-method n09 tables at both noise levels, n18 per cleanup and setting, and n30 per
+  arm and clipped fraction.
 - E: data and code availability (all chapters). The full statement covers three distinct
   software artifacts. (1) NoiseInject: the open-source benchmarking framework, MIT, at
   github.com/adpunt/noise_inject, archived on Zenodo; released. (2) The standalone Rust and
