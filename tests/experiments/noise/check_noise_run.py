@@ -168,6 +168,12 @@ def _same(a, b):
 # ---------------------------------------------------------------------------
 # (a) finished, rows on disk
 # ---------------------------------------------------------------------------
+# Experiments that write no D vs D' rows by design: they measure something and
+# change no training data (grep for a row writer finds none in these files,
+# 2026-09-27). For them "no rows" is not a failure; the result file is the check.
+NO_ROWS_BY_DESIGN = {'c10', 'n01', 'n06', 'n14', 'n15', 'n16', 'n26', 'n37'}
+
+
 def check_finished(args, V):
     print("\n(a) BOTH RUNS FINISHED, ROWS ON DISK FOR EVERY FOLD THAT RAN")
     per_run = {}
@@ -201,6 +207,13 @@ def check_finished(args, V):
             st = res.get('result_status')
             msg = f"{tag}: result file {rj} (result_status={st!r})"
             (V.ok if st in ('ok', 'skipped') else lambda m: V.fail('a', m))(msg)
+            if st == 'skipped' or res.get('skipped'):
+                # The experiment decided this dataset is out of its scope and
+                # said why (e.g. regression-only, or needs repeat measurements).
+                # That is a pass for a crash-and-cache check, not a failure.
+                args._skipped = True
+                V.note(f"{tag}: SKIPPED by the experiment -- "
+                       f"{_short(res.get('reason') or res.get('skip_reason') or res.get('why') or '')}")
         rows, files = read_rows(out, args.dataset, args.experiment)
         per_run[tag] = {'manifest': man, 'result': res, 'result_path': rj,
                         'rows': rows}
@@ -217,7 +230,12 @@ def check_finished(args, V):
             n = ((res or {}).get('input_fingerprint') or {}).get('n_splits')
             want = set(range(int(n))) if n else None
         got = {r.get('fold') for r in rows}
-        if not rows:
+        _no_rows_ok = (args.experiment in NO_ROWS_BY_DESIGN
+                       or getattr(args, '_skipped', False))
+        if not rows and _no_rows_ok:
+            V.note(f"{tag}: no output rows, as expected "
+                   f"({'skipped' if getattr(args, '_skipped', False) else 'this experiment writes none'})")
+        elif not rows:
             V.fail('a', f"{tag}: no output rows (*.jsonl with dataset="
                         f"{args.dataset}, experiment={args.experiment}) under {out}")
         elif want is None:
@@ -271,6 +289,9 @@ def check_cache(args, V):
     rep1 = rep1 if isinstance(rep1, dict) and '_unreadable' not in rep1 else {}
     rep2 = rep2 if isinstance(rep2, dict) and '_unreadable' not in rep2 else {}
     if not rep1 and not rep2:
+        if getattr(args, '_skipped', False):
+            V.note("no cache calls: the experiment skipped this dataset")
+            return
         V.fail('b', "neither run recorded a cache call, so this experiment does "
                     "not go through noise_cache yet and run 2 cannot be shown to "
                     "be all hits")
