@@ -650,7 +650,17 @@ def _refuse_cold_search(*, tier, objective, dataset_name, result_db_identity,
     try:
         from .result_cache import ResultCache as _RC
         with _RC(result_db_dataset, cache_dir=result_db_cache_dir) as _rc:
-            have = len(list(_rc.fetch_rows(result_db_identity)))
+            # Count only the rows written with THIS augmentation setting.
+            # aug_strategy is a per-row CONFIG column (result_cache.CONFIG_COLS),
+            # not part of the identity, so fetch_rows returns every strategy's
+            # rows together. Until 2026-09-27 they were all counted: caco2's
+            # 8,544 rows without augmentation passed an uncapped search for
+            # which 0 rows existed ("105% stored"), and the job then ran the
+            # whole uncapped search inside its 12 h wall.
+            from .result_cache import canon as _canon
+            _want_aug = _canon(augmentation_strategy or 'none')
+            have = sum(1 for _r in _rc.fetch_rows(result_db_identity)
+                       if _canon(_r.get('aug_strategy') or 'none') == _want_aug)
     except _StaleDB:
         # NOT swallowed. This guard exists to stop a run that would search from
         # nothing, and a store it cannot open is exactly that case: returning
@@ -5671,7 +5681,17 @@ def _evaluate_baselines(
                 _bl_pairs_id = _struct_pairs_hash(structural_pairs, row_index)
                 if _bl_pairs_id is not None:
                     _baseline_meta['struct_pairs_id'] = _bl_pairs_id
-                if tune_knn_k:
+                # Only when tuning is ON. tune_knn_k does nothing without tune
+                # (it only marks the kNN estimator inside `if tune:` below), but
+                # precompute_hybrids.py passes tune_knn_k=True on its UNTUNED
+                # passes too (its default). Stamping it there made every
+                # untuned baseline carry an opt-in no untuned experiment asks
+                # for, so each experiment rejected the precompute's baseline,
+                # refitted it and wrote it back unstamped, and the next
+                # precompute pass did the reverse. Seen 2026-09-27 as "stored
+                # opt-in 'tune_knn_k'=True was not requested". Tuned baselines
+                # already sit in their own __tuned<n> file (_baseline_cache_path).
+                if tune_per_fold and tune_knn_k:
                     _baseline_meta['tune_knn_k'] = True
                 _baseline_meta['rep_hash'] = _rep_hash
                 _cached = _load_cache_with_meta(

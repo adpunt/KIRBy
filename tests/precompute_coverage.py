@@ -156,7 +156,8 @@ def main():
         FAST_ALLOCATION_METHODS, FAST_IMPORTANCE_METHODS,
         FAST_INTERNAL_EVALUATORS, FAST_REP_COUNTS,
     )
-    from experiments.dataset_policy import dataset_search_speed
+    from experiments.dataset_policy import (dataset_search_speed,
+                                            SIMILARITY_OBJECTIVE_SKIP_DATASETS)
     from experiments._shared import (
         FULL_BUDGETS, DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
         DOWNSTREAM_MODELS, DISTANCE_MODELS,
@@ -192,6 +193,26 @@ def main():
             print(f"{ds}: database is empty")
             print()
             continue
+
+        # ⛔ LIST THE PASSES THAT HAVE NOT STARTED. Only passes with at least
+        # one row used to print, so a pass the precompute had not reached was
+        # invisible: on 2026-09-27 caco2 showed no general / predictive /
+        # uncapped line at all while it held 0 of those rows, and experiments
+        # that needed it ran the whole search themselves. The passes are the
+        # ones run_precompute_dataset.sh runs (sim, dist): none always, the
+        # augmented ones when the dataset has augmentation representations,
+        # the similarity objective unless it is cut for the dataset.
+        _has_aug = bool(DATASET_REPS.get(ds, {}).get('augmentation'))
+        _augs = ['none'] + (['uncapped', 'capped'] if _has_aug else [])
+        _sim_ok = ds not in SIMILARITY_OBJECTIVE_SKIP_DATASETS
+        _expected = [('general', 'predictive', a, '') for a in _augs]
+        if _sim_ok:
+            _expected += [('general__obj-similarity', 'similarity', a, '') for a in _augs]
+        _expected += [('general_distance', 'predictive', a, '')
+                      for a in (['none', 'uncapped'] if _has_aug else ['none'])]
+        for _k in _expected:
+            if _k not in passes:
+                passes[_k]   # defaultdict: an empty pass, 0 rows
 
         # ⛔ COUNT AGAINST THE GRID THIS DATASET ACTUALLY SEARCHES.
         # Until 2026-09-21 this always counted against the full grid, so the

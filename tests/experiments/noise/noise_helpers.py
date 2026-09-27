@@ -1512,7 +1512,11 @@ SWEEPS_ALL_CONDITIONS = {'n13'}
 # run_all writes a skip marker carrying the reason for them instead, the way
 # should_skip_experiment does; an explicit sweep in their own run() is
 # unaffected.
+# n24 joined 2026-09-27: it raises outside DETECTION_IS_DEFINED
+# (n24_delete_or_keep.py:740-751), and a server check on herg gave it 'uniform'.
+# It now gets the same skip marker as n21 and n25 instead of a crash.
 CONDITION_LIMITED_TO = {'n21': DETECTION_IS_DEFINED,
+                        'n24': DETECTION_IS_DEFINED,
                         'n25': DETECTION_IS_DEFINED}
 
 

@@ -130,8 +130,12 @@ def build_tasks(datasets, experiments):
                 phase_a_plain.append(('A', ds, e, '-'))
                 continue
             conds = per_ds_conds[ds]
-            if e == 'n21':
-                conds = [c for c in conds if c in NH.DETECTION_IS_DEFINED]
+            # n21, n24 and n25 run only under the conditions in
+            # CONDITION_LIMITED_TO; any other condition is a skip marker, so it
+            # gets no task (was n21 alone until 2026-09-27).
+            _lim = getattr(NH, 'CONDITION_LIMITED_TO', {}).get(e)
+            if _lim:
+                conds = [c for c in conds if c in _lim]
             for i, c in enumerate(conds):
                 phase_a_cond.append((i, ('A', ds, e, c)))
             if e in REMAINDER_SWEEP:
