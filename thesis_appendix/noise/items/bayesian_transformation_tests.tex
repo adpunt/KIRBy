@@ -1,0 +1,28 @@
+% Thesis appendix item: bayesian_transformation_tests
+% Seeded on 2026-09-27 from qsar_qm_models/supplementary/items/bayesian_transformation_tests.tex by thesis_appendix/seed_from_paper.py.
+% From here on this copy is edited independently of the paper. Rules: thesis_appendix/README.md.
+% The lines below, down to the first blank line, are the PAPER copy's header, kept for
+% provenance. They describe the paper file, not this one: in particular a GENERATED
+% notice there does not apply here, and this copy may be edited by hand.
+% Supplementary item: bayesian_transformation_tests
+% Split out of additional_files.tex on 2026-09-27, where it was Additional file 8 (NN Bayesian transformation effects (was Supp Table S6)).
+% Content unchanged apart from: the heading line removed (the build writes it), the old
+% 'Table S*/Figure S*' caption prefix replaced by \SuppFile{}, and the label renamed to supp:bayesian_transformation_tests.
+% Rules: supplementary/README.md.
+
+\begin{table}[H]
+\centering
+\caption{\textbf{Neural network Bayesian transformation effects on noise degradation slope (NDS) by representation, on the QM9 HOMO--LUMO gap.}
+Positive $\Delta$ NDS indicates the Bayesian variant is more robust (less negative slope) than its deterministic counterpart.}
+\label{app:noise:bayesian_transformation_tests}
+\small
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{Model} & \textbf{Representation} & \textbf{Baseline R$^2$} & \textbf{NN-$\beta$ NDS} & \textbf{BNN-$\beta$ NDS} & \textbf{$\Delta$ NDS} \\
+\midrule
+NN-$\beta$ & ECFP4 & 0.791 & $-0.464$ & $-0.388$ & $+0.076$ \\
+NN-$\beta$ & PDV & 0.858 & $-0.487$ & $-0.382$ & $+0.106$ \\
+NN-$\beta$ & SMILES & 0.721 & $-0.558$ & $-0.365$ & $+0.193$ \\
+\bottomrule
+\end{tabular}
+\end{table}

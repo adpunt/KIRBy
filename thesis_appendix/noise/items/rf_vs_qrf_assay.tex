@@ -1,0 +1,28 @@
+% Thesis appendix item: rf_vs_qrf_assay
+% Seeded on 2026-09-27 from qsar_qm_models/supplementary/items/rf_vs_qrf_assay.tex by thesis_appendix/seed_from_paper.py.
+% From here on this copy is edited independently of the paper. Rules: thesis_appendix/README.md.
+% The lines below, down to the first blank line, are the PAPER copy's header, kept for
+% provenance. They describe the paper file, not this one: in particular a GENERATED
+% notice there does not apply here, and this copy may be edited by hand.
+% Supplementary item: rf_vs_qrf_assay
+% Split out of additional_files.tex on 2026-09-27, where it was Additional file 11 (RF vs QRF on validation datasets (was Supp Table S7)).
+% Content unchanged apart from: the heading line removed (the build writes it), the old
+% 'Table S*/Figure S*' caption prefix replaced by \SuppFile{}, and the label renamed to supp:rf_vs_qrf_assay.
+% Rules: supplementary/README.md.
+
+\begin{table}[H]
+\centering
+\caption{\textbf{Random forest (RF) vs quantile regression forest (QRF) noise degradation slope (NDS) on the three external validation datasets (LogD, Caco-2 Efflux, hERG K$_i$).}
+Lower (more negative) NDS indicates faster degradation under noise.}
+\label{app:noise:rf_vs_qrf_assay}
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Dataset} & \textbf{RF NDS} & \textbf{QRF NDS} & \textbf{$\Delta$ NDS} \\
+\midrule
+ChEMBL-hERG-Ki     & $-0.231$ & $-0.359$ & $-0.128$ \\
+OpenADMET-Caco2    & $-0.534$ & $-0.627$ & $-0.094$ \\
+OpenADMET-LogD     & $-0.101$ & $-0.185$ & $-0.083$ \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,32 @@
+% Thesis appendix item: uncertainty_metrics_ecfp4
+% Seeded on 2026-09-27 from qsar_qm_models/supplementary/items/uncertainty_metrics_ecfp4.tex by thesis_appendix/seed_from_paper.py.
+% From here on this copy is edited independently of the paper. Rules: thesis_appendix/README.md.
+% The lines below, down to the first blank line, are the PAPER copy's header, kept for
+% provenance. They describe the paper file, not this one: in particular a GENERATED
+% notice there does not apply here, and this copy may be edited by hand.
+% Supplementary item: uncertainty_metrics_ecfp4
+% Split out of additional_files.tex on 2026-09-27, where it was Additional file 9 (Uncertainty metrics ECFP4 (was Supp Table S8)).
+% Content unchanged apart from: the heading line removed (the build writes it), the old
+% 'Table S*/Figure S*' caption prefix replaced by \SuppFile{}, and the label renamed to supp:uncertainty_metrics_ecfp4.
+% Rules: supplementary/README.md.
+
+\begin{table}[H]
+\centering
+\caption{\textbf{Uncertainty quantification metrics for probabilistic models on the ECFP4 representation (Gaussian noise strategy) on the QM9 HOMO--LUMO gap.}
+Unc-Error $\rho$: Spearman correlation between predicted uncertainty and absolute prediction error. Unc-Noise $\rho$: Spearman correlation between predicted uncertainty and injected noise level $\sigma$. ECE: expected calibration error (lower = better-calibrated). Coverage targets: 68\% ($1\sigma$), 95\% ($2\sigma$).}
+\label{app:noise:uncertainty_metrics_ecfp4}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Model} & \textbf{Unc-Error $\rho$} & \textbf{Unc-Noise $\rho$} & \textbf{ECE} & \textbf{Cov.\ $1\sigma$} & \textbf{Cov.\ $2\sigma$} \\
+\midrule
+\textbf{QRF}     & \textbf{0.25} & 0.27 & 0.19 & 74.7\% & 94.6\% \\
+\textbf{NGBoost} & 0.22 & \textbf{0.37} & \textbf{0.11} & 69.2\% & 94.2\% \\
+GP               & 0.18 & 0.34 & 0.23 & 78.6\% & 96.0\% \\
+BNN-$\beta$      & 0.20 & 0.37 & 0.29 & 78.6\% & 95.2\% \\
+BNN-$\alpha$     & 0.15 & 0.32 & 0.24 & 76.6\% & 95.1\% \\
+VBLL-$\beta$     & 0.19 & 0.34 & 0.19 & 73.9\% & 95.5\% \\
+VBLL-$\alpha$    & 0.11 & 0.31 & 0.22 & 74.5\% & 95.1\% \\
+\bottomrule
+\end{tabular}
+\end{table}

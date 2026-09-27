@@ -1,0 +1,32 @@
+% Thesis appendix item: excluded_configurations
+% Seeded on 2026-09-27 from qsar_qm_models/supplementary/items/excluded_configurations.tex by thesis_appendix/seed_from_paper.py.
+% From here on this copy is edited independently of the paper. Rules: thesis_appendix/README.md.
+% The lines below, down to the first blank line, are the PAPER copy's header, kept for
+% provenance. They describe the paper file, not this one: in particular a GENERATED
+% notice there does not apply here, and this copy may be edited by hand.
+% Supplementary item: excluded_configurations
+% Split out of additional_files.tex on 2026-09-27, where it was Additional file 5 (Excluded configurations (was Supp Table S2)).
+% Content unchanged apart from: the heading line removed (the build writes it), the old
+% 'Table S*/Figure S*' caption prefix replaced by \SuppFile{}, and the label renamed to supp:excluded_configurations.
+% Rules: supplementary/README.md.
+
+\begin{table}[H]
+\centering
+\caption{\textbf{Configurations excluded from robustness analysis due to baseline R$^2 \leq 0.6$ on the QM9 HOMO--LUMO gap, summarized by model and representation.}
+Each cell shows the number of noise strategies (out of 6) for which the configuration was excluded.}
+\label{app:noise:excluded_configurations}
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{Mol2Vec} & \textbf{MHGGNN} & \textbf{SMILES} & \textbf{Rand.~SMILES} \\
+\midrule
+BNN-$\alpha$ & 6 & 6 & --- & --- \\
+BNN-$\beta$ & 6 & 6 & --- & --- \\
+VBLL-$\alpha$ & 6 & 6 & --- & --- \\
+VBLL-$\beta$ & 6 & 6 & --- & --- \\
+RF & --- & --- & --- & 4 \\
+QRF & --- & --- & --- & 4 \\
+NGBoost & --- & --- & 6 & 4 \\
+\bottomrule
+\end{tabular}
+\end{table}
