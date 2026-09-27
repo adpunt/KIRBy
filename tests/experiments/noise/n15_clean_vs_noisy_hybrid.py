@@ -111,7 +111,7 @@ from experiments._shared import (
     extract_top3_base_reps, DOWNSTREAM_MODELS_NOISE,
 )
 from experiments.noise.noise_helpers import noisy_search_specs
-from kirby.noise_spec import make_noisy_labels, noisy_labels_hash
+from kirby.noise_spec import TrainingNoise, noisy_labels_hash
 # The disk cache and the per-(noise spec, model) checkpoint, added 2026-09-25
 # (plan section 3). n15 finds no neighbours and changes no training data --
 # both arms train on the same noisy labels and differ in which recipe built
@@ -389,10 +389,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n--- noise {sid} (target effective noise "
               f"{spec.target_effective_noise}) ---")
 
-        # ONE deterministic noisy column, identical to the one the cached noisy
-        # search was built on (both call make_noisy_labels on the full label vector).
-        y_noisy_full = make_noisy_labels(labels, spec, is_clf=is_clf)
-        _noisy_hash = noisy_labels_hash(y_noisy_full)
+        # The noise source the cached noisy search was built on: find_best_hybrid
+        # wraps the same (labels, spec) in a TrainingNoise, which corrupts each
+        # fold's training labels from those labels alone.
+        y_noisy_full = TrainingNoise(labels, spec, is_clf=is_clf)
+        _folds_n15 = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
+        _tr0 = _folds_n15[0][0]
+        _noisy_hash = noisy_labels_hash(y_noisy_full[_tr0])
         results.setdefault('noisy_labels_hash', {})[sid] = _noisy_hash
 
         # ⛔ THE HASH IS CHECKED NOW, NOT JUST WRITTEN. Added 2026-09-18,
@@ -426,7 +429,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # that needs the engine to expose its derived column or its label digest.
         # Until it does, that gap is open and this comment is where it is
         # recorded.
-        _recheck = make_noisy_labels(labels, spec, is_clf=is_clf)
+        _recheck = TrainingNoise(labels, spec, is_clf=is_clf)[_tr0]
         if noisy_labels_hash(_recheck) != _noisy_hash:
             raise RuntimeError(
                 f"n15 {sid}: make_noisy_labels is not deterministic for this "
@@ -441,8 +444,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 f"and the labels have {len(labels)}. They index the same "
                 f"molecules, so every row after the first gap would train on "
                 f"another molecule's label.")
-        _identical = bool(np.array_equal(np.asarray(y_noisy_full),
-                                         np.asarray(labels)))
+        _identical = bool(np.array_equal(np.asarray(y_noisy_full[_tr0]),
+                                         np.asarray(labels)[_tr0]))
         _lvl = float(spec.target_effective_noise or 0.0)
         if _lvl > 0.0 and _identical:
             raise RuntimeError(
@@ -516,7 +519,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if _engine_id is not None:
                 from kirby.find_best_hybrid import (_hash_bytes as _hb,
                                                     _canonical_bytes as _cb)
-                _ours = f'{_hb(_cb(np.asarray(y_noisy_full).ravel())):016x}'[:8]
+                _ours = f'{_hb(_cb(y_noisy_full)):016x}'[:8]
                 if _ours != _engine_id:
                     raise RuntimeError(
                         f"n15 {sid}/{model_name}: the noisy column this run "

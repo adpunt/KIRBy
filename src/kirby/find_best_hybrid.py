@@ -77,6 +77,7 @@ warnings.filterwarnings('ignore')
 # kirby._warn is stdlib-only and imports nothing from the package, so this is
 # safe at module scope and does not pull lightgbm in ahead of torch.
 from kirby._warn import KirbyWarning, warn_once  # noqa: E402
+from kirby.noise_spec import TrainingNoise, label_rows  # noqa: E402
 
 
 # =============================================================================
@@ -488,11 +489,28 @@ def _canonical_bytes(arr) -> bytes:
     np.ascontiguousarray(x).tobytes()), so existing integer-group/-label caches
     keep their exact hash and are NOT forced to rebuild.
     """
+    from kirby.noise_spec import TrainingNoise
+    if isinstance(arr, TrainingNoise):
+        # A per-fold noise source has no single column to hash; its identity is
+        # the clean labels, the groups and the noise condition.
+        return arr.identity_bytes()
     a = np.asarray(arr).ravel()
     if a.dtype == object or a.dtype.kind in ('U', 'S'):
         _, inv = np.unique(a, return_inverse=True)
         a = inv.astype(np.int64)
     return np.ascontiguousarray(a).tobytes()
+
+
+def _noisy_held_out(train_labels, rows, train_idx):
+    """Noisy labels for held-out `rows`, for runs that score on noisy labels.
+
+    A TrainingNoise draws them as the paper draws validation labels: same
+    condition and amount as the training labels, amount and censoring limit from
+    `train_idx`, separate seed. A caller-supplied column is read as it stands.
+    """
+    if isinstance(train_labels, TrainingNoise):
+        return train_labels.held_out(rows, train_idx)
+    return np.asarray(train_labels).ravel()[rows]
 
 
 def _hash_array(arr: np.ndarray) -> int:
@@ -4533,15 +4551,17 @@ def _evaluate_single(
     # Label-noise contract: TRAIN labels may be noisy, VALIDATION labels never are.
     # `train_labels` is the noisy full column (or None / `y` itself when clean), so
     # y_train comes from it while y_val always comes from the clean `y`.
-    _y_tr_src = y if train_labels is None else np.asarray(train_labels).ravel()
+    _y_tr_src = y if train_labels is None else train_labels
     # score_on_noisy_labels lifts the validation half of that contract too: the
     # winner is then picked without a clean label anywhere, which is what a
     # practitioner holding noisy labels actually has.
-    _y_va_src = _y_tr_src if score_on_noisy_labels else y
 
     for train_idx, val_idx in splitter.split(*split_args):
         X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = _y_tr_src[train_idx], _y_va_src[val_idx]
+        y_train = label_rows(_y_tr_src, train_idx)
+        y_val = (_noisy_held_out(train_labels, val_idx, train_idx)
+                 if (score_on_noisy_labels and train_labels is not None)
+                 else y[val_idx])
 
         # Per-fold high-dim filter — fit LGBM on train only, pick top N
         # features, apply to this fold's train and val.
@@ -4861,12 +4881,12 @@ def _evaluate_hybrid_config(
         # (possibly noisy) train labels; scoring at the bottom of this loop always
         # uses the clean val labels.
         y_train = (labels[train_idx] if train_labels is None
-                   else np.asarray(train_labels).ravel()[train_idx])
+                   else label_rows(train_labels, train_idx))
         # score_on_noisy_labels lifts the validation half of that contract too,
         # so a run under label noise picks its winner with no clean label
         # anywhere. Off by default; find_best_hybrid rides it on `tier` and on
         # noise_id, so a run with it on never reads a run with it off.
-        y_val = (np.asarray(train_labels).ravel()[val_idx]
+        y_val = (_noisy_held_out(train_labels, val_idx, train_idx)
                  if (score_on_noisy_labels and train_labels is not None)
                  else labels[val_idx])
 
@@ -5558,17 +5578,18 @@ def _evaluate_baselines(
 
     # Held-out labels the geometry score reads. Clean by default; the noisy
     # column when the caller asked for a run with no clean label anywhere.
-    _geo_val_label_src = (np.asarray(train_labels).ravel()
-                          if (score_on_noisy_labels and train_labels is not None)
-                          else labels)
+    _geo_noisy_val = score_on_noisy_labels and train_labels is not None
 
-    def _geo_fold_score(X_val_scaled, val_idx, _is_clf):
+    def _geo_fold_score(X_val_scaled, val_idx, _is_clf, train_idx):
         """One fold's geometry score under the objective actually requested."""
         _parts = {}
         if OBJECTIVE_SIMILARITY in _geo_components:
             _g_va = groups[val_idx] if groups is not None else None
             _parts[OBJECTIVE_SIMILARITY] = _readacross_objective_score(
-                X_val_scaled, _geo_val_label_src[val_idx], _g_va, _is_clf,
+                X_val_scaled,
+                (_noisy_held_out(train_labels, val_idx, train_idx)
+                 if _geo_noisy_val else labels[val_idx]),
+                _g_va, _is_clf,
                 seed=seed)
         if OBJECTIVE_STRUCT_FID in _geo_components:
             _parts[OBJECTIVE_STRUCT_FID] = _structural_fidelity_score(
@@ -5743,7 +5764,7 @@ def _evaluate_baselines(
                     # Fixed 2026-09-10 (metric-direction audit).
                     _Xt_b, _Xv_b, _ = _impute_nan(_sc.transform(X[_tr]),
                                                   _sc.transform(X[_va]))
-                    _sac_folds.append(_geo_fold_score(_Xv_b, _va, _is_clf_b))
+                    _sac_folds.append(_geo_fold_score(_Xv_b, _va, _is_clf_b, _tr))
                 _m, _nd, _nt = _geometry_fold_mean(_sac_folds)
                 rounded_score = round(_m, 4) if np.isfinite(_m) else float('nan')
                 if _nd < _nt and verbose:
@@ -5855,7 +5876,8 @@ def _evaluate_baselines(
                     _sc = StandardScaler().fit(ft_train)
                     _Xt, _Xv, _ = _impute_nan(_sc.transform(ft_train),
                                               _sc.transform(ft_val))
-                    _geo_folds.append(_geo_fold_score(_Xv, val_idx, _is_clf_f))
+                    _geo_folds.append(_geo_fold_score(_Xv, val_idx, _is_clf_f,
+                                                      train_idx))
                 if _geo_folds:
                     _gm, _gnd, _gnt = _geometry_fold_mean(_geo_folds)
                     _geo_mean = round(_gm, 4) if np.isfinite(_gm) else float('nan')
@@ -5879,7 +5901,7 @@ def _evaluate_baselines(
                     ft_train, ft_val = fold_reps[fold_idx][rep_name]
                     # Train on (possibly noisy) train labels; ALWAYS score on clean val.
                     y_train = (labels[train_idx] if train_labels is None
-                               else np.asarray(train_labels).ravel()[train_idx])
+                               else label_rows(train_labels, train_idx))
                     y_val = labels[val_idx]
 
                     if _apply_hd_filter:
@@ -6398,6 +6420,7 @@ def _run_search(
     # before. Note the fold BOUNDARIES above are always computed from the clean
     # labels — they must not move when the noise draw changes.
     _train_label_src = (labels if train_labels is None
+                        else train_labels if isinstance(train_labels, TrainingNoise)
                         else np.asarray(train_labels).ravel())
 
     # ── Pre-compute importance scores for deduplication ──
@@ -8780,14 +8803,18 @@ def _find_best_hybrid_inner(
                 "on `labels`, putting back the very labels this column exists "
                 "to replace. Precompute the fine-tuned reps separately and "
                 "pass them as base_reps.")
-        _train_labels = np.asarray(train_labels).ravel()
+        # A TrainingNoise (kirby.noise_spec) is a per-fold noise source: it
+        # corrupts whichever rows are the training set, from those rows alone.
+        _train_labels = (train_labels if isinstance(train_labels, TrainingNoise)
+                         else np.asarray(train_labels).ravel())
         if len(_train_labels) != len(labels):
             raise ValueError(
                 f"find_best_hybrid: train_labels has {len(_train_labels)} "
                 f"entries and labels has {len(labels)}. They index the same "
                 f"rows, so a mismatch means every row after the first gap "
                 f"would be trained on another row's label.")
-        if not np.all(np.isfinite(_train_labels)):
+        if (not isinstance(_train_labels, TrainingNoise)
+                and not np.all(np.isfinite(_train_labels))):
             raise ValueError(
                 "find_best_hybrid: train_labels holds non-finite values. A "
                 "repair that could not be computed has to be left at the "
@@ -8805,7 +8832,11 @@ def _find_best_hybrid_inner(
             _noise_id = f'{_noise_id}__selnoisy'
             if tier:
                 tier = f'{tier}__selnoisy'
-        if verbose:
+        if verbose and isinstance(_train_labels, TrainingNoise):
+            print(f"[train_labels] {_noise_id} — training on "
+                  f"{_train_labels.spec.spec_id}, injected per fold on the "
+                  f"training rows only. tier={tier!r}")
+        elif verbose:
             _moved = int(np.count_nonzero(
                 np.asarray(labels).ravel() != _train_labels))
             print(f"[train_labels] {_noise_id} — training on a caller-supplied "
@@ -8826,11 +8857,13 @@ def _find_best_hybrid_inner(
                 "rep_factories — fine-tuned embeddings would still be trained on "
                 "the clean labels, reintroducing the leak. Precompute the "
                 "fine-tuned reps separately and pass them as base_reps.")
-        from kirby.noise_spec import make_noisy_labels as _mk_noisy
         _is_clf_noise = (task_type == 'classification'
                          if task_type in ('classification', 'regression')
                          else _detect_task_type(labels) == 'classification')
-        _train_labels = _mk_noisy(labels, label_noise, is_clf=_is_clf_noise)
+        # Injected per fold on each fold's training rows, from those rows alone
+        # (kirby.noise_spec.inject_training_rows). It used to be one column drawn
+        # over every label, so the held-out labels set the amount of noise.
+        _train_labels = TrainingNoise(labels, label_noise, is_clf=_is_clf_noise)
         # The corrupted label column itself, not just the condition's NAME.
         # spec_id records the strategy, the level and the seeds; it records
         # nothing about the numbers those produced. So a change to the injector

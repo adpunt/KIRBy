@@ -28,7 +28,7 @@ from experiments.dataset_policy import (
 )
 from kirby.noise_robustness import robustness_metrics
 from kirby.noise_spec import (
-    REGRESSION_STRATEGIES, NoiseSpec, make_noisy_labels_verbose,
+    REGRESSION_STRATEGIES, NoiseSpec, TrainingNoise, label_rows,
     noise_provenance_row,
 )
 
@@ -221,11 +221,13 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         WHICH molecules are hit is seeded from the condition alone, with the
         level left out, so one condition's levels hit the same molecules and
         auc_norm summarises a curve of rising dose rather than a curve of
-        re-drawn victims. The fold index is no longer part of either seed: the
-        corruption is now drawn once over every row and then sliced, which is
-        what find_best_hybrid does with a spec (find_best_hybrid.py:7784), so
-        the recipe a search picks and the features phase 3 rebuilds come from
-        the same corrupted column.
+        re-drawn victims. The fold index is not part of either seed: the random
+        draws are made once over every row, and each fold's training labels
+        are then corrupted with the amount, censoring limit and grouped-wider
+        families taken from that fold's training labels alone
+        (kirby.noise_spec.inject_training_rows). find_best_hybrid does the same
+        with a spec, so the recipe a search picks and the features phase 3
+        rebuilds come from the same corrupted training labels.
         """
         if float(level) == 0.0:
             return None
@@ -238,20 +240,22 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                          dose_units=dose_units)
 
     def _noisy_column(spec):
-        """The whole-dataset corrupted label column for one condition.
-
-        Held-out rows are never read from it — the searches train on the
-        training slice and score on the clean labels.
+        """The noise source for one condition: `src[train_idx]` is that fold's
+        training labels, corrupted from those labels alone
+        (kirby.noise_spec.inject_training_rows). Held-out rows are never
+        corrupted. Provenance is recorded per fold, one row each.
         """
         if spec is None:
             return labels
         if spec.spec_id not in _noisy_columns:
             # Passed for EVERY condition, not just the grouped two. The other
-            # nine ignore it when drawing (bit-identical, verified) and it
-            # populates n_groups / largest_group_share on their rows too.
-            res = make_noisy_labels_verbose(labels, spec, groups=noise_groups)
-            provenance.setdefault(spec.spec_id, noise_provenance_row(res, spec))
-            _noisy_columns[spec.spec_id] = np.asarray(res.y_noisy)
+            # nine ignore it when drawing and it populates n_groups /
+            # largest_group_share on their rows too.
+            src = TrainingNoise(labels, spec, is_clf=False, groups=noise_groups)
+            provenance.setdefault(spec.spec_id, [
+                noise_provenance_row(src.result(tr), spec)
+                for tr, _ in _cv_split(groups, n_folds, sample_X, labels)])
+            _noisy_columns[spec.spec_id] = src
         return _noisy_columns[spec.spec_id]
 
     results = {
@@ -753,7 +757,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 if _stored is not None:
                     fold_features.append({(r, int(i)) for r, i in _stored})
                     continue
-                y_train = np.asarray(y_noisy_full)[train_idx]
+                y_train = label_rows(y_noisy_full, train_idx)
 
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
                 val_reps_stab = {k: v[val_idx] for k, v in reps.items()}

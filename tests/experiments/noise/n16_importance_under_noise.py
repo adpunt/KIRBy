@@ -136,7 +136,7 @@ from experiments.dataset_policy import (
 from experiments.framework.f30_analyse import _pair_stats, nogueira_stability
 from kirby.hybrid import compute_feature_importance
 from kirby.noise_spec import (
-    NoiseSpec, calibrate, make_noisy_labels_verbose, noise_provenance_row,
+    NoiseSpec, TrainingNoise, noise_provenance_row,
 )
 # The disk cache and the per-fold checkpoint, added 2026-09-25 (plan section
 # 3). n16 finds no neighbours and fits no downstream model, so it takes no
@@ -227,18 +227,19 @@ def _specs_for_ladder(condition, levels, replicate, dataset_name):
             for lv in levels]
 
 
-def _inject_ladder(labels, specs, levels, noise_groups):
-    """Corrupt the FULL label column once per level, and check the ladder nests.
+def _inject_ladder(labels, specs, levels, noise_groups, folds):
+    """One noise source per level, and a check that the ladder nests.
 
-    The amount is solved on the full clean label column (kirby.noise_spec.calibrate,
-    resolved once at noise_spec.py:325-330) and the realisation covers every row, so
-    each fold indexes its own training positions out of one draw. A molecule's
-    corruption is then a property of the molecule, not of which fold it landed in —
-    the property NOISE_AUDIT_2026_09_10.md section 1.1 measured the suite as lacking
-    (600 of 600 molecules carrying more than one corrupted value).
+    Each fold's training labels are corrupted from those labels alone: the amount
+    is a fraction of their standard deviation, as the NoiseInject paper's Methods
+    say (kirby.noise_spec.inject_training_rows). The random draws are made once
+    over every row, so a molecule keeps the same draw in every fold it trains in.
 
-    Returns (per_level, provenance) where per_level[level] = {'y': full noisy column,
-    'epsilon': per-row error, 'realised': delivered amount in label units}.
+    Returns (per_level, provenance) where per_level[level] = {'y': a TrainingNoise,
+    so per_level[level]['y'][train_idx] is that fold's noisy training labels;
+    'epsilon': the error on the FIRST fold's training rows, used by the nesting
+    check; 'realised' / 'target': the first fold's delivered and asked-for amount
+    in label units}. provenance[spec_id] is one row per fold.
 
     RAISES if the ladder does not nest. The whole experiment compares a vector at one
     level against the vector at level 0.0, and if the higher level is a fresh draw
@@ -248,17 +249,16 @@ def _inject_ladder(labels, specs, levels, noise_groups):
     y = np.asarray(labels, dtype=float).ravel()
     per_level, provenance = {}, {}
     for spec, level in zip(specs, levels):
-        magnitude = calibrate(y, spec, is_clf=False)
-        res = make_noisy_labels_verbose(y, spec, magnitude=magnitude,
-                                        groups=noise_groups)
-        row = noise_provenance_row(res, spec)
+        src = TrainingNoise(y, spec, is_clf=False, groups=noise_groups)
+        rows = [noise_provenance_row(src.result(tr), spec) for tr, _ in folds]
+        res0 = src.result(folds[0][0])
         per_level[level] = {
-            'y': np.asarray(res.y_noisy, dtype=float),
-            'epsilon': np.asarray(res.epsilon, dtype=float),
-            'realised': row.get('realised_dose_label_units'),
-            'target': row.get('target_dose_label_units'),
+            'y': src,
+            'epsilon': np.asarray(res0.epsilon, dtype=float),
+            'realised': rows[0].get('realised_dose_label_units'),
+            'target': rows[0].get('target_dose_label_units'),
         }
-        provenance[spec.spec_id] = row
+        provenance[spec.spec_id] = rows
 
     # --- the nesting check ------------------------------------------------------
     # noiseInject warns on a draw that misses its target amount (DoseWarning,
@@ -707,7 +707,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             continue
         _resumed = _st0.get('replicate') == replicate
         specs = _specs_for_ladder(condition, levels, replicate, dataset_name)
-        per_level, prov = _inject_ladder(labels, specs, levels, noise_groups)
+        per_level, prov = _inject_ladder(labels, specs, levels, noise_groups, folds)
         results['noise_provenance'].update(prov)
 
         for lv in levels:
