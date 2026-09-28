@@ -1158,7 +1158,23 @@ def print_analysis(ds_results):
             rows.append((rep_name, model_name, e1, e5, e10, f1, f5, f10,
                          auroc, acc, row_chance, row_done, row_tried))
 
-    rows.sort(key=lambda r: (r[2] if not np.isnan(r[2]) else 0), reverse=True)
+    # Ranked on EF@1%, not E@1%. E@1% is the raw fraction of a fold's top rows
+    # that are binders, and the three folds are edit-distance shells whose own
+    # binder fractions are 0.181, 0.385 and 0.320 — so the same ranking ability
+    # scores higher on the fold with more binders in it, and a row that is a
+    # mean over a different set of folds is not on the same footing as the row
+    # beside it. EF@1% divides each fold's count by that fold's own binder
+    # fraction before averaging, which is what the header above already says it
+    # is for. Measured on a synthetic pair this session: E@1% 0.4700 over one
+    # fold outranks 0.4500 over three, while EF@1% puts them 1.22 against 1.53.
+    # compute_enrichment writes ef_ beside every enrich_ key, so a row with an
+    # E@1% and no EF@1% does not arise from this file. The fallback to E@1% is
+    # there so an externally built results dict still sorts rather than raising;
+    # it puts that row among the EF values, which are a ratio and not a
+    # fraction, so such a row's position is not to be read.
+    rows.sort(key=lambda r: (r[5] if not np.isnan(r[5])
+                             else (r[2] if not np.isnan(r[2]) else 0)),
+              reverse=True)
 
     def _f(v):
         return f"{v:.4f}" if not np.isnan(v) else "—"
@@ -1191,15 +1207,21 @@ def print_analysis(ds_results):
     # Summary
     best_indiv = [r for r in rows if r[0] != 'kirby_hybrid']
 
-    print(f"\n  Summary (Enrichment @ top-1%):")
+    print(f"\n  Summary (Enrichment factor @ top-1%):")
     print(f"    The row below is the highest of {len(best_indiv)} "
           f"representation-and-model rows, picked on the same held-out folds "
           f"it is scored on, so it is the best of that many tries and not a "
           f"held-out number. The held-out best single representation is in the "
           f"table further down.")
+    print(f"    It is the highest EF@1%, not the highest E@1%: EF divides each "
+          f"fold's binder count by that fold's own binder fraction, so a row "
+          f"scored on the fold with more binders in it does not win on that "
+          f"alone.")
     if best_indiv:
         bi = best_indiv[0]
-        print(f"    Best individual: {bi[0]} ({bi[1]}) E@1% = {bi[2]:.4f}")
+        _bef = f"{bi[5]:.4f}" if not np.isnan(bi[5]) else "—"
+        print(f"    Best individual: {bi[0]} ({bi[1]}) EF@1% = {_bef} "
+              f"(E@1% = {_f(bi[2])}, chance on its folds {_f(bi[10])})")
 
     # Hybrid number: the leave-one-fold-out re-score. On each held-out fold the
     # hybrid recipe and the best single representation are both picked from the
