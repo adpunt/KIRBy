@@ -59,12 +59,14 @@ def _compute_fold_importance(reps, labels, folds, methods):
     cover every arm. Scores are still computed on each fold's training rows
     only, in the same rep order, so no number changes.
 
-    Returns {(fold index, method): concatenated importance scores}. A method
-    that raises on a fold is left out; the arm that needs it then reports that
-    method as failed instead of scoring it on partial folds.
+    Returns ({(fold index, method): concatenated importance scores},
+    {"method fold N": error}). A method that raises on a fold is left out of the
+    first dict; the arm that needs it then reports that method as failed
+    instead of scoring it on partial folds, and the second dict keeps the
+    error itself, which the arm's own message does not carry.
     """
     rep_order = sorted(reps.keys())
-    cache = {}
+    cache, failed = {}, {}
     for fold_i, (train_idx, _val_idx) in enumerate(folds):
         train_reps = {k: reps[k][train_idx] for k in rep_order}
         y_train = labels[train_idx]
@@ -74,10 +76,11 @@ def _compute_fold_importance(reps, labels, folds, methods):
                     train_reps, y_train, method=method)
             except Exception as e:
                 print(f"    importance {method} failed on fold {fold_i}: {e}")
+                failed[f"{method} fold {fold_i}"] = str(e)
                 continue
             cache[(fold_i, method)] = np.concatenate(
                 [imp_dict[rep] for rep in sorted(imp_dict.keys())])
-    return cache
+    return cache, failed
 
 
 def _fold_importance(imp_by_fold, fold_i, method):
@@ -285,9 +288,11 @@ def _evaluate_single_rep_retrieval(reps, labels, folds, k_neighbors=10):
     pooled into one vector and one R-squared is computed over the pool, which
     is how the concatenation arms aggregate.
 
-    Returns {rep name: {r2, mae}}.
+    Returns ({rep name: {r2, mae, n_features}}, {rep name: error}). A
+    representation that fails is named in the second dict rather than left
+    out without a trace.
     """
-    out = {}
+    out, failed = {}, {}
     for rep_name in sorted(reps.keys()):
         X = reps[rep_name]
         preds, truth = [], []
@@ -314,7 +319,8 @@ def _evaluate_single_rep_retrieval(reps, labels, folds, k_neighbors=10):
             }
         except Exception as e:
             print(f"    {rep_name}: FAILED - {e}")
-    return out
+            failed[rep_name] = str(e)
+    return out, failed
 
 
 # =========================================================================
@@ -358,8 +364,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     folds = list(cv_split(groups, n_folds, X_concat, labels))
     print(f"\n  Computing importance once per (fold, method): "
           f"{len(folds)} folds x {len(importance_methods)} methods...")
-    imp_by_fold = _compute_fold_importance(
+    imp_by_fold, importance_failed = _compute_fold_importance(
         reps, labels, folds, importance_methods)
+    if importance_failed:
+        results['importance_failed'] = importance_failed
 
     # Evaluate each method with per-fold importance computation
     print("\n  Evaluating methods (per-fold importance)...")
@@ -383,7 +391,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"sim delta={sim_result.get('delta_r2', 0):+.4f} "
                   f"({elapsed:.1f}s)")
         except Exception as e:
+            # Printed only, before: the file then held an empty 'methods' and
+            # the summary readers listed a failed regression dataset as a
+            # skipped classification one.
             print(f"FAILED: {e}")
+            results.setdefault('methods_failed', {})[method] = str(e)
 
     # Cross-test: selection by method A, weighting by method B
     method_names = [m for m in importance_methods if m in results['methods']]
@@ -422,6 +434,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"unweighted R2={ld['unweighted_r2']:.4f}")
         except Exception as e:
             print(f"    {method}: FAILED - {e}")
+            results.setdefault('low_dim_failed', {})[method] = str(e)
 
     # Single-representation comparator: the same retrieval from the 10 nearest
     # training molecules, on each representation's own matrix, unweighted, over
@@ -429,8 +442,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # representation loaded, so without these rows the weighted-concatenation R-squared has
     # nothing to be read against.
     print("\n  Single-representation retrieval (unweighted, own matrix)...")
-    single_rep = _evaluate_single_rep_retrieval(reps, labels, folds)
+    single_rep, single_rep_failed = _evaluate_single_rep_retrieval(
+        reps, labels, folds)
     results['single_rep_comparator'] = single_rep
+    if single_rep_failed:
+        results['single_rep_failed'] = single_rep_failed
     if single_rep:
         best_rep = max(single_rep, key=lambda r: single_rep[r]['r2'])
         results['best_single_rep'] = best_rep
