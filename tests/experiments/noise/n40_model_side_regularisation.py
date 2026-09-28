@@ -265,6 +265,16 @@ EXTRA_PAIRS = (
     ('gp_means_per_molecule_alpha', 'gp_means_ml_nugget'),
 )
 
+# (arm under test, the arm it is paired against), both per downstream model.
+# The two controls the module docstring names: seed_one is there so seed
+# averaging is read against the same subsampled model, and tuned_clean_reused
+# so retuning FOR the noise is read against tuning at all. Until 2026-09-28
+# each was only paired against `fixed`, so neither comparison was computed.
+MODEL_PAIRS = (
+    ('seed_avg', 'seed_one'),
+    ('retuned', 'tuned_clean_reused'),
+)
+
 # Set by the smoke to a callable(name, X, y, groups): every call the tuner gets,
 # so a test can prove the held-out molecules never reach it.
 TUNER_HOOK = None
@@ -1298,6 +1308,13 @@ def _summarise(acc, models, metric_name, lower_is_better):
                     if arm != 'clean':
                         e.update(_share(clean.get(m) or {}, b, g, lower_is_better))
                     row['per_arm'][arm] = e
+                row['within_model_pairs'] = {}
+                for got, base in MODEL_PAIRS:
+                    g = (by_arm.get(got) or {}).get(m) or {}
+                    bb = (by_arm.get(base) or {}).get(m) or {}
+                    if g and bb:
+                        row['within_model_pairs'][f'{got}_vs_{base}'] = _paired(
+                            bb, g, lower_is_better)
                 srow['per_model'][m] = row
                 if fixed.get('stack'):
                     srow['stack'][m] = _paired(b, fixed['stack'], lower_is_better)
@@ -1338,6 +1355,10 @@ def _print_summary(results, metric_name):
                           f"{v['n_passes_paired']} passes, mean "
                           f"{v['mean_gain']:+.4f} (spread "
                           f"{v['spread_over_pass_gains']:.4f})")
+                for name, v in row.get('within_model_pairs', {}).items():
+                    print(f"      {name:20s} won {v['passes_won']} of "
+                          f"{v['n_passes_paired']} passes, mean "
+                          f"{v['mean_gain']:+.4f}")
             for m, v in srow['stack'].items():
                 print(f"    {space}/stack vs {m}: won {v['passes_won']} of "
                       f"{v['n_passes_paired']} passes, mean {v['mean_gain']:+.4f}")
