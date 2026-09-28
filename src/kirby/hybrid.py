@@ -2964,15 +2964,41 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     elif internal_evaluator == 'gp':
         from sklearn.gaussian_process import GaussianProcessRegressor, GaussianProcessClassifier
         from sklearn.gaussian_process.kernels import RBF, ConstantKernel
-        kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
-        if is_classification:
-            m = GaussianProcessClassifier(kernel=kernel, random_state=42,
-                                          max_iter_predict=50, n_restarts_optimizer=0)
-        else:
-            m = GaussianProcessRegressor(kernel=kernel, random_state=42,
-                                         n_restarts_optimizer=0, alpha=1e-2)
         # Distance-scorer fit cap: same helper/constant as svm/mlp.
         X_fit, y_fit = _subsample_for_scorer(X_train_scaled, y_train)
+        # The RBF width starts at the median distance between training rows.
+        # It started at 1.0. On standardised representations hundreds of
+        # features wide, rows sit tens of units apart, so every kernel entry
+        # was ~0, the optimiser had no gradient to move it, and the GP
+        # predicted one flat number for every representation. Measured
+        # 2026-09-28 on five synthetic representations 200-1024 features
+        # wide: prediction SD 0.000 on all five, so performance_weighted
+        # split the budget equally under the name 'gp' (c23's svm row).
+        # The width alone did not cure it: with the labels left unscaled the
+        # optimiser shrank the width to 5 (from 45) and the GP again predicted
+        # its prior mean of zero on every validation row. normalize_y=True
+        # fits the labels as z-scores, and then the fit keeps a width near 49
+        # and predicts with correlation 0.42 to the truth on the same data.
+        from scipy.spatial.distance import pdist
+        _d = pdist(X_fit) if X_fit.shape[0] > 1 else np.array([1.0])
+        _d = _d[np.isfinite(_d) & (_d > 0)]
+        _ls = float(np.median(_d)) if _d.size else 1.0
+        kernel = ConstantKernel(1.0) * RBF(
+            length_scale=_ls,
+            length_scale_bounds=(max(_ls * 1e-3, 1e-5), max(_ls * 1e3, 1e5)))
+        if is_classification:
+            # Kernel held at the median width, not optimised. With the
+            # optimiser on, the same synthetic check shrank the amplitude to
+            # 0.1 and the classifier predicted one class (accuracy 0.475 on a
+            # balanced split). Held fixed it scored 0.675, beside SVC's 0.663.
+            # SVC's own default width (gamma='scale') is also a fixed rule.
+            m = GaussianProcessClassifier(kernel=kernel, random_state=42,
+                                          max_iter_predict=50, n_restarts_optimizer=0,
+                                          optimizer=None)
+        else:
+            m = GaussianProcessRegressor(kernel=kernel, random_state=42,
+                                         n_restarts_optimizer=0, alpha=1e-2,
+                                         normalize_y=True)
         try:
             m.fit(X_fit, y_fit)
         except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
