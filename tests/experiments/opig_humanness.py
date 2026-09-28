@@ -6,7 +6,11 @@ Extends Prihoda et al. 2022 "BioPhi" (mAbs) — a score discrimination study
 comparing 8 humanness scoring methods on IMGT/mAb-DB therapeutic antibodies.
 BioPhi does NOT train classifiers; it computes ROC AUC via threshold sweep
 on the full dataset (no train/test split, no CV). KIRBy instead trains
-supervised classifiers (Ridge, RF) on high-dimensional reps with proper CV.
+supervised classifiers on high-dimensional reps with grouped, stratified CV.
+The classifiers are whatever DOWNSTREAM_MODELS holds when this file is
+imported (rf, xgboost, svm, dnn, lightgbm as of 2026-09-28, and a shorter
+list under a local grid). The names 'Ridge, RF' stood here until 2026-09-28
+and were never what the file ran.
 
 NOTE: Previous versions cited Marks et al. 2021 (Hu-mAb) as primary reference.
 Marks 2021 is one of the 8 methods BioPhi evaluates, not the data source.
@@ -18,8 +22,12 @@ Scientific questions:
   3. How do sequence-only LM reps compare to classical encodings (BLOSUM, onehot)?
 
 Datasets:
-  - species:     Human VH vs mouse+rhesus+camelid (OAS, 10K balanced)
-  - therapeutic: Human vs non-human real therapeutics (BioPhi IMGT, ~553)
+  - humanness_therapeutic: human vs non-human real therapeutics (BioPhi IMGT,
+    about 565 rows). The label is 1 when the IMGT species field reads Human and
+    0 for Humanized, Chimeric, Mouse and the rest, so one class holds three
+    kinds of antibody.
+  - A species preset exists in src/kirby/datasets/humanness.py but is not a key
+    of DATASET_REGISTRY, so this file cannot run it.
 
 Paper baselines (Prihoda et al. 2022, BioPhi):
   - 8 methods scored on IMGT/mAb-DB therapeutics (VH+VL averaged):
@@ -30,12 +38,16 @@ Paper baselines (Prihoda et al. 2022, BioPhi):
   - KIRBy uses VH-only; BioPhi averages VH+VL scores.
 
 Usage:
-    # Smoke test (therapeutic only — species has 10K samples and is slow)
+    # Three representations only, for a quick check
     python tests/experiments/opig_humanness.py --datasets humanness_therapeutic \
         --n-folds 3 --reps blosum,onehot,aac
 
-    # Full evaluation
-    python tests/experiments/opig_humanness.py --datasets species,therapeutic
+    # The approved representation pool for the dataset
+    python tests/experiments/opig_humanness.py --datasets humanness_therapeutic
+
+    # 'species' and 'therapeutic' are NOT accepted: DATASET_REGISTRY holds
+    # humanness_therapeutic and nothing else here, and an unknown name makes
+    # main() print ERROR and return 1 before any work.
 
 Reference:
     Prihoda et al. (2022). BioPhi: A platform for antibody design,
@@ -178,6 +190,16 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
     X = np.asarray(X, dtype=np.float64)
     labels = np.asarray(labels, dtype=np.int64)
 
+    # A non-finite entry is not a score problem, it is a representation
+    # problem, and it reaches the mean silently: StandardScaler propagates it,
+    # LightGBM accepts it as a missing value and still returns a number, while
+    # RandomForest and SVC raise and lose the fold. Said out loud here so a
+    # degraded row cannot be read as a weak representation.
+    _n_bad = int((~np.isfinite(X)).sum())
+    if _n_bad:
+        print(f"      [{_n_bad} non-finite feature values out of "
+              f"{X.shape[0] * X.shape[1]}]", flush=True)
+
     if groups is None or len(np.unique(groups)) < n_folds:
         raise ValueError(
             f"Cannot create {n_folds}-fold group split: "
@@ -221,19 +243,31 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
             else:
                 scores = preds.astype(float)
             auroc_scores.append(roc_auc_score(y_val, scores))
-        except Exception:
-            pass
+        except Exception as e:
+            # Was a bare pass. A held-out fold carrying one class makes
+            # roc_auc_score raise, so the AUROC mean is then taken over fewer
+            # folds than the accuracy mean beside it, with nothing on the page
+            # to say so. Both the reason and the two fold counts are recorded
+            # below.
+            print(f"      [AUROC not scored on one fold: "
+                  f"{type(e).__name__}: {e}]", flush=True)
 
     if not acc_scores:
         return None
 
+    # n_folds_requested is what was asked for, n_folds_scored how many folds
+    # produced a number. They differ when a fit raised, and a mean over 2 folds
+    # otherwise reads exactly like a mean over 3.
     result = {
         'accuracy': {'mean': np.mean(acc_scores), 'std': np.std(acc_scores)},
         'f1_weighted': {'mean': np.mean(f1_scores), 'std': np.std(f1_scores)},
         'balanced_accuracy': {'mean': np.mean(bacc_scores), 'std': np.std(bacc_scores)},
+        'n_folds_requested': int(n_folds),
+        'n_folds_scored': len(acc_scores),
     }
     if auroc_scores:
         result['auroc'] = {'mean': np.mean(auroc_scores), 'std': np.std(auroc_scores)}
+        result['n_folds_scored_auroc'] = len(auroc_scores)
     return result
 
 
@@ -381,13 +415,13 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
                     print(f"  hybrid_deltas[{_name}]: not computed -- {_why}")
                 for _m in _delta_models:
                     try:
-                        # hybrid= is passed by hand. hybrid_deltas(search, m)
-                        # with no hybrid reads _picked['selected'][0]['row']
-                        # (_shared.py:7432) and top_hybrids' entries carry no
-                        # 'row' key -- score_mean and blueprint sit at the top
-                        # level of the entry -- so the defaulted call raises
-                        # KeyError('row'). Checked against these two functions
-                        # on 2026-09-18.
+                        # hybrid= is passed by hand. The defaulted call used to
+                        # read _picked['selected'][0]['row'], a key top_hybrids
+                        # never writes, and raised KeyError('row'); _shared.py
+                        # was corrected on 2026-09-28 to read the entry itself.
+                        # Passing the entry here does the same thing either
+                        # way, so this call does not depend on which version of
+                        # that helper is on disk.
                         _top1 = top_hybrids(search, _m, 1, require_full=False,
                                             context=f'{dataset_name}/{_m}')
                         if not _top1['selected']:
@@ -454,6 +488,14 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         'n_human': n_pos,
         'n_nonhuman': n - n_pos,
         'results': results,
+        # Which representations were asked for and which ones actually built.
+        # compute_or_load_reps prints FAILED and drops a representation whose
+        # builder raises -- esmc needs the esm package, which is not installed
+        # everywhere -- so a table of 9 representations could be read as the
+        # approved pool of 10. The two lists say which it is.
+        'reps_requested': list(rep_names),
+        'reps_built': sorted(reps.keys()),
+        'reps_not_built': sorted(set(rep_names) - set(reps.keys())),
     }
     # Additive: the honest, per-model, held-out comparison block (contract
     # json_convention). Absent only when the hybrid search was unavailable.
@@ -543,22 +585,61 @@ def print_analysis(dataset_name, ds_results):
 
     # Summary: best individual rep. There is no hybrid row here — the hybrid's
     # only number in this experiment is the held-out one printed below.
+    #
+    # ONE METRIC, NOT WHICHEVER IS PRESENT. This loop used to take a row's
+    # AUROC when it had one and its accuracy when it did not, then compare the
+    # winner against the published AUROC below. A row scored on accuracy can
+    # win that maximum and be subtracted from an AUROC, which is two different
+    # quantities either side of the minus sign. AUROC is used when any row
+    # carries one, and rows without it are left out of the maximum.
+    _have_auroc = [r for r in rows if not np.isnan(r[3])]
+    _summary_metric = 'AUROC' if _have_auroc else 'accuracy'
+    _summary_rows = _have_auroc if _have_auroc else rows
+    _value_idx = 3 if _have_auroc else 2
+
     best_individual = None
-    for rep_name, model_name, acc, auroc, f1w, bacc in rows:
-        metric_val = auroc if not np.isnan(auroc) else acc
+    for row in _summary_rows:
+        metric_val = row[_value_idx]
         if best_individual is None or metric_val > best_individual[2]:
-            best_individual = (rep_name, model_name, metric_val)
+            best_individual = (row[0], row[1], metric_val)
 
     print(f"\n  Summary:")
     if best_individual:
-        print(f"    Best individual rep: {best_individual[0]} ({best_individual[1]}) "
+        print(f"    Best individual representation by {_summary_metric}: "
+              f"{best_individual[0]} ({best_individual[1]}) "
               f"= {best_individual[2]:.4f}")
+        if _have_auroc and len(_have_auroc) < len(rows):
+            print(f"    {len(rows) - len(_have_auroc)} of {len(rows)} "
+                  f"representation-and-model rows scored no AUROC and are not "
+                  f"in that maximum.")
+
+    if baselines and best_individual:
+        # The deltas below are printed because the published numbers are the
+        # reason this experiment exists, and they are not a like-for-like
+        # comparison. Four differences, all in the published method's favour
+        # or against it in ways this line cannot net out.
+        print(f"    The published numbers were measured differently, so read "
+              f"each delta as a landmark and not as a win or a loss.")
+        print(f"    Those methods are scored by sweeping a threshold over "
+              f"every antibody at once, with no training and no held-out set.")
+        print(f"    They average a heavy-chain and a light-chain score, while "
+              f"every number above is heavy chain only.")
+        print(f"    The KIRBy value is the best of "
+              f"{len(_summary_rows)} representation-and-model rows, picked on "
+              f"the same folds it is reported on, so it is the optimistic end "
+              f"of what one prespecified choice would give.")
 
     for method, metrics in baselines.items():
         ref_val = metrics.get('auroc', metrics.get('accuracy', float('nan')))
-        if not np.isnan(ref_val) and best_individual:
-            delta = best_individual[2] - ref_val
-            print(f"    vs {method}: {delta:+.4f}")
+        _ref_metric = 'AUROC' if 'auroc' in metrics else 'accuracy'
+        if np.isnan(ref_val) or not best_individual:
+            continue
+        if _ref_metric != _summary_metric:
+            print(f"    vs {method}: not printed -- the published number is "
+                  f"{_ref_metric} and the best row here is {_summary_metric}.")
+            continue
+        delta = best_individual[2] - ref_val
+        print(f"    vs {method}: {delta:+.4f} {_summary_metric}")
 
     # -------------------------------------------------------------------------
     # HONEST per-model, held-out comparison (supersedes the max-vs-max summary
@@ -618,7 +699,8 @@ def main():
              '(default: humanness_therapeutic)')
     parser.add_argument(
         '--reps', type=str, default=None,
-        help='Comma-separated rep names (default: hand-picked set of 10)')
+        help='Comma-separated rep names (default: the approved pool for the '
+             'dataset, plus onehot)')
     parser.add_argument(
         '--n-folds', type=int, default=5,
         help='Number of stratified CV folds (default: 5)')
