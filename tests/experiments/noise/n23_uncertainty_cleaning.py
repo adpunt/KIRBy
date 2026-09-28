@@ -2268,6 +2268,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['summary'] = convert_numpy(
         _summarise(acc, [a[0] for a in arms], downstream_models, metric_name,
                    lower_is_better, results['detection']))
+    if is_clf and 'zero_noise_control' in results['summary']:
+        # dirty-local 2026-09-28: the same correction as zero_noise_control_note.
+        results['summary']['zero_noise_control']['what_it_says'] = (
+            results['zero_noise_control_note'])
     # The similarity sweep's detection readings, averaged over the folds and
     # draws of a level as `detection` is, and the spaces that could not be
     # built with the reason (2026-09-25).
