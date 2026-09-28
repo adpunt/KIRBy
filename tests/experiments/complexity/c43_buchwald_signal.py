@@ -84,7 +84,7 @@ def main():
             "rmse_over_std": float(m_mean / y.std()),
         }
         print(f"\n--- TARGET cgr_morgan x {model_name} "
-              f"(5-fold GroupKFold by additive) ---")
+              f"({len(folds)}-fold GroupKFold by additive) ---")
         print(f"  RMSE (mean of folds) = {m_mean:.4f}")
         print(f"  RMSE per fold        = {[round(x,3) for x in m_pf]}")
         print(f"  Spearman rho (OOF)   = {m_rho:.4f}")
