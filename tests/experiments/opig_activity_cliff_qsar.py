@@ -275,6 +275,17 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
     it only the pooled block is computed, which is what this function did
     before.
 
+    HOW THE PARTITION IS BUILT (changed 2026-09-28, read against Dablander's
+    modules/scoring.py and modules/data_splitting.py). He builds M_inter and
+    M_test separately inside every split. In a split, a pair with one compound
+    held out is an M_inter case scored |a(training compound) - f(held-out)|.
+    Under k-fold, a pair whose compounds sit in different folds is therefore
+    an M_inter case twice, once in each compound's fold. This file used to
+    average the two distances into one case; it now keeps both, as he does.
+    He also computes MCC per split and reports the mean over splits
+    (summarise_scores_from_cubic_scores_array, nanmean). That mean is stored
+    as 'mcc_fold_mean' beside the pooled 'ac_mcc', with the per-fold values.
+
     Returns the pooled metrics, plus 'by_partition' with 'M_inter' and
     'M_test' when held_out_fold is given.
     """
@@ -334,41 +345,50 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
     # compound contributes its MEASURED activity rather than a prediction.
     if held_out_fold is not None:
         held_out_fold = np.asarray(held_out_fold)
-        parts = {'M_inter': ([], []), 'M_test': ([], [])}
+        # Non-half-cliff pairs and their true labels, once.
+        kept = []
         for i, j, _ in mmp_pairs:
-            fi, fj = held_out_fold[i], held_out_fold[j]
-            if fi < 0 or fj < 0:
-                continue
             true_delta = abs(labels[i] - labels[j])
             if 1.0 < true_delta < ac_threshold:
                 continue
-            is_ac = int(true_delta >= ac_threshold)
-            if fi == fj:
-                # both held out together -> both activities unknown
-                if np.isnan(predictions[i]) or np.isnan(predictions[j]):
-                    continue
-                pred_delta = abs(predictions[i] - predictions[j])
-                key = 'M_test'
-            else:
-                # held out in different folds: in the fold that scored i, j was
-                # in training, so j's measured activity was known. Score the
-                # pair the way Dablander does, measured against predicted, and
-                # take the compound whose prediction exists.
-                if np.isnan(predictions[i]) and np.isnan(predictions[j]):
-                    continue
-                if np.isnan(predictions[i]):
-                    pred_delta = abs(labels[i] - predictions[j])
-                elif np.isnan(predictions[j]):
-                    pred_delta = abs(labels[j] - predictions[i])
+            kept.append((i, j, int(true_delta >= ac_threshold)))
+        parts = {'M_inter': ([], []), 'M_test': ([], [])}
+        per_fold = {'M_inter': [], 'M_test': []}
+        for f in sorted(int(v) for v in np.unique(held_out_fold) if v >= 0):
+            fold_parts = {'M_inter': ([], []), 'M_test': ([], [])}
+            for i, j, is_ac in kept:
+                in_i = held_out_fold[i] == f
+                in_j = held_out_fold[j] == f
+                if in_i and in_j:
+                    # both held out in this fold -> both activities unknown
+                    if np.isnan(predictions[i]) or np.isnan(predictions[j]):
+                        continue
+                    pred_delta = abs(predictions[i] - predictions[j])
+                    key = 'M_test'
+                elif in_i or in_j:
+                    # one held out in this fold; under k-fold the other was a
+                    # training compound here, so its measured activity is known
+                    h, t = (i, j) if in_i else (j, i)
+                    if np.isnan(predictions[h]):
+                        continue
+                    pred_delta = abs(labels[t] - predictions[h])
+                    key = 'M_inter'
                 else:
-                    # both predictions exist (each from its own fold); average
-                    # the two one-known-one-predicted distances so neither
-                    # compound is privileged.
-                    pred_delta = 0.5 * (abs(labels[i] - predictions[j])
-                                        + abs(labels[j] - predictions[i]))
-                key = 'M_inter'
-            parts[key][0].append(is_ac)
-            parts[key][1].append(2.0 * np.arctan(pred_delta / AC_SCALE) / np.pi)
+                    continue
+                prob = 2.0 * np.arctan(pred_delta / AC_SCALE) / np.pi
+                fold_parts[key][0].append(is_ac)
+                fold_parts[key][1].append(prob)
+                parts[key][0].append(is_ac)
+                parts[key][1].append(prob)
+            for key, (yt, yp) in fold_parts.items():
+                fm = (_ac_clf_metrics(np.array(yt), np.array(yp))
+                      if yt else None)
+                per_fold[key].append({
+                    'fold': f, 'n_pairs': len(yt), 'n_acs': int(sum(yt)),
+                    'mcc': fm['mcc'] if fm else float('nan'),
+                    'sensitivity': fm['sensitivity'] if fm else float('nan'),
+                    'precision': fm['precision'] if fm else float('nan'),
+                })
         by_part = {}
         for key, (yt, yp) in parts.items():
             if not yt:
@@ -381,6 +401,11 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
             m['n_pairs'] = len(yt)
             m['n_acs'] = int(sum(yt))
             m['ac_mcc'] = m['mcc']
+            _fold_mccs = [r['mcc'] for r in per_fold[key]
+                          if not np.isnan(r['mcc'])]
+            m['mcc_fold_mean'] = (float(np.mean(_fold_mccs))
+                                  if _fold_mccs else float('nan'))
+            m['per_fold'] = per_fold[key]
             by_part[key] = m
         result['by_partition'] = by_part
     return result
