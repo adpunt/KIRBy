@@ -643,9 +643,13 @@ def run(data, config, output_dir, dataset_name, families=None):
                     'n_folds_scored': None, 'n_folds_asked': None,
                 }
             elif per_budget_val:
-                cmp_fn = min if lower_is_better else max
-                opt_budget, (opt_val, opt_bp, opt_cell) = cmp_fn(
-                    per_budget_val.items(), key=lambda kv: kv[1][0])
+                # FIXED 2026-09-28 (dirty local, verification): the peak is the
+                # smallest budget inside the tie tolerance above, so 'budget'
+                # is always tied_budgets[0]. It was min/max over exact values,
+                # which could return a larger budget whose score was better by
+                # less than 1e-9 relative while tied_budgets named a smaller one.
+                opt_budget = _tied[0]
+                opt_val, opt_bp, opt_cell = per_budget_val[opt_budget]
                 fam_result['optimal_budget'][var_name] = {
                     'tied_budgets': _tied,
                     'budget': opt_budget,
