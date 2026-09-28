@@ -837,7 +837,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     print(f"\n  Best rep per modality:")
     for mod in active_modalities:
-        rep = best_rep_per_modality.get(mod)
+        # None when every fit of every representation in the modality failed;
+        # formatting None with a width raised TypeError and ended the run.
+        rep = best_rep_per_modality.get(mod) or 'none'
         score = best_score_per_modality.get(mod, float('nan'))
         dim = reps[rep].shape[1] if rep and rep in reps else '?'
         print(f"    {mod:<15} {rep:<30} {metric}={score:+.4f}  dim={dim}")
@@ -1063,7 +1065,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("    " + "-" * 64)
     for mod in sorted(active_modalities,
                        key=lambda m: -best_score_per_modality.get(m, -np.inf)):
-        rep = best_rep_per_modality.get(mod, 'N/A')
+        rep = best_rep_per_modality.get(mod) or 'none'
         score = best_score_per_modality.get(mod, float('nan'))
         dim = reps[rep].shape[1] if rep and rep in reps else '?'
         print(f"    {mod:<15} {rep:<30} {score:>8.4f}  {dim:>6}")
