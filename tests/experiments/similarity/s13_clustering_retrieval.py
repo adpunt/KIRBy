@@ -1300,6 +1300,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"  [warn] fold_reselection vs PCA ({axis}) failed: "
                       f"{type(e).__name__}: {e}")
 
+    # ── Retrieval with the hybrid held to unweighted distance ─────────────
+    # The retrieval block above lets the hybrid arm pick, per fold, between
+    # its unweighted and its importance-weighted distance, while every single
+    # representation is scored unweighted only. A hybrid win there can come
+    # from the weighting rather than from the features. This is the same
+    # re-pick with both arms unweighted, so the features are the only
+    # difference. Pure arithmetic on scores already computed. Added 2026-09-28.
+    _rb = results['fold_reselection_retrieval']
+    _uw = [c for c in (_rb['candidates_by_model'].get('knn') or [])
+           if '|unweighted_' in c['name']]
+    if _uw and _rb['baselines_by_model']:
+        try:
+            hru = fold_reselection({'knn': _uw}, _rb['baselines_by_model'],
+                                   True, exclude_folds=hr_exclude_folds(_rb),
+                                   recipe_selection=_rb['recipe_selection'])
+            results['fold_reselection_retrieval_unweighted_result'] = hru
+            mu = hru.get('knn')
+            if mu is not None:
+                print(f"  Honest LOFO re-score (retrieval, both arms "
+                      f"unweighted, lower-better): "
+                      f"hybrid={mu['hybrid_reselected']:.4f}, "
+                      f"best_single={mu['best_single_reselected']:.4f}, "
+                      f"delta={mu['delta']:+.4f} (positive=hybrid better) "
+                      f"on {mu.get('n_paired_folds')} paired folds")
+        except Exception as e:
+            print(f"  [warn] fold_reselection (retrieval, unweighted) failed: "
+                  f"{type(e).__name__}: {e}")
+
     # ── Per-cluster-count re-picks ─────────────────────────────────────────
     # The block above lets each arm choose its own cluster count per fold, so
     # the hybrid's winning cell and the single representation's can sit at two
