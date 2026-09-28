@@ -656,7 +656,7 @@ def _raw_chembl_frame(target_chembl_id=None):
 # and pooled them, so on herg_ki (a pKi label) a compound with an IC50 in one
 # paper and a Ki in another became a "two-paper group" whose spread was the
 # IC50-versus-Ki difference. Counted on herg_ki: 324 groups, 131 with a nonzero
-# spread, when Ki records alone give 211 groups and 20 nonzero. A dataset not
+# spread, when Ki records alone give 211 groups and 17 nonzero. A dataset not
 # listed here has no ChEMBL records of its own label type, and gets a refusal:
 # matching a logD molecule to its hERG records would score a logD label against
 # hERG disagreement.
