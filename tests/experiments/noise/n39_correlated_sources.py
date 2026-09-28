@@ -51,7 +51,7 @@ squared out-of-fold error (a = sigma_delta^2 + rho sigma_e^2, b = (1 - rho)
 sigma_e^2; n19's `fit_noise_variance` fits exactly that line). So rho_hat here
 needs sigma_e from outside the labels. A practitioner's equivalent is a
 published per-measurement assay error; in the simulation it is the injected
-sigma_e, and the arm that uses it is marked as such:
+sigma_e, so rho_hat is written as a diagnostic and no arm uses it (2026-09-28):
 
     rho_hat = 1 - s_w^2 / sigma_e^2, clipped to [0, 1],
 
@@ -61,7 +61,7 @@ a + b/k, so the fitted n19 weight and the rho-aware weight differ in how a and b
 are estimated, not in what they target. The oracle arms show how much a WRONG
 rho costs when every variance is known.
 
-THE ARMS. All five downstream models, in each model's top 2 single
+THE ARMS. Every downstream model the run fits, in each model's top 2 single
 representations -- spaces base_1 and base_2, ranked by that model's own score in
 the stored search (_shared.noise_base_reps_by_model, owner's decision
 2026-09-25) -- and in each hybrid space. A model the pool holds no search for
@@ -123,7 +123,10 @@ training molecules measured twice or more:
     written. bindingdb_kd carries no source per measurement, so any two.
   * the correlation of the pair's residuals from a group-aware out-of-fold
     LightGBM prediction of the molecule mean. It equals (sigma_delta^2 + rho
-    sigma_e^2) / (sigma_delta^2 + sigma_e^2), so it is an UPPER BOUND on rho.
+    sigma_e^2) / (sigma_delta^2 + sigma_e^2), so it is an UPPER BOUND on rho
+    when the two sources share no offset. A pair from two documents with
+    different offsets adds their variance to the denominator only, and the
+    bound can then fall below rho.
   * s_w^2, the pooled within-molecule variance (ddof = 1), and n19's a and b.
   * rho at the dataset's published per-measurement error, where one exists
     (`REFERENCE_ERROR_LABEL_UNITS`). Neither herg_ic50 nor bindingdb_kd has one,
