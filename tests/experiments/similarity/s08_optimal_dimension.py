@@ -876,7 +876,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rep_result = _ck.get(per_rep=rep_name)
             results['per_rep'][rep_name] = rep_result
             sac_rep = rep_result['sac_rho']
-            if best_rep_name is None or sac_rep > best_rep_sac:
+            if np.isfinite(sac_rep) and (best_rep_name is None
+                                         or sac_rep > best_rep_sac):
                 best_rep_sac = sac_rep
                 best_rep_name = rep_name
             continue
@@ -956,7 +957,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
         results['per_rep'][rep_name] = rep_result
         _ck.put(rep_result, per_rep=rep_name)
-        if best_rep_name is None or sac_rep > best_rep_sac:
+        # A NaN SAC never becomes the best representation: every later
+        # comparison against NaN is False, so it would stay there.
+        if np.isfinite(sac_rep) and (best_rep_name is None
+                                     or sac_rep > best_rep_sac):
             best_rep_sac = sac_rep
             best_rep_name = rep_name
         scores_str = ', '.join(f"{mn}={rep_model_means[mn]:.4f}" for mn in rep_model_means
@@ -971,9 +975,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _best_fn = min if lower_is_better else max
     _default = 999 if lower_is_better else -999
     results['top3_by_model'] = {}
+    def _finite_or_default(v):
+        # A NaN key makes sorted() order arbitrarily; it goes last instead.
+        # (dirty-local 2026-09-28)
+        try:
+            return v if np.isfinite(v) else _default
+        except TypeError:
+            return _default
     for mname in model_factories:
         top3 = sorted(results['per_rep'].items(),
-                       key=lambda x: x[1].get('model_scores', {}).get(mname, _default),
+                       key=lambda x: _finite_or_default(
+                           x[1].get('model_scores', {}).get(mname, _default)),
                        reverse=not lower_is_better)[:3]
         results['top3_by_model'][mname] = [
             (name, r['model_scores'].get(mname, float('nan'))) for name, r in top3]
