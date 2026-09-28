@@ -367,10 +367,11 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         smoothed_view.loc[shared, 'ACTIVITY'] = noisy_lookup.loc[shared, 'ACTIVITY']
                     cluster_data_noisy.append(smoothed_view)
 
-                # Train FLuID teachers on training data per cluster
-                # Matches FLuID's build_teacher_models: one RF per cluster, balance=False
-                # (KIRBy uses class_weight='balanced' as a lighter alternative to FLuID's
-                # RandomUnderSampler — documented deviation)
+                # Train FLuID teachers on training data per cluster.
+                # One model per cluster, as FLuID's build_teacher_models. That
+                # function passes balance=False (FLuID.py:733). fit_fed_classifier
+                # defaults to balance=True, so every teacher here IS put through
+                # RandomUnderSampler. This differs from FLuID and is open.
                 from sklearn.ensemble import RandomForestClassifier as RFC
                 teacher_models = []
                 cluster_data_train = [None]  # Index 0 placeholder (Teacher 0 unused)
