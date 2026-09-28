@@ -529,6 +529,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for fold_i, (train_idx, val_idx) in enumerate(folds_b):
             pool = _fold_pool(fold_i, budget)
             if pool is None:
+                # The pool read raised on this fold. Counted as a raise so this
+                # budget's unit is not checkpointed: stored, a transient read
+                # failure would be served on every resume as "no hybrid arm".
+                _threw.append(('pool_read', fold_i))
                 continue
             for h in (pool.get('hybrids') or []):
                 arms.setdefault((h['objective'], h['rank']), {})[fold_i] = h
