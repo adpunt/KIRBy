@@ -707,6 +707,15 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label='tz_her2_binary')
         _smoke = _smoke_search_kwargs()
+        # The feature budgets this search sweeps. Passing none of them leaves
+        # find_best_hybrid on its own fallback of 50, 150 and 300 features
+        # (find_best_hybrid.py:8468), which is not the budget list this file
+        # hands the per-fold hybrid arm below. The two arms then search
+        # different budgets and the whole-data search costs three times what
+        # the run asked for. FULL_BUDGETS is the budget list the run is
+        # configured with, and it is what the per-fold arm already uses.
+        _search_kwargs = {k: v for k, v in _smoke.items() if k != 'speed'}
+        _search_kwargs.setdefault('budgets', FULL_BUDGETS)
         search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=None,
@@ -716,7 +725,7 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             dataset_name='tz_her2_binary',
             return_fitted=True,
             adaptive_pruning=0.25,
-            **{k: v for k, v in _smoke.items() if k != 'speed'},
+            **_search_kwargs,
             **_pkw,
         )
         if search is not None:
