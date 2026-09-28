@@ -309,6 +309,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # because which way to correct it is the user's call.
         budgets_searched_this_n = []
         rows_drawn_this_n = []
+        # Rows drawn by the seeds whose search returned, for the curve's x axis.
+        rows_scored_this_n = []
         # Second pass: the all-rows-selected blueprint, features re-selected
         # on the subsample. The recipe itself still came from every label.
         hybrid_fd_by_model = {m: [] for m in model_names}
@@ -429,6 +431,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 )
                 last_search = search
                 last_search_n, last_search_seed = n_sub, seed
+                rows_scored_this_n.append(int(len(idx)))
                 # Per-fold scores for BOTH arms (hybrid candidates +
                 # per-rep baselines) in the CONTRACT shape. Derives models
                 # only from what the search actually evaluated, so model
@@ -635,6 +638,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             int(max(budgets_searched_this_n)) if budgets_searched_this_n else 0)
         results.setdefault('n_rows_drawn', []).append(
             sorted(rows_drawn_this_n))
+        results.setdefault('n_rows_scored_mean', []).append(
+            float(np.mean(rows_scored_this_n)) if rows_scored_this_n
+            else float('nan'))
 
         if last_search is not None:
             top3 = extract_top3_base_reps(last_search)
@@ -682,22 +688,60 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     top3_full = extract_top3_base_reps(last_search) if last_search is not None else []
 
-    # Fit learning curves per model
+    # Fit learning curves per model.
+    #
+    # ⛔ X AXIS IS THE ROWS DRAWN, NOT THE ROWS ASKED FOR (2026-09-28). The
+    # group draw stops short of n_sub, by up to one whole group: on
+    # flab_expression_koenig the 50% point asks for 2,137 antibodies and draws
+    # two groups, 1,710. The fit read n_sub. It now reads the mean rows drawn
+    # by the seeds whose search returned, falling back to n_sub where none did.
+    #
+    # BOTH ARMS ARE FITTED (2026-09-28). Only the hybrid had a fit, so "more
+    # sample-efficient than individual representations" had no curve to be
+    # compared against. The single-representation arrays are fitted the same
+    # way. Each fit has 3 parameters, so 3 points leave no residual degrees of
+    # freedom and fit_R2 near 1 says nothing; that needs 4 or more points.
+    _n_scored = results.get('n_rows_scored_mean') or []
+
+    def _x(i):
+        v = _n_scored[i] if i < len(_n_scored) else float('nan')
+        return v if np.isfinite(v) else float(sample_sizes[i])
+
     for model_name in model_names:
         model_result = results['models'][model_name]
-        valid = [i for i, h in enumerate(model_result['hybrid']) if not np.isnan(h)]
-        if len(valid) >= 3:
-            n_arr = np.array([sample_sizes[i] for i in valid])
-            h_arr = np.array([model_result['hybrid'][i] for i in valid])
-            model_result['hybrid_fit'] = fit_learning_curve(
-                n_arr, h_arr, lower_is_better=lower_is_better)
-        valid_h = [i for i, h in enumerate(model_result['hybrid_reselected'])
-                   if not np.isnan(h)]
-        if len(valid_h) >= 3:
-            n_arr = np.array([sample_sizes[i] for i in valid_h])
-            h_arr = np.array([model_result['hybrid_reselected'][i] for i in valid_h])
-            model_result['hybrid_reselected_fit'] = fit_learning_curve(
-                n_arr, h_arr, lower_is_better=lower_is_better)
+        for _arr, _fit in (('hybrid', 'hybrid_fit'),
+                           ('best_single', 'best_single_fit'),
+                           ('hybrid_reselected', 'hybrid_reselected_fit'),
+                           ('best_single_reselected',
+                            'best_single_reselected_fit')):
+            _valid = [i for i, v in enumerate(model_result[_arr])
+                      if not np.isnan(v)]
+            if len(_valid) >= 3:
+                n_arr = np.array([_x(i) for i in _valid])
+                v_arr = np.array([model_result[_arr][i] for i in _valid])
+                model_result[_fit] = fit_learning_curve(
+                    n_arr, v_arr, lower_is_better=lower_is_better)
+                model_result[_fit]['n_points'] = len(_valid)
+                model_result[_fit]['n_rows'] = [float(x) for x in n_arr]
+                # Which parameters stopped on a bound of fit_learning_curve
+                # (asymptote within one observed range of the scores, a in
+                # [0, 100], b in [0.1, 2]). A parameter on its bound was set by
+                # the bound, not the data. Checked on made-up rmse values in
+                # yield units (30, 22, 18): a stopped at 100 and the asymptote
+                # at the edge of its range.
+                _f = model_result[_fit]
+                if 'error' not in _f:
+                    _span = float(np.max(v_arr) - np.min(v_arr)) or 1.0
+                    _lo = float(np.min(v_arr)) - _span
+                    _hi = float(np.max(v_arr)) + _span
+                    _tol = 1e-6 * max(1.0, abs(_span))
+                    _f['at_bound'] = [
+                        _p for _p, _hit in (
+                            ('asymptote', min(abs(_f['r2_max'] - _lo),
+                                              abs(_f['r2_max'] - _hi)) < _tol),
+                            ('a', _f['a'] <= 1e-9 or _f['a'] >= 100 - 1e-6),
+                            ('b', _f['b'] <= 0.1 + 1e-9 or _f['b'] >= 2 - 1e-9))
+                        if _hit]
 
     # Summary table. Each model gets its same-fold pair and the
     # leave-one-fold-out delta beside it; the two differ by how much the
