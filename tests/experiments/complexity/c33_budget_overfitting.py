@@ -159,6 +159,27 @@ def _fold_spread(per_fold):
     return float(np.std(vals, ddof=1))
 
 
+def _paired_worse_by(a_folds, b_folds, lower_is_better):
+    """Per outer fold, how much worse a scored than b. Positive = a worse.
+
+    Returns (mean, sd with ddof=1, n folds paired). The sd is the yardstick for
+    a gap between two arms scored on the SAME outer folds: fold difficulty is
+    shared by both arms and cancels here, where it does not in either arm's own
+    spread across folds.
+    """
+    diffs = []
+    n = min(len(a_folds or []), len(b_folds or []))
+    for f in range(n):
+        a, b = _f(a_folds[f]), _f(b_folds[f])
+        if a is None or b is None:
+            continue
+        diffs.append((a - b) if lower_is_better else (b - a))
+    if not diffs:
+        return None, None, 0
+    sd = float(np.std(diffs, ddof=1)) if len(diffs) > 1 else None
+    return float(np.mean(diffs)), sd, len(diffs)
+
+
 def _f(x):
     """float, or None when the number is missing or not finite."""
     if x is None:
@@ -421,6 +442,19 @@ def _double_descent(rows, lower_is_better, min_train_rows):
                if b is not None and rows[b]['reselected_std'] is not None]
     spread = max(spreads) if spreads else None
 
+    # Recorded beside the yardstick above, never used by the shape label. The
+    # rise and the fall are paired comparisons on the same outer folds; these
+    # are the spread (ddof=1) of each one fold by fold. The yardstick above is
+    # each budget's own spread across folds (ddof=0), which also carries how
+    # much harder one fold is than another. Which one decides the shape is the
+    # author's call.
+    def _folds(b):
+        return rows[b].get('fold_scores') if b is not None else None
+    rise_paired, rise_fold_sd, _ = _paired_worse_by(
+        _folds(interp_b), _folds(under_b), lower_is_better)
+    fall_paired, fall_fold_sd, _ = _paired_worse_by(
+        _folds(interp_b), _folds(over_b), lower_is_better)
+
     # All four sign combinations are named, so 'inconclusive' means a number
     # was missing — never that the curve had a shape with no label for it.
     shape = 'inconclusive'
@@ -450,6 +484,8 @@ def _double_descent(rows, lower_is_better, min_train_rows):
         'rise_to_threshold': rise,
         'fall_after_threshold': fall,
         'fold_spread_yardstick': spread,
+        'rise_paired': rise_paired, 'rise_paired_fold_sd': rise_fold_sd,
+        'fall_paired': fall_paired, 'fall_paired_fold_sd': fall_fold_sd,
         'shape': shape,
         'n_budgets_under': sum(1 for b, r in scored.items()
                                if _row_region(r, b, min_train_rows) == 'under'),
@@ -840,6 +876,21 @@ def run(data, config, output_dir, dataset_name):
             process_gap = (float(hyb - curve['reselected_best_mean']) if lower
                            else float(curve['reselected_best_mean'] - hyb))
 
+        # The yardstick for the two gaps above. Until 2026-09-28 the printed
+        # 'fold sd' beside them was per_fold_delta_std at the picked budget:
+        # the spread of (hybrid - best single representation), which is a
+        # different comparison from either gap. These are the spread across
+        # outer folds of the gap itself, paired fold by fold.
+        _best_b = curve['reselected_best_budget']
+        _best_folds = rows[_best_b]['fold_scores'] if _best_b in rows else None
+        process_gap_paired, process_gap_fold_sd, process_gap_n = (
+            _paired_worse_by(entry.get('hybrid_fold_scores'), _best_folds,
+                             lower))
+        overfit_gap_paired, overfit_gap_fold_sd, overfit_gap_n = (
+            _paired_worse_by(rows[picked_modal]['fold_scores'], _best_folds,
+                             lower)
+            if picked_modal in rows else (None, None, 0))
+
         summary[model] = {
             'process_reselected_mean': hyb,
             'process_gap': process_gap,
@@ -850,6 +901,13 @@ def run(data, config, output_dir, dataset_name):
                 else bool(picked_modal > min_train_rows)),
             'reselected_at_picked_budget': reselected_at_picked,
             'overfit_gap': overfit_gap,
+            # Same two gaps, paired fold by fold, with their own fold spread.
+            'process_gap_paired': process_gap_paired,
+            'process_gap_fold_sd': process_gap_fold_sd,
+            'process_gap_n_paired_folds': process_gap_n,
+            'overfit_gap_paired': overfit_gap_paired,
+            'overfit_gap_fold_sd': overfit_gap_fold_sd,
+            'overfit_gap_n_paired_folds': overfit_gap_n,
             # Which representation was second best on each outer fold, for the
             # delta_vs_rank2_single curve added beside the rank-1 one.
             'rank2_rep_per_fold': rank2_by_model.get(model),
@@ -863,8 +921,9 @@ def run(data, config, output_dir, dataset_name):
                 "the inner search's own CV score on the outer training rows, "
                 "not a held-out score; the held-out number per budget is "
                 "'reselected_mean' in by_model_budget"),
-            # The gap is only worth reading if it is bigger than the amount the
-            # folds themselves move by at the picked budget.
+            # Spread of (hybrid - best single representation) at the picked
+            # budget. NOT the yardstick for either gap: that is
+            # process_gap_fold_sd / overfit_gap_fold_sd above.
             'picked_budget_per_fold_delta_std': (
                 rows.get(picked_modal, {}).get('per_fold_delta_std')
                 if picked_modal is not None else None),
@@ -937,8 +996,9 @@ def run(data, config, output_dir, dataset_name):
 
     print(f"\n  WHAT THE SEARCH PICKED vs WHAT WAS HONESTLY BEST")
     print(f"  {'model':<10} {'picked':>8} {'honest best':>12} "
-          f"{'process gap':>12} {'modal gap':>10} {'fold sd':>9} {'bias trend':>11}")
-    print("  " + "-" * 78)
+          f"{'process gap':>12} {'its sd':>8} {'modal gap':>10} {'its sd':>8} "
+          f"{'bias trend':>11}")
+    print("  " + "-" * 86)
     for model in sorted(summary):
         s = summary[model]
         def _s(v, w=9, p=4):
@@ -949,8 +1009,9 @@ def run(data, config, output_dir, dataset_name):
               f"{(str(pk) + ('*' if s['picked_exceeds_train_rows'] else '')) if pk else '-':>8} "
               f"{(str(hb) + ('*' if s['reselected_best_exceeds_train_rows'] else '')) if hb else '-':>12} "
               f"{_s(s['process_gap'], 12)} "
+              f"{_s(s['process_gap_fold_sd'], 8)} "
               f"{_s(s['overfit_gap'], 10)} "
-              f"{_s(s['picked_budget_per_fold_delta_std'])} "
+              f"{_s(s['overfit_gap_fold_sd'], 8)} "
               f"{_s(s['bias_vs_budget_spearman'], 11, 3)}")
     print("\n  process gap > 0 = the per-fold budget the search chose scored "
           "worse, held out,")
@@ -958,8 +1019,14 @@ def run(data, config, output_dir, dataset_name):
           "what choosing costs.")
     print("  modal gap    > 0 = same, at the one budget the folds picked most "
           "often.")
-    print("  Read either against the fold sd beside it: a gap smaller than "
-          "that is a gap the folds could have produced.")
+    print("  its sd       = spread across outer folds of that same gap, paired "
+          "fold by fold.")
+    print("  Read each gap against its sd: a gap smaller than that is a gap "
+          "the folds could have produced.")
+    print("  Both gaps compare against the budget with the best HELD-OUT mean, "
+          "which was picked on")
+    print("  the same held-out folds, so the modal gap cannot be negative and "
+          "the process gap leans positive.")
 
     # ---- double descent: one row is one model ---------------------------
     print(f"\n  ACROSS THE INTERPOLATION THRESHOLD "
