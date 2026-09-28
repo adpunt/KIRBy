@@ -152,7 +152,7 @@ def _split_silo(sd, seed=42):
 def _silo_baseline(sd, shared_reps, seed=42,
                    alloc='performance_weighted', imp='treeshap',
                    int_eval='match', fed_model='rf', fed_seed=0,
-                   split=None):
+                   split=None, budget=100):
     """Train create_hybrid on one silo and evaluate. Returns metrics + fi.
 
     Routes the downstream model + metric on the silo's task_type — P1-4
@@ -199,6 +199,7 @@ def _silo_baseline(sd, shared_reps, seed=42,
         allocation_method=alloc,
         importance_method=imp,
         internal_evaluator=int_eval,
+        budget=budget,
         augmentations=tr_augs,
         augmentation_strategy=s_aug_cond)
     X_h_te = apply_feature_selection(rep_te, fi)
@@ -391,14 +392,53 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     print(f"  budgets swept: {TRANSFER_BUDGETS}, "
           f"headline {HEADLINE_BUDGET} features")
 
+    # ONE HYBRID PER SILO PER WIDTH. Until 2026-09-28 every transfer took the
+    # source's C1 selection, which create_hybrid builds at its default 100
+    # features, and truncated it to the transfer width. A width above 100
+    # therefore carried the same 100 features as 100 itself: the sweep above
+    # 100 was the headline repeated. The comparison was also lopsided: a
+    # transfer at width b was scored against the target's own hybrid at 100.
+    # Now each silo builds its own hybrid at every width, on its own training
+    # rows with its own recipe. That hybrid is the source of a transfer at
+    # width b AND the target's own-selection comparison at width b.
+    # C1 is create_hybrid at 100 with the same arguments, so it is reused at
+    # width 100 rather than built twice.
+    width_fis = {}
+    width_metrics = {}
+    for sname in silo_names:
+        width_fis[sname] = {}
+        width_metrics[sname] = {}
+        s_alloc, s_imp, s_int_eval = _silo_recipe(sname)
+        for b in TRANSFER_BUDGETS:
+            if b == 100 and sname in silo_fis:
+                width_fis[sname][b] = silo_fis[sname]
+                width_metrics[sname][b] = independent[sname]
+                continue
+            try:
+                m_b, fi_b, _ = _silo_baseline(
+                    silo_data[sname], shared_reps, seed=fed_seed,
+                    alloc=s_alloc, imp=s_imp, int_eval=s_int_eval,
+                    fed_model=fed_model, fed_seed=fed_seed,
+                    split=silo_splits[sname], budget=b)
+                width_fis[sname][b] = fi_b
+                width_metrics[sname][b] = m_b
+            except Exception as e:
+                width_metrics[sname][b] = {'error': str(e)}
+                print(f"  {sname} own hybrid at {b} features FAILED: {e}")
+    results['c2_own_selection_by_width'] = convert_numpy(
+        {s: {f'b{b}': m for b, m in d.items()}
+         for s, d in width_metrics.items()})
+
     for source_name in silo_names:
-        source_fi = silo_fis.get(source_name)
-        if source_fi is None:
+        if not width_fis.get(source_name):
             continue
         for target_name in silo_names:
             if source_name == target_name:
                 continue
             for transfer_budget in TRANSFER_BUDGETS:
+                source_fi = width_fis[source_name].get(transfer_budget)
+                if source_fi is None:
+                    continue
                 key = f"{source_name}→{target_name}@b{transfer_budget}"
                 print(f"  {key}...", end=' ')
                 try:
@@ -437,9 +477,24 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         metrics = compute_reg_metrics(y_te, y_pred)
                     metrics['transfer_stats'] = stats
 
-                    ind_rmse = independent.get(target_name, {}).get('rmse', float('nan'))
-                    if not np.isnan(ind_rmse):
+                    # The comparison is the target's OWN hybrid at the SAME
+                    # width, on the same rows. Positive means the transfer
+                    # did better in both: RMSE is lower-better, so own minus
+                    # transfer; spearman is higher-better, so transfer minus
+                    # own. Spearman is the metric the three silos resolve to.
+                    _own = width_metrics.get(target_name, {}).get(
+                        transfer_budget, {})
+                    ind_rmse = _own.get('rmse', float('nan'))
+                    if ind_rmse is not None and not np.isnan(ind_rmse):
                         metrics['rmse_improvement'] = float(ind_rmse - metrics['rmse'])
+                    _own_rho = _own.get('spearman_rho')
+                    _tr_rho = metrics.get('spearman_rho')
+                    metrics['spearman_improvement'] = (
+                        float(_tr_rho - _own_rho)
+                        if _own_rho is not None and _tr_rho is not None
+                        else None)
+                    metrics['own_selection_rmse'] = ind_rmse
+                    metrics['own_selection_spearman'] = _own_rho
 
                     transfer_results[key] = metrics
                     if 'rmse' in metrics:
@@ -997,9 +1052,13 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
 
     # Summary table
     print(f"\n{'─' * 70}")
-    print(f"  {'Silo':<12} {'C1 Ind':>10} {'Best C2':>10}")
+    # Both columns are RMSE at the headline width, so the two are the same
+    # number of features. The first column used to be C1, which is always
+    # 100 features, whatever width the second column was read at.
+    print(f"  RMSE at {HEADLINE_BUDGET} features, lower is better")
+    print(f"  {'Silo':<12} {'Own':>10} {'Best C2':>10}")
     for sname in silo_names:
-        ind = independent.get(sname, {})
+        ind = width_metrics.get(sname, {}).get(HEADLINE_BUDGET, {})
         ind_rmse = ind.get('rmse', float('nan'))
         best_tr = float('nan')
         for k, v in transfer_results.items():
