@@ -294,15 +294,21 @@ def report_hybrid(p):
     print(f"  budget={bp.get('budget')} allocation={bp.get('allocation_method')} "
           f"importance={bp.get('importance_method')} "
           f"evaluator={bp.get('internal_evaluator')}")
-    print(f"    {'level':>7}{'cells':>7}{'features taken':>17}"
-          f"{'kept from lv 0.0':>19}")
-    for lv in _levels_of(p):
-        c = hyb.get(f'{lv:g}')
-        if c is None:
+    # One table per representation: n16's summary is keyed representation
+    # first since 2026-09-28, and never pools across representations.
+    for rname, per_level in hyb.items():
+        if not isinstance(per_level, dict):
             continue
-        print(f"    {lv:>7.2f}{c['n_cells']:>7}"
-              f"{c['median_n_selected_features']:>17.0f}"
-              f"{c['median_retained_fraction_of_level_zero']:>19.3f}")
+        print(f"\n  [{rname}]")
+        print(f"    {'level':>7}{'replicates':>11}{'features taken':>17}"
+              f"{'kept from lv 0.0':>19}")
+        for lv in _levels_of(p):
+            c = per_level.get(f'{lv:g}')
+            if not isinstance(c, dict):
+                continue
+            print(f"    {lv:>7.2f}{c.get('n_replicates', c.get('n_cells')):>11}"
+                  f"{c['median_n_selected_features']:>17.0f}"
+                  f"{c['median_retained_fraction_of_level_zero']:>19.3f}")
 
 
 def report_dose(p):
