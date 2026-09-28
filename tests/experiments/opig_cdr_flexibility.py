@@ -174,6 +174,7 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
 
     is_binary = _is_binary_rep(X)
     roc_scores, pr_scores, bacc_scores, mcc_scores, acc_scores = [], [], [], [], []
+    n_one_class = 0
 
     for train_idx, val_idx in splits:
         X_train, X_val = X[train_idx], X[val_idx]
@@ -198,7 +199,27 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
         bacc_scores.append(balanced_accuracy_score(y_val, preds))
         mcc_scores.append(matthews_corrcoef(y_val, preds))
 
-        # Scores for AUROC and PR-AUC
+        # Scores for AUROC and PR-AUC.
+        #
+        # ⛔ A ONE-CLASS HELD-OUT FOLD IS DROPPED BY TEST, NOT BY EXCEPTION.
+        # Measured in this environment 2026-09-28 (scikit-learn 1.x):
+        # roc_auc_score on a fold whose held-out antibodies are all flexible
+        # (or all rigid) does NOT raise. It returns NaN and warns, and the
+        # warnings filter at the top of this file hides the warning. The NaN
+        # went into roc_scores, np.mean made the whole (representation, model)
+        # row's ROC AUC NaN, and the fold count printed beside it still said
+        # every fold had contributed. average_precision_score does not raise
+        # either: on an all-flexible fold it returns 1.0 and on an all-rigid
+        # fold 0.0, so PR AUC took a perfect or a zero score for a fold where
+        # neither number is defined. Both metrics need both classes, so such a
+        # fold contributes to neither and is counted instead.
+        #
+        # No number changes on the data this file runs on: measured 2026-09-28,
+        # no held-out fold is one-class for CDRH3 at 3, 4 or 5 folds or for
+        # CDRL3 at 3 or 4. It bites on any other CDR type or fold count.
+        if len(np.unique(y_val)) < 2:
+            n_one_class += 1
+            continue
         try:
             if hasattr(m, 'decision_function'):
                 scores = m.decision_function(X_val)
@@ -224,6 +245,9 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
     # made.
     result = {
         'n_folds_split': len(splits),
+        # Held-out folds where every antibody carried the same label. ROC AUC
+        # and PR AUC are undefined there and are means over the rest.
+        'n_one_class_folds': n_one_class,
         'accuracy': {'mean': np.mean(acc_scores), 'std': np.std(acc_scores),
                      'n_folds': len(acc_scores)},
         'balanced_accuracy': {'mean': np.mean(bacc_scores),
