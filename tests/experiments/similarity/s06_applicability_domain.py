@@ -214,6 +214,21 @@ def resolved_k_values(kwargs):
     return [int(v) for v in raw.split(',') if v.strip()]
 
 
+def _mean_one(w):
+    """Importance weights rescaled so their mean is 1. Added 2026-09-28.
+
+    LightGBM gain is a sum of squared-error reductions, so its size moves with
+    each fold's row count and label spread. Unscaled, every weighted distance
+    in a fold was multiplied by that fold's own constant. A constant changes
+    no neighbour and no within-fold rank, but the pooled Spearman ranks all
+    folds together, so a fold with larger gains and larger errors read as
+    distance tracking error. Unweighted arms had no such constant.
+    """
+    w = np.asarray(w, dtype=float)
+    m = float(np.mean(w)) if w.size else 0.0
+    return w / m if m > 0 else w
+
+
 def _graded_clf_error(clf, X, y_true):
     """Continuous classification error = 1 - P(true class).
 
@@ -653,8 +668,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # NaN-guard: importance helpers can emit NaN for constant
                 # features; np.maximum(NaN, 0) is NaN which would corrupt the
                 # weighted kNN distance.
-                w = importance_feature_weights(
-                    flatten_fold_weights(feat_info))
+                w = _mean_one(importance_feature_weights(
+                    flatten_fold_weights(feat_info)))
             except Exception as exc:
                 # N9: log the dropped fold so a thrown hybrid/importance build
                 # is distinguishable from a genuinely skipped fold.
@@ -705,7 +720,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             Xva_cmp = scaler_cmp.transform(reps[cmp_rep][val_idx])
             w_cmp = (imp[cmp_rep] if cmp_rep in imp
                      else np.ones(reps[cmp_rep].shape[1]))
-            w_cmp = importance_feature_weights(w_cmp)
+            w_cmp = _mean_one(importance_feature_weights(w_cmp))
 
             # Distance to k-NN in training set for each val molecule
             # Comparator representation (unweighted)
@@ -739,7 +754,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         _fold_spearman(d_rep, errors_neutral))
 
                 if rname in imp:
-                    w_r = importance_feature_weights(imp[rname])
+                    w_r = _mean_one(importance_feature_weights(imp[rname]))
                     nn_rw = make_nearest_neighbors(n_neighbors=min(k, len(y_train) - 1))
                     nn_rw.fit(Xtr_r * w_r)
                     drw, _ = nn_rw.kneighbors(Xva_r * w_r)
@@ -790,8 +805,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     sc_h2 = StandardScaler()
                     X_tr_s2 = sc_h2.fit_transform(X_tr_h2)
                     X_va_s2 = sc_h2.transform(X_va_h2)
-                    w2 = importance_feature_weights(
-                        flatten_fold_weights(feat_info2))
+                    w2 = _mean_one(importance_feature_weights(
+                        flatten_fold_weights(feat_info2)))
                     nn_h2 = make_nearest_neighbors(
                         n_neighbors=min(k, len(y_train) - 1))
                     nn_h2.fit(X_tr_s2)
