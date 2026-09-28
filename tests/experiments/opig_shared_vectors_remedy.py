@@ -558,6 +558,21 @@ def summarise_comparison(name, point, result, outer_folds, data, reps, donor_rep
             'delta_vs_target_alone_mean': (float(np.mean(deltas))
                                            if deltas else None),
             'n_paired_folds': len(deltas),
+            # The delta above is against the TARGET alone. In C and D the pool
+            # also holds the partners, and on herg_ki ecfp4 alone scores well
+            # ahead of chemberta alone, so a positive delta there can mean only
+            # "the partner is the better representation". The engine's own
+            # comparison is against the best single representation in the pool,
+            # picked per fold on the inner search's baselines (outer-train only),
+            # signed so positive means the hybrid is better. Recorded beside it,
+            # with every pool member's own held-out scores.
+            'delta_vs_best_single_per_fold': entry.get('per_fold_delta'),
+            'delta_vs_best_single_mean': entry.get('delta_mean_of_folds'),
+            'best_single_reps_per_fold': entry.get('best_single_reps_per_fold'),
+            'pool_alone_fold_scores': {
+                r: (v or {}).get('fold_scores')
+                for r, v in ((result.baselines_by_model or {})
+                             .get(model, {}) or {}).items()},
             'ties_per_fold': ties_per_fold,
             'donor_features_admitted': admitted,
             # Without the rebuild there is nothing to read admission from, so
@@ -630,12 +645,14 @@ def print_headline(dataset_name, choice, rows, models_common):
           f'   donor = {choice["donor"]}')
     print('score delta is the row minus the target representation alone, signed so '
           'positive is better.')
+    print('vs best 1 is the row minus the best single representation in its own '
+          'pool (picked on outer-train), same sign.')
     print('tied rows counts molecules sharing a row in the matrix that fold was '
           'scored on.')
     print('=' * 104)
     for model in sorted(models_common):
         print(f'\n  model {model}')
-        print(f'    {"which":6s} {"score delta":>12s} '
+        print(f'    {"which":6s} {"score delta":>12s} {"vs best 1":>10s} '
               f'{"folds":>6s} {"tied: full":>11s} {"kept cols":>10s} '
               f'{"hybrid":>8s}  setting')
         for r in rows:
@@ -646,6 +663,9 @@ def print_headline(dataset_name, choice, rows, models_common):
             kept = mean_of(ties, 'target_columns_the_hybrid_kept', 'n_tied_rows')
             built = mean_of(ties, 'built_hybrid', 'n_tied_rows')
             d = r['delta_vs_target_alone_mean']
+            d1 = r.get('delta_vs_best_single_mean')
+            if d1 is not None and not np.isfinite(d1):
+                d1 = None
             label = r['condition_suffix'] or '-'
             if r['no_op']:
                 label += '  [no-op: no donor features admitted]'
@@ -657,6 +677,7 @@ def print_headline(dataset_name, choice, rows, models_common):
             # printed under one label and the no-op tag was never visible.
             print(f'    {r["comparison"]:6s} '
                   f'{"—" if d is None else f"{d:+12.4f}":>12s} '
+                  f'{"—" if d1 is None else f"{d1:+10.4f}":>10s} '
                   f'{r["n_paired_folds"]:6d} '
                   f'{"—" if full is None else f"{full:11.1f}":>11s} '
                   f'{"—" if kept is None else f"{kept:10.1f}":>10s} '
