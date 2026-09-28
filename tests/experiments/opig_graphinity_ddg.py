@@ -431,16 +431,23 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
     # inside the try and this file has to keep running when it is not.
     top2_block = None
 
+    # The split refusal sits OUTSIDE the try below, and raises before any
+    # scoring. Inside it, the `except Exception` that catches a failed hybrid
+    # build caught this too: the run printed "Hybrid build failed", carried on
+    # to the table, and every representation there was scored by
+    # _make_cv(groups=None) — a random KFold split wearing a group-CV label.
+    # The refusal only ever stopped the hybrid, never the numbers that get
+    # reported. ddg_combined always carries PDB complexes, so no number this
+    # dataset produced was affected.
+    if groups is None:
+        raise ValueError(
+            f"evaluate_condition({condition}): groups is None for "
+            f"{ds_name}; refusing to run — _make_cv would fall back to "
+            "KFold, which is a random split."
+        )
+
     # Build hybrid with aac as augmentation rep (matches DDG domain config)
     try:
-        if groups is None:
-            # GroupKFold without real groups silently degenerates to KFold,
-            # which violates the lab-group prohibition on random splits.
-            raise ValueError(
-                f"evaluate_condition({condition}): groups is None for "
-                f"{ds_name}; refusing to fall back to np.arange(n) "
-                "(would degenerate GroupKFold to KFold = random split)."
-            )
         grp = groups
         AUG_REPS = {'aac'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
