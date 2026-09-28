@@ -1100,6 +1100,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'is not among the settings this run sweeps')
     counts = {}
     provenance = {}
+    hybrid_fold_reps = {}
     n_units_done = n_units_resumed = 0
 
     print(f"  condition {condition}; {len(passes)} (level, draw) passes; "
@@ -1163,9 +1164,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # donors. So n42's hybrid is not the same matrix as n23's and
                 # n32's under an augmented recipe. Which one is right is the
                 # owner's call; n42 follows n07.
+                # DIRTY-LOCAL 2026-09-28: each hybrid space is built on the
+                # representations the stored search chose on THIS fold's
+                # training rows (n02.search_fold_reps, as n02 736ec93, n12,
+                # n30 and n37 do). Handed the whole pool, build_fold_hybrid
+                # cuts a rep_count recipe by Blueprint.rep_scores, one score
+                # per representation over every molecule, this fold's
+                # held-out ones included (_shared.py:5270-5300). With no
+                # per-fold record search_fold_reps returns None and the build
+                # is what it was. n07.fold_similarity_spaces itself is not
+                # changed here, so n07's own hybrids still take the old path.
+                _all_sets = list(settings) + mi_settings
+                _hyb = ('hybrid', 'hybrid_similarity')
                 try:
                     sp_tr, sp_va, sp_unavail = n07.fold_similarity_spaces(
-                        dataset_name, list(settings) + mi_settings,
+                        dataset_name,
+                        [s for s in _all_sets if s.space not in _hyb],
                         model_input_tr=None, model_input_va=None, reps=reps,
                         train_idx=train_idx, val_idx=val_idx, y_train=y0,
                         groups_train=g_tr, base_reps=base_by_model.get(m, []),
@@ -1173,6 +1187,37 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         augmentations=augmentations, model_name=m,
                         model_factory=factories.get(m), metric=metric,
                         task_type=task_type)
+                    for _hsp in _hyb:
+                        _hs = [s for s in _all_sets if s.space == _hsp]
+                        if not _hs:
+                            continue
+                        _rec = recipes.get(m, {}).get(_hsp)
+                        _keep, _src = ((None, 'no recipe') if _rec is None
+                                       else n02.search_fold_reps(
+                                           _rec[0], fold_i, n_folds,
+                                           list(reps)))
+                        hybrid_fold_reps.setdefault(m, {}).setdefault(
+                            _hsp, {})[str(fold_i)] = {
+                                'reps': (sorted(_keep) if _keep is not None
+                                         else None), 'source': _src}
+                        _h_tr, _h_va, _h_un = n07.fold_similarity_spaces(
+                            dataset_name, _hs, model_input_tr=None,
+                            model_input_va=None,
+                            reps=(reps if _keep is None else
+                                  {k: v for k, v in reps.items()
+                                   if k in _keep}),
+                            train_idx=train_idx, val_idx=val_idx, y_train=y0,
+                            groups_train=g_tr,
+                            base_reps=base_by_model.get(m, []),
+                            recipes=recipes.get(m, {}),
+                            augmentations=augmentations, model_name=m,
+                            model_factory=factories.get(m), metric=metric,
+                            task_type=task_type)
+                        if _h_tr.get(_hsp) is not None:
+                            sp_tr[_hsp] = _h_tr[_hsp]
+                            sp_va[_hsp] = _h_va[_hsp]
+                        if _hsp in _h_un:
+                            sp_unavail[_hsp] = _h_un[_hsp]
                 except Exception as exc:
                     errors.add(f'spaces|{m}', exc)
                     continue
@@ -1277,6 +1322,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'model_inputs': list(MODEL_INPUTS),
         'base_reps_by_model': base_by_model, 'base_reps_missing': base_missing,
         'recipe_spaces_by_model': {m: sorted(v) for m, v in recipes.items()},
+        'hybrid_fold_reps': hybrid_fold_reps,
         'recipe_spaces_unavailable': recipes_unavailable,
         'models_without_recipe': no_recipe,
         'families_run': list(families),
