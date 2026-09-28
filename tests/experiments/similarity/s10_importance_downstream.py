@@ -171,6 +171,8 @@ from experiments._shared import (
 from kirby.find_best_hybrid import nested_cv_outer_folds
 
 from kirby.hybrid import apply_feature_selection
+from kirby.hybrid import (RANKING_METRICS as _RANKING_METRICS,
+                          _graded_scores_for_clf)
 
 
 # =============================================================================
@@ -368,6 +370,21 @@ def _qrasar_block(base_scores, uw_scores, w_scores):
         'base_plus_sim_unweighted_folds': [float(s) for s in uw_scores],
         'base_plus_sim_weighted_folds': [float(s) for s in w_scores],
     }
+
+
+def _predict_for_metric(model, X, metric_name, is_clf):
+    """What metric_fn is handed for this fitted model.
+
+    On a classification dataset scored by AUROC (humanness_therapeutic), the
+    hard classes from predict() turn AUROC into (sensitivity + specificity) / 2
+    and throw away the ranking it measures. The pool search scores the same
+    models from predict_proba's positive column, so this does too, through the
+    engine's own helper. Every other case gets predict(), as before.
+    """
+    y_hard = model.predict(X)
+    if is_clf and metric_name in _RANKING_METRICS:
+        return _graded_scores_for_clf(model, X, y_hard)
+    return y_hard
 
 
 def _paired_delta(treatment_scores, reference_scores):
@@ -644,7 +661,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                 KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
                 model = KNN(n_neighbors=k_eff, weights=vote)
                 model.fit(X_tr, y_train)
-                uw_scores.append(metric_fn(y_val, model.predict(X_va)))
+                uw_scores.append(metric_fn(y_val, _predict_for_metric(model, X_va, metric_name, is_clf)))
 
                 # Weighted (use precomputed importance)
                 try:
@@ -654,7 +671,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                     w = _importance_weights(imp_arr)
                     model_w = KNN(n_neighbors=k_eff, weights=vote)
                     model_w.fit(X_tr * w, y_train)
-                    w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
+                    w_scores.append(metric_fn(y_val, _predict_for_metric(model_w, X_va * w, metric_name, is_clf)))
                 except Exception:
                     w_scores.append(float('nan'))
 
@@ -759,7 +776,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                     KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
                     model = KNN(n_neighbors=k_eff, weights=vote)
                     model.fit(X_tr, y_train)
-                    uw_by_k[k].append(metric_fn(y_val, model.predict(X_va)))
+                    uw_by_k[k].append(metric_fn(y_val, _predict_for_metric(model, X_va, metric_name, is_clf)))
 
                     # Weighted
                     try:
@@ -769,7 +786,7 @@ def _run_weighted_knn(reps, labels, groups, config, fold_blueprints,
                         model_w = KNN(n_neighbors=k_eff, weights=vote)
                         model_w.fit(X_tr * w, y_train)
                         w_by_k[k].append(
-                            metric_fn(y_val, model_w.predict(X_va * w)))
+                            metric_fn(y_val, _predict_for_metric(model_w, X_va * w, metric_name, is_clf)))
                     except Exception:
                         w_by_k[k].append(float('nan'))
 
@@ -1579,6 +1596,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
     For per-rep and hybrid.
     """
     print("\n  --- Task 4: Similarity-Augmented Features (q-RASAR style) ---")
+    is_clf = task_type == 'classification'
 
     k_list = _qrasar_ks()
     # The count the unsuffixed blocks report. Every count is under
@@ -1619,7 +1637,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
             try:
                 rf = _make_rf()
                 rf.fit(X_tr, y_train)
-                base_scores.append(metric_fn(y_val, rf.predict(X_va)))
+                base_scores.append(metric_fn(y_val, _predict_for_metric(rf, X_va, metric_name, is_clf)))
             except Exception:
                 base_scores.append(float('nan'))
 
@@ -1645,7 +1663,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                     X_va_aug = np.hstack([X_va, sim_va])
                     rf_aug = _make_rf()
                     rf_aug.fit(X_tr_aug, y_train)
-                    uw_by_k[k_n].append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
+                    uw_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug, X_va_aug, metric_name, is_clf)))
                 except Exception:
                     uw_by_k[k_n].append(float('nan'))
 
@@ -1663,7 +1681,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                     X_va_aug_w = np.hstack([X_va_w, sim_va_w])
                     rf_aug_w = _make_rf()
                     rf_aug_w.fit(X_tr_aug_w, y_train)
-                    w_by_k[k_n].append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                    w_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug_w, X_va_aug_w, metric_name, is_clf)))
                 except Exception:
                     w_by_k[k_n].append(float('nan'))
 
@@ -1739,7 +1757,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                 try:
                     rf = _make_rf()
                     rf.fit(X_tr, y_train)
-                    base_scores.append(metric_fn(y_val, rf.predict(X_va)))
+                    base_scores.append(metric_fn(y_val, _predict_for_metric(rf, X_va, metric_name, is_clf)))
                 except Exception:
                     base_scores.append(float('nan'))
 
@@ -1763,7 +1781,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                         X_va_aug = np.hstack([X_va, sim_va])
                         rf_aug = _make_rf()
                         rf_aug.fit(X_tr_aug, y_train)
-                        uw_by_k[k_n].append(metric_fn(y_val, rf_aug.predict(X_va_aug)))
+                        uw_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug, X_va_aug, metric_name, is_clf)))
                     except Exception:
                         uw_by_k[k_n].append(float('nan'))
 
@@ -1781,7 +1799,7 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                         X_va_aug_w = np.hstack([X_va_w, sim_va_w])
                         rf_aug_w = _make_rf()
                         rf_aug_w.fit(X_tr_aug_w, y_train)
-                        w_by_k[k_n].append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
+                        w_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug_w, X_va_aug_w, metric_name, is_clf)))
                     except Exception:
                         w_by_k[k_n].append(float('nan'))
 
