@@ -34,8 +34,9 @@ WHAT IS COMPUTED, per fold, on the fold's training molecules as recorded:
                          distinct representation at that rank.
        <hybrid space>    Euclidean on each standardised hybrid matrix, built
                          from the fold's clean training labels
-       forest_proximity  one minus the share of 200 trees putting the two
-                         molecules in one leaf; refused above n07's row cap.
+       forest_proximity  one minus the share of the forest's trees putting the
+                         two molecules in one leaf (FOREST_TREES = 100,
+                         noise_estimation.py); refused above n07's row cap.
                          The forest reads the labels, so its close molecules
                          already agree on the label: biased low by construction.
      Differs from n35: per-molecule neighbours rather than the closest 1% of all
