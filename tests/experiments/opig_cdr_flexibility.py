@@ -331,6 +331,18 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         dataset_tag=f"cdr_{'_'.join(cdr_types)}",
     )
 
+    # Which representations were asked for and which were actually built.
+    # compute_or_load_reps prints a FAILED line for one it cannot build and
+    # returns a shorter dict; here 'esmc' and 'esm3' need the esm package,
+    # which is not installed on this laptop, so the pool of 10 becomes 8 and
+    # only the terminal said so. A saved file of 8 rows read exactly like a run
+    # configured for 8.
+    _missing = [r for r in rep_names if r not in reps]
+    if _missing:
+        print(f"  {len(_missing)} of {len(rep_names)} representations could "
+              f"not be built and are absent from every number below: "
+              f"{', '.join(_missing)}")
+
     if not reps:
         # ⛔ NOT `return None`. _checkpoint.Checkpoint.put stores anything that
         # is not a dict carrying 'error', so a None went into the sidecar as a
@@ -618,6 +630,10 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         'n_flexible': n_flex,
         'n_rigid': n - n_flex,
         'cdr_types': cdr_types,
+        'n_folds': n_folds,
+        'reps_requested': list(rep_names),
+        'reps_built': sorted(reps.keys()),
+        'reps_not_built': _missing,
         'results': results,
         'hybrid_summary': hybrid_summary,
         # Held-out hybrid-vs-best-single comparison per downstream model, plus
