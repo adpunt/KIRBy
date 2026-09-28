@@ -33,6 +33,31 @@ from sklearn.preprocessing import StandardScaler
 from kirby.hybrid import _graded_scores_for_clf
 
 
+# find_best_hybrid's default seed. c05 never passes one, so the search's folds
+# are built with this; _min_train_rows must build the same folds.
+_SEARCH_SEED = 42
+
+
+def _min_train_rows(sub_groups, sub_labels, n_folds, task_type):
+    """Training rows in the smallest training partition of the search's folds.
+
+    Uses the splitter find_best_hybrid uses (_make_cv_splitter: GroupKFold, or
+    StratifiedGroupKFold with seed 42 for classification), on the rows the
+    group draw actually returned. Falls back to (k-1)/k of those rows if the
+    splitter cannot be built here; the search then raises on its own.
+    """
+    n = len(sub_labels)
+    try:
+        from kirby.find_best_hybrid import _make_cv_splitter
+        splitter, use_groups = _make_cv_splitter(
+            sub_groups, n_folds, _SEARCH_SEED, task_type=task_type)
+        X = np.zeros((n, 1))
+        args = (X, sub_labels, sub_groups) if use_groups else (X, sub_labels)
+        return int(min(len(tr) for tr, _ in splitter.split(*args)))
+    except Exception:
+        return int(n * (n_folds - 1) / n_folds) if n_folds > 1 else int(n * 0.8)
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Learning curves: hybrid advantage vs sample size."""
     print("\n" + "=" * 70)
@@ -350,8 +375,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # budget > train rows yields a degenerate selection -> NaN (this was
             # the all-NaN-at-small-n bug, e.g. budget 50 at n_sub=50 leaves only
             # ~40 train rows). See COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
-            train_size = (int(n_sub * (sub_folds - 1) / sub_folds)
-                          if sub_folds > 1 else int(n_sub * 0.8))
+            #
+            # ⛔ FROM THE ROWS DRAWN, NOT THE ROWS ASKED FOR (2026-09-28). This
+            # used n_sub, but the group draw stops short of n_sub, so the cap
+            # could exceed every fold's training rows. buchwald_hartwig at 10%
+            # asks for 395 reactions and draws two additive groups of 180: the
+            # cap said 197 while each fold trains on 180. Now it is the
+            # smallest training partition of the folds the search itself
+            # builds (same splitter, same seed 42 as find_best_hybrid's
+            # default), so no fold is handed a budget above its own rows.
+            train_size = _min_train_rows(sub_groups, sub_labels, sub_folds,
+                                         data['task_type'])
             sub_budgets = [b for b in sweep_budgets if b <= train_size]
             budgets_searched_this_n.append(len(sub_budgets))
             if not sub_budgets:
@@ -485,8 +519,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # exactly n_sub passed and was then applied to about 0.8 n_sub
                 # rows. It now compares against the training partition, the
                 # same number the other arm caps against.
-                _fd_train = (int(n_sub * (sub_folds - 1) / sub_folds)
-                             if sub_folds > 1 else int(n_sub * 0.8))
+                _fd_train = train_size
                 if bp_fd_budget is not None and bp_fd_budget > _fd_train:
                     all_rows_bp_skips.setdefault(model_name, []).append({
                         'n_sub': int(n_sub),
