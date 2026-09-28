@@ -131,6 +131,9 @@ from experiments.noise.n23_uncertainty_cleaning import (
     as_cleanup_dict, cached_base_cell, cached_hybrid_cell, CACHEABLE_MODELS,
     NO_NEIGHBOURS,
 )
+# DIRTY-LOCAL 2026-09-28: the representations the stored search built each
+# outer fold's hybrid on (n02 736ec93; n12, n21, n30 and n37 use it the same way).
+from experiments.noise.n02_sample_weighting import search_fold_reps
 
 # Shares of the training molecules kept in the removal part. 1.0 is the
 # reference every other share is paired against.
@@ -243,8 +246,17 @@ def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
                   recipe_for_space_by_model, downstream_models,
                   model_factories, metric_fn, lower_is_better, *,
                   dataset_name=None, reps=None, train_idx=None, val_idx=None,
-                  metric_name=None):
+                  metric_name=None, fold_i=None, n_folds=None):
     """{space: [(training matrix, held-out matrix, models scored on it)]}.
+
+    DIRTY-LOCAL 2026-09-28. Given fold_i and n_folds, each hybrid is built on
+    the representations the stored search chose for that outer fold
+    (search_fold_reps, Blueprint.allocation_per_fold). Handed the whole pool,
+    build_fold_hybrid cuts a rep_count recipe by Blueprint.rep_scores
+    (_shared.py:5270-5300), one score per representation over every molecule,
+    this fold's held-out ones included. The local recipes are rep_count 5
+    over a pool of 10. Same defect and helper as n02 (736ec93), n12, n21, n30
+    and n37.
 
     base_k holds one matrix per distinct representation at rank k, shared by
     the models that rank it there. A hybrid space is one matrix per distinct
@@ -282,15 +294,23 @@ def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
         for bp_m, mnames, shareable in group_models_by_recipe(
                 {m: recipe_for_space_by_model.get(m, {}).get(sp)
                  for m in downstream_models}, downstream_models):
+            _keep = None
+            if fold_i is not None and n_folds is not None:
+                _keep, _ = search_fold_reps(bp_m, fold_i, n_folds,
+                                            list(train_reps))
+            _tr_pool = (train_reps if _keep is None else
+                        {k: v for k, v in train_reps.items() if k in _keep})
+            _va_pool = (val_reps if _keep is None else
+                        {k: v for k, v in val_reps.items() if k in _keep})
             if _cache:
                 X_tr_h, X_va_h = cached_hybrid_cell(
-                    dataset_name, train_reps, val_reps, y_tr, bp_m, g_tr,
+                    dataset_name, _tr_pool, _va_pool, y_tr, bp_m, g_tr,
                     None if shareable else mnames[0],
                     None if shareable else model_factories[mnames[0]](),
                     (metric_name, metric_fn, lower_is_better), train_idx)
             else:
                 X_tr_h, X_va_h = hybrid_for_fold(
-                    train_reps, val_reps, y_tr, bp_m, g_tr,
+                    _tr_pool, _va_pool, y_tr, bp_m, g_tr,
                     None if shareable else model_factories[mnames[0]](),
                     metric_fn, lower_is_better)
             if X_tr_h is not None:
@@ -524,6 +544,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for fold_i, (train_idx, val_idx) in enumerate(splits):
         fkey = f'f{fold_i}'
+        # DIRTY-LOCAL 2026-09-28: which representations each hybrid is built
+        # on in this fold, and where that list came from (search_fold_reps).
+        # Computed before the checkpoint skip so a resumed run records it too.
+        for _sp in spaces:
+            if _sp in BASE_SPACES:
+                continue
+            for _bp_m, _mnames, _shareable in group_models_by_recipe(
+                    {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
+                     for _m in downstream_models}, downstream_models):
+                _keep, _src = search_fold_reps(_bp_m, fold_i, n_folds,
+                                               list(reps))
+                _hkey = (_sp if list(_mnames) == list(downstream_models)
+                         else f'{_sp}/{_mnames[0]}')
+                results.setdefault('hybrid_fold_reps', {}).setdefault(
+                    _hkey, {})[fkey] = {
+                        'reps': sorted(_keep) if _keep is not None else None,
+                        'source': _src}
+                print(f"    fold {fold_i} {_hkey}: built on "
+                      f"{sorted(_keep) if _keep is not None else 'the pool'} "
+                      f"({_src})")
         if fkey in done_folds:
             print(f"    fold {fold_i}: on disk in the checkpoint")
             continue
@@ -540,7 +580,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
             recipe_for_space_by_model, downstream_models, model_factories,
             metric_fn, lower_is_better, train_idx=train_idx, val_idx=val_idx,
-            **_cache_kw)
+            fold_i=fold_i, n_folds=n_folds, **_cache_kw)
         for sp in spaces:
             if sp not in clean_spaces:
                 errors[f'{sp}|{fkey}|build'] = (
@@ -704,7 +744,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         recipe_for_space_by_model, downstream_models,
                         model_factories, metric_fn, lower_is_better,
                         train_idx=train_idx, val_idx=val_idx,
-                        **_cache_kw).items()
+                        fold_i=fold_i, n_folds=n_folds, **_cache_kw).items()
                     if sp not in BASE_SPACES})
             # A hybrid that could not be rebuilt on the noisy labels used to
             # drop out of this pass with nothing recorded.
