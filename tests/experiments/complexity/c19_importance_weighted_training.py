@@ -426,8 +426,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # on spearman/auc. Added 2026-09-10 (metric-direction audit).
                 'deltas_oriented': deltas_oriented,
                 'n_zero_importance_features_per_fold': n_zero_importance,
-                'best_condition': _best_fn(model_results, key=lambda k: model_results[k]
-                                           if not np.isnan(model_results[k]) else _sentinel),
+                # None when no condition was scored. The sentinel alone let an
+                # all-NaN column return the first condition, 'unweighted',
+                # which the summary then counted as a win.
+                'best_condition': (
+                    _best_fn(model_results, key=lambda k: model_results[k]
+                             if not np.isnan(model_results[k]) else _sentinel)
+                    if any(not np.isnan(v) for v in model_results.values())
+                    else None),
             }
 
         results['per_space'][space_name] = convert_numpy(space_results)
@@ -436,7 +442,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     condition_wins = {c: 0 for c in conditions}
     for space_name, space_res in results['per_space'].items():
         for model_name, model_res in space_res.items():
-            best = model_res.get('best_condition', 'unweighted')
+            best = model_res.get('best_condition')
+            if best is None:
+                continue
             condition_wins[best] = condition_wins.get(best, 0) + 1
 
     results['summary'] = {
