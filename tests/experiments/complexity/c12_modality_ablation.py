@@ -236,7 +236,8 @@ def _score_combination_on_fold(rep_names, reps, labels, fold_indices, fold_i,
         model = model_factory()
         model.fit(X_train, y_train)
         predict_fn = get_predict_fn(model, task_type, n_classes)
-        return float(score_predictions(y_val, predict_fn(X_val), task_type))
+        return float(score_predictions(y_val, predict_fn(X_val), task_type,
+                                       n_classes))
     except Exception as e:
         print(f"    FAILED fold {fold_i}: {'+'.join(rep_names)} with "
               f"{model_name or 'model'} raised {type(e).__name__}: {e}")
@@ -426,13 +427,20 @@ FACTORY_EXPRESSION_REPS = [
 # METRIC HELPERS
 # =============================================================================
 
-def score_predictions(y_true, y_pred, task_type: str) -> float:
-    """Compute the primary metric for the given task type."""
+def score_predictions(y_true, y_pred, task_type: str, n_classes=None) -> float:
+    """Compute the primary metric for the given task type.
+
+    `n_classes` is the number of classes in the whole dataset. It decides
+    AUROC against weighted F1. It used to be counted on the held-out fold, so
+    a four-class fold that held only two classes was scored as AUROC on one
+    probability column and averaged with F1 folds (fixed 2026-09-28).
+    """
     if task_type == 'regression':
         return float(r2_score(y_true, y_pred))
     elif task_type == 'classification':
         # y_pred may be probabilities or class labels
-        n_classes = len(np.unique(y_true))
+        if n_classes is None:
+            n_classes = len(np.unique(y_true))
         if n_classes == 2:
             # For binary: use probabilities if available (shape (n, 2))
             if y_pred.ndim == 2:
@@ -554,7 +562,12 @@ def get_predict_fn(model, task_type, n_classes):
             # Return 1D positive-class probabilities
             return lambda X: model.predict_proba(X)[:, 1]
         else:
-            return model.predict_proba
+            # Weighted F1 needs class labels. The argmax is a COLUMN index;
+            # model.classes_ turns it into the label. The bare argmax equalled
+            # the label only when every class was in the training fold
+            # (fixed 2026-09-28).
+            return lambda X: np.asarray(model.classes_)[
+                np.argmax(model.predict_proba(X), axis=1)]
     # Fallback: use decision_function or predict
     if hasattr(model, 'decision_function'):
         return model.decision_function
@@ -592,7 +605,7 @@ def eval_single_rep(X, labels, groups, model_factories, n_folds, task_type,
                 model.fit(X_train, y_train)
                 predict_fn = get_predict_fn(model, task_type, n_classes)
                 y_pred = predict_fn(X_val)
-                score = score_predictions(y_val, y_pred, task_type)
+                score = score_predictions(y_val, y_pred, task_type, n_classes)
             except Exception as e:
                 print(f"    FAILED fold {f}: {rep_label or 'rep'} with "
                       f"{model_name} raised {type(e).__name__}: {e}")
@@ -649,7 +662,7 @@ def eval_concat_reps(rep_arrays, labels, groups, model_factories, n_folds,
                 model.fit(X_train, y_train)
                 predict_fn = get_predict_fn(model, task_type, n_classes)
                 y_pred = predict_fn(X_val)
-                score = score_predictions(y_val, y_pred, task_type)
+                score = score_predictions(y_val, y_pred, task_type, n_classes)
             except Exception as e:
                 print(f"    FAILED fold {f}: {rep_label or 'combination'} with "
                       f"{model_name} raised {type(e).__name__}: {e}")
