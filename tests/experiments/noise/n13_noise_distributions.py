@@ -1159,11 +1159,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # DNN clean baseline on each of its two single representations
         # (matched-evaluator anchors for Track A)
+        # The fold's scaffold groups go to the network's early-stopping carve,
+        # as n09 hands them over; without them the carve is a random 20% and
+        # the stopping loss is read on scaffolds the network trains on.
+        # 2026-09-28.
+        _g_tr_fold = (groups[train_idx] if groups is not None else None)
         for _sp, (_k, _rn) in track_a_base.items():
             try:
                 dnn_pred = _plain_dnn(
                     _by_rep[_rn][0], y_train_clean, _by_rep[_rn][1],
-                    epochs=LNL_EPOCHS, patience=10, random_state=42)
+                    epochs=LNL_EPOCHS, patience=10, random_state=42,
+                    groups=_g_tr_fold)
                 clean_scores_dnn[f'base_{_k}'].append(
                     float(metric_fn(y_val, dnn_pred)))
             except Exception:
@@ -1569,6 +1575,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if 'hybrid_sim' in spaces and hybrid_sim_val_s is not None:
                         _track_a_spaces.append(
                             ('hybrid_sim', spaces['hybrid_sim'], hybrid_sim_val_s))
+                    # The fold's scaffold groups, for the early-stopping and
+                    # checkpoint-selection carve of the plain DNN and of every
+                    # method, as n09 passes them. Until 2026-09-28 n13 passed
+                    # none, so every network stopped on a random 20% of its
+                    # training rows. Both sides of each gain were affected
+                    # alike, so no comparison was unfair, but none matched n09.
+                    _g_tr_a = (groups[fd['train_idx']]
+                               if groups is not None else None)
                     for space_name, X_train_s, X_val_s in _track_a_spaces:
 
                         if space_name not in track_a_acc:
@@ -1583,7 +1597,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             _plain_pred = _plain_dnn(
                                 X_train_s, y_noisy, X_val_s,
                                 epochs=LNL_EPOCHS, patience=10,
-                                random_state=_seed_combined)
+                                random_state=_seed_combined,
+                                groups=_g_tr_a)
                             _plain_score = float(metric_fn(fd['y_val'],
                                                            _plain_pred))
                         except Exception:
@@ -1598,6 +1613,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     patience=10, random_state=_seed_combined,
                                     is_clf=is_clf,
                                     classes_=(np.unique(labels) if is_clf else None))
+                                m.selection_groups = _g_tr_a
                                 res = m.train_and_predict(X_train_s, y_noisy,
                                                           X_val_s, fd['y_val'])
                                 score = float(metric_fn(fd['y_val'], res['y_pred']))
@@ -1633,6 +1649,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         is_clf=is_clf,
                                         classes_=(np.unique(labels) if is_clf
                                                   else None))
+                                    _mth.selection_groups = _g_tr
                                     _res = _mth.train_and_predict(
                                         _Xtr, y_noisy, _Xva, fd['y_val'])
                                 except Exception as _e:
