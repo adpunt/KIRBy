@@ -540,7 +540,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         heatmap[model_name] = {}
         model_configs = [c for c in configs if c['model'] == model_name]
         for budget in full_budgets:
-            budget_configs = [c for c in model_configs if c['budget'] == budget]
+            # Finite scores only. min/max keep a NaN that comes first in the
+            # list, because every comparison against NaN is False, so one
+            # failed configuration could fill the cell.
+            budget_configs = [c for c in model_configs if c['budget'] == budget
+                              and c['score_mean'] is not None
+                              and np.isfinite(c['score_mean'])]
             if budget_configs:
                 best = (min if lower_is_better else max)(budget_configs, key=lambda c: c['score_mean'])
                 heatmap[model_name][budget] = best['score_mean']
@@ -665,7 +670,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for model_name in models:
         candidates = []
         for cond_name, cond_best in conditions.items():
-            if model_name in cond_best:
+            # Finite scores only, for the same reason as the heatmap above.
+            _sm = cond_best.get(model_name, {}).get('score_mean')
+            if _sm is not None and np.isfinite(_sm):
                 candidates.append((cond_name, cond_best[model_name]))
         if not candidates:
             continue
