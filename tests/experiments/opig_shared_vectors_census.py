@@ -621,8 +621,8 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True,
             # carried no 'n_stereo_only', which print_worst reads, so the first
             # hybrid row to reach the table raised KeyError before the JSON
             # was written.
-            groups_attr = attribute_groups(inv, sizes, ~np.any(Xh != 0, axis=1),
-                                           keys, stereo_keys)
+            _zero = ~np.any(Xh != 0, axis=1)
+            groups_attr = attribute_groups(inv, sizes, _zero, keys, stereo_keys)
             tied = int(groups_attr['n_representation_merged'])
             out.append({
                 'dataset': dataset_name,
@@ -639,6 +639,11 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True,
                 'rep_count': getattr(bp, 'rep_count', None),
                 'reps_used': sorted(_info.get('rep_count_kept') or base),
                 'n_distinct_vectors': int(np.unique(inv).size),
+                # print_dead reads n_all_zero_rows on any row with five or
+                # fewer distinct vectors. A hybrid row without it raised
+                # KeyError there, before the JSON was written.
+                'n_all_zero_rows': int(_zero.sum()),
+                'n_rows_with_nan': int(np.isnan(Xh).any(axis=1).sum()),
                 **groups_attr,
                 'percent_molecules_sharing': (round(
                     100.0 * groups_attr['n_molecules_sharing'] / n, 3)
