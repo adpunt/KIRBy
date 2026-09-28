@@ -756,11 +756,16 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     # writes no D-versus-D' rows.
     from experiments.noise.n07_remediation import FoldCheckpoint
     from experiments._shared import input_fingerprint
+    # The noise spec_id rides on each key and 'selection' on the fingerprint
+    # since 2026-09-28. Neither the draw nor the selection code was in either,
+    # and c10 is never handed force_rerun, so a run after 4858717 took the level
+    # out of the draw seed read back selections made on the old draw.
     ckpt = FoldCheckpoint(output_dir, 'c10_noise_robustness', dataset_name,
                           tag='stability', fingerprint={
                               'input': input_fingerprint(data, config),
                               'noise_seed': int(noise_seed),
-                              'budget': budget_for_stability})
+                              'budget': budget_for_stability,
+                              'selection': 'v1'})
 
     for strategy in strategies[:1]:
         features_by_level = {}
@@ -768,6 +773,8 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
         for level in _levels_stability:
             fold_features = []
+            _spec_stab = _spec_for(strategy, level)
+            _spec_key = 'clean' if _spec_stab is None else _spec_stab.spec_id
             _search_stab = _search_for(strategy, level)
             if _search_stab is None:
                 features_by_level[level] = fold_features
@@ -781,10 +788,11 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 continue
             # The same corrupted label column the search trained on, sliced to
             # this fold's training rows.
-            y_noisy_full = _noisy_column(_spec_for(strategy, level))
+            y_noisy_full = _noisy_column(_spec_stab)
             for fold_idx, (train_idx, val_idx) in enumerate(
                     _cv_split(groups, n_folds, sample_X, labels)):
-                _stored = ckpt.get([strategy, float(level), int(fold_idx)])
+                _ck = [strategy, float(level), int(fold_idx), _spec_key]
+                _stored = ckpt.get(_ck)
                 if _stored is not None:
                     fold_features.append({(r, int(i)) for r, i in _stored})
                     continue
@@ -819,7 +827,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                             for idx in rep_info['selected_indices']:
                                 selected.add((rep_name, int(idx)))
                     fold_features.append(selected)
-                    ckpt.put([strategy, float(level), int(fold_idx)],
+                    ckpt.put(_ck,
                              sorted([r, int(i)] for r, i in selected))
                 except Exception as _e:
                     print(f"    level={level} fold {fold_idx}: rebuild failed, "
