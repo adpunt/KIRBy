@@ -863,6 +863,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         pca_fold_ranks = []
         random_fold_ranks = []
         fold_widths = []
+        random_fold_widths = []
         pca_failures = []
         hybrid_failures = []
         for fold_i, (train_idx, val_idx) in enumerate(
@@ -881,7 +882,12 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
             hybrid_fold_widths.append(width)
 
             # PCA and random at the same width, on the same training rows.
+            # Only PCA needs the row cut: it cannot keep more components than
+            # training rows minus one. The random arm keeps the hybrid's full
+            # width, as the hybrid does; both of their ranks are bounded by the
+            # row count anyway, and so is PCA's at that cut.
             n_feat_fold = min(width, len(train_idx) - 1, X_concat.shape[1])
+            n_random_fold = min(width, X_concat.shape[1])
             fold_widths.append(int(n_feat_fold))
             try:
                 pca = PCA(n_components=n_feat_fold).fit(
@@ -902,7 +908,8 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
 
             # One draw per fold, seeded by the fold, at the hybrid's width.
             rng = np.random.RandomState(42 + fold_i)
-            random_idx = rng.choice(X_concat.shape[1], n_feat_fold, replace=False)
+            random_idx = rng.choice(X_concat.shape[1], n_random_fold, replace=False)
+            random_fold_widths.append(int(n_random_fold))
             random_fold_ranks.append(
                 compute_effective_rank(X_concat[train_idx][:, random_idx]))
 
@@ -919,6 +926,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
             list(hybrid_fold_widths))
         results.setdefault('hybrid_width_mean', []).append(_hw)
         results.setdefault('pca_random_width_mean', []).append(_pw)
+        results.setdefault('random_width_per_fold', []).append(list(random_fold_widths))
         results.setdefault('hybrid_failures', []).append(hybrid_failures)
         results['pca_rank'].append(float(pca_rank))
         results['random_rank'].append(float(random_rank))
