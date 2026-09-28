@@ -505,23 +505,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return out
 
     # --- Precompute per-fold feature importance per rep (hoisted from lambda) ---
-    # Cache fold train indices so we compute importance once per (fold, rep).
-    def _fold_key(tr):
-        return (int(tr[0]), int(tr[-1]), int(len(tr)))
-    fold_importance = {}  # {rep_name: {fold_key: imp_array}}
+    # Keyed by fold number. It was keyed by (first training row, last training
+    # row, number of training rows) until 2026-09-28. Two folds can share all
+    # three: row 0 and the last row both held out by a third fold, and equal
+    # training sizes. The later fold's importance, fitted on rows the earlier
+    # fold holds out, then weighted the earlier fold's distance. Not hit on
+    # herg_ki or caco2 at 3 folds; nothing prevented it.
+    fold_importance = {}  # {rep_name: {fold_i: imp_array}}
     for rep_name, X_rep in reps.items():
         fold_importance[rep_name] = {}
-        for tr, _va in fold_splits:
+        for _fi_imp, (tr, _va) in enumerate(fold_splits):
             try:
                 imp = compute_feature_importance(
                     {rep_name: X_rep[tr]}, labels[tr], method='lightgbm_gain')
-                fold_importance[rep_name][_fold_key(tr)] = imp[rep_name]
+                fold_importance[rep_name][_fi_imp] = imp[rep_name]
             except Exception as exc:
                 # N9: log so a None-importance fold reads as "compute failed"
                 # rather than silently weakening the weighted kNN.
                 print(f"      importance fold failed (rep={rep_name}): "
                       f"{type(exc).__name__}: {exc}")
-                fold_importance[rep_name][_fold_key(tr)] = None
+                fold_importance[rep_name][_fi_imp] = None
 
     # --- Per-rep kNN baselines (unweighted + weighted) ---
     print(f"\n  Per-rep kNN baselines (k=5, metric={metric_name}):")
@@ -539,7 +542,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Weighted: importance-weighted distance on this rep (precomputed per fold)
             def _get_rep_w(tr, va, yt, fold_i, _X=X_rep, _rname=rep_name):
-                imp_arr = fold_importance[_rname].get(_fold_key(tr))
+                imp_arr = fold_importance[_rname].get(fold_i)
                 if imp_arr is None:
                     return None, None
                 w = np.maximum(imp_arr, 0) ** weight_exponent
@@ -592,7 +595,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _rname = _pool_base_by_fold.get(fold_i)
                 if _rname is None or _rname not in reps:
                     return None, None
-                imp_arr = fold_importance[_rname].get(_fold_key(tr))
+                imp_arr = fold_importance[_rname].get(fold_i)
                 if imp_arr is None:
                     return None, None
                 w = np.maximum(imp_arr, 0) ** weight_exponent
