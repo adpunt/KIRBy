@@ -1530,9 +1530,28 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                     # predicting the mean.
                     _y_val = labels[val_rows]
                     if metric_fn is not None and not lower_is_better:
+                        # AUC is a ranking metric and needs a graded score.
+                        # Fed the 0/1 classes from predict(), it returns
+                        # (sensitivity + specificity) / 2, so every silo's
+                        # share was set by balanced accuracy under the AUC
+                        # name. hybrid.py's _score_rep_for_budget made the
+                        # same change on 2026-09-13.
+                        _pred_val = None
+                        if (is_classification
+                                and getattr(metric_fn, '__name__', '')
+                                in ('_safe_roc_auc', 'roc_auc_score')
+                                and hasattr(evaluator, 'predict_proba')):
+                            try:
+                                _pp = np.asarray(
+                                    evaluator.predict_proba(X_silo_val))
+                                if _pp.ndim == 2 and _pp.shape[1] == 2:
+                                    _pred_val = _pp[:, 1]
+                            except Exception:
+                                _pred_val = None
+                        if _pred_val is None:
+                            _pred_val = evaluator.predict(X_silo_val)
                         try:
-                            _sc = float(metric_fn(
-                                _y_val, evaluator.predict(X_silo_val)))
+                            _sc = float(metric_fn(_y_val, _pred_val))
                             if not np.isfinite(_sc):
                                 raise ValueError('metric is not finite')
                         except Exception:
