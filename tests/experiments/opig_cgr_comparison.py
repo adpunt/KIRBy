@@ -812,7 +812,27 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
     from experiments._shared import _smoke_subsample
     data = _smoke_subsample(data)
 
-    reps = data['reps']
+    # A matrix whose every row is the same vector is a failed featurisation,
+    # not a representation. create_chytorch_graphormer returns np.zeros when
+    # every reaction fails to parse or encode, and the cached
+    # chytorch_graphormer.npy for buchwald_hartwig is exactly that: 3,955 rows,
+    # all zero (checked 2026-09-28; opig_shared_vectors_census lists it too).
+    # Kept, it scored a no-skill RMSE as if it were a CGR representation, sat
+    # in the SMILES+CGR pool as a third CGR member that could never be picked,
+    # and gave linear CKA 0.0 against everything, which reads as maximally
+    # unique. It is dropped here and named in the result, so the output says
+    # which CGR representations were actually compared.
+    reps_dropped_constant = {}
+    for _name in sorted(data['reps']):
+        _X = np.asarray(data['reps'][_name])
+        if _X.ndim == 2 and _X.shape[0] > 1 and bool(np.all(_X == _X[0])):
+            reps_dropped_constant[_name] = (
+                f'every one of {_X.shape[0]} rows is the same '
+                f'{_X.shape[1]}-feature vector '
+                f'(all zero: {bool(not np.any(_X))})')
+            print(f"  DROPPED {_name}: {reps_dropped_constant[_name]}")
+    reps = {k: v for k, v in data['reps'].items()
+            if k not in reps_dropped_constant}
     labels = data['labels']
     groups = data['groups']
     n = len(labels)
@@ -954,6 +974,7 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
         'n_folds': actual_folds,
         'group_key': data['metadata'].get('group_key', 'unknown'),
         'cgr_reps_available': sorted(cgr_available),
+        'reps_dropped_constant': reps_dropped_constant,
         'individual_results': individual_results,
         'hybrid_comparison': hybrid_comparison,
         'delta_by_model': delta_by_model,
@@ -985,6 +1006,9 @@ def print_analysis(all_results):
             continue
         print(f"\n  Dataset: {ds_name} ({ds['n_reactions']} reactions, "
               f"{ds['n_groups']} groups, {ds['n_folds']}-fold)")
+        for _name, _why in sorted((ds.get('reps_dropped_constant')
+                                   or {}).items()):
+            print(f"  Not compared, {_name}: {_why}")
 
         # Table 1: Family comparison
         print(f"\n  --- Family Head-to-Head (RF RMSE, lower is better) ---")
