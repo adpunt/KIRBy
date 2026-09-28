@@ -107,6 +107,58 @@ def _stratum_score(metric_fn, y_true, y_pred):
         return float('nan')
 
 
+def _fold_local_rep_subset(train_reps, y_train, groups_train, blueprint,
+                           metric_fn, lower_is_better, is_clf):
+    """The representations a predictive recipe keeps, ranked on this fold only.
+
+    Added 2026-09-28 (dirty-local), the same fix as s06 and c18. The local
+    recipe asks for 5 representations (blueprint.rep_count). On a pool of 6
+    (logd, buchwald_hartwig), build_fold_hybrid cuts to 5 by
+    blueprint.rep_scores when it is given no fold scores. Those are the
+    search's baselines over EVERY molecule (find_best_hybrid.py, the block that
+    fills Blueprint.rep_scores), this fold's held-out ones included, so
+    held-out labels chose which representation was left out.
+
+    This ranks on this fold's training rows instead: the carve create_hybrid
+    makes (internal_holdout_split) and the score it splits the budget by
+    (_score_rep_for_budget), higher is better. Only the subset is returned.
+    Handing build_fold_hybrid exactly rep_count representations turns its own
+    cut off.
+
+    Returns (subset dict, sorted kept names), or (train_reps, None) when no
+    cut applies or the recipe is not a plain predictive one.
+    """
+    rep_count = getattr(blueprint, 'rep_count', None)
+    if rep_count is None or int(rep_count) >= len(train_reps):
+        return train_reps, None
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    from kirby.find_best_hybrid import _is_geometry_objective
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or isinstance(objective, dict)
+            or (objective is not None and _is_geometry_objective(objective))):
+        return train_reps, None
+    from kirby.hybrid import (_score_rep_for_budget, internal_holdout_split,
+                              OBJECTIVE_PREDICTIVE)
+    inner_tr, inner_va = internal_holdout_split(len(y_train), y_train,
+                                                groups_train)
+    scores = {}
+    for name, X in train_reps.items():
+        X = np.asarray(X)
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        s = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lower_is_better,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=is_clf))
+        scores[name] = s if np.isfinite(s) else float('-inf')
+    keep = sorted(train_reps, key=lambda r: (-scores[r], r))[:int(rep_count)]
+    return {k: v for k, v in train_reps.items() if k in keep}, sorted(keep)
+
+
 # =========================================================================
 # CLIFF DETECTION (domain-generic, mirrors N01's identify_cliff_pairs)
 # =========================================================================
@@ -486,8 +538,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         experiment_sidecar(output_dir, 's12_cross_domain_cliffs', dataset_name),
         run_identity('s12_cross_domain_cliffs', dataset_name, data, config,
                      kwargs=kwargs, models=sorted(model_factories),
-                     budget=budget, n_pool_hybrids=_N_POOL_HYBRIDS))
+                     budget=budget, n_pool_hybrids=_N_POOL_HYBRIDS,
+                     # 2026-09-28: the recipe's representations are ranked on
+                     # each fold's training rows, so a sidecar written before
+                     # that is not read back.
+                     rep_ranking='fold_local'))
     _hyb_threw = []
+    # {model: [{fold, pool_rank, reps}]} for each build where rep_count cut
+    # the pool; empty when every recipe kept every representation.
+    _hyb_reps_kept = {}
 
     for rep_name, X_rep in reps.items():
         rep_model_results = {}
@@ -547,7 +606,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         per_rep_results[rep_name] = rep_model_results
 
     def _score_hybrid_fold(mname, mfactory, blueprint, aug_cond,
-                           train_idx, val_idx):
+                           train_idx, val_idx, fold_i=None, rank=None):
         """(cliff score, non-cliff score) for one recipe on one fold; NaN on failure."""
         _use_aug = augmentations if aug_cond != 'none' else None
         train_reps_h = {k: v[train_idx] for k, v in reps.items()}
@@ -556,6 +615,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         aug_va = {k: v[val_idx] for k, v in _use_aug.items()} if _use_aug else None
 
         try:
+            _g_tr = groups[train_idx] if groups is not None else None
+            train_reps_h, _kept = _fold_local_rep_subset(
+                train_reps_h, labels[train_idx], _g_tr, blueprint,
+                metric_fn, lower_is_better, is_clf)
+            if _kept is not None:
+                val_reps_h = {n: val_reps_h[n] for n in train_reps_h}
+                _hyb_reps_kept.setdefault(mname, []).append(
+                    {'fold': fold_i, 'pool_rank': rank, 'reps': _kept})
             X_tr_h, X_va_h, fi = build_fold_hybrid(
                 train_reps_h, val_reps_h, labels[train_idx], blueprint,
                 augmentations_train=aug_tr, augmentations_val=aug_va,
@@ -688,7 +755,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'pool_metric_name': h.get('metric_name'),
                 }
                 c, nc = _score_hybrid_fold(mname, mfactory, bp, aug_cond,
-                                           train_idx, val_idx)
+                                           train_idx, val_idx,
+                                           fold_i=fold_i, rank=r + 1)
                 rank_cliff[r].append(c)
                 rank_noncliff[r].append(nc)
 
@@ -744,6 +812,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # 'hybrid' above is pool_rank1.
         'pool_hybrid_ranks': convert_numpy(pool_rank_results_by_model),
         'pool_selection': convert_numpy(pool_selection_by_model),
+        # Which representations each hybrid build kept when the recipe's
+        # rep_count was smaller than the pool, ranked on that fold's training
+        # rows. A model read back from the checkpoint has no entry here.
+        'hybrid_reps_kept_per_fold': _hyb_reps_kept,
         'pool_read': {
             'pool_subset': _POOL_SUBSET,
             'n_hybrids_per_fold': _N_POOL_HYBRIDS,
