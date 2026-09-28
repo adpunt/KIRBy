@@ -6,8 +6,10 @@ held-out bases. Measured on the ligand axis 2026-09-23: fold spreads of 8.1
 to 15.9 RMSE in yield units against hybrid-minus-baseline deltas of 1.2 to
 7.2 -- the delta sits inside the spread on every one of the 5 downstream
 models, and with 3 or 4 folds no grid size makes it readable. The additive
-axis has 23 components and would be measurable, but this file runs all four
-axes together, so it goes as a whole. Removed from submit_everything.sh.
+axis has 22 components on buchwald_hartwig and 24 on bh_doyle_plates (counted
+2026-09-28; this line used to say 23) and would be measurable, but this file
+runs all four axes together, so it goes as a whole. Removed from
+submit_everything.sh.
 
 Component-Wise Extrapolation Splits for Buchwald-Hartwig (OPIG C6)
 
@@ -38,14 +40,17 @@ Motivation:
 
 Split conditions (true leave-one-group-out GroupKFold; n_folds == n_groups):
   - additive:    leave-one-additive-out (22 groups → 22 folds on
-                 buchwald_hartwig, counted 2026-09-28; was written as 23)
+                 buchwald_hartwig, counted 2026-09-28; was written as 23.
+                 24 on bh_doyle_plates, one of them the wells with no
+                 additive, whose value is the empty string)
   - aryl_halide: leave-one-aryl-halide-out (15 groups → 15 folds)
   - ligand:      leave-one-ligand-out (4 groups → 4 folds — hardest)
   - base:        leave-one-base-out (3 groups → 3 folds — very few, extreme OOS)
 
 Datasets:
   - buchwald_hartwig (Ahneman/Dreher/Doyle, Science 2018, ~3955 reactions)
-  - bh_doyle_plates (Doyle lab HTE, ~4599 reactions)
+  - bh_doyle_plates (Doyle lab HTE, 4312 reactions as loaded, counted
+    2026-09-28; this line used to say ~4599)
 
 Paper baselines:
   - Ahneman et al. 2018: RF + DFT descriptors, R2=0.92 (random split)
@@ -265,13 +270,17 @@ def assign_component_groups(components, split_key):
     Returns:
         (groups, n_groups, group_names) tuple.
     """
-    # Grouped on the exact string, case kept. The component values are SMILES
-    # (reaction_yields.load_buchwald_hartwig builds them from the Dreher-Doyle
-    # sheet), and in SMILES case is chemistry: 'c' is an aromatic carbon, 'C'
-    # an aliphatic one. This used to lowercase first, which could merge two
-    # different compounds into one held-out group. On buchwald_hartwig it
-    # merged none (22 additives, 15 aryl halides, 4 ligands, 3 bases either
-    # way, checked 2026-09-28), so no stored number moves.
+    # Grouped on the exact string, case kept. On buchwald_hartwig every
+    # component value is a SMILES string, and in SMILES case is chemistry: 'c'
+    # is an aromatic carbon, 'C' an aliphatic one. On bh_doyle_plates the
+    # aryl halide is a SMILES string, but the ligand, base and additive keys
+    # hold names ('XPhos', 'P2Et'); their SMILES sit under *_smiles keys. This
+    # used to lowercase first, which could merge two different compounds into
+    # one held-out group. It merged none on either dataset (checked
+    # 2026-09-28): buchwald_hartwig has 22 additives, 15 aryl halides, 4
+    # ligands and 3 bases; bh_doyle_plates has 24 additives, 15 aryl halides,
+    # 4 ligands and 3 bases. So no stored number moves. One bh_doyle_plates
+    # additive group is the empty string: the wells run with no additive.
     norm_values = []
     for comp in components:
         val = comp.get(split_key, '')
@@ -500,9 +509,11 @@ def _evaluate_hybrid_per_fold(
                 # no stored full grid to miss by asking for a shorter one.
                 #
                 # The multiplier is the fold count. A leave-one-component-out
-                # split is one fold per component: 23 additives, 15 aryl
-                # halides, 4 ligands and 3 bases, so 45 folds per dataset where
-                # an ordinary run has 5, across 2 datasets. At the full grid
+                # split is one fold per component: 22 additives on
+                # buchwald_hartwig and 24 on bh_doyle_plates, 15 aryl halides,
+                # 4 ligands and 3 bases, so 44 and 46 folds per dataset where
+                # an ordinary run has 5 (counted 2026-09-28; this used to say
+                # 23 additives and 45 folds). At the full grid
                 # that was about 44 million model fits.
                 #
                 # Full is 5 allocation methods x 3 importance methods x 4
@@ -530,7 +541,7 @@ def _evaluate_hybrid_per_fold(
                 # x 1 importance method x 2 representation counts x 8 budgets x
                 # 17 (model, evaluator) pairs = 816 configurations per fold,
                 # where the model-axis cut made it 432. So roughly double the
-                # fits per fold, over the same 45 folds per dataset.
+                # fits per fold, over the same 44 or 46 folds per dataset.
                 models=list(models.keys()),
                 #
                 # ⛔ internal_evaluators=_eval_list above is explicit, so fast
