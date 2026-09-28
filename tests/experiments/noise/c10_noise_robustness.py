@@ -591,8 +591,22 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         else:
             retention = float('nan')
 
+        # Added 2026-09-28. A curve with two or three scored levels passed the
+        # check above, and robustness_metrics returned nan for auc_norm with
+        # no reason, beside a finite retention_pct.
+        _nan_reason = None
+        if not np.isfinite(rmetrics['auc_norm']):
+            if len(level_scores) < 4:
+                _nan_reason = (f'{len(level_scores)} of {len(_levels)} levels '
+                               f'scored; auc_norm needs 4')
+            elif not any(float(k) == 0.0 for k in level_scores):
+                _nan_reason = 'no clean (level 0) score'
+            elif not (np.isfinite(baseline_r2) and baseline_r2 > 0):
+                _nan_reason = 'clean score missing or at or below zero'
         return {
             'scores_by_level': level_scores,
+            'n_levels_scored': len(level_scores),
+            'auc_norm_nan_reason': _nan_reason,
             'auc_norm': rmetrics['auc_norm'],
             'weibull_tau': rmetrics['weibull_tau'],
             'weibull_beta': rmetrics['weibull_beta'],
