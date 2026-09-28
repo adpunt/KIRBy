@@ -114,11 +114,10 @@ New avenues in the drug discovery pipeline have opened up thanks to advances in 
 
 QSAR models are of course, sensitive to the quality of the input data on which they are trained. Experimental noise can arise from measurement errors, variability under experimental conditions, varying provenance of the data, and intrinsic biological and chemical variability. Even the very measures of model performance may be flawed if test and validation sets are laden with noise. \citet{Kolmar2021} show that the variance associated with experimental data can contribute more to prediction error than the model’s own error. There is also a limit to how much noise the model can tolerate; \citet{jorner2021} found that once the model error approaches the magnitude of the experimental measurement error on labels, adding more training data yields diminishing returns in predictive performance. In the context of activity prediction, the inherent variability within experimental setups and assays, batch effects, measurement errors, and biological variability introduce additional layers of complexity \citep{Kolmar2021, Fourches2010}. All of this increases the likelihood of encountering noise in the data \citep{Fang2022}. Even the molecular representations in the training data themselves may be incorrect or misleading \citep{Walters2023}, and chemical datasets contain too few repeat measurements of each compound to characterize the distribution the label is drawn from. Thus, models treat a single label as the population mean \citep{Kolmar2021}. Repeat measurements of the same compound-target pair disagree by about $0.68$ log units for pIC$_{50}$, and by about $0.54$ log units for pK$_i$ \citep{Kalliokoski2013, Kramer2012}. Measurements from a single assay lowers the mean disagreement from $0.50$ to $0.27$ log units \citep{landrum2024}.  
 
-% TODO: do I need citations here? for the similarity stuff
 % TODO: rephrase: However, all of the methods that used simiarity metrics failed, even when I tried using different molecular representations and vector operations 
 This thesis addresses the challenge of conducting molecular property prediction when the underlying experimental data contain noisy labels. My initial research question is which combinations of molecular representations and predictive model architectures maintain predictive performance under label corruption, and whether probabilistic methods that estimate uncertainty justify their additional complexity. As I will show, both model and representation choice dominate predictive performance on clean data, however, this relationship inverts under label corruption as predictive architecture becomes the primary factor in determining noise robustness.  Most existing work on noise in QSAR modelings assumes that label noise can be modeled as random error drawn from a Gaussian distribution, and they evaluate either molecular representations or predictive model architectures in isolation. \cite{Cortes2015} examined 12 algorithms across multiple noise levels but used fixed representations. Studies that compare representations are typically done on clean data. No work has systematically compared the relative importance of representation versus architecture choice for noise robustness, assessed whether probabilistic methods justify their computational overhead in noisy settings, or tested whether findings generalize across different corruption patterns and molecular property types.
 
-Building on these findings, I began exploring techniques involving learning with noisy labels and noise mitigation. Many of these methods incorporate measures of molecular similarity, relying on the assumption that molecules which are similar in structure share similar properties. However, all of the methods that used simiarity estimates failed, even when I tried varying the molecular representations and vector operations from the standard ECFP4 and Tanimoto coefficient. I hypothesized that to generate accurate similarity estimates, you need a specialised molecular representation who's features relate directly to similarity in that molecular domain. This brings me to my next research question, how do you select the best set of features for a given prediction task? I will outline how I developed an adaptive feature selection methodology that takes in a set of molecular representations, identifies each representation's most important features, and combines a select set of those top features into a new hybrid representation. I will then demonstrate how it improve performance across a range of predictive tasks beyond the small molecule space, and how it can be applied to the context of similarity estimation and downstream noise mitigation methods. 
+Building on these findings, I began exploring techniques involving learning with noisy labels and noise mitigation. Many of these methods incorporate measures of molecular similarity, relying on the assumption that molecules which are similar in structure share similar properties \citep{LopezPerez2024}. However, all of the methods that used simiarity estimates failed, even when I tried varying the molecular representations and vector operations from the standard ECFP4 and Tanimoto coefficient. I hypothesized that to generate accurate similarity estimates, you need a specialised molecular representation who's features relate directly to similarity in that molecular domain. This brings me to my next research question, how do you select the best set of features for a given prediction task? I will outline how I developed an adaptive feature selection methodology that takes in a set of molecular representations, identifies each representation's most important features, and combines a select set of those top features into a new hybrid representation. I will then demonstrate how it improve performance across a range of predictive tasks beyond the small molecule space, and how it can be applied to the context of similarity estimation and downstream noise mitigation methods. 
 % TODO: how do I end this? Check other theses
 
 
@@ -798,7 +797,10 @@ representation, interaction. The ten QM9 replicates provide the residual. The un
 
 ANOVA relies on the assumption that observations both within and across groups are independence. Across the whole set of models and representations in this study, some pairs produced similar predictions that are not independent. This causes the residual degrees of freedom to increase, while the residual sum of squares barely moves. To handle this issue, we computed pairwise Spearman rank correlations between all models and between all representations across noise strategies. Models whose profiles correlated at $\rho > 0.99$ with another model were excluded, including quantile regression forests (QRF), which were very similar to RF, as well as different BNN variants. 
 
-% TODO: this isn't actually in additional files
+% - Checked: the SNS--ECFP4 pair is in Appendix~\ref{app:noise:sec:representation_redundancy} (thesis_appendix/noise/items/representation_redundancy.tex), rho = 0.992, marked excluded.
+% CHECK: that table also marks Morgan, Rand. SMILES and PDV (binary) as excluded. The sentence names only SNS.
+% CHECK: every pair in that table has rho > 0.89. ECFP4--MHGGNN is 0.993 and not excluded, so rho > 0.90 is not the rule that decided exclusion.
+% CHECK: that table has no Avalon or ChemBERTa. It lists Morgan, SMILES, Rand. SMILES, PDV (binary) and Mol2Vec, which are not among the six representations in Sec 3.2.
 Across representations, SNS correlated at $\rho > 0.90$ with the ECFP4 fingerprint and was excluded to avoid inflating representation degrees of freedom, as both encode overlapping circular substructure information. We also computed intraclass correlation coefficients ICC(1,1) for all model pairs. ICC(1,1) measures the proportion of total variance attributable to between-subject differences, with values near 1.0 indicating that two models rank configurations almost identically. The full redundancy and ICC tables are reported in Appendices~\ref{app:noise:sec:model_redundancy}--\ref{app:noise:sec:model_icc}.
 
 To assess the interaction between uncertainty estimation and label noise, we posed three questions. First, whether uncertainty rise with label noise, as measured by the mean $u_i$ over held-out molecules at the highest noise level
@@ -1020,7 +1022,10 @@ Samples containing label noise tend to produce large residuals in training, and 
 % TODO: -- it only reports that for VBLL both components rise [NI 540, Fig 5b]. Either the result
 % TODO: exists elsewhere and must be pulled in, or the outline claim needs revising.
 \todo[inline, color=yellow!40]{MISSING RESULT: the GP uncertainty decomposition by representation.}
-% TODO(check): Table tab:top_unc_noise gives the GP the highest uncertainty--noise correlation (0.56 on SNS), and the next subsection says GPs can separate noise-induced residuals. The GP code (qsar_qm_models/models/models.py, gauche fit) uses one GaussianLikelihood noise for the whole fit, and its posterior variance does not depend on the labels. The current analysis (scripts/uncertainty_stats.py, _stat_unc_noise_spearman) calls this correlation 'near zero by design'. Check which analysis produced the 0.56 before keeping the table and those two sentences.
+% CHECK: the 0.56 is row GP,SNS (0.5556) of qsar_qm_models/results/paper_figures/table4c_top_unc_noise_correlations.csv, written 24 Jun.
+% CHECK: the later run (qsar_qm_models/results/paper_figures_v2/table4c_bottom_unc_noise_correlations.csv:6) splits it by noise level: GP+SNS is 0.535 with all noise levels pooled, but -0.043 within sigma=0.3 and -0.043 within sigma=0.6.
+% CHECK: NGBoost+SNS is the same (qsar_qm_models/results/paper_figures_v2/table4c_top_unc_noise_correlations.csv:2): 0.472 pooled, 0.076 within sigma=0.3, 0.087 within sigma=0.6.
+% CHECK: qsar_qm_models/scripts/generate_paper_figures_v2.py:1572-1576 says the pooled value only shows that uncertainty and |noise| both rise with sigma; it is not per-sample tracking. The text at the top of this section calls the numbers per-sample.
 
 \subsection{Fingerprint representations carry the usable uncertainty signal}
 
@@ -1133,8 +1138,8 @@ When working with noisy experimental data in QSAR settings, it is important to k
 % - A fully constant feature does not change Tanimoto and adds zero to a distance. Near-constant features are the ones that distort distances, as Section 4.3 shows. So the argument rests on the near-constant count.
 %
 % Literature this puts numbers under:
-% - Dablander's thesis says, without a count, that the least frequent substructures usually appear in only a few compounds \citep{Dablander2024}. That is about substructures before hashing; this count is of bits after folding.
-% - TODO(lit): confirm the page number in Dablander's thesis before citing it.
+% - Dablander's thesis says, without a count, that the least frequent substructures usually appear in only a few compounds \citep[p.~112]{Dablander2024}. That is about substructures before hashing; this count is of bits after folding.
+% - Checked: printed page 112 of the submitted thesis PDF; the same point is repeated on p.~121.
 %
 % Links to:
 % - 4.2.3: if too few bits vary, different molecules can get identical vectors.
@@ -1163,8 +1168,7 @@ When working with noisy experimental data in QSAR settings, it is important to k
 %
 % Why stereoisomers tie:
 % - Most common fingerprints do not encode stereochemistry \citep{orsi2024map4c}. The Morgan fingerprints here are built with chirality off, the library default.
-% - Stereoisomers can differ in measured activity, so a stereo-blind representation forces one prediction onto molecules with different measured values.
-% - TODO(lit): one citation on stereoisomers differing in potency.
+% - Stereoisomers can differ in measured activity \citep{Nguyen2006}, so a stereo-blind representation forces one prediction onto molecules with different measured values.
 %
 % The measurement:
 % - For each dataset and representation, group molecules whose feature vectors are exactly identical, and assign each group one of the three causes.
@@ -1189,7 +1193,7 @@ When working with noisy experimental data in QSAR settings, it is important to k
 % OUTLINE 4.2.4: bullets in THESIS_OUTLINE.md.
 % ---- NOTES 4.2.4 (2026-09-28, bullets for writing; comment only) ----
 % - Her existing paragraph makes the point: descriptor features have a named chemical meaning; embedding features do not.
-% - Supporting quote: pooled graph-network vectors are "obscure real numbers" that cannot be directly interpreted \citep{Dablander2024}. TODO(lit): confirm the exact wording and page.
+% - Supporting quote: pooled graph-network vectors are "obscure real numbers" that cannot be directly interpreted \citep[p.~41]{Dablander2024}. Checked, exact wording on p.~41: "The graph-level featurisation generated by the global pooling step of a GNN usually consists of a vector of obscure real numbers that cannot be directly interpreted by human experts in any straightforward manner."
 % - Links to: Chapter 5, Blueprints. A blueprint can name chosen descriptors or substructure bits; chosen embedding features stay unnamed.
 % ---- END NOTES 4.2.4 ----
 
@@ -1229,7 +1233,7 @@ It is worth noting that some of these features are more straightforward than oth
 %
 % Distance concentration:
 % - Stated in Chapter 2 with \citet{Aggarwal2001}; cross-reference only. \citet{Beyer1999} is the earlier source for the same result and could be added there.
-% - TODO(lit): Beyer 1999 is not yet in refs.bib.
+% - Checked: Beyer 1999 is already in refs.bib as Beyer1999 and matches Crossref (doi 10.1007/3-540-49257-7_15). refs.bib holds the same paper a second time under the key beyer1999nearest.
 %
 % Errors compound:
 % - The chain: representation error, then similarity error, then wrong neighbours, then a wrong prediction, noise flag or applicability-domain call.
@@ -1249,7 +1253,7 @@ It is worth noting that some of these features are more straightforward than oth
 % - DIAGRAM: two panels, one dataset. Left: absolute activity difference against ECFP4 Tanimoto for sampled pairs, binned. Right: the same pairs under a second representation. Shows that high-similarity pairs still differ widely in activity, and that the representations disagree about which pairs are similar.
 %
 % Literature gaps:
-% - TODO(lit): a benchmark or survey stating ECFP4 with Tanimoto is the default similarity in QSAR.
+% - ECFP4 with Tanimoto as the standard: no source found that states the pair is the QSAR default. Closest two, both already in refs.bib: \citet{Bajusz2015} rank Tanimoto among the four best of eight similarity metrics and quote Willett's 2006 review calling it "the coefficient of choice"; \citet{OBoyle2016} find ECFP4 and ECFP6 among the best of 28 fingerprints for ranking diverse structures.
 % - TODO(lit): prior work on task-specific or feature-weighted molecular similarity.
 %
 % Links:
@@ -1258,7 +1262,7 @@ It is worth noting that some of these features are more straightforward than oth
 % ---- END NOTES 4.3 ----
 
 % TODO: need sources for this
-Within small molecule research, the most standard way to measure how similar two molecules are is the Tanimoto coefficient between two ECFPs representations of those molecules. There's a handful of problems with this approach. Firstly, ECFPs do not indvidually distinguish each molecule. 
+Within small molecule research, the most standard way to measure how similar two molecules are is the Tanimoto coefficient between two ECFPs representations of those molecules \citep{Capecchi2020, LopezPerez2024}. There's a handful of problems with this approach. Firstly, ECFPs do not indvidually distinguish each molecule. 
 
 \subsubsection{Distance metrics for continuous molecular descriptors}
 
@@ -1342,7 +1346,6 @@ All features are standardised (zero mean, unit variance) before distance computa
 % TODO: Not carried over: the 12-method table [CR 681-715], the HetGP kernel table [CR 725-740],
 % TODO: the method-effectiveness table [CR 746-765], and the DivideMix / curriculum results.
 % TODO: They are recoverable from Confirmation_Report/paper.tex if ch.6 wants them.
-% TODO(xref): 'In Chapter 3' -- old ch.3 is now ch.3 (robustness and uncertainty); now a \ref.
 
 Numerous studies have explored Learning with Noisy Labels (LNL) in the broader context of ML, as well as specifically for QSAR models. \citet{Song2022} provide a comprehensive review of Deep LNL, identifying five main approaches: (i) modifying architectures to better handle noise in training; (ii) employing regularization to reduce overfitting to noise; (iii) adjusting loss functions to be less sensitive to outliers or label flips; (iv) post-processing to adjust the weights for noisy data; and (v) sample selection to select presumably clean data to pre-train. \citet{Cortes2015} examined 12 different algorithms across 12 datasets and 10 noise levels, finding that no single algorithm was overall best at maintaining predictive performance in the presence of noise; certain algorithms perform better or worse at different levels of noise. This is a recurring theme in LNL research: there is no universal solution to handling noise with experimental endpoints.
 % TODO make this flow
@@ -1368,7 +1371,7 @@ The main issue we identified here is that when a large proportion of dimensions 
 % The idea:
 % - Similar molecules should have similar labels, so a label far from its neighbours' labels is probably wrong.
 % - Classic origin: editing a nearest-neighbour training set by removing points whose label disagrees with their neighbours \citep{Wilson1972}. Both this and the wider filtering literature \citep{Brodley1999, frenay2014classification} are about classification.
-% - TODO(lit): nearest-neighbour label-noise filtering for regression, or for QSAR data.
+% - Regression: \citet{Martin2021} adapt fourteen classification noise filters to regression, inject noise into the labels of 20 datasets, and find the filters improve the regression methods. Unverified: whether any of the fourteen are nearest-neighbour filters (full text not reached, only the abstract). No QSAR-specific source found.
 % - The specific scores, removal, weighting, smoothing and the recovery rate are defined in Chapter 6 methods. Point there; do not define them here.
 %
 % Why it inherits the similarity flaw:
@@ -1382,8 +1385,7 @@ The main issue we identified here is that when a large proportion of dimensions 
 % - Links to: Chapter 6, which recomputes this with neighbours found in a hybrid and under noise types other than Gaussian.
 % ---- END NOTES 4.4.2 ----
 
-% TODO(xref): 'conclusions of Chapter 4' -> the LNL study, now Sec 5.1.
-Overall, we see in agreement with conclusions of Chapter 4 on the use of distance metrics in LNL methods, the concept of using a sample's neighbors to determine it's ground truth is flawed. It is likely all labels are too uniformly noisy for a methodology like this. Uncertainty-based methods show potential at lower noise, but their estimation performance degrades with higher noise. Sampling weighting methods generally proved effective, and one estimator using exponential sample weighting produced very strong recovery across both noise levels.  
+Overall, we see in agreement with conclusions of Section~\ref{sec:lnl_motivation} on the use of distance metrics in LNL methods, the concept of using a sample's neighbors to determine it's ground truth is flawed. It is likely all labels are too uniformly noisy for a methodology like this. Uncertainty-based methods show potential at lower noise, but their estimation performance degrades with higher noise. Sampling weighting methods generally proved effective, and one estimator using exponential sample weighting produced very strong recovery across both noise levels.  
 
 Hybrid representations had mixed results. For sample removal, hybrids showed advantages at high noise, but struggled at low noise. They showed consistently positive recovery rates for neighbor-based estimation, which roughly falls in line with the idea that a low-dimension, high-quality information representation benefits neighbor-based reasoning. The feature budget in this experiment was restricted to 50-100 features, which may limit its advantages. This range was successful at standard molecular property prediction, but potentially not for certain noise mitigation or estimation tasks. Distance-based methods remain challenging under Gaussian noise regardless of representation, suggesting the core issue is the noise distribution rather than representation quality alone. This merits an investigation into mitigation of noise from other distributions or noise injection strategies.
 
@@ -1584,7 +1586,7 @@ Concatenation, the most common method for combining feature sets, gives the full
 % DIAGRAM: several base representation matrices of different widths; within each, features ranked by importance; the budget drawn as a bar split between representations; the top features from each joined into a narrow hybrid. Side panel: the full concatenation for contrast.
 % ---- END NOTES 5.1.3 ----
 
-% TODO: how do I properly reference something? noise robustness
+% - Xref: the noise robustness study is Chapter~\ref{chap:robustness} (label at thesis.tex:634). Write ``the noise robustness study in Chapter~\ref{chap:robustness}''.
 % TODO: is this right??? I'm making shit up with NGBoost.
 Here, we present KIRBy (Knowledge Integration by Representation), a framework that takes a collection of feature matrices for a given data set and outputs a customised feature set optimised for a specific prediction task. The inputs can be any type of frozen feature vector, such as fingerprints, descriptor sets, foundation model embeddings, gene expression signatures, histopathology features. Within a given domain, these individual vectors typically contain its own type of information. It's a well-established phenomenon when it comes to machine learning, there's rarely ever a one-size-fits-all approach. Take the noise robustness study above as evidence, NGBoost's predictive performance on QM9 was only ever strong with given PDV input features. However, on Caco-2, NGBoost preferred Avalon, with PDV as a close second. The model NGBoost itself produces better fits when given physicochemical properties, yet this preference can be overidden by a different prediction task. Avalon likely captures features that are pertinent to the log efflux ratio. 
 
@@ -1745,13 +1747,20 @@ Inputs from different sources differ in scale, distribution, and missingness pat
 % DIAGRAM: two paths. Left, "re-run the recipe": new labelled data, score representations, split the budget, pick top features, hybrid. Right, "reuse the exact features": stored features taken from unlabelled molecules, hybrid. Mark which path needs labels.
 % ---- END NOTES 5.2.6 ----
 
-% TODO: is this list for blueprint components complete? 
+% - Checked (src/kirby/find_best_hybrid.py:1415-1506): the list is incomplete. Blueprint also stores objective (:1479), rep_count, the number of representations allowed (:1506), and lower_is_better (:1433).
+% - It also stores seven augmentation settings: aug_per_source_budget, augmentation_margin, augmentation_fraction, candidate_ranking, augmentation_threshold, augmentation_budget, aug_max_candidates.
+% - As data only, it stores allocation_per_fold (features per representation per fold, :1498) and kept_augmentations (extra-feature indices per fold, :1490).
+% - Two items in the prose do not match the code. `reps` is the whole pool offered to the search, not the representations actually used (:5365-5374). "Task domain" is task_type, which is only 'regression' or 'classification' (:1431).
 To be able to better examine the selected features and to regenerate them on new data sets, we produce blueprints. After a hybrid feature selection search is completed, it's results are stored as a blueprint containing the ``recipe'' required to recreate this exact hybrid representation on any data. These blueprints store the selected picks for the pre-specified budget,  the full list of input representations searched and how many of them the recipe used, feature importance scoring method, allocation strategy, and internal evaluator. It contains other runtime information like the step size, number of folds, the seed, the metric being used to score, the task type (regression or classification), whether augmented features were being used, and the per-representation scores. 
 
 The blueprint does not store selected feature indices, those can only be recovered when the blueprint is refit on the data, which re-runs the feature selection process deterministically from that recipe and seed. 
 
 It also provides a registry of selected features, stating where that feature came from. On some representations, we added an extension where features are mapped back to their function. For instance, ECFP and MACCS bits are mapped to SMARTS substructures. This blueprint will tell you which of those substructures were selected. This is not possible for learned embeddings for which the blueprint will return the bare representation name and dimension index. This mapping provides a layer of explainability. It can be used both to discover what features are useful for your task and to confirm that the features being selected are in fact lining up with the underlying known chemistry. 
-% TODO what representations can it map to chemically related names specficially? 
+% - Checked (src/kirby/importance/hybrid.py:259-296 and 543-620): the mapping is done by explain_hybrid. The Blueprint does not store it.
+% - ECFP/Morgan bits map to an atom environment written as a SMILES fragment (MolFragmentToSmiles, :375), not SMARTS. It comes from the first of at most 50 supplied molecules that has the bit set (:550).
+% - MACCS keys map to RDKit's SMARTS and a short name (:557). PDV maps to RDKit descriptor names (importance/feature_names.py:41-44).
+% - Non-chemical names: protein aac/descriptors/k-mers; antibody aac, one-hot/BLOSUM positions, 28 structural features and 5 AntiFold scores; genomic pathway sets; PCA gives PC_1..PC_n.
+% - MAP4 and DRFP give only a bit index (:567). Anything else, including Avalon, mordred and every learned embedding, gives the representation name and dimension index (:614).
 
 
 \subsection{The search space and why each axis is swept}
@@ -1795,7 +1804,8 @@ It also provides a registry of selected features, stating where that feature cam
 % - Values: the downstream model itself ("matched"), random forest, LightGBM, DNN.
 % - Controls: the model that scores each representation on its own, which sets the budget split and the representation ranking.
 % - Why swept: the matched model is the obvious default, but a different model may give better scores to split the budget on.
-% - TODO(check): the existing prose lists RF, DNN, SVM, LightGBM, XGBoost and matched. The search uses matched, random forest, LightGBM and DNN only. Make them agree.
+% - Checked: the searched list is ['match', 'rf', 'lightgbm', 'dnn'] (src/kirby/find_best_hybrid.py:3681); the fast list is the same four (:3039).
+% - SVM and XGBoost appear only as 'match' for those two downstream models (:6355-6368). The prose ('We use the following evaluators: RF, DNN, SVM, LightGBM, XGBoost') still needs editing to agree.
 % - TODO(results): which internal evaluator wins differs by dataset, and matching it to the downstream model is not reliably better.
 % Not an axis inside one search:
 % - The objective (predictive by default; similarity in Chapter 6) is chosen per search.
@@ -1817,9 +1827,8 @@ It also provides a registry of selected features, stating where that feature cam
 
 % TODO: this is out of date
 
-% TODO: citations??
 % What were the qualifications for correlation/filtering allocation strategies? Can I formalize this a bit? 
-Not all features from a given base representation are equally informative, and there are a variety of techniques that can assess each feature's relative importance. Tree-based feature importance measures favor features with high split gain, while neural attributions such as DeepLIFT measure how much each feature moves a neural network's output away from its output on a reference input. \cite{??} 
+Not all features from a given base representation are equally informative, and there are a variety of techniques that can assess each feature's relative importance. Tree-based feature importance measures favor features with high split gain, while neural attributions such as DeepLIFT measure how much each feature moves a neural network's output away from its output on a reference input \citep{Strobl2007, Ancona2018}. 
 We tested if, for the purposes of this task, there was a single feature importance method that worked across data sets and model architectures. Not only was there no clear winner, but there was evidence that certain networks preferred tree-based measures of importance while certain tree ensembles preferred gradient-based approaches. We landed on a set of three who's predictions did not correlate strongly with each other and who's selected features performed well as model input.
 
 % TODO: background on each of these, also how do I name these in text
@@ -2012,12 +2021,13 @@ Augmentation features range from smaller fingerprints like MACCS or Coloumb matr
 % - A fast run can be upgraded to a full one later without redoing work: each configuration's score is stored by its settings, not by the tier, so the full search reuses what the fast one scored and runs only the rest.
 % - How the lists were chosen: a member stays in the fast lists if it is cheap and adds to the best score; an expensive member that wins often (e.g. the global pool) stays in the full search only.
 % - TODO(results): the evidence behind the fast lists: which dropped members cost the most run time, and how much the best score moves when each is added back.
-% - Which datasets use it: those where the full search cannot finish (large sample sizes, or run time beyond the cluster's job limits). TODO: name them and mark them in the dataset table.
+% - Which datasets use it: those where the full search cannot finish (large sample sizes, or run time beyond the cluster's job limits). Checked: twelve datasets run fast by default: nt_H3K27me3, nt_H3K9me3, nt_H3K9ac, nt_H3K4me3, gb_human_enhancers_cohn, nt_promoter_tata, qm9, herg, logd, flab_expression_koenig, tz_her2_binary, tz_her2_multiclass (tests/slurm_scripts/run_precompute_dataset.sh:104; same list in tests/experiments/dataset_policy.py:688-701). CHECK: the fast-tier bullet above says RF, LightGBM and DNN only; the precompute passes all five models at fast speed (run_precompute_dataset.sh:170, MODELS="rf,lightgbm,dnn,svm,xgboost"). TODO: mark them in the dataset table.
 % - Dropped members are still searched on every other dataset. The fast tier is a compute compromise, not a claim that those members are useless.
 % Adaptive pruning, in words:
 % - After the first folds, some configurations are so far behind that scoring them on the remaining folds only confirms a loss. Stop scoring those.
 % - Pruning is off unless a study switches it on. The main search computed once per dataset does prune, with the calibrated schedule below (as submitted, on every dataset; the per-dataset script alone would leave datasets under about 1,500 molecules unpruned). TODO: settle which, and say so.
 % - TODO: state, study by study, which results used pruning.
+% - CHECK: the per-dataset precompute does prune by default, contradicting "the main search computed once per dataset does not prune". Calibrated pruning on every dataset not in the SMALL list (the 12 fast datasets and all medium ones, e.g. caco2, buchwald_hartwig); no pruning on the 15 SMALL datasets (tcga_brca_pam50, flab_thermo_tresanco, humanness_therapeutic, herg_ki, five ginkgo sets, abcov_kd, three abagym sets, ddg_combined, cdr_flexibility). tests/slurm_scripts/run_precompute_dataset.sh:103-111.
 % - Pruning is judged on one criterion: it must never delete a configuration that would have been the best. The cut-offs were set as those that lost no winner on a calibration set of datasets, not for the largest saving.
 % Adaptive pruning, step by step (checked in the code):
 % - Step 1: every configuration is scored on the first two folds. All rules below rank by the mean over these two folds. Budgets run from smallest to largest.
@@ -2060,7 +2070,9 @@ Adaptive pruning: every configuration is first scored on the first two folds. At
 % - Reported per dataset and model: the per-fold scores for the hybrid and every single representation, and their spread (reporting rule in Models and metrics).
 % - Baseline (decided): each base representation at its full width. This asks whether the hybrid beats what a user would otherwise run.
 % How it fits with the rest:
-% - Links to: Chapter 6 builds on this protocol. TODO(check): state there which rows receive injected noise.
+% - Links to: Chapter 6 builds on this protocol. Checked: noise goes on the outer fold's training labels only. Held-out labels are never corrupted.
+% - The noise size and the censoring limit come from that fold's clean training labels (src/kirby/noise_spec.py:474-486; tests/experiments/noise/noise_helpers.py:377-414).
+% - Not checked: experiments that inject by their own route rather than these helpers, e.g. n15 and n39.
 % - TODO(results): per-dataset table of the per-fold best single representation versus the hybrid, per model, with per-fold spread; numbers come from the full runs.
 % ---- END NOTES 5.3 ----
 
@@ -2193,7 +2205,7 @@ The hybrid construction step uses a nested internal train/validation split withi
 % Pre-processing (your TODO in the section):
 % - All features are standardised with the training fold's mean and spread only. This matters most for computed descriptors, whose scales differ widely (molecular weight in the hundreds, fragment counts 0 to 2). The same step is described in 5.2.1; keep one full description and point to it from the other.
 % - Missing or non-finite descriptor values are set to 0. A molecule that cannot be parsed gets an all-zero row.
-% - TODO: state what cleaning each dataset's SMILES received. A standardisation routine exists (largest fragment, neutralise charges, canonical tautomer, reject metals, remove duplicates by InChIKey), but the dataset loaders do not call it. Confirm per dataset before writing.
+% - Checked (small molecules): the loaders DO call the standardisation routine for logd and caco2 (tests/find_best_hybrid_molecular.py:229) and herg_ki (:332). The Biogen/Polaris sets are only parsed by RDKit (:386). QM9 keeps the 129,428 RDKit-valid molecules (src/kirby/datasets/qm9.py:155-170). InChIKey deduplication runs on all of them (:542), skipped only for a set with one row per measurement. Full per-dataset steps are in the Appendix A notes. Reaction, antibody and Lhasa sets not checked here.
 %
 % How each pool of ten was chosen (short; method only):
 % - Step 1: score every candidate representation on its own with a gradient-boosted tree model (LightGBM), under the dataset's real grouped folds. Drop the dataset if no representation clearly beats a trivial predictor.
@@ -2253,9 +2265,9 @@ The hybrid construction step uses a nested internal train/validation split withi
 %   - One-hot: each residue position as one of 20 letters, heavy and light chain padded to fixed lengths.
 %   - BLOSUM62: same layout, each residue replaced by its row of the substitution matrix \citep{Henikoff1992}. Similar letters get similar vectors.
 %   - Amino-acid composition: the fraction of each amino acid, per chain, 40 features.
-% - General protein language models: ESM-2 650M \citep{Lin2023}; ESM3 \citep{Hayes2025}; ESM C 600M (TODO(lit): find a citable source for ESM C; only a company release note may exist); ProtT5 \citep{Elnaggar2022}; SaProt, which adds a structure letter per residue \citep{Su2023SaProt}.
+% - General protein language models: ESM-2 650M \citep{Lin2023}; ESM3 \citep{Hayes2025}; ESM C 600M \citep{Candido2026}; ProtT5 \citep{Elnaggar2022}; SaProt, which adds a structure letter per residue \citep{Su2023SaProt}.
 %   - SaProt's structure letters are Foldseek 3Di tokens \citep{vanKempen2024}, predicted from sequence by ProstT5 \citep{Heinzinger2024}, not taken from solved structures.
-% - Antibody-specific language models: AntiBERTy \citep{Ruffolo2021AntiBERTy}; AbLang-2 \citep{Olsen2024}; IgT5 \citep{Kenlay2024IgT5}; Ab-RoBERTa (TODO(lit): find the paper for Ab-RoBERTa, released as mogam-ai/Ab-RoBERTa).
+% - Antibody-specific language models: AntiBERTy \citep{Ruffolo2021AntiBERTy}; AbLang-2 \citep{Olsen2024}; IgT5 \citep{Kenlay2024IgT5}; Ab-RoBERTa \citep{Huh2025}.
 %   - Why include both kinds: general models learned from all proteins; antibody models learned from antibody repertoires and see germline and CDR patterns more directly.
 % - Most models embed heavy and light chains separately, and the two mean-pooled vectors are joined.
 % - AbLang-2 and IgT5 read both chains together as one paired input. One ESM-2 variant joins the two sequences into one string and pools once (1280 features instead of 2560).
@@ -2280,13 +2292,13 @@ The hybrid construction step uses a nested internal train/validation split withi
 % - Component identity: one-hot of which aryl halide, ligand, base and additive was used. Encodes the plate design, no chemistry.
 % - Any molecular representation applied three ways: to the reactants, to the products, or as the difference between product and reactant features.
 % - Why it matters: on plate data, component identity alone can predict yield well. The hybrid shows whether chemistry adds anything beyond "which reagents".
-% - TODO(lit): search for literature on one-hot reagent baselines matching learned representations on Buchwald-Hartwig high-throughput yield data.
+% - \citet{Chuang2018}: random-valued features matched the chemical descriptors of \citet{Ahneman2018} on the Buchwald-Hartwig plate. \citet{Schwaller2021a}, Table 1, R$^2$ on random 70/30 splits: one-hot 0.89, DFT descriptors 0.92, Yield-BERT 0.951. Averaged over the four out-of-sample splits by additive: one-hot 0.59, DFT 0.69, Yield-BERT 0.73. So one-hot comes close on random splits and falls behind when additives are held out.
 %
 % Nucleotide sequences (input: DNA sequence):
 % - k-mer frequencies: normalised counts of every length-$k$ word ($k = 3$ to 6).
 % - Tetranucleotide frequency, two forms: all 256 4-mers (mean-centred), and canonical, where each 4-mer is merged with its reverse complement, giving 136 features.
-% - TODO(lit): search for literature on tetranucleotide frequency as a genome signature in metagenomic binning.
-% - DNA language models: DNABERT-2 \citep{Zhou2023DNABERT2}; Nucleotide Transformer v2, 250M and 500M \citep{DallaTorre2025}; HyenaDNA \citep{Nguyen2023HyenaDNA}; GROVER for DNA \citep{Sanabria2024} (not the molecular GROVER above; name clash); Mistral-DNA, a mixture-of-experts model (TODO(lit): find a citable source for Mistral-DNA, currently a code release only).
+% - Tetranucleotide frequency as a genome signature for assigning metagenomic fragments to taxa: z-scores of tetranucleotide frequencies separate genomic fragments far better than GC content \citep{Teeling2004}.
+% - DNA language models: DNABERT-2 \citep{Zhou2023DNABERT2}; Nucleotide Transformer v2, 250M and 500M \citep{DallaTorre2025}; HyenaDNA \citep{Nguyen2023HyenaDNA}; GROVER for DNA \citep{Sanabria2024} (not the molecular GROVER above; name clash); Mistral-DNA, a mixture-of-experts model \citep{Mourad2024} (code and model release; no paper).
 % - Augmentation: GC content, dinucleotide frequency, codon usage, sequence complexity, predicted DNA shape.
 % - Why include k-mers next to language models: on these tasks simple counts are competitive, so the pool tests whether a hybrid finds anything beyond them.
 %
@@ -2297,16 +2309,16 @@ The hybrid construction step uses a nested internal train/validation split withi
 % - Copy number: 50 principal components of the standardised GISTIC2 gene-level matrix \citep{Mermel2011}.
 % - miRNA: the 200 most variable miRNAs, z-scored.
 % - Protein: reverse-phase protein array, about 260 proteins, z-scored \citep{Li2013TCPA}.
-% - Whole-slide image embeddings: TITAN \citep{Ding2024TITAN}, Prov-GigaPath \citep{Xu2024GigaPath}, CTransPath \citep{Wang2022CTransPath}, Phikon \citep{Filiot2023}, H-optimus-0 (TODO(lit): find a citable source for H-optimus-0).
+% - Whole-slide image embeddings: TITAN \citep{Ding2024TITAN}, Prov-GigaPath \citep{Xu2024GigaPath}, CTransPath \citep{Wang2022CTransPath}, Phikon \citep{Filiot2023}, H-optimus-0 \citep{Saillard2024} (software release; no paper).
 % - Augmentation: tumour mutation burden, homologous recombination deficiency score, tumour purity, immune cell fractions, stemness index, CIMP status, chromosome-arm expression summaries.
 % - Limitation to state: the principal components, the most-variable selections and the z-scoring for methylation, copy number, miRNA and protein are fitted once on all patients in the cohort, including held-out patients. No labels are used. Either state this as label-free pre-processing on the whole cohort, or move these steps inside each fold.
 % - Why it matters: here each representation is a different measurement of the patient, not a different encoding of one input. Links to: 5.1.5 and 5.9.
-% - TODO(lit): search for literature on multi-omics integration for TCGA subtype classification (late vs early fusion), to place the hybrid next to it.
+% - Multi-omics integration strategies (early, mixed, intermediate, late, hierarchical) are reviewed in \citet{Picard2021}. MOGONET classifies TCGA BRCA PAM50 subtypes from mRNA expression, DNA methylation and miRNA, combining omics-specific learning with cross-omics correlation learning \citep{Wang2021}.
 %
 % Tables for this section:
 % - The per-domain representation tables and the dataset-to-representation table now exist in the section. Remaining: widths marked "?" (not cached locally) and sources marked "--".
 % - TODO: pretraining corpora and sizes for most learned models are not recorded in the code. Fill from each model's paper.
-% - TODO(lit): search for literature comparing frozen embeddings from pretrained molecular models against ECFP on property benchmarks.
+% - Frozen embeddings against ECFP: 25 pretrained models on 25 datasets; nearly all show negligible or no improvement over ECFP \citep{Praski2025} (arXiv preprint, no journal version found).
 %
 % NOT NOW - possible later addition, not among the current 16 datasets:
 % - The ChEMBL activity sets (dopamine D2, factor Xa, SARS-CoV-2 main protease) were never pruned themselves. They borrow the ten representations that appear most often across the six pruned small-molecule pools. State this openly if they come back.
@@ -2331,7 +2343,8 @@ We combine a variety of component, or base representations to create these hybri
 
 % Tables generated 2026-09-28 from the representation lists in the code and the widths of the cached
 % feature matrices. Widths marked ? are not cached locally: fill them in. "--" in Source = no citation found yet.
-% TODO(lit): sources for ESM C, Ab-RoBERTa, Mistral-DNA, H-optimus-0 and the TCGA augmentation features.
+% Sources added for ESM C, Ab-RoBERTa, Mistral-DNA (code release only) and H-optimus-0 (software release only).
+% TODO(lit): sources for the TCGA augmentation features.
 \begin{longtable}{p{3.2cm}p{5.6cm}p{1.6cm}p{1.6cm}p{1.4cm}}
 \caption{Representations used for small molecules. Role: B = base representation, A = augmentation, B/A = base on some datasets and augmentation on others.}\label{tab:reps_smallmol}\\
 \toprule
@@ -2423,7 +2436,7 @@ ESM-2 shift from parent & ESM-2 variant minus parent embedding & 1280 & \citep{L
 ESM-2 log-likelihood ratio & masked mutant vs parent log-probability: sum, mean, min & 3 & \citep{Meier2021} & A \\
 ESM3 & protein LM & 1536 & \citep{Hayes2025} & B \\
 ESM3 CDR & ESM3, mean over CDR residues & 1536/chain & \citep{Hayes2025} & B \\
-ESM C & protein LM & 1152/chain & -- & B \\
+ESM C & protein LM & 1152/chain & \citep{Candido2026} & B \\
 ProtT5 & protein LM & 1024/chain & \citep{Elnaggar2022} & B \\
 ProtT5 CDR & ProtT5, mean over CDR residues & 1024 & \citep{Elnaggar2022} & B \\
 SaProt & structure-aware protein LM & 1280/chain & \citep{Su2023SaProt} & B \\
@@ -2431,8 +2444,8 @@ AbLang-2 & paired antibody LM & 480 & \citep{Olsen2024} & B \\
 IgT5 & paired antibody LM & 1024 & \citep{Kenlay2024IgT5} & B \\
 AntiBERTy & antibody LM & 512 & \citep{Ruffolo2021AntiBERTy} & B \\
 AntiBERTy CDR & AntiBERTy, mean over CDR residues & 512 & \citep{Ruffolo2021AntiBERTy} & B \\
-Ab-RoBERTa & antibody LM & 768 & -- & B \\
-Ab-RoBERTa CDR & Ab-RoBERTa, mean over CDR residues & 768 & -- & B \\
+Ab-RoBERTa & antibody LM & 768 & \citep{Huh2025} & B \\
+Ab-RoBERTa CDR & Ab-RoBERTa, mean over CDR residues & 768 & \citep{Huh2025} & B \\
 Mutation features & hand-built descriptors of each point mutation & 48 & -- & B/A \\
 \end{longtable}
 
@@ -2457,7 +2470,7 @@ Nucleotide Transformer v2 250M & DNA LM & 768 & \citep{DallaTorre2025} & B \\
 Nucleotide Transformer v2 500M & DNA LM & 1024 & \citep{DallaTorre2025} & B \\
 HyenaDNA & long-context DNA LM & 256 & \citep{Nguyen2023HyenaDNA} & B \\
 GROVER (DNA) & DNA LM & 768 & \citep{Sanabria2024} & B \\
-Mistral-DNA & mixture-of-experts DNA LM & 768 & -- & B \\
+Mistral-DNA & mixture-of-experts DNA LM & 768 & \citep{Mourad2024} & B \\
 GC content & GC fraction and related summaries & 5 & -- & A \\
 Dinucleotide frequency & frequency of each 2-letter word & 16 & -- & A \\
 Codon usage & frequency of each sense codon & 61 & -- & A \\
@@ -2490,7 +2503,7 @@ TITAN & whole-slide image foundation model & 768 & \citep{Ding2024TITAN} & B \\
 Prov-GigaPath & whole-slide image foundation model & 512 & \citep{Xu2024GigaPath} & B \\
 CTransPath & histopathology image encoder & 512 & \citep{Wang2022CTransPath} & B \\
 Phikon & histopathology image encoder & 512 & \citep{Filiot2023} & B \\
-H-optimus-0 & histopathology image encoder & 512 & -- & B \\
+H-optimus-0 & histopathology image encoder & 512 & \citep{Saillard2024} & B \\
 HRD score & homologous recombination deficiency (LOH, TAI, LST, total) & 4 & -- & A \\
 Tumour mutation burden & mutation counts and rate & 5 & -- & A \\
 Tumour purity & purity, ploidy and genome doublings & 4 & -- & A \\
@@ -2574,7 +2587,7 @@ For every data set in this study, we pre-selected ten base representations that 
 %     - The early-stopping holdout is group-disjoint, using the same grouping as the outer split, so no scaffold group sits on both sides.
 %     - Regression targets are z-scored inside the fit, with the training fold's mean and spread.
 % - Implementation: scikit-learn \citep{scikit-learn} for the random forest and the SVM. XGBoost and LightGBM come from their own libraries. The DNN is written in PyTorch.
-%   - TODO(lit): add a citation for PyTorch. refs.bib has none; the standard reference is Paszke et al. 2019, NeurIPS.
+%   - PyTorch: \citep{Paszke2019}.
 % - Hyperparameters are the same on every dataset: already in prose (end of the models paragraph). Keep that sentence.
 % - Features are standardised in each fold with training-fold statistics only (described in 5.2.1). Binary fingerprint features are left as 0/1 only when a single representation is scored on its own; in the hybrid every feature is standardised.
 % - Size cap: the SVM is skipped above 10,000 training samples (5,000 under the augmentation that adds features on top of the budget $B$).
@@ -2597,7 +2610,7 @@ For every data set in this study, we pre-selected ten base representations that 
 % Reporting:
 % - Every score is on an outer test fold the search never saw. Report the per-fold scores and their spread, paired by fold with the best single representation (protocol in 5.3 and 5.2.1).
 % - No significance tests and no confidence intervals, within or across datasets. With 5 folds, a p-value or an interval would rest on too few values to mean much.
-%   - TODO(lit): search for literature on why scores from cross-validation folds are not independent, and why standard tests on them understate the variance (for example the Nadeau and Bengio variance correction, and Bengio and Grandvalet on there being no unbiased estimator of the variance of k-fold CV). Use it for one sentence justifying the choice.
+%   - Fold scores share training molecules, so they are correlated. No unbiased estimator of the variance of k-fold cross-validation exists, and estimates that ignore the overlap between training sets grossly underestimate it \citep{Bengio2004}.
 % - A gap is only interpreted if it is larger than the spread across folds. State this rule once, here, and apply it in every results section.
 % Compute:
 % - TODO(results): hours per dataset for the full search, and the hardware used (CPU cores, memory, and a GPU where the DNN or the embeddings used one); numbers come from the full runs.
@@ -2607,7 +2620,7 @@ For every data set in this study, we pre-selected ten base representations that 
 % - Links to: the Ch 5 Discussion (does the hybrid overfit the search?) and Ch 7 "Simple is often better". Fixed models with library defaults are a deliberately plain setting.
 %
 % NOT NOW - possible later addition, not among the current 16 datasets:
-% - Antibody $\Delta\Delta G$ benchmark sets (Graphinity) would use Pearson $r$, to match the benchmark paper. TODO(lit): cite Hummer et al. and confirm it reports Pearson $r$.
+% - Antibody $\Delta\Delta G$ benchmark sets (Graphinity) would use Pearson $r$, to match the benchmark paper. \citep{Hummer2025} reports Pearson's correlation (up to 0.87 on experimental $\Delta\Delta G$).
 % - Drug-target affinity (Davis, KIBA, BindingDB $K_d$, Metz) would use the concordance index \citep{Pahikkala2015}.
 % - Trastuzumab-HER2 multi-class would use support-weighted F1.
 % - ChEMBL per-target QSAR sets (dopamine D2, factor Xa, SARS-CoV-2 main protease) would use MAE.
@@ -2787,7 +2800,7 @@ For a fair comparison, the downstream model pool must cover a range of inductive
 % - Why it matters: what crosses the network is a list of indices and importances, which is smaller and less invertible than a model's weights or a gradient.
 % - Why it matters: the allocation question the rest of the chapter asks between representations is the same question asked between organisations, with the same machinery.
 % - Links to: Feature allocation strategies, where the within-dataset version of the same split is defined.
-% - TODO(lit): search for literature on feature selection performed independently at each client in horizontal federated learning.
+% - Federated feature selection where each client runs a mutual-information selection on its own data and a server aggregates the results, with no raw data exchanged \citep{Cassara2022}.
 %
 % The hERG comparison:
 % - hERG channel blockade is a cardiotoxicity liability screened early in drug discovery, and its public data is assembled from many labs \citep{Czodrowski2013}.
@@ -2881,7 +2894,7 @@ For a fair comparison, the downstream model pool must cover a range of inductive
 % - Features are ranked by importance computed on the same training labels the model is then fitted to. Noise in those labels can steer which features are picked.
 % - The search picks the best of many configurations. The best of many noisy scores is biased upwards, even when each score on its own is unbiased \citep{Cawley2010}. The measured version of this is the selection bias defined in Complexity experiments; point there.
 % - Prior work in this field: Sort \& Slice, which uses no labels to choose fingerprint substructures, outperformed two supervised substructure-selection schemes \citep{sns}.
-%   - TODO(lit): check whether the Sort \& Slice paper or Dablander's thesis attributes the weaker supervised selection to overfitting; cite only if it says so.
+%   - Checked: the Sort \& Slice paper says the reasons are "not obvious" and that it is "conceivable" that using the training label to select substructures adds to the risk of overfitting. A hedged suggestion, not a measured finding \citep{sns}. Dablander's thesis not checked.
 % - Small datasets are the most exposed. With few molecules, one fold's importance ranking rests on few labels.
 %
 % The case that it does not, or that the cost is outweighed:
@@ -3240,7 +3253,6 @@ We also tested the following noise removal methods:  distance-weighted predictio
 
 \subsubsection{Noise magnitude estimation}
 
-% TODO(xref): [CR 906] 'as discussed in Chapter 3' -> now ch.4 (uncertainty).
 % TODO: [CR 863] carries the author's own '% TODO: get sources' marker. Left in place.
 We now examine the core of the noise mitigation research: estimating the magnitude of noise. This enables proportional handling rather than complete removal. We used the following neighbor-based estimators:
 
@@ -3282,7 +3294,7 @@ We used probabilistic methods that directly predict noise magnitude using uncert
     \item NGBoost: Natural gradient boosting that predicts distributional parameters $(\mu, \sigma)$ directly \citep{Duan2020}.
 \end{itemize}
 
-NGBoost in particular was selected due to its promising uncertainty values with respect to the correlation between noise and prediction error, as discussed in Chapter 3.  
+NGBoost in particular was selected due to its promising uncertainty values with respect to the correlation between noise and prediction error, as discussed in Section~\ref{sec:uq}.  
 
 \subsubsection{Label smoothing and sample weighting}
 
@@ -3624,9 +3636,6 @@ A recovery rate of 1.0 indicates complete restoration to clean performance; nega
 % ---- END NOTES 7.6 ----
 
 % TODO: prune the parts that ch.4-6 now deliver.
-% TODO(xref): [CR 1150] ends 'small-loss selection, as discussed in Chapter 4'. Small-loss
-% selection is an LNL method; the LNL study is now Section 4.1. DONE 2026-09-27: retargeted with \ref{sec:lnl_motivation}.
-% TODO(xref): [CR 1156] 'Chapters 4 and 5' / 'Chapter 3' -- old numbering throughout.
 I also plan to extend the hybrid research to additional base representations and datasets. Some alternative representations include additional GNN embeddings, sequential encoders, augmented features such as embedded distances from molecular graphs, and transformed representations (i.e., normalization, binarization of continuous features). Additionally, I want to explore alternative feature importance scoring methods, especially ones that involve different families of models. Specifically, I plan to look at TreeSHAP, KernelSHAP, drop-column importance for noise robustness, gradient-based attribution for NN embeddings, and small-loss selection, as discussed in Section~\ref{sec:lnl_motivation}. 
 
 As mentioned earlier, although I do not currently have a full set of results on hybrid, they have been showing promise throughout a rank of QSAR and noise mitigation tasks. I would like to explore the complexity tradeoff between model and representation complexity, as I've seen a trend of complicated models like NNs having stronger predictive performance with smaller hybrids and more simplistic tree-based methods benefiting from larger hybrids. This noise mitigation experiment relied on a very small default hybrid and used RF-based feature importance. I would like to leverage my allocation strategies to adapt hybrid models to datasets \textit{and} models. These strategies can also be modified to optimize for noise robustness in addition to predictive performance. 
@@ -3651,9 +3660,6 @@ What does this mean in practice? A new foundation model appears every few months
 % TODO: the second paper's title still says 'Improving noise prediction robustness and
 % mitigation with feature-importance hybrid representations' -- the outline now plans TWO
 % hybrid papers (ch.5 and ch.6). Update.
-% TODO(xref): [CR 1161] 'based on the material in Chapter 3' -- per the outline the
-% NoiseInject paper is Chapter 3. [CR 1163] 'the experiments in Chapter 5'
-% now spans Chapters 4-6. DONE 2026-09-27: both are \ref now.
 % TODO: the outline wants the three software artifacts listed here too.
 \section{Research Papers}
 \textbf{In prepration:} Punt, A., Morris, G., Werner, S., \& Hanser, T. (2026). Noise-Robust QSAR: evaluating probabilistic methods across molecular representations \\
@@ -3717,7 +3723,7 @@ I have contributed to the \textit{Blopig} blog of the Oxford Protein Informatics
 %
 % hERG Ki (ChEMBL):
 % - Source: ChEMBL \citep{Zdrazil2023}, target CHEMBL240 (hERG, KCNH2). Retrieved through the ChEMBL web API.
-%   - TODO: record the ChEMBL release number and the download date.
+%   - TODO: record the ChEMBL release number and the download date. Checked: the code does not record either. It queries the live web API (tests/find_best_hybrid_molecular.py:281), so the release is whichever was current when chembl_herg_ki.csv was first written; take it from that file's date on the cluster.
 % - Query filters:
 %   - standard type Ki;
 %   - a pChEMBL value is present;
@@ -3789,7 +3795,7 @@ I have contributed to the \textit{Blopig} blog of the Oxford Protein Informatics
 %
 % Antibodies:
 % - FLAb benchmark \citep{Chungyoun2024}, CSV files downloaded from its repository.
-%   - TODO: record the commit hash.
+%   - TODO: record the commit hash. Checked: the code does not pin one; it downloads from the main branch (src/kirby/datasets/flab.py:32), so the hash must be matched to the cached CSVs' download date.
 %   - Rows with a missing heavy chain or a missing label are dropped.
 % - Expression, Koenig set:
 %   - Label: expression enrichment ratio from a deep mutational scan of the anti-VEGF antibody G6 \citep{Koenig2017}.
@@ -3817,7 +3823,7 @@ I have contributed to the \textit{Blopig} blog of the Oxford Protein Informatics
 %
 % Nucleotide sequences:
 % - Source: the revised Nucleotide Transformer downstream tasks \citep{DallaTorre2025}, from Hugging Face.
-%   - TODO: record the dataset revision.
+%   - TODO: record the dataset revision. Checked: the code does not pin one; load_dataset is called with no revision argument (src/kirby/datasets/nucleotide.py:265), so it takes the latest Hugging Face revision at download time.
 % - Tasks: promoter-TATA (about 5,274 sequences) and the histone mark H3K4me3 (about 18,244 sequences). Both are binary.
 % - The released train and test splits are merged, then re-split.
 % - CHECK: both counts come from the dataset registry and have not been re-counted.
