@@ -643,11 +643,14 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                                 for r in draws:
                                     # A ranking rule's tie-break must not be
                                     # random draw 0's own order. leverage is
-                                    # an integer with many ties, and sharing
-                                    # draw 0's seed made its chosen molecules
-                                    # overlap draw 0's more than chance, which
-                                    # pulled that pair's difference toward 0.
-                                    # Fixed 2026-09-28.
+                                    # an integer with many ties. Sharing draw
+                                    # 0's seed broke those ties on the LOWEST
+                                    # of draw 0's scores, while draw 0 takes
+                                    # the highest, so the two chosen sets
+                                    # overlapped less than chance (0 of 217
+                                    # molecules in a synthetic check where
+                                    # chance is 54). Only the pair against
+                                    # draw 0 was affected. Fixed 2026-09-28.
                                     rseed = (1000 * seed + 17 * fold_i + r
                                              if rule == 'random' else
                                              (1000 * seed + 17 * fold_i, 1))
