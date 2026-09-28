@@ -285,8 +285,11 @@ def evaluate_rep(X, labels, groups, model, n_folds):
     cv = GroupKFold(n_splits=actual_folds)
     splits = list(cv.split(X, labels, groups=groups))
     r2_scores, rmse_scores, spearman_scores = [], [], []
+    # Fold-index-aligned RMSE, None where the fit failed. The lists above are
+    # compacted, so two representations' lists cannot be paired fold by fold.
+    rmse_per_fold = [None] * len(splits)
 
-    for train_idx, val_idx in splits:
+    for _fold_k, (train_idx, val_idx) in enumerate(splits):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = labels[train_idx], labels[val_idx]
 
@@ -310,6 +313,7 @@ def evaluate_rep(X, labels, groups, model, n_folds):
         ss_tot = np.sum((y_val - y_val.mean()) ** 2)
         r2_scores.append(1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
         rmse_scores.append(np.sqrt(np.mean((y_val - preds) ** 2)))
+        rmse_per_fold[_fold_k] = float(rmse_scores[-1])
 
         if len(y_val) > 2:
             rho, _ = spearmanr(y_val, preds)
@@ -326,6 +330,7 @@ def evaluate_rep(X, labels, groups, model, n_folds):
             'std': float(np.nanstd(spearman_scores)) if spearman_scores else float('nan'),
         },
         'n_folds_completed': len(r2_scores),
+        'rmse_per_fold': rmse_per_fold,
     }
 
 
@@ -744,13 +749,30 @@ def analyze_families(individual_results, primary_model='rf'):
                                      primary_model)
 
         cgr_wins = False
+        per_fold = []
         if best_cgr and best_smiles:
             cgr_wins = best_cgr['rmse'] < best_smiles['rmse']
+            # Same unshuffled GroupKFold on the same groups for every
+            # representation, so fold k is the same reactions on both sides.
+            _c = best_cgr.get('rmse_per_fold') or []
+            _s = best_smiles.get('rmse_per_fold') or []
+            for _k in range(max(len(_c), len(_s))):
+                _a = _c[_k] if _k < len(_c) else None
+                _b = _s[_k] if _k < len(_s) else None
+                per_fold.append(None if (_a is None or _b is None)
+                                else float(_a) - float(_b))
+        _paired = [d for d in per_fold if d is not None]
 
         analysis[family_name] = {
             'best_cgr': best_cgr,
             'best_smiles': best_smiles,
             'cgr_wins': cgr_wins,
+            # Best CGR minus best SMILES RMSE on each held-out fold; negative
+            # means CGR was lower. The two 'best' are each picked on these same
+            # folds, and the fingerprint SMILES side picks from 2 against 1.
+            'rmse_delta_per_fold': per_fold,
+            'n_paired_folds': len(_paired),
+            'n_folds_cgr_lower': int(sum(d < 0 for d in _paired)),
         }
     return analysis
 
@@ -765,7 +787,8 @@ def _best_in_group(individual_results, rep_names, model):
         rmse = res['rmse']['mean']
         if best is None or rmse < best['rmse']:
             best = {'rep': rn, 'rmse': rmse, 'r2': res['r2']['mean'],
-                    'spearman': res['spearman']['mean']}
+                    'spearman': res['spearman']['mean'],
+                    'rmse_per_fold': res.get('rmse_per_fold')}
     return best
 
 
@@ -881,6 +904,21 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
                 continue
             delta = sc_rmse - so_rmse  # negative = CGR helped
             pct = (delta / so_rmse * 100) if so_rmse > 0 else 0.0
+            # Paired per fold. Both searches split the same 22 additive groups
+            # with the same unshuffled GroupKFold, so fold k is the same
+            # held-out reactions in both pools. 'rmse_delta' above is a
+            # difference of two means; it equals the mean of these only when
+            # both pools scored the same folds. The fold list is what shows
+            # whether the sign holds on every held-out fold or on one.
+            _so_f = so[model_name].get('hybrid_fold_scores') or []
+            _sc_f = sc[model_name].get('hybrid_fold_scores') or []
+            _per_fold = []
+            for _k in range(max(len(_so_f), len(_sc_f))):
+                _a = _so_f[_k] if _k < len(_so_f) else None
+                _b = _sc_f[_k] if _k < len(_sc_f) else None
+                _per_fold.append(None if (_a is None or _b is None)
+                                 else float(_b) - float(_a))
+            _paired = [d for d in _per_fold if d is not None]
             delta_by_model[model_name] = {
                 'rmse_delta': float(delta),
                 'pct_change': float(pct),
@@ -888,6 +926,13 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
                 'smiles_plus_cgr_hybrid_reselected': float(sc_rmse),
                 'n_folds_used': int(min(so[model_name].get('n_folds_used', 0),
                                         sc[model_name].get('n_folds_used', 0))),
+                # SMILES+CGR minus SMILES-only on each held-out fold, in RMSE
+                # yield points; None where either pool has no score there.
+                'rmse_delta_per_fold': _per_fold,
+                'rmse_delta_mean_of_folds': (float(np.mean(_paired))
+                                             if _paired else float('nan')),
+                'n_paired_folds': len(_paired),
+                'n_folds_cgr_lower': int(sum(d < 0 for d in _paired)),
             }
 
     # --- Phase D: Family analysis ---
@@ -963,7 +1008,8 @@ def print_analysis(all_results):
         # Table 2: Hybrid comparison
         hc = ds.get('hybrid_comparison', {})
         if 'smiles_only' in hc and 'smiles_plus_cgr' in hc:
-            print(f"\n  --- Hybrid Pool Comparison ---")
+            print(f"\n  --- Hybrid Pool Comparison: recipe fitted on every "
+                  f"reaction's label, optimistic, not the comparison ---")
             print(f"  {'Pool':15s} {'#Reps':>5s}  ", end='')
             model_names = sorted(
                 set(hc['smiles_only'].get('hybrid_eval', {}).keys())
@@ -1031,18 +1077,37 @@ def print_analysis(all_results):
                     row += f"  {matrix[i][j]:>10.3f}"
                 print(row)
 
-        # Verdict
+        # Verdict. Counts, not a yes/no. Until 2026-09-28 this printed
+        # "improves" when ANY one downstream model's mean RMSE fell by any
+        # amount, and "loses to" for a family where one side had no
+        # representation at all.
         fa = ds.get('family_analysis', {})
-        fp_wins = fa.get('fingerprint', {}).get('cgr_wins', False)
-        nn_wins = fa.get('neural', {}).get('cgr_wins', False)
-        delta = ds.get('delta_by_model', {})
-        hybrid_helps = any(d['rmse_delta'] < 0 for d in delta.values()) if delta else False
 
-        print(f"\n  Verdict: CGR fingerprint {'beats' if fp_wins else 'loses to'} "
-              f"SMILES FPs, CGR neural {'beats' if nn_wins else 'loses to'} "
-              f"SMILES neural. "
-              f"Hybrid pool {'improves' if hybrid_helps else 'does not improve'} "
-              f"with CGR.")
+        def _family_word(fam):
+            f = fa.get(fam, {})
+            if not f.get('best_cgr') or not f.get('best_smiles'):
+                return 'not compared (one side has no representation)'
+            word = 'beats' if f.get('cgr_wins') else 'loses to'
+            nf = f.get('n_paired_folds')
+            if nf:
+                word += (f" (lower RMSE on {f.get('n_folds_cgr_lower')} of "
+                         f"{nf} held-out folds)")
+            return word
+
+        print(f"\n  Verdict, random forest mean RMSE: CGR fingerprint "
+              f"{_family_word('fingerprint')} the best SMILES fingerprint; "
+              f"CGR neural {_family_word('neural')} the best SMILES neural.")
+        delta = ds.get('delta_by_model', {})
+        if delta:
+            for mn in sorted(delta):
+                d = delta[mn]
+                print(f"  Hybrid with CGR in the pool, {mn}: RMSE "
+                      f"{d['smiles_only_hybrid_reselected']:.2f} -> "
+                      f"{d['smiles_plus_cgr_hybrid_reselected']:.2f}, lower on "
+                      f"{d.get('n_folds_cgr_lower', '?')} of "
+                      f"{d.get('n_paired_folds', '?')} held-out folds.")
+        else:
+            print("  Hybrid pools not compared.")
 
 
 # =============================================================================
