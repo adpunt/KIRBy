@@ -228,12 +228,12 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
               f"to RandomForest at budget 100. Why each candidate was "
               f"unusable: {pool_lookup_errors or 'no candidates tried'}")
     if optimal_model_factory is None:
-        if is_classification:
-            optimal_model_factory = lambda: RandomForestClassifier(
-                n_estimators=100, random_state=42, n_jobs=-1)
-        else:
-            optimal_model_factory = lambda: RandomForestRegressor(
-                n_estimators=100, random_state=42, n_jobs=-1)
+        # The roster's rf (DEFAULT_MODELS: 100 trees, max_features='sqrt'),
+        # the one every search scores. sklearn's own default here used every
+        # feature at every split, which is a different model under the name rf.
+        optimal_model_factory = get_model_factories(
+            ['rf'], task_type=task_type,
+            n_samples=len(data['labels']))['rf']
 
     # Define conditions: (model_factory, budget, alloc, imp, description)
     if is_classification:
