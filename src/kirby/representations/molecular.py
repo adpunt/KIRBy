@@ -4405,11 +4405,17 @@ def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
     print(f"Converting {len(smiles_list)} molecules to graphs...")
     
     graphs_data = []
-    
+    # Which row of smiles_list each graph came from. A molecule RDKit cannot
+    # parse contributes no graph, and the histograms were written back in
+    # order, so every molecule after an unparseable one took its neighbour's
+    # features and the last rows came out all zero.
+    graph_rows = []
+
     for i, smiles in enumerate(smiles_list):
         mol = _safe_mol(smiles)
         if mol is None:
             continue
+        graph_rows.append(i)
         if mol.GetNumBonds() == 0:
             # Bond-less molecules (e.g. inorganic salts like [Cl-].[Cl-].[Sr+2] in
             # the FLuID hERG set) have no edges. Fall through and build an edge-less
@@ -4465,9 +4471,9 @@ def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
     sorted_labels = sorted(vocabulary)
     features = np.zeros((len(smiles_list), len(sorted_labels)), dtype=np.float32)
     
-    for i, histogram in enumerate(all_histograms):
+    for histogram, row in zip(all_histograms, graph_rows):
         for j, label in enumerate(sorted_labels):
-            features[i, j] = histogram.get(label, 0)
+            features[row, j] = histogram.get(label, 0)
 
     print(f"  Shape: {features.shape[0]} x {features.shape[1]}")
 
