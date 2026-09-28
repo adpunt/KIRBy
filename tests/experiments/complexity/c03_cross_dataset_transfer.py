@@ -302,8 +302,12 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                     print(f"    {_mname:<10} per-fold re-pick: no fold scored "
                           f"on both sides")
                 else:
-                    print(f"    {_mname:<10} per-fold re-pick: hybrid minus "
-                          f"best single rep = {_d:+.4f} over "
+                    # fold_reselection flips the sign for a lower-is-better
+                    # metric, so + always means the hybrid scored better. On
+                    # an RMSE dataset this is best single rep minus hybrid.
+                    print(f"    {_mname:<10} per-fold re-pick: hybrid better "
+                          f"than best single rep by {_d:+.4f} "
+                          f"{_blk.get('metric_name')} (+ = hybrid better) over "
                           f"{_hr[_mname].get('n_paired_folds', 0)} folds")
 
             # Best model on this dataset is now the argmax over the per-model
@@ -561,6 +565,22 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
             per_desc = {}
             print(f"    {model}  (n={len(model_ds)} datasets: "
                   f"{', '.join(model_ds)})")
+            # A Spearman coefficient against a winning budget that is the same
+            # on every dataset is undefined; scipy returns NaN and that NaN was
+            # written into the result file as if it were a measured value.
+            if np.std(m_budgets) < 1e-10:
+                print(f"      winning budget is {m_budgets[0]:g} features on "
+                      f"every dataset - no coefficient")
+                correlations_by_model[model] = {
+                    'n_datasets': len(model_ds), 'datasets': model_ds,
+                    'descriptors': {},
+                    'undefined_reason': (
+                        f'winning budget is {m_budgets[0]:g} features on every '
+                        f'dataset, so a rank correlation with it is undefined'),
+                }
+                continue
+            if m_dims is not None and np.std(m_dims) < 1e-10:
+                m_dims = None
             for key in complexity_keys:
                 values = np.array([float(valid[ds]['complexity'][key])
                                    for ds in model_ds])
@@ -661,15 +681,26 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                         print(f"    Dataset effect:     {ss_dataset/ss_total*100:5.1f}% of variance")
                         print(f"    Interaction effect: {ss_interaction/ss_total*100:5.1f}% of variance")
 
+                    else:
+                        print(f"\n  BUDGET VARIANCE DECOMPOSITION: undefined, "
+                              f"the winning budget is the same in every "
+                              f"(model, dataset) entry")
+                    # With zero total variance the shares are undefined, not
+                    # 0%: writing 0 read as "no model, dataset or interaction
+                    # effect" when there was nothing to decompose.
                     results['_budget_variance'] = {
                         'ss_model': float(ss_model),
                         'ss_dataset': float(ss_dataset),
                         'ss_interaction': float(ss_interaction),
                         'ss_total': float(ss_total),
-                        'pct_model': float(ss_model / ss_total * 100) if ss_total > 0 else 0,
-                        'pct_dataset': float(ss_dataset / ss_total * 100) if ss_total > 0 else 0,
-                        'pct_interaction': float(ss_interaction / ss_total * 100) if ss_total > 0 else 0,
+                        'pct_model': float(ss_model / ss_total * 100) if ss_total > 0 else None,
+                        'pct_dataset': float(ss_dataset / ss_total * 100) if ss_total > 0 else None,
+                        'pct_interaction': float(ss_interaction / ss_total * 100) if ss_total > 0 else None,
                     }
+                    if not ss_total > 0:
+                        results['_budget_variance']['undefined_reason'] = (
+                            'winning budget identical in every (model, dataset) '
+                            'entry; zero total variance')
 
                     # Does budget range differ across models?
                     print(f"\n  MODEL DIMENSION SENSITIVITY:")
