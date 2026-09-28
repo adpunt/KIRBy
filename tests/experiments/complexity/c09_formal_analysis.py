@@ -548,7 +548,12 @@ def _run_information_retention(data, budgets, dataset_name=None,
             X_full_s_val = _sc_full.transform(X_val_concat)
             X_hyb_s = _sc_hyb.transform(X_hybrid)
             X_hyb_s_val = _sc_hyb.transform(X_hybrid_val)
-            n_pcs = min(20, X_hybrid.shape[1], X_full_s.shape[0] - 1)
+            # The targets are the full pool's top 20 principal components at
+            # EVERY budget. This used to be capped by the hybrid's width, so at
+            # a budget of 10 only 10 components were targets and the ceiling
+            # of the sum fell with the budget. A ridge on 10 features can still
+            # be asked to predict 20 targets.
+            n_pcs = min(20, X_full_s.shape[1], X_full_s.shape[0] - 1)
             try:
                 pca_full = PCA(n_components=n_pcs)
                 X_full_pcs = pca_full.fit_transform(X_full_s)
