@@ -227,6 +227,12 @@ def _pool_hybrid_once(reps, labels, groups, *, downstream_model, budget,
     return _POOL_HYBRID_MEMO[key]
 
 
+# Threads per RandomForest. KIRBY_RF_JOBS in the local run, every core on the
+# server as before. Timing only: a forest with a fixed random_state fits the
+# same trees at any thread count.
+_RF_JOBS = int(os.environ.get('KIRBY_RF_JOBS') or -1)
+
+
 def _env_floats(var, default, local_default=None):
     """Comma-separated floats from the environment, else a default.
 
@@ -949,7 +955,7 @@ def _run_double_descent(data, config, dataset_name=None):
                 base_reps=reps, labels=labels, groups=groups,
                 models={
                     'rf': _RF15(n_estimators=100, max_depth=None,
-                                random_state=42, n_jobs=-1),
+                                random_state=42, n_jobs=_RF_JOBS),
                     'ridge': _Ridge15(alpha=1.0),
                 },
                 budgets=[_b],
@@ -1156,7 +1162,7 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: Ridge(alpha=1.0)
     else:
         make_model = lambda: RandomForestRegressor(
-            n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
+            n_estimators=100, max_depth=None, random_state=42, n_jobs=_RF_JOBS)
 
     if prefetched_search is not None:
         # c15c fast-search path: blueprint comes from the per-budget fast search.
@@ -1295,7 +1301,7 @@ def _eval_at_budget_pca(X_concat, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: Ridge(alpha=1.0)
     else:
         make_model = lambda: RandomForestRegressor(
-            n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
+            n_estimators=100, max_depth=None, random_state=42, n_jobs=_RF_JOBS)
 
     scores, widths = [], []
     for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels, mode=mode):
@@ -1335,7 +1341,7 @@ def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: Ridge(alpha=1.0)
     else:
         make_model = lambda: RandomForestRegressor(
-            n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
+            n_estimators=100, max_depth=None, random_state=42, n_jobs=_RF_JOBS)
 
     rng = np.random.RandomState(42)
     feat_idx = rng.choice(X_concat.shape[1], min(n_features, X_concat.shape[1]),
