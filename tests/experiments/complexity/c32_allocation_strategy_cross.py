@@ -546,7 +546,13 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
         per_fold_sel, origin_counts = [], {}
         for i, (tr, va) in enumerate(folds):
             origins, mats = [], []
-            for rn in pool_by_fold[i]:
+            # Glued in name order, as allocate_weighted_global does
+            # (rep_names = sorted(...)). The glue order decides which
+            # zero-gain features pad the final top-B, because np.argsort
+            # breaks exact ties by position, and which of two identical
+            # columns lightgbm splits on. Before 2026-09-28 c32 glued in this
+            # fold's rank order.
+            for rn in sorted(pool_by_fold[i]):
                 idx = topk_local(rn, i, slots_by_fold[i][rn])
                 if len(idx) == 0:
                     continue
