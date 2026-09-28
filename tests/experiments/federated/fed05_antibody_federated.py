@@ -555,6 +555,11 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             # Per-cluster importance profiles
             # Use lower budget for small clusters to avoid overfitting
             profiles = {}
+            # A cluster whose hybrid raised, or whose budget came out below 5
+            # features, used to vanish with nothing in the result saying so,
+            # and the stability was then computed over whichever clusters
+            # were left. Each one is now named with its reason.
+            profile_failures = {}
             # Every cluster here is a subset of ONE silo's rows, so the recipe
             # is that silo's own searched one, not the cross-silo fallback.
             c3_alloc, c3_imp, c3_int_eval = _silo_recipe(sname)
@@ -565,6 +570,9 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                           if aug_tr else None)
                 c_budget = min(30, len(c_idx) // 3)  # conservative for small clusters
                 if c_budget < 5:
+                    profile_failures[c_id] = (
+                        f'budget {c_budget} features from {len(c_idx)} rows, '
+                        f'below the 5-feature minimum')
                     continue
                 try:
                     # ⛔ THE SILO'S SEQUENCE-IDENTITY GROUPS, WHICH THIS CALL DID NOT PASS.
@@ -598,12 +606,15 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         augmentations=c_augs,
                         augmentation_strategy=s_aug_cond)
                     profiles[c_id] = extract_importance_profile(fi_c)
-                except Exception:
-                    pass
+                except Exception as e:
+                    profile_failures[c_id] = f'{type(e).__name__}: {e}'
+                    print(f"\n    cluster {c_id} hybrid FAILED: {e}", end=' ')
 
             mean_sp, pairwise = compare_importance_profiles(profiles)
             clustering_results[sname] = {
                 'n_sub_clusters': len(train_sub_indices),
+                'n_profiles_compared': len(profiles),
+                'profile_failures': profile_failures,
                 'profile_stability': mean_sp,
                 'profiles': profiles,
                 'cluster_sizes': {
