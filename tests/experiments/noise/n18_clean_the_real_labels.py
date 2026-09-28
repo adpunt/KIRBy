@@ -591,6 +591,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'every row says which axis it sits on under swept_axis and where '
             'under setting. swept_axis_per_cleanup lists both.'),
         'detectors': detectors,
+        # A cleanup that reads no suspicion score gives the same number under
+        # every detector, so it is scored and written under this one only.
+        'score_free_cleanups_scored_under_detector': {
+            c: detectors[0] for c in CLEANUPS if c in SCORE_FREE_CLEANUPS},
         'shuffle_seeds': shuffle_seeds,
         'shuffled_control_note': (
             'per_space[space]["shuffled_control"] holds every cleanup re-run '
@@ -1147,6 +1151,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             reads = sx.strategy_reads_setting(cleanup, setting)
                             if not (det_reads or reads):
                                 continue
+                            if cleanup in SCORE_FREE_CLEANUPS and not reads:
+                                # Reads neither the score nor the neighbours,
+                                # so every setting would write the default
+                                # path's number again under its own name.
+                                continue
                             _axis, _vals = setting_axis(cleanup, is_clf)
                             for slot, rate in enumerate(flag_rates):
                                 if slot >= len(_vals):
@@ -1451,11 +1460,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             # them swept nothing -- they get the strength axis
                             # instead, at the same three slots. See
                             # setting_axis.
+                            if (cleanup in SCORE_FREE_CLEANUPS
+                                    and detector != detectors[0]):
+                                # ⛔ DIRTY-LOCAL 2026-09-28. quantile_clip
+                                # reads no suspicion score, so under the second
+                                # detector it is the same cleaned training set
+                                # and the same cached fit: one number written
+                                # twice and counted as two settings, the defect
+                                # CLASSIFICATION_DUPLICATES fixes for
+                                # knn_smooth. Scored under the first detector
+                                # only; a fold where that detector failed has
+                                # no quantile_clip score.
+                                continue
                             _axis, _vals = setting_axis(cleanup, is_clf)
                             if slot >= len(_vals):
-                                # This cleanup has fewer settings than slots.
-                                # Only quantile_clip does: it reads neither
-                                # axis, so scoring it here would be the same
+                                # This cleanup has fewer settings than slots:
+                                # quantile_clip, huber_weight and js_shrink
+                                # each run at one setting, so scoring here
+                                # would be the same
                                 # column fitted again.
                                 continue
                             _strength = (None if _axis == 'flag_rate'
@@ -1533,6 +1555,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     row = {'no_cleaning_mean': float(np.nanmean(base))
                            if base.size else float('nan')}
                     for cleanup in CLEANUPS:
+                        if (cleanup in SCORE_FREE_CLEANUPS
+                                and detector != detectors[0]):
+                            # Scored under the first detector only (see the
+                            # fold loop). No row, rather than a row of zero
+                            # folds.
+                            continue
                         _axis, _vals = setting_axis(cleanup, is_clf)
                         _slot = flag_rates.index(rate)
                         if _slot >= len(_vals):
