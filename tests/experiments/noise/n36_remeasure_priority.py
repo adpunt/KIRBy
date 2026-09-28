@@ -241,8 +241,12 @@ def rank_candidates(rule, cand, *, disagreement, leverage, sparsity,
     disagreement  per training molecule, |start - oof|
     leverage      per training molecule, from neighbour_stats
     Ties are broken by a seeded draw so no rule inherits molecule order.
+    random_seed is an int, or a tuple of ints (run() passes a tuple for a
+    ranking rule's tie-break, so it is never one of the random draws).
     """
-    rng = np.random.default_rng(int(random_seed))
+    rng = np.random.default_rng(
+        [int(s) for s in random_seed] if isinstance(random_seed, (tuple, list))
+        else int(random_seed))
     tie = rng.random(len(cand))
     if rule == 'random':
         score = tie
@@ -637,10 +641,20 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                                 if sfx and rname not in extra_rules:
                                     extra_rules.append(rname)
                                 for r in draws:
+                                    # A ranking rule's tie-break must not be
+                                    # random draw 0's own order. leverage is
+                                    # an integer with many ties, and sharing
+                                    # draw 0's seed made its chosen molecules
+                                    # overlap draw 0's more than chance, which
+                                    # pulled that pair's difference toward 0.
+                                    # Fixed 2026-09-28.
+                                    rseed = (1000 * seed + 17 * fold_i + r
+                                             if rule == 'random' else
+                                             (1000 * seed + 17 * fold_i, 1))
                                     ranked = rank_candidates(
                                         rule, cand, disagreement=disagreement,
                                         leverage=lev, sparsity=spa,
-                                        random_seed=1000 * seed + 17 * fold_i + r)
+                                        random_seed=rseed)
                                     col = labels_after_budget(
                                         start_tr, spare_tr, ranked[:n_b])
                                     if per_m is None:
