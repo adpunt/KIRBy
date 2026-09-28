@@ -149,6 +149,30 @@ def _allocation_profiles(feature_infos):
     return out
 
 
+def _realised_profiles(feature_infos):
+    """How many features each representation actually contributed, per cluster.
+
+    feature_info['allocation'] is what the allocator asked for.
+    concatenate_features then stops each representation at its last feature
+    with positive importance (hybrid.py, 'THE BUDGET IS A MAXIMUM'), so the
+    count used can be smaller. On a synthetic 300-row cluster a fingerprint
+    was allocated 23 features and contributed 5. This is the count the
+    classifiers in Phase 4 actually see.
+    """
+    out = {}
+    for s, fi in feature_infos.items():
+        alloc = (fi or {}).get('allocation')
+        if not isinstance(alloc, dict) or not alloc:
+            continue
+        out[s] = {}
+        for r in alloc:
+            info = fi.get(r)
+            out[s][r] = (float(info.get('n_features',
+                                        len(info.get('selected_indices', []))))
+                         if isinstance(info, dict) else 0.0)
+    return out
+
+
 def _run_one(data, config, output_dir, dataset_name, **kwargs):
     """Fed04: Cluster-aware importance."""
     print("\n" + "=" * 70)
@@ -372,6 +396,14 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 alloc_profiles)
             null_alloc_spearman, null_alloc_pairwise = compare_importance_profiles(
                 null_alloc_profiles)
+            # The same again on the features each representation actually
+            # contributed, which can be fewer than it was allocated.
+            real_profiles = _realised_profiles(feature_infos)
+            null_real_profiles = _realised_profiles(null_feature_infos)
+            real_spearman, real_pairwise = compare_importance_profiles(
+                real_profiles)
+            null_real_spearman, null_real_pairwise = compare_importance_profiles(
+                null_real_profiles)
             _as_str = 'n/a' if alloc_spearman is None else f"{alloc_spearman:.3f}"
             _nas_str = ('n/a' if null_alloc_spearman is None
                         else f"{null_alloc_spearman:.3f}")
@@ -576,6 +608,20 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     'mean_spearman': alloc_spearman,
                     'pairwise': alloc_pairwise,
                     'allocations': alloc_profiles,
+                    'what': 'features the allocator asked for per representation',
+                }),
+                'realised_stability': convert_numpy({
+                    'mean_spearman': real_spearman,
+                    'pairwise': real_pairwise,
+                    'counts': real_profiles,
+                    'what': ('features each representation actually '
+                             'contributed; can be fewer than allocated'),
+                }),
+                'realised_stability_null': convert_numpy({
+                    'mean_spearman': null_real_spearman,
+                    'pairwise': null_real_pairwise,
+                    'counts': null_real_profiles,
+                    'partition': 'random, same cluster sizes as K-Means',
                 }),
                 'allocation_stability_null': convert_numpy({
                     'mean_spearman': null_alloc_spearman,
@@ -658,6 +704,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         return float(np.mean(vals)) if vals else None
     mean_alloc_stability = _mean_defined('allocation_stability')
     mean_alloc_stability_null = _mean_defined('allocation_stability_null')
+    mean_real_stability = _mean_defined('realised_stability')
+    mean_real_stability_null = _mean_defined('realised_stability_null')
 
     # ── Which features this dataset prefers, across every fold ───────────
     # Each fold x cluster produced one selection of BUDGET features. Counting
@@ -792,6 +840,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             'mean_profile_stability_null': mean_stability_null,
             'mean_allocation_stability': mean_alloc_stability,
             'mean_allocation_stability_null': mean_alloc_stability_null,
+            'mean_realised_stability': mean_real_stability,
+            'mean_realised_stability_null': mean_real_stability_null,
             'smooth_factor_stability': convert_numpy(smooth_factor_stability),
             'n_fallback': convert_numpy(n_fallback_agg),
             'feature_preference': convert_numpy(dataset_feature_preference),
@@ -813,6 +863,9 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Allocation stability (features per representation), mean "
           f"pairwise Spearman: {_fmt(mean_alloc_stability)}; random "
           f"partition: {_fmt(mean_alloc_stability_null)}")
+    print(f"  Features each representation actually contributed, mean "
+          f"pairwise Spearman: {_fmt(mean_real_stability)}; random "
+          f"partition: {_fmt(mean_real_stability_null)}")
     print(f"  MCC, per-cluster features + per-cluster rows: "
           f"{cond_agg['mcc']['mean']:.3f} ± {cond_agg['mcc']['std']:.3f}")
     print(f"  MCC, per-cluster features + ALL training rows: "
