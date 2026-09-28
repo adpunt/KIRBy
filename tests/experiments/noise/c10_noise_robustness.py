@@ -986,16 +986,17 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             for level in [0.0] + [v for v in _levels_stability if v > 0]:
                 if level not in features_by_level or not features_by_level[level]:
                     continue
-                # Average feature count per rep across folds
-                rep_counts = {}
-                for fold_feats in features_by_level[level]:
-                    fold_reps = set(r for r, _ in fold_feats)
-                    for rep_name in fold_reps:
-                        rep_counts.setdefault(rep_name, [])
-                        count = sum(1 for r, _ in fold_feats if r == rep_name)
-                        rep_counts[rep_name].append(count)
+                # Mean feature count per rep over EVERY fold at this level, a fold
+                # that did not keep the rep counting 0. It used to average only
+                # over the folds that kept it, which overstated a rep one fold
+                # kept; phase 3 now re-ranks representations per fold, so the kept
+                # set can differ by fold. "k/n folds" says how many kept it.
+                _fl = features_by_level[level]
+                _all_reps = sorted({r for ff in _fl for r, _ in ff})
                 counts_str = ", ".join(
-                    f"{r}={np.mean(c):.0f}" for r, c in sorted(rep_counts.items()))
+                    f"{r}={np.mean([sum(1 for q, _ in ff if q == r) for ff in _fl]):.0f}"
+                    f" ({sum(1 for ff in _fl if any(q == r for q, _ in ff))}/{len(_fl)} folds)"
+                    for r in _all_reps)
                 print(f"      level={level:g}: {counts_str}")
 
     # 2026-09-25: c10 finds no neighbours and changes no training data, so no
