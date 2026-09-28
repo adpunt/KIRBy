@@ -532,7 +532,13 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         rep_r2[rn] = (float(np.mean(r2pf)), r2pf)
         rep_oof[rn] = oof
 
-    ranked = sorted(rep_native, key=lambda r: gs * rep_native[r][0], reverse=True)
+    # A NaN mean (spearman on constant predictions in one fold) compares False
+    # both ways, so sorted() would leave it wherever it fell and it could become
+    # the target. It ranks last instead, as _tp_key does for the second baseline.
+    def _rank_key(r):
+        v = gs * rep_native[r][0]
+        return v if np.isfinite(v) else -np.inf
+    ranked = sorted(rep_native, key=_rank_key, reverse=True)
     # One candidate pool per size in POOLS; the smaller pool is a prefix of the
     # larger, so everything computed per rep is computed once over the widest.
     #
