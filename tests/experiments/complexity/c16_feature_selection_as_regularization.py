@@ -559,10 +559,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Each blueprint's allocation method, importance method and internal
     # evaluator come from a search ranked over every row of the dataset,
     # including the rows each fold below validates on. How much budget each
-    # representation gets is NOT decided that way any more: build_fold_hybrid
-    # no longer falls back to the blueprint's whole-dataset representation
-    # scores, so every fold re-scores the representations on its own training
-    # rows. results['recipe_selected_on'] below carries what is left.
+    # representation gets, and which rep_count representations a recipe keeps,
+    # are NOT decided that way: _evaluate_cell hands build_fold_hybrid this
+    # fold's own representation scores. build_fold_hybrid itself STILL falls
+    # back to the blueprint's whole-dataset scores for the rep_count choice
+    # when a caller passes none (_shared.py, the rep_count block), so that
+    # argument must never be dropped here. results['recipe_selected_on'] below
+    # carries what is left.
     blueprints = {fam: {} for fam in families}          # {family: {budget: bp}}
     pool_lookup_errors = {fam: {} for fam in families}  # {family: {budget: str}}
     for fam_name in families:
@@ -898,10 +901,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              for _, pval, _ in variants]
                 full_gaps = [(p, g) for p, g in full_gaps if not np.isnan(g)]
                 if len(full_gaps) >= 2:
-                    # Simple interpolation: find pval where gap ≈ hybrid_gap
+                    # NOT an interpolation: the answer is whichever of the
+                    # swept settings has the gap nearest hybrid_gap, so it can
+                    # only ever be one of the six values in the sweep.
                     pvals = np.array([p for p, _ in full_gaps])
                     gaps = np.array([g for _, g in full_gaps])
-                    # Find nearest gap
                     idx = np.argmin(np.abs(gaps - hybrid_gap))
                     l2_equivalence[budget] = {
                         'hybrid_gap': hybrid_gap,
