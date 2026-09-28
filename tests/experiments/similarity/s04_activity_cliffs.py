@@ -239,6 +239,55 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     fold_splits = nested_cv_outer_folds(reps, labels, groups, n_folds,
                                         _FOLD_SEARCH_SEED, task_type)
 
+    # --- Held-out cliff molecules whose cliff partner is in the training rows ---
+    # A molecule is a cliff when ANY molecule in the dataset is its cliff
+    # partner. Under a scaffold split that partner is often held out in the same
+    # fold, so no model ever sees it. Measured 2026-09-28 at 3 folds: 74 of 211
+    # held-out cliff molecules on herg_ki and 106 of 324 on caco2 had no partner
+    # in their fold's training rows. Those molecules are scored as cliffs but
+    # nothing about the cliff can reach the prediction. This records how many
+    # there are and scores the other subset separately. It changes no
+    # existing number.
+    from experiments.similarity.similarity_helpers import (
+        _pairwise_delta_matrix as _pdm)
+    _cliff_pairs = ((np.asarray(cliff_sim) >= cliff_cutoff)
+                    & (_pdm(np.asarray(labels), is_clf=is_clf)
+                       > cliff_info['activity_threshold']))
+    np.fill_diagonal(_cliff_pairs, False)
+    # {fold_i: positions WITHIN val_idx of cliff molecules with a partner in train}
+    _cliff_seen_pos = {}
+    _split_summary = []
+    for _fi_cs, (_tr_cs, _va_cs) in enumerate(fold_splits):
+        _vc = np.array([i for i, vi in enumerate(_va_cs) if vi in cliff_indices],
+                       dtype=int)
+        if len(_vc):
+            _seen = _cliff_pairs[np.ix_(_va_cs[_vc], _tr_cs)].any(axis=1)
+        else:
+            _seen = np.zeros(0, dtype=bool)
+        _cliff_seen_pos[_fi_cs] = _vc[_seen]
+        _split_summary.append({
+            'fold': _fi_cs,
+            'n_cliff_held_out': int(len(_vc)),
+            'n_cliff_held_out_partner_in_train': int(_seen.sum()),
+            'n_cliff_held_out_partner_only_held_out': int((~_seen).sum()),
+        })
+    _fold_of = np.full(len(labels), -1, dtype=int)
+    for _fi_cs, (_tr_cs, _va_cs) in enumerate(fold_splits):
+        _fold_of[_va_cs] = _fi_cs
+    _I, _J = np.where(np.triu(_cliff_pairs, 1))
+    results['cliff_partner_split'] = {
+        'n_cliff_pairs': int(len(_I)),
+        'n_cliff_pairs_both_in_one_held_out_fold': int(
+            (_fold_of[_I] == _fold_of[_J]).sum()),
+        'by_fold': _split_summary,
+        'note': ('a cliff molecule is one with a cliff partner anywhere in '
+                 'the dataset; partner_in_train counts the held-out cliff '
+                 'molecules whose partner sits in that fold\'s training rows, '
+                 'the only ones whose cliff a model can meet. Every arm also '
+                 'carries score_cliff_partner_in_train over that subset.'),
+    }
+    del _cliff_pairs
+
     # --- Per-fold pool read (2026-09-12, owner's decision) -------------------
     # DECIDED: s04 stops calling get_fold_best_search. It reads the pool
     # instead -- the best single representation plus the top three hybrids for
@@ -406,6 +455,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # and score_noncliff can rest on different numbers of folds, and
         # neither count was written out before.
         n_cliff_rows_pos, n_noncliff_rows_pos = [], []
+        fold_cliff_seen, fold_cliff_seen_pos = [], []
 
         for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -423,6 +473,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_scores_pos.append(float('nan'))
                 fold_cliff_pos.append(float('nan'))
                 fold_noncliff_pos.append(float('nan'))
+                fold_cliff_seen_pos.append(float('nan'))
 
             try:
                 X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train, fold_i)
@@ -475,6 +526,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         y_val[val_noncliff], y_pred[val_noncliff]))))
             else:
                 fold_noncliff_pos.append(float('nan'))
+            _vcs = _cliff_seen_pos.get(fold_i, np.zeros(0, dtype=int))
+            if len(_vcs) > 1:
+                _score_seen = float(metric_fn(y_val[_vcs], y_pred[_vcs]))
+                fold_cliff_seen.append(_score_seen)
+                fold_cliff_seen_pos.append(_score_seen)
+            else:
+                fold_cliff_seen_pos.append(float('nan'))
 
         if not fold_all:
             return None
@@ -495,6 +553,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_noncliff_rows_by_fold': n_noncliff_rows_pos,
             'n_folds_scored_cliff': int(len(fold_cliff)),
             'n_folds_scored_noncliff': int(len(fold_noncliff)),
+            # The cliff rows whose cliff partner is in the fold's training
+            # rows; see results['cliff_partner_split'].
+            'score_cliff_partner_in_train': (float(np.mean(fold_cliff_seen))
+                                             if fold_cliff_seen
+                                             else float('nan')),
+            'fold_scores_cliff_partner_in_train': [
+                float(v) for v in fold_cliff_seen_pos],
         }
         if not is_clf:
             out['rmse_all'] = float(np.mean(fold_rmse_all))
@@ -839,6 +904,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # where the held-out fold carried 1 or fewer rows of the stratum.
         fold_cliff_pos, fold_noncliff_pos = [], []
         n_cliff_rows_pos, n_noncliff_rows_pos = [], []
+        fold_cliff_seen, fold_cliff_seen_pos = [], []
         for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
             _rep = rf_rep_by_fold.get(fold_i) or best_rep_name
@@ -873,6 +939,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_noncliff_pos.append(_score_noncliff)
             else:
                 fold_noncliff_pos.append(float('nan'))
+            _vcs = _cliff_seen_pos.get(fold_i, np.zeros(0, dtype=int))
+            if len(_vcs) > 1:
+                _score_seen = float(metric_fn(y_val[_vcs], y_pred[_vcs]))
+                fold_cliff_seen.append(_score_seen)
+                fold_cliff_seen_pos.append(_score_seen)
+            else:
+                fold_cliff_seen_pos.append(float('nan'))
 
         results['rf_baseline'] = {
             'rep': best_rep_name,
@@ -892,6 +965,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_noncliff_rows_by_fold': n_noncliff_rows_pos,
             'n_folds_scored_cliff': int(len(fold_cliff)),
             'n_folds_scored_noncliff': int(len(fold_noncliff)),
+            'score_cliff_partner_in_train': (float(np.mean(fold_cliff_seen))
+                                             if fold_cliff_seen
+                                             else float('nan')),
+            'fold_scores_cliff_partner_in_train': [
+                float(v) for v in fold_cliff_seen_pos],
         }
         # RF is a separate downstream model — record its per-fold single-rep
         # baseline under model=rf. No RF hybrid candidate exists here, so the
