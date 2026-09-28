@@ -647,12 +647,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         _ho = _fold_heldout_rep_scores(
                             train_reps, y_train, _g_tr, bp, metric_fn)
                         _rank_row['heldout_scores'] = _ho
-                        _rc = getattr(bp, 'rep_count', None)
-                        # Passed only when rep_count cuts, so a fold that keeps
-                        # every representation builds exactly as before.
-                        _alloc = (_ho if (_ho is not None and _rc is not None
-                                          and int(_rc) < len(train_reps))
-                                  else None)
+                        # Passed on every fold since 2026-09-28 (second pass).
+                        # They are the numbers create_hybrid computes for itself
+                        # (same evaluator, carve, clipping, metric, direction),
+                        # checked equal on synthetic data with 5 and 6
+                        # representations, so a fold that keeps every
+                        # representation builds the same features and skips one
+                        # evaluator fit per representation. When rep_count cuts
+                        # they also pick which representations are kept.
+                        _alloc = _ho
                         X_tr_h, X_va_h, _fi = build_fold_hybrid(
                             train_reps, val_reps_fold, y_train, bp,
                             augmentations_train=None,
