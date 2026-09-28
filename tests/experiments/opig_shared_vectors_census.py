@@ -195,11 +195,18 @@ def stereo_stripped_keys(data, domain):
         return None
     from rdkit import Chem, RDLogger
     RDLogger.DisableLog('rdApp.*')
+    # ⛔ isomericSmiles=False IS NOT "STEREO REMOVED". Fixed 2026-09-28. It
+    # also drops isotope labels, so a deuterated drug and its parent were filed
+    # as stereo-only. RemoveStereochemistry takes the stereo out and leaves the
+    # isotopes in the canonical string.
     keys = []
     for s in smiles:
         m = Chem.MolFromSmiles(s) if s else None
-        keys.append(Chem.MolToSmiles(m, isomericSmiles=False)
-                    if m is not None else f'UNPARSED:{s}')
+        if m is None:
+            keys.append(f'UNPARSED:{s}')
+            continue
+        Chem.RemoveStereochemistry(m)
+        keys.append(Chem.MolToSmiles(m))
     return np.array(keys, dtype=object)
 
 
