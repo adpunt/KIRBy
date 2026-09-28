@@ -1028,8 +1028,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _heldout_scored = {k: _heldout(v) for k, v in budget_block.items()}
             _heldout_scored = {k: v for k, v in _heldout_scored.items()
                                if v is not None}
+            # Finite only, for the same reason as _heldout above: max() over a
+            # dict holding a NaN picks by dict order. (dirty-local 2026-09-28)
             _sac_scored = {k: v['best_sac'] for k, v in budget_block.items()
-                           if isinstance(v.get('best_sac'), (int, float))}
+                           if isinstance(v.get('best_sac'), (int, float))
+                           and np.isfinite(v['best_sac'])}
             if _heldout_scored:
                 _win = max(_heldout_scored, key=_heldout_scored.get)
                 _rule = ('higher held-out delta, both arms re-picked on the '
