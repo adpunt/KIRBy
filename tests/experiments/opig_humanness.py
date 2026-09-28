@@ -191,9 +191,11 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
     labels = np.asarray(labels, dtype=np.int64)
 
     # A non-finite entry is not a score problem, it is a representation
-    # problem, and it reaches the mean silently: StandardScaler propagates it,
-    # LightGBM accepts it as a missing value and still returns a number, while
-    # RandomForest and SVC raise and lose the fold. Said out loud here so a
+    # problem, and it reaches the mean silently: StandardScaler propagates a
+    # NaN (and raises on an inf, which the caller prints as SKIPPED), LightGBM
+    # and RandomForest (scikit-learn 1.6.1, checked 2026-09-28) accept a NaN as
+    # a missing value and still return a number, while SVC raises and loses
+    # the fold. Said out loud here so a
     # degraded row cannot be read as a weak representation.
     _n_bad = int((~np.isfinite(X)).sum())
     if _n_bad:
@@ -229,7 +231,18 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
                   f"{type(e).__name__}: {e}]", flush=True)
             continue
 
-        preds = m.predict(X_val)
+        try:
+            preds = m.predict(X_val)
+        except Exception as e:
+            # predict sat outside every try. SVC refuses a NaN in the held-out
+            # rows, so the ValueError left this function and the caller printed
+            # the whole representation-and-model pair as SKIPPED, throwing away
+            # the folds that had scored; any other exception type from predict
+            # reached main() and failed the whole dataset. Now it loses this
+            # fold only, like a failed fit, and n_folds_scored says so.
+            print(f"      [fold predict failed: {type(model).__name__} "
+                  f"{type(e).__name__}: {e}]", flush=True)
+            continue
         acc_scores.append(accuracy_score(y_val, preds))
         f1_scores.append(f1_score(y_val, preds, average='weighted'))
         bacc_scores.append(balanced_accuracy_score(y_val, preds))
