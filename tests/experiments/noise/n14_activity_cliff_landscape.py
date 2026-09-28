@@ -277,6 +277,85 @@ def _geometry(adj):
     return out, cliff_mask
 
 
+# Chance baseline for every cliff count (2026-09-28, review 5 of
+# n14__herg_ki). A cliff count alone cannot say whether similar molecules
+# differ by 2 log units more or less often than random molecules do. On
+# herg_ki the 10,809 pairs with Tanimoto at least 0.55 hold 106 cliff pairs;
+# the same pairs with the labels permuted across molecules hold a median of
+# 1,270. So the bare 106 reads as "cliffs are common" when it means similar
+# molecules differ far less often than chance. Written beside each count, never
+# in its place. Gated on KIRBY_NOISE_CONTROLS like the suite's other controls.
+CHANCE_SHUFFLES = 200
+CHANCE_SEED = 0
+
+
+def _unique_pairs(rows, cols, n, same=None):
+    """Unordered (i, j) pairs, i < j, each once, no self pair and no pair of
+    rows that are the same molecule."""
+    rows = np.asarray(rows, dtype=np.int64).ravel()
+    cols = np.asarray(cols, dtype=np.int64).ravel()
+    keep = rows != cols
+    a = np.minimum(rows[keep], cols[keep])
+    b = np.maximum(rows[keep], cols[keep])
+    key = np.unique(a * n + b)
+    a, b = key // n, key % n
+    if same is not None and a.size:
+        ok = ~same[a, b]
+        a, b = a[ok], b[ok]
+    return a, b
+
+
+def _chance_baseline(a, b, labels, n_shuffles=CHANCE_SHUFFLES,
+                     seed=CHANCE_SEED):
+    """Cliff pairs among the candidate pairs (a[t], b[t]) with the real labels
+    and with the labels permuted across all molecules, n_shuffles times.
+
+    The candidate pairs are fixed (the similar pairs, or the k-nearest pairs);
+    only which label sits on which molecule changes. A count below the
+    shuffled ones means similar molecules differ by more than the threshold
+    less often than random molecules do.
+    """
+    labels = np.asarray(labels, dtype=float)
+    cut = AC_POTENCY_THRESHOLD + GAP_TOLERANCE
+    n_cand = int(len(a))
+    observed = int((np.abs(labels[a] - labels[b]) > cut).sum()) if n_cand else 0
+    rng = np.random.default_rng(seed)
+    sh = np.empty(n_shuffles, dtype=np.int64)
+    for s in range(n_shuffles):
+        p = labels[rng.permutation(len(labels))]
+        sh[s] = int((np.abs(p[a] - p[b]) > cut).sum()) if n_cand else 0
+    med = float(np.median(sh))
+    return {
+        'n_candidate_pairs': n_cand,
+        'cliff_pairs': observed,
+        'cliff_share_of_candidate_pairs': (observed / n_cand) if n_cand else None,
+        'shuffled_cliff_pairs_median': med,
+        'shuffled_cliff_pairs_p05': float(np.percentile(sh, 5)),
+        'shuffled_cliff_pairs_p95': float(np.percentile(sh, 95)),
+        'cliff_pairs_over_shuffled_median': (observed / med) if med > 0 else None,
+        'share_of_shuffles_at_or_below_observed': float((sh <= observed).mean()),
+        'n_shuffles': int(n_shuffles),
+        'seed': int(seed),
+        'what_is_shuffled': ('labels permuted across all molecules; the '
+                             'candidate pairs are unchanged'),
+    }
+
+
+def _share_all_pairs_over_threshold(labels):
+    """Share of all unordered molecule pairs whose labels differ by more than
+    the threshold: the cliff rate if similarity told nothing about the label.
+    Sorted counting, so no n x n matrix."""
+    y = np.sort(np.asarray(labels, dtype=float))
+    n = len(y)
+    if n < 2:
+        return None
+    cut = AC_POTENCY_THRESHOLD + GAP_TOLERANCE
+    # for each i, molecules j > i (in sorted order) with y[j] - y[i] > cut
+    j0 = np.searchsorted(y, y + cut, side='right')
+    over = int(np.maximum(n - j0, 0).sum())
+    return over / (n * (n - 1) / 2)
+
+
 def _same_molecule(data, n):
     """(n, n) bool, True where two rows are the same molecule, or None.
 
@@ -372,6 +451,12 @@ def _build_ac_reference(data, dataset_name, labels):
         'similarity_cutoff': float(sim_cutoff),
         'similar_percentile': None,
     })
+    from experiments.noise.controls import controls_enabled
+    if controls_enabled():
+        _ci, _cj = np.nonzero(np.triu(
+            (sim >= ECFP4_SIM_THRESHOLD) & (sim > 0), k=1))
+        _a, _b = _unique_pairs(_ci, _cj, n, same)
+        provenance['chance_baseline'] = _chance_baseline(_a, _b, labels)
     if adj.sum() == 0:
         adj_p, cut_p = _cliff_mask_from_similarity(
             sim, labels, ECFP4_SIM_THRESHOLD, AC_POTENCY_THRESHOLD,
@@ -458,6 +543,8 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
     # is in the fingerprint only where such rows exist, so a dataset with one
     # row per molecule, whose graphs this cannot change, keeps its checkpoint.
     same = _same_molecule(data, n)
+    from experiments.noise.controls import controls_enabled
+    _chance = bool(controls_enabled())
     ckpt = FoldCheckpoint(output_dir, 'n14_activity_cliff_landscape',
                           dataset_name, tag='geometry', fingerprint={
                               'input': input_fingerprint(data, config),
@@ -465,7 +552,12 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
                               'gap_tolerance': GAP_TOLERANCE,
                               'base': base,
                               **({'same_molecule_excluded': True}
-                                 if same is not None else {})})
+                                 if same is not None else {}),
+                              # A stored graph without the chance baseline is
+                              # not served to a run that asks for one.
+                              **({'chance_baseline': [CHANCE_SHUFFLES,
+                                                      CHANCE_SEED]}
+                                 if _chance else {})})
     nb = fold_neighbours(dataset_name, settings, spaces, None, labels,
                          smiles_train=data.get('smiles'), is_clf=False)
     out = {}
@@ -487,7 +579,12 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
                 adj |= adj.T
                 np.fill_diagonal(adj, False)
                 adj, _ = _drop_same_molecule(adj, same)
-                return _geometry(adj)[0]
+                geo = _geometry(adj)[0]
+                if _chance:
+                    # candidate pairs: every distinct k-nearest pair
+                    _a, _b = _unique_pairs(rows, cols, n, same)
+                    geo['chance_baseline'] = _chance_baseline(_a, _b, labels)
+                return geo
             out.setdefault(st.name, {})[str(k)] = ckpt.cached(
                 [st.name, int(k)], _geo)
     meta = similarity_record(
@@ -540,6 +637,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"{provenance['potency_criterion']}")
     print(f"  Cliffs: {n_cliffs} compounds ({geometry['pct_cliff_compounds']:.1f}%), "
           f"{geometry['n_cliff_pairs']} pairs, lean={geometry['geometry_lean']}")
+    _cb = provenance.get('chance_baseline')
+    if _cb:
+        print(f"  Chance baseline: {_cb['cliff_pairs']} cliff pairs among "
+              f"{_cb['n_candidate_pairs']} similar pairs; with the labels "
+              f"shuffled {_cb['n_shuffles']} times the median is "
+              f"{_cb['shuffled_cliff_pairs_median']:.0f} "
+              f"({_cb['shuffled_cliff_pairs_p05']:.0f} to "
+              f"{_cb['shuffled_cliff_pairs_p95']:.0f})")
 
     # Label-spread context so a reader can judge whether the absolute 2-log
     # threshold is meaningful for THIS endpoint (it is literal 100-fold only for
@@ -551,6 +656,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'label_range': [float(labels.min()), float(labels.max())],
         'potency_threshold_in_mad_units': (
             float(AC_POTENCY_THRESHOLD / label_mad) if label_mad > 0 else None),
+        # The cliff rate if similarity said nothing about the label: the share
+        # of ALL molecule pairs whose labels differ by more than the threshold
+        # (2026-09-28). 0 means no cliff can exist under this threshold.
+        'share_of_all_pairs_over_threshold': _share_all_pairs_over_threshold(
+            labels),
         'note': ('the 2-log threshold is literal 100-fold potency only for '
                  'genuine activity endpoints (pIC50/pKi/pKd); for other '
                  'regression targets it is a fixed 2-unit label gap.'),
