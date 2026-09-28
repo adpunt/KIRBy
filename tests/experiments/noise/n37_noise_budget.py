@@ -628,6 +628,14 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         s2_base = (g_base or {}).get('intercept', float('nan'))
         # gamma_1: the upper bound under independent errors (module docstring, 1).
         s2_k1 = float(((g_base or {}).get('gamma') or [float('nan')])[0])
+        # SIMEX scales its extra noise from s2_base. An intercept that is
+        # missing or not positive (a straight line carried to zero distance
+        # can land below zero) gives no noise to add, so SIMEX is not run in
+        # this fold. Written here so the fold mean says which folds it has.
+        if run_simex and not (np.isfinite(s2_base) and s2_base > 0):
+            frec['simex_skipped'] = (
+                f'reference Gamma intercept {s2_base!r} is not a positive '
+                f'number; SIMEX was not run in this fold')
 
         # The check: the reference neighbours are fixed, so the intercept
         # should rise by the realised injected variance.
@@ -857,7 +865,11 @@ def _vals(xs):
 def _summarise(per_fold, oof_block):
     """Per space and model: the fold values side by side, and their mean."""
     out = {'gamma_intercept': {}, 'noise_share_of_mse': {},
-           'noise_share_of_mse_k1_upper_bound': {}, 'simex': {}, 'tails': {}}
+           'noise_share_of_mse_k1_upper_bound': {}, 'simex': {}, 'tails': {},
+           # Folds whose reference intercept was not positive: SIMEX did not
+           # run there, so its fold means are over the other folds.
+           'simex_folds_skipped': [f.get('fold') for f in per_fold
+                                   if f.get('simex_skipped')]}
     for f in per_fold:
         for sp, g in (f.get('gamma') or {}).items():
             if isinstance(g, dict) and 'intercept' in g:
