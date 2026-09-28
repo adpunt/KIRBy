@@ -3210,7 +3210,15 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
     # exactly one of ten (onehot, 5600 features) crosses the line. And a
     # threshold never reached inside those 500 components was reported AS 500,
     # which reads as a measurement.
-    results['estimator'] = 'truncated_svd_500' if d > 2000 else 'exact_pca'
+    #
+    # 2026-09-28: the exact PCA is used whenever EITHER side is at most 2000,
+    # not only the feature side. Its cost is set by min(rows, features), so a
+    # 2,048-bit fingerprint on c01's 2,000-row subsample is cheap to do exactly.
+    # Before this every 2,048-bit fingerprint (ecfp4, avalon, atom_pair) took
+    # the truncated estimator while the 1,613 mordred descriptors took the
+    # exact one, on the same rows.
+    _truncate = (d > 2000 and n > 2000)
+    results['estimator'] = 'truncated_svd_500' if _truncate else 'exact_pca'
     results['n_features'] = int(d)
     if d > 2000:
         from sklearn.decomposition import TruncatedSVD
@@ -3238,7 +3246,7 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
 
     X_for_mle = X_scaled
     results['mle_on'] = 'full matrix'
-    if d > 2000:
+    if _truncate:
         from sklearn.decomposition import TruncatedSVD
         _mle_comp = min(200, n - 1)
         results['mle_on'] = f'truncated_svd {_mle_comp} components'
