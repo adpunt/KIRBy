@@ -235,8 +235,22 @@ def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False,
     nn = make_nearest_neighbors(n_neighbors=k_actual + 1)  # +1 because query includes self
     nn.fit(X_weighted)
     _, indices = nn.kneighbors(X_weighted)
-    # Exclude self (first neighbor)
-    neighbor_idx = indices[:, 1:]
+    # DIRTY-LOCAL 2026-09-28: exclude the molecule itself BY INDEX. Dropping
+    # column 0 assumed the first neighbour returned is the molecule itself,
+    # which fails when another training molecule has the identical row in
+    # this weighted space: at distance 0 either can come first, and then the
+    # molecule's own label sits in the mean it is compared with while one
+    # real neighbour is dropped. On herg_ki, 29 to 38 of about 941 training
+    # rows per fold share their ecfp4 row with another molecule before any
+    # importance weighting; features with zero importance only add ties.
+    # Same fix as c19 (cbcd07e).
+    own = indices == np.arange(len(indices))[:, None]
+    has_own = own.any(axis=1)
+    # A row whose own index did not come back at all (more than k_actual
+    # other rows tied at distance 0) keeps its first k_actual neighbours.
+    drop = own.copy()
+    drop[~has_own, -1] = True
+    neighbor_idx = indices[~drop].reshape(len(indices), k_actual)
     return reliability_from_neighbours(y, neighbor_idx, is_clf=is_clf,
                                        strength=strength)
 
@@ -276,6 +290,42 @@ def reliability_from_neighbours(y, neighbor_idx, is_clf=False, strength=None):
     return weights_from_scores(
         deviation,
         strength=DEFAULT_STRENGTH if strength is None else float(strength))
+
+
+def search_fold_reps(bp, fold_idx, n_folds, pool):
+    """The representations the stored search built this outer fold's hybrid on.
+
+    DIRTY-LOCAL 2026-09-28. A recipe with rep_count N below the pool size is
+    built on the N representations that fold's own training rows rank highest
+    (find_best_hybrid.py:4939-4960). build_fold_hybrid, handed the whole pool
+    and no per-fold scores, ranks by Blueprint.rep_scores instead
+    (_shared.py:5270-5300): one cross-validated score per representation over
+    EVERY molecule, the held-out fold's included. On herg_ki that put ecfp4 in
+    every fold's hybrid, while the search used ecfp4 in none, and n02's rf
+    hybrid scored 0.6152 RMSE against the search's 0.6058 on the same folds.
+
+    Blueprint.allocation_per_fold records the representations each fold gave
+    features to, chosen on that fold's training rows alone. Returns
+    (names, source); names is None when the recipe does not cut the pool or
+    carries no per-fold record, and build_fold_hybrid then does what it did.
+    """
+    rc = getattr(bp, 'rep_count', None)
+    if rc is None or int(rc) >= len(pool):
+        return None, 'whole_pool'
+    apf = getattr(bp, 'allocation_per_fold', None)
+    if not apf:
+        return None, 'blueprint.rep_scores (no allocation_per_fold on the recipe)'
+    bp_folds = getattr(bp, 'n_folds', None)
+    if bp_folds is not None and int(bp_folds) != int(n_folds):
+        return None, (f'blueprint.rep_scores (recipe searched on {bp_folds} '
+                      f'folds, n02 runs {n_folds})')
+    per = apf.get(fold_idx, apf.get(str(fold_idx)))
+    if not per:
+        return None, f'blueprint.rep_scores (no allocation for fold {fold_idx})'
+    names = [r for r, n in per.items() if n and r in pool]
+    if not names:
+        return None, f'blueprint.rep_scores (fold {fold_idx} allocation empty)'
+    return names, 'allocation_per_fold'
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -387,8 +437,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                               'strength': DEFAULT_STRENGTH,
                               # DIRTY-LOCAL 2026-09-28: a fold stored before
                               # the classification weights were divided by
-                              # their mean is not read back.
-                              'weight_rule': 'clf_mean_1'})
+                              # their mean is not read back. '+self_by_index':
+                              # nor one whose neighbours dropped column 0
+                              # instead of the molecule's own index.
+                              'weight_rule': 'clf_mean_1+self_by_index'})
     sweep_ctx = sweep_context(
         experiment='n02_sample_weighting', dataset_name=dataset_name,
         sink=sink, settings=sim_settings,
@@ -901,11 +953,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reliability_stats = {m: [] for m in importance_methods}
             ca_scores = []
             n_features_list = []
+            fold_reps_used = {}
 
             for _fi, (train_idx, val_idx) in enumerate(cv_split(
                     groups, n_folds, sample_X, labels, mode=mode)):
-                train_reps = {k: v[train_idx] for k, v in reps.items()}
-                val_reps = {k: v[val_idx] for k, v in reps.items()}
+                # DIRTY-LOCAL 2026-09-28: the fold's own representations, as
+                # the search chose them on this fold's training rows
+                # (search_fold_reps). Before this, the rebuild ranked by a
+                # whole-dataset score that saw this fold's held-out labels.
+                _keep, _keep_src = search_fold_reps(
+                    model_bp, _fi, n_folds, list(reps))
+                fold_reps_used[_fi] = {
+                    'reps': (sorted(_keep) if _keep is not None else None),
+                    'source': _keep_src}
+                _fold_pool = (reps if _keep is None
+                              else {k: v for k, v in reps.items() if k in _keep})
+                train_reps = {k: v[train_idx] for k, v in _fold_pool.items()}
+                val_reps = {k: v[val_idx] for k, v in _fold_pool.items()}
                 y_train, y_val = labels[train_idx], labels[val_idx]
 
                 # Create hybrid per fold from THIS MODEL'S blueprint
@@ -1065,6 +1129,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'weighted_std': w_std,
                 'delta': delta,
                 'n_features': n_features,
+                'fold_reps': fold_reps_used,
                 'reliability_stats': primary['reliability_stats'],
                 'n_folds_scored': len(unweighted_scores),
                 'importance_methods': list(importance_methods),
@@ -1112,6 +1177,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {model_name} [{space_name}]: unweighted={uw_mean:.4f}, "
                   f"weighted={w_mean:.4f} (delta={sign}{delta:.4f}, "
                   f"dim={n_features}, family={_fam}) [{primary_importance}]")
+            for _f, _fr in sorted(fold_reps_used.items()):
+                print(f"      {'':<{len(model_name)}}  fold {_f} "
+                      f"representations: {_fr['reps'] or 'whole pool cut by the rebuild'}"
+                      f" ({_fr['source']})")
             for imp_method in importance_methods[1:]:
                 _b = by_importance[imp_method]
                 print(f"      {'':<{len(model_name)}}  weighted="
