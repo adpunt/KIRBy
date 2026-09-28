@@ -630,11 +630,40 @@ def run(all_dataset_results):
             opt = exp8['optimal']
             # s08 may write None (via .get('knn')) when no budget was found;
             # treat None and missing the same.
-            knn_opt = opt.get('best_knn_budget') or 0
-            rf_opt = opt.get('best_rf_budget') or 0
-            if rf_opt and knn_opt and rf_opt > 0:
+            # The NaN-skipped picks, where the file has them. s08's original
+            # best_*_budget seeds max()/min() on the first budget, and every
+            # comparison with NaN is False, so a budget whose score was NaN
+            # can be named optimal (s08 docstring, 2026-08-26). Older files
+            # carry only the original keys, which are read then.
+            # (dirty-local 2026-09-28)
+            if 'best_knn_budget_nan_skipped' in opt:
+                knn_opt = opt.get('best_knn_budget_nan_skipped') or 0
+                rf_opt = opt.get('best_rf_budget_nan_skipped') or 0
+                _pick8 = 'best_*_budget_nan_skipped'
+            else:
+                knn_opt = opt.get('best_knn_budget') or 0
+                rf_opt = opt.get('best_rf_budget') or 0
+                _pick8 = 'best_*_budget (file predates the NaN-skipped keys)'
+            # s08 flags its own optimum as noise when fewer than four distinct
+            # feature counts were evaluated: the budgets collapse onto the
+            # same width, and the argmax is a tie broken by floating point.
+            # With one budget the ratio is 1 by construction. The value is
+            # still stored per dataset; it does not enter the series.
+            _insuff8 = bool(exp8.get('insufficient_budgets'))
+            if rf_opt and knn_opt and rf_opt > 0 and _insuff8:
+                ds_summary['optimal_dim_ratio_unusable'] = knn_opt / rf_opt
+                _record_absent(
+                    ds_summary, 'optimal_dim_ratio',
+                    f's08 optimal.{_pick8}',
+                    f"s08 insufficient_budgets=True: "
+                    f"{exp8.get('n_distinct_dims')} distinct feature count(s) "
+                    f"evaluated ({exp8.get('distinct_dims')}), 4 required")
+                print(f"    Optimal dim ratio (kNN/RF): not aggregated, only "
+                      f"{exp8.get('n_distinct_dims')} distinct feature "
+                      f"count(s) evaluated")
+            elif rf_opt and knn_opt and rf_opt > 0:
                 ratio = knn_opt / rf_opt
-                _src8 = ('s08 optimal.best_knn_budget / optimal.best_rf_budget '
+                _src8 = (f's08 optimal.{_pick8}, kNN over RF '
                          '(each the budget with the best cross-validation mean, '
                          'picked over the same budgets it is read from)')
                 _record(ds_summary, 'optimal_dim_ratio', ratio,
