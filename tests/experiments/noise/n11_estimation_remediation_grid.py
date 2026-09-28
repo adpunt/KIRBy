@@ -1850,6 +1850,31 @@ _CORRECTION_UNITS = {
 }
 
 
+# 2026-09-28: what the number means under each RULE. The family text above is
+# true of 'inverse' and 'proportional' alone. At a = 3.0 the most suspect
+# molecule's row weight is 1/4 of the cleanest one's under 'inverse', exp(-3) =
+# 1/20 under 'exponential' and the 0.1 floor under 'soft', so one number is
+# three different weightings. s below is the suspicion score rescaled to 0-1
+# over the training fold (weights_from_scores, smooth_by_scores).
+_RULE_UNITS = {
+    'inverse': "row weight 1/(1+a*s): the most suspect molecule gets "
+               "1/(1+a) of the cleanest one's weight",
+    'exponential': "row weight exp(-a*s): the most suspect molecule gets "
+                   "exp(-a) of the cleanest one's weight",
+    'soft': "row weight 1-a*s^2, floored at 0.1: the most suspect molecule "
+            "gets max(0.1, 1-a) of the cleanest one's weight",
+    'proportional': "each label moves a*s of the way to its target: the most "
+                    "suspect moves a of the way",
+    'threshold': "the top a share of molecules by suspicion each move a of "
+                 "the way to the target; the rest do not move",
+    'soft_threshold': "each label moves a/(1+exp(-5(s-0.5))) of the way to "
+                      "its target: the most suspect about 0.92a",
+    'confidence': "each label moves a*r/(1+a*r) of the way to its target, r "
+                  "the RAW suspicion score in the estimator's own units",
+    'quantile_clip': _CORRECTION_UNITS['quantile_clip'],
+}
+
+
 def _parse_remediation(remed_key):
     """Split a remediation key into the parts a summary groups by.
 
@@ -1953,32 +1978,45 @@ def _compute_summary(results):
         # hybrid). Until today this mean ran over every model, both of each
         # model's representations and every detection space at once, which
         # is a mean across models and across representations.
-        # {unit: {space: {family: {setting: [recovery, ...]}}}}; the mean is
-        # over estimators and rules inside one family only.
+        # 2026-09-28, later: and kept apart by RULE inside a family. The same
+        # number is a 4-to-1, a 20-to-1 and a 10-to-1 row weighting under the
+        # three weighting rules, and a different move under each smoothing
+        # rule (_RULE_UNITS), so a mean over rules at one setting averaged
+        # different treatments.
+        # {unit: {space: {family: {rule: {setting: [recovery, ...]}}}}}; the
+        # mean is over estimators and targets inside one rule only.
         setting_recoveries = {}
         for c in all_configs:
             (setting_recoveries.setdefault(c['unit'], {})
              .setdefault(c['space'], {})
              .setdefault(c['correction'], {})
+             .setdefault(c['rule'], {})
              .setdefault(str(c['setting']), []).append(c['recovery']))
         setting_effect = {
             unit: {
                 sp: {
                     fam: {
-                        'unit': _CORRECTION_UNITS.get(fam, 'the value swept'),
-                        'by_setting': {
-                            a: {
-                                'mean_recovery': float(np.mean(rs)),
-                                'n_cells': len(rs),
-                                'n_cells_positive': int(sum(1 for r in rs if r > 0)),
-                                'pct_positive': float(
-                                    sum(1 for r in rs if r > 0) / len(rs) * 100),
-                            }
-                            for a, rs in sorted(by_a.items(),
-                                                key=lambda kv: float(kv[0]))
-                        },
+                        rule: {
+                            'unit': _RULE_UNITS.get(
+                                rule, _CORRECTION_UNITS.get(fam,
+                                                            'the value swept')),
+                            'by_setting': {
+                                a: {
+                                    'mean_recovery': float(np.mean(rs)),
+                                    'n_cells': len(rs),
+                                    'n_cells_positive': int(
+                                        sum(1 for r in rs if r > 0)),
+                                    'pct_positive': float(
+                                        sum(1 for r in rs if r > 0)
+                                        / len(rs) * 100),
+                                }
+                                for a, rs in sorted(by_a.items(),
+                                                    key=lambda kv: float(kv[0]))
+                            },
+                        }
+                        for rule, by_a in by_rule.items()
                     }
-                    for fam, by_a in by_fam.items()
+                    for fam, by_rule in by_fam.items()
                 }
                 for sp, by_fam in by_sp.items()
             }
