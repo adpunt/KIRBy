@@ -381,6 +381,31 @@ transform.k = 0.5
             fh.write(body.rstrip() + '\n' + component)
 
     cfg = published
+
+    # Their stage 1 lists its scoring components INSIDE staged_learning.toml,
+    # while their stage 2 reads a file. Replacing only the stage 2 file name
+    # left stage 1 running their three published components and no KIRBy
+    # predictor, identically in every arm, for the first 25 to 100 steps. The
+    # arm's stage 1 now reads its own scoring file, the way their stage 2 does.
+    head, sep, tail = cfg.partition('[[stage.scoring.component]]')
+    if not sep:
+        raise RuntimeError(
+            "staged_learning.toml holds no inline stage 1 scoring component, "
+            "so the stage 1 block cannot be pointed at a file. Their published "
+            "configuration has changed shape since commit "
+            f"{REINVENT_COMMIT}.")
+    marker = '### Stage 2'
+    cut = tail.find(marker)
+    if cut < 0:
+        raise RuntimeError(
+            "staged_learning.toml holds no '### Stage 2' marker, so the end of "
+            "the inline stage 1 scoring block cannot be found. Their published "
+            f"configuration has changed shape since commit {REINVENT_COMMIT}.")
+    cfg = (head
+           + f'filename = "{arm_name}_stage1_scoring.toml"\n'
+           + 'filetype = "toml"\n\n\n'
+           + tail[cut:])
+
     cfg = cfg.replace('summary_csv_prefix = "staged_learning"',
                       f'summary_csv_prefix = "{arm_name}"')
     cfg = cfg.replace("chkpt_file = 'test1.chkpt'",
