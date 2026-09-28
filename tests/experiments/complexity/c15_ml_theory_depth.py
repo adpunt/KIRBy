@@ -1052,6 +1052,19 @@ def _run_double_descent(data, config, dataset_name=None):
         print(f"    Hybrid instability near p≈n: variance_ratio={instability_hybrid:.2f} "
               f"({_stability_word(instability_hybrid)})")
 
+    # 2026-09-28: the same ratio for the two Ridge arms. The two above are
+    # RandomForest scores, and the p = n threshold is a property of linear
+    # least squares (the Ridge arms), not of a forest.
+    if np.sum(near_n_mask) >= 2 and far_ok:
+        for _arm, _key in (('ridge_hybrid', 'ridge_on_hybrid'),
+                           ('ridge_pca', 'ridge_on_pca')):
+            _arr = np.array(results[_key])
+            _r = float(np.var(_arr[near_n_mask])) / (
+                float(np.var(_arr[far_mask])) + 1e-10)
+            results[f'instability_ratio_{_arm}'] = _r
+            print(f"    Ridge {_arm} instability near p≈n: "
+                  f"variance_ratio={_r:.2f} ({_stability_word(_r)})")
+
     return results
 
 
