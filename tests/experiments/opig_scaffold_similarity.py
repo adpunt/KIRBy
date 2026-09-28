@@ -397,8 +397,13 @@ def mode_features(ctx):
                  for m in range(1, k + 1)]
     curve = [(m, score_subset(SDr_, [int(x) for x in order[:m]], tr_, hr_))
              for m in range(1, k + 1)]
-    peak_m = max(curve_fit, key=lambda t: t[1])[0]
-    peak_v = dict(curve)[peak_m]
+    # The peak is the best FINITE point of the choosing half's curve. A plain
+    # max() keeps the first entry when that entry is NaN, because NaN loses
+    # every comparison, so a one-feature prefix whose count-controlled
+    # correlation is undefined was reported as the peak with a NaN score.
+    finite_curve = [t for t in curve_fit if np.isfinite(t[1])]
+    peak_m = max(finite_curve, key=lambda t: t[1])[0] if finite_curve else None
+    peak_v = dict(curve)[peak_m] if peak_m is not None else float('nan')
     SDraw, traw, hraw = feature_sqdiff(ctx, zscore=False)[:3]
     raw_v = score_subset(SDraw[:, rep], list(range(k)), traw[rep], hraw[rep])
 
