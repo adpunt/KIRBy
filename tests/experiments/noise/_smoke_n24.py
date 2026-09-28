@@ -152,9 +152,12 @@ def test_the_control():
 
     deleted = r['molecules_deleted']['0.5']['base_1']
     who = sorted(deleted)
+    # dirty-local 2026-09-28: since a9a933b the random seeds' counts are kept
+    # per detector, under '<detector>/random_seed<k>'.
+    _rand = 'neighbor_residual/random_seed'
     check('the detector and every random seed have their own deletion counts',
           'neighbor_residual' in who
-          and len([w for w in who if w.startswith('random_seed')]) == 3,
+          and len([w for w in who if w.startswith(_rand)]) == 3,
           f'{who}')
 
     same = True
@@ -166,7 +169,7 @@ def test_the_control():
                 f"training molecules summed over "
                 f"{by_det['passes']} passes"]
         for w in who:
-            if not w.startswith('random_seed'):
+            if not w.startswith(_rand):
                 continue
             row = deleted[w].get(rate)
             if row is None:
