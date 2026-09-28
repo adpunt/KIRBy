@@ -1277,8 +1277,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _kk = sorted(_dec, key=lambda x: int(x[1:]) if x[1:].isdigit() else 0)
         if _mode != 'knn_rmse' and _kk:
             _arms = _dec[_kk[0]]
+            # Finite values only: max() over a dict holding a NaN returns
+            # whichever key it met first, so a constant-distance arm could be
+            # named the comparator. Fixed 2026-09-28.
             _singles = {n: v for n, v in _arms.items()
-                        if isinstance(v, (int, float)) and not n.startswith('hybrid')}
+                        if isinstance(v, (int, float)) and np.isfinite(v)
+                        and not n.startswith('hybrid')}
             if _singles:
                 _best = max(_singles, key=_singles.get)
                 _old = results.get('comparator_rep')
@@ -1296,6 +1300,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              'conformal hybrid_genuinely_tighter flag name. '
                              'KIRBY_S06_COMPARATOR=knn_rmse restores the old '
                              'choice.')}
+                # The conformal flag has to name the same representation.
+                # It was computed above against the kNN-RMSE comparator and
+                # was left there, so 'comparator_rep' and
+                # 'hybrid_genuinely_tighter' named two different
+                # representations. Fixed 2026-09-28. A '<rep>_weighted' arm
+                # reads its representation's interval: the conformal forest
+                # is fitted on the unweighted features, and a forest does
+                # not change when one feature is multiplied by a constant.
+                _conf = results.get('conformal') or {}
+                _by_rep = _conf.get('hybrid_genuinely_tighter_by_rep') or {}
+                if _by_rep:
+                    _conf_rep = (_best[:-len('_weighted')]
+                                 if _best.endswith('_weighted')
+                                 and _best[:-len('_weighted')] in _by_rep
+                                 else _best)
+                    if _old in _by_rep:
+                        _conf['hybrid_genuinely_tighter_vs_knn_rmse_comparator'] = \
+                            _by_rep[_old]
+                    if _conf_rep in _by_rep:
+                        _conf['hybrid_genuinely_tighter'] = _by_rep[_conf_rep]
+                        _conf['hybrid_genuinely_tighter_rep'] = _conf_rep
+                    else:
+                        _conf.pop('hybrid_genuinely_tighter', None)
+                        _conf['hybrid_genuinely_tighter_rep'] = None
                 if _best != _old:
                     print(f"  Comparator re-pointed: {_old} (rank "
                           f"{_rank} of {len(_singles)} by the reported "
