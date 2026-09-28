@@ -1033,6 +1033,11 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         'n_samples': n,
         'n_binders': n_binders,
         'base_rate': n_binders / n,
+        # The binder fraction of each held-out fold, fold-index-aligned. Every
+        # enrichment in this file is counted inside one held-out fold, so this
+        # is the level a random ranking reaches, and the whole-library
+        # base_rate above is not that level on any of them.
+        'fold_base_rates': fold_base_rates,
         'zero_shot': zero_shot_results,  # paper's protocol (no training)
         'supervised': results,            # KIRBy's extension (trained classifiers)
         'hybrid_search': hybrid_search_meta,  # search diagnostic; NOT held-out
@@ -1072,27 +1077,47 @@ def print_analysis(ds_results):
 
     results = ds_results['supervised']
     base_rate = ds_results['base_rate']
+    # Every E and EF column below is a mean over held-out folds. The level a
+    # random ranking reaches inside a fold is that fold's own binder fraction,
+    # and on this dataset the folds are edit-distance shells, so those
+    # fractions differ from each other and from the whole-library rate.
+    fold_rates = ds_results.get('fold_base_rates') or []
+    chance = float(np.mean(fold_rates)) if fold_rates else base_rate
 
     print(f"\n{'=' * 100}")
     print(f"TRASTUZUMAB ENRICHMENT COMPARISON (OPIG B1)")
-    print(f"  {ds_results['n_samples']} samples, base binder rate = {base_rate:.3f}")
+    print(f"  {ds_results['n_samples']} samples, whole-library binder rate = "
+          f"{base_rate:.3f}")
+    if fold_rates:
+        print(f"  Held-out binder rate per fold: "
+              f"{', '.join(f'{r:.3f}' for r in fold_rates)} — the E columns are "
+              f"means over these folds, so {chance:.3f} is the level a random "
+              f"ranking reaches, not {base_rate:.3f}")
     print(f"{'=' * 100}")
 
-    # Header
-    header = f"  {'Method':30s} {'E@1%':>8s} {'E@5%':>8s} {'E@10%':>8s} {'AUROC':>8s} {'Acc':>8s}"
+    # Header. E is the fraction of the top-ranked held-out rows that are
+    # binders. EF is that fraction divided by the same fold's own binder
+    # fraction, so EF=1 is a random ranking on every fold and the three folds
+    # can be averaged without their different binder rates moving the number.
+    header = (f"  {'Method':30s} {'E@1%':>8s} {'E@5%':>8s} {'E@10%':>8s} "
+              f"{'EF@1%':>8s} {'EF@5%':>8s} {'EF@10%':>8s} "
+              f"{'AUROC':>8s} {'Acc':>8s}")
     print(header)
-    print(f"  {'-'*30} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+    print(f"  {'-'*30}" + f" {'-'*8}" * 8)
 
     # Random baseline
-    print(f"  {'Random baseline':30s} {base_rate:8.4f} {base_rate:8.4f} "
-          f"{base_rate:8.4f} {'0.5000':>8s} {'—':>8s}")
+    print(f"  {'Random baseline':30s} {chance:8.4f} {chance:8.4f} "
+          f"{chance:8.4f} {1.0:8.4f} {1.0:8.4f} {1.0:8.4f} "
+          f"{'0.5000':>8s} {'—':>8s}")
 
-    # Paper baselines (predicted binder %, different metric but reference point)
-    print(f"  {'— Paper (pred. binder %) —':30s}")
+    # Paper baselines. These are the fraction of a DESIGNED library that a CNN
+    # called a binder, not the top-K count of a held-out fold, so they belong to
+    # no column here. Printed as fractions so the column holds one unit.
+    print(f"  {'— Paper (CNN binder fraction) —':30s}")
     for method, metrics in PAPER_BASELINES.items():
         pct = metrics.get('predicted_binder_pct', float('nan'))
-        pct_s = f"{pct:.2%}" if not np.isnan(pct) else "—"
-        print(f"  {method:30s} {pct_s:>8s} {'—':>8s} {'—':>8s} {'—':>8s} {'—':>8s}")
+        pct_s = f"{pct:.4f}" if not np.isnan(pct) else "—"
+        print(f"  {method:30s} {pct_s:>8s}" + f" {'—':>8s}" * 7)
 
     print(f"  {'. . .':30s}")
 
@@ -1105,26 +1130,36 @@ def print_analysis(ds_results):
             # Stored key is f'enrich_{0.10}' -> 'enrich_0.1' (Python drops the
             # trailing zero), so look up 'enrich_0.1' not 'enrich_0.10'.
             e10 = metrics.get('enrich_0.1', {}).get('mean', float('nan'))
+            f1 = metrics.get('ef_0.01', {}).get('mean', float('nan'))
+            f5 = metrics.get('ef_0.05', {}).get('mean', float('nan'))
+            f10 = metrics.get('ef_0.1', {}).get('mean', float('nan'))
             auroc = metrics.get('auroc', {}).get('mean', float('nan'))
             acc = metrics.get('accuracy', {}).get('mean', float('nan'))
-            rows.append((rep_name, model_name, e1, e5, e10, auroc, acc))
+            rows.append((rep_name, model_name, e1, e5, e10, f1, f5, f10,
+                         auroc, acc))
 
     rows.sort(key=lambda r: (r[2] if not np.isnan(r[2]) else 0), reverse=True)
 
-    for rep_name, model_name, e1, e5, e10, auroc, acc in rows:
+    def _f(v):
+        return f"{v:.4f}" if not np.isnan(v) else "—"
+
+    for (rep_name, model_name, e1, e5, e10, f1, f5, f10,
+         auroc, acc) in rows:
         label = f"{rep_name} ({model_name})"
         tag = ' ***' if rep_name == 'kirby_hybrid' else ''
-        e1s = f"{e1:.4f}" if not np.isnan(e1) else "—"
-        e5s = f"{e5:.4f}" if not np.isnan(e5) else "—"
-        e10s = f"{e10:.4f}" if not np.isnan(e10) else "—"
-        aurocs = f"{auroc:.4f}" if not np.isnan(auroc) else "—"
-        accs = f"{acc:.4f}" if not np.isnan(acc) else "—"
-        print(f"  {label:30s} {e1s:>8s} {e5s:>8s} {e10s:>8s} {aurocs:>8s} {accs:>8s}{tag}")
+        print(f"  {label:30s} {_f(e1):>8s} {_f(e5):>8s} {_f(e10):>8s} "
+              f"{_f(f1):>8s} {_f(f5):>8s} {_f(f10):>8s} "
+              f"{_f(auroc):>8s} {_f(acc):>8s}{tag}")
 
     # Summary
     best_indiv = [r for r in rows if r[0] != 'kirby_hybrid']
 
     print(f"\n  Summary (Enrichment @ top-1%):")
+    print(f"    The row below is the highest of {len(best_indiv)} "
+          f"representation-and-model rows, picked on the same held-out folds "
+          f"it is scored on, so it is the best of that many tries and not a "
+          f"held-out number. The held-out best single representation is in the "
+          f"table further down.")
     if best_indiv:
         bi = best_indiv[0]
         print(f"    Best individual: {bi[0]} ({bi[1]}) E@1% = {bi[2]:.4f}")
