@@ -266,7 +266,31 @@ def _inject_ladder(labels, specs, levels, noise_groups, folds):
     # process, re-admitting KirbyWarning only (_warn.py:39) — _shared.py:52 does the
     # same. So the delivered amount is PRINTED here; a warning cannot reach the log.
     nonzero = [lv for lv in levels if float(lv) > 0.0]
-    if nonzero:
+    # CENSORING NESTS DIFFERENTLY. Its level is the fraction clipped, and a
+    # clipped molecule's error is (limit - label), so a higher fraction is not
+    # the lower one's error times a constant. The scale check below raised on
+    # every censoring run (measured 2026-09-28 on 300 synthetic labels: the
+    # ratio ran 1.39 to 102.6 where it demanded 2.0), and the exception ended
+    # the whole condition sweep at censoring, so the eight conditions after it
+    # never ran. What nesting means here: every molecule clipped at a lower
+    # fraction is clipped at every higher one, in the same direction, by at
+    # least as much.
+    is_cens = bool(getattr(specs[0], 'is_censoring', False)) if specs else False
+    if nonzero and is_cens:
+        ordered = sorted(nonzero)
+        for lo, hi in zip(ordered[:-1], ordered[1:]):
+            e_lo = per_level[lo]['epsilon']
+            e_hi = per_level[hi]['epsilon']
+            hit = np.abs(e_lo) > 0
+            bad = hit & ((np.sign(e_hi) != np.sign(e_lo))
+                         | (np.abs(e_hi) + 1e-12 < np.abs(e_lo)))
+            if bad.any():
+                raise RuntimeError(
+                    f"the censoring ladder does not nest: {int(bad.sum())} of "
+                    f"{int(hit.sum())} molecules clipped at fraction {lo} are "
+                    f"not clipped at least as far, in the same direction, at "
+                    f"fraction {hi}.")
+    elif nonzero:
         ref_lv = min(nonzero)
         ref_eps = per_level[ref_lv]['epsilon']
         moved = np.abs(ref_eps) > 0
