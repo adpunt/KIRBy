@@ -560,6 +560,13 @@ def run(all_dataset_results):
                          '(itself best over k)')
                 _record(ds_summary, 'knn_delta', delta_knn, _ARM_OPTIMISTIC,
                         _src5)
+                # per_rep_baselines[*].score_mean is the UNWEIGHTED single-rep
+                # kNN (s05 per-rep loop); the hybrid side is the weighted
+                # condition only. Same two-effect contrast as sac_delta and
+                # cliff_rmse_reduction_pct. (dirty-local 2026-09-28)
+                ds_summary['knn_delta_contrast'] = (
+                    'importance-weighted hybrid vs UNWEIGHTED single reps '
+                    '(rep mixing and importance weighting together)')
                 _series('kNN_delta', ds_name, delta_knn, _ARM_OPTIMISTIC, _src5)
                 _label = _exp5_metric or 'score'
                 print(f"    kNN delta {_label} (vs best rep) "
@@ -622,6 +629,14 @@ def run(all_dataset_results):
                 print(f"    kNN delta [{_ARM_HELD_OUT}]: not read ({_why5})")
             else:
                 _record(ds_summary, 'knn_delta_heldout', _v5, _arm5, _src5h)
+                # s05's held-out hybrid candidates hold both the weighted and
+                # the unweighted condition; its single-rep candidates
+                # (baseline_candidates) are unweighted only. Unlike s04's
+                # block, which carries '<rep>|weighted' baselines.
+                # (dirty-local 2026-09-28)
+                ds_summary['knn_delta_heldout_contrast'] = (
+                    'hybrid re-picked over weighted and unweighted cells vs '
+                    'single reps re-picked over UNWEIGHTED cells only')
                 _series('kNN_delta_heldout', ds_name, _v5, _arm5, _src5h)
                 print(f"    kNN delta [{_arm5}]: {_v5:+.4f}")
 
