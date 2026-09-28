@@ -1131,8 +1131,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             egp = _EigenGP(sig_kernel, X_tr_s, y0)
                             var_y = egp.sd ** 2
                             grid = [white * m for m in GP_NUGGET_MULT]
+                            # A fit whose length scale hit a bound, or whose
+                            # held-out predictions barely vary, is a collapsed
+                            # fit; every GP arm here reuses its kernel.
                             gp_rec = {'ml_noise_normalised': white,
-                                      'ml_noise_label_units': white * var_y}
+                                      'ml_noise_label_units': white * var_y,
+                                      'length_scale': float(np.ravel(
+                                          sig_kernel.length_scale)[0]),
+                                      'heldout_pred_sd_over_train_label_sd': float(
+                                          np.std(pred) / max(egp.sd, 1e-12))}
                             a_cv, cv_s = gp_cv_choice(sig_kernel, X_tr_s, y0, g_tr,
                                                       grid, metric_fn, lower_is_better,
                                                       inner_folds=tune_inner)
