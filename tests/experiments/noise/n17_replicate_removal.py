@@ -855,6 +855,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'single-measurement training labels. The consensus labels the '
             'held-out entities are graded against reach no feature ranking and '
             'no budget split.'),
+        # Added 2026-09-28. The key above is about the per-fold rebuild only.
+        # The recipe that rebuild follows -- which representations, budget,
+        # allocation and importance method -- came from a stored search run on
+        # every measurement row of the dataset (the pool lookup below is handed
+        # the row-level labels), so the measurements the held-out entities are
+        # graded against were among the labels that search scored on. Every
+        # arm shares the recipe, so this touches hybrid-against-base readings,
+        # not an arm against no_cleaning.
+        'recipe_search_saw_grading_measurements': True,
+        'recipe_search_saw_grading_measurements_note': (
+            'The recipe came from a stored search over every measurement row, '
+            'held-out entities included. The per-fold feature ranking and '
+            'budget split did not see the grading labels. All arms share the '
+            'recipe, so an arm against no_cleaning is unaffected; a hybrid '
+            'space against a base representation is not.'),
         'per_draw': {},
     }
 
