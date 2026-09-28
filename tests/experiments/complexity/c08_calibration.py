@@ -301,7 +301,17 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         # third of it is not the condition its name says.
         'condition_widths_built': _built_widths,
         'conditions_distinct': len(set(_cond_budgets.values())) == len(_cond_budgets),
+        # underfit is capped at 25 features whatever the recipe's budget. The
+        # searched budgets include 10 and 25, so a recipe that won at either
+        # makes 'underfit' as wide as 'optimal' or wider. False means the
+        # underfit condition is not below the optimal one and cannot be read
+        # as too compressed.
+        'underfit_below_optimal': bool(underfit_budget < optimal_budget),
     }
+    if not results['underfit_below_optimal']:
+        print(f"  WARNING: underfit budget {underfit_budget} is not below the "
+              f"optimal budget {optimal_budget}; 'underfit' is not compressed "
+              f"relative to 'optimal'.")
     if not results['conditions_distinct']:
         print(f"  WARNING: calibration conditions collapse (budgets "
               f"{_cond_budgets}) — optimal/underfit/overfit not separated.")
