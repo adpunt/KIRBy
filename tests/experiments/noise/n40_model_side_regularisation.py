@@ -391,9 +391,21 @@ def knn_cp_choice(X, y, sigma2, k_grid=KNN_K_GRID, neighbour_idx=None):
     """
     ks = [k for k in k_grid if k <= len(y)]
     if neighbour_idx is None:
+        # The molecule is put first BY INDEX. Until 2026-09-28 this was
+        # kneighbors(X), which puts a duplicate feature vector (distance 0)
+        # in front of the molecule itself as often as not: 30 of 1,412
+        # herg_ki molecules share an ecfp4 vector. The fit at k then left the
+        # molecule out while the penalty 2 sigma^2 / k still assumed it in.
+        # kneighbors() with no X drops each molecule's own index.
         from experiments._shared import make_nearest_neighbors
-        nn = make_nearest_neighbors(n_neighbors=max(ks)).fit(X)
-        _, idx = nn.kneighbors(X)
+        n_other = max(ks) - 1
+        own = np.arange(len(y))[:, None]
+        if n_other >= 1:
+            nn = make_nearest_neighbors(n_neighbors=n_other).fit(X)
+            _, nb = nn.kneighbors()
+            idx = np.hstack([own, nb])
+        else:
+            idx = own
     else:
         nb = np.asarray(neighbour_idx)
         idx = np.hstack([np.arange(len(y))[:, None], nb])
