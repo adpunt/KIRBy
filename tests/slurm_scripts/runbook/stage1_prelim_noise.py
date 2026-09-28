@@ -65,6 +65,7 @@ Usage:
 import argparse
 import datetime as _dt
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -256,8 +257,12 @@ def main():
             q = ''
         for line in q.splitlines():
             parts = line.split()
+            # Exact dataset match: pc_<dataset>_<link> where link is a number
+            # or x<number>. A prefix test matched herg_ki's jobs for herg
+            # (pc_herg_ki_x1 starts with pc_herg_), 2026-09-28.
             if len(parts) == 2 and parts[0].isdigit() and any(
-                    parts[1].startswith(f'pc_{ds}_') for ds in datasets):
+                    re.fullmatch(rf'pc_{re.escape(ds)}_x?\d+', parts[1])
+                    for ds in datasets):
                 extra_dep.append(parts[0])
     if extra_dep:
         print(f'waits for {len(extra_dep)} job(s): {":".join(extra_dep)}')

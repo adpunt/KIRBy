@@ -101,7 +101,9 @@ PCQ=$(squeue -M "$CLUSTER" -u "$USER" -h -o '%i %j' 2>/dev/null | awk '$1 ~ /^[0
 pc_ids() {   # dataset names -> colon list of their pc_ job ids
     local out="" d
     for d in "$@"; do
-        out="${out}$(printf '%s\n' "$PCQ" | awk -v p="pc_${d}_" 'index($2,p)==1 {printf "%s:", $1}')"
+        # exact dataset: pc_<d>_<n> or pc_<d>_x<n> (a prefix match took
+        # herg_ki's jobs for herg, 2026-09-28)
+        out="${out}$(printf '%s\n' "$PCQ" | awk -v d="$d" '$2 ~ ("^pc_" d "_x?[0-9]+$") {printf "%s:", $1}')"
     done
     echo "${out%:}"
 }
