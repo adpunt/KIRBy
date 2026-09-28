@@ -1217,8 +1217,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if smiles is not None:
             try:
                 qed_scores = compute_qed_scores(smiles)
+                # The hunted end, not the scoring metric's direction: RMSE
+                # made this True on every local dataset, so caco2's combined
+                # objective rewarded LOW permeability.
                 y_multi = compute_combined_objective(
-                    labels, qed_scores, lower_is_better)
+                    labels, qed_scores, _hunt == 'low')
                 print(f"  Multi-objective: label + QED geometric mean")
                 print(f"    QED range: [{qed_scores.min():.3f}, "
                       f"{qed_scores.max():.3f}]")
