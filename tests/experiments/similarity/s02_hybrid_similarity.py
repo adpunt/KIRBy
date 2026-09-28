@@ -721,7 +721,10 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
         cell['weight_methods'][wm] = wm_result
 
         # higher = better distance-activity correlation
-        if best_sac is None or sac_weighted > best_sac:
+        # Same NaN rule as the best single representation in run(): a NaN
+        # first weight method no longer blocks a finite later one.
+        if (best_sac is None or not np.isfinite(best_sac)
+                or sac_weighted > best_sac):
             best_sac = sac_weighted
             best_method = wm
 
@@ -870,7 +873,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  {rep_name}: SAC={sac_rep:.4f}, viol={viol_rep:.3f}, dim={X.shape[1]}")
 
         results['per_rep'][rep_name] = rep_result
-        if best_rep_name is None or sac_rep > best_rep_sac:
+        # A NaN held as the best used to stay there: the first representation
+        # is always taken, and every later `sac_rep > nan` is False, so a NaN
+        # first representation was named best over finite ones and s09
+        # subtracted a NaN. A NaN best is now replaced by the next one; a
+        # finite best is never replaced by a NaN. (dirty-local 2026-09-28)
+        if (best_rep_name is None or not np.isfinite(best_rep_sac)
+                or sac_rep > best_rep_sac):
             best_rep_sac = sac_rep
             best_rep_name = rep_name
 
