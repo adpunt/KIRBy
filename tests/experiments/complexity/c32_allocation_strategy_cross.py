@@ -73,6 +73,7 @@ from sklearn.metrics import r2_score  # noqa: E402
 # weighting is byte-for-byte what the allocation strategies do.
 from kirby.hybrid import (  # noqa: E402
     create_hybrid, _compute_allocation_weights, _sanitize_baseline_scores,
+    metric_name_for_fn, origin_null_reference, origin_normalise_scores,
 )
 from kirby.find_best_hybrid import get_model  # noqa: E402
 
@@ -106,7 +107,8 @@ MODELS = [m.strip() for m in _env_models.split(",") if m.strip()] or _ALL_MODELS
 DEFAULT_DATASETS = ["herg_ki", "logd", "flab_thermo_tresanco"]
 
 CAVEATS = [
-    "STRATEGY = (weighting W x mechanism M x N).  32 per cell (4 N x 4 W x 2 M). "
+    "STRATEGY = (weighting W x mechanism M x N).  Up to 32 per cell (4 N x 4 W "
+    "x 2 M); an N at or above the staged pool size collapses to the whole pool. "
     "The CELL is (dataset x model x budget); TARGET is the best single staged rep "
     "x that model at full native width, re-derived per model AND PER FOLD.  All "
     "deltas are paired per fold vs that fold's own target (higher R2 delta = "
@@ -142,14 +144,20 @@ CAVEATS = [
     "A fold whose N reps hold fewer than B features between them cannot reach the "
     "budget; those folds are listed per strategy in "
     "folds_pool_narrower_than_budget, and features_per_fold gives the count "
-    "actually selected in each of the 5 folds.",
+    "actually selected in each outer fold.",
     "global mechanism: per-rep candidate slots = round(w_i/sum(w) * 2B), glue the "
     "candidate columns, ONE global lightgbm_gain rank, take top-B.  == "
     "allocate_weighted_global at pool_total_mult=2.",
     "PINNED to control size: pool_total_mult=2, global importance=lightgbm_gain. "
     "Restore a sweep of either by editing POOL_TOTAL_MULT / IMP.",
-    "Only NFOLDS=5 paired folds -> per-cell CIs are wide; the deliverable is "
-    "per-cell WIN-COUNTS across the 60 cells, NOT per-cell significance.",
+    f"Only {NFOLDS} paired folds -> per-cell CIs are wide; the deliverable is "
+    "per-cell WIN-COUNTS across the cells, NOT per-cell significance.",
+    "2026-09-28: the sizing scores pass through the engine's origin rule "
+    "(1 - rmse / rmse of the training mean, or spearman floored at 0) before "
+    "the sanitiser, as allocate_performance_weighted and "
+    "allocate_weighted_global have done since 2026-09-10. Before, the worst "
+    "staged rep weighed zero and the rest were weighted by their distance from "
+    "it. Results written before 2026-09-28 are not comparable.",
     "At small N the weightings converge (2 reps split 2 ways ~ identical across "
     "schemes); that redundancy is expected and informative, not a bug.",
 ]
@@ -244,6 +252,50 @@ def _exact_budget_quota(weights, widths, B):
                 alloc[rn] -= take
                 over -= take
     return alloc
+
+
+def _engine_sizing_scores(per_fold_raw, fold_pairs, y_all, metric_fn, gs):
+    """Per-representation sizing scores, shaped the way the engine shapes them.
+
+    `per_fold_raw` is {rep: [metric value on each of fold_pairs]}, and
+    `fold_pairs` is [(train_idx, val_idx)] into `y_all`.
+
+    Since 2026-09-10 allocate_performance_weighted and allocate_weighted_global
+    both run `_apply_origin_rule` before `_sanitize_baseline_scores`
+    (hybrid.py, FRAMEWORK_FINALIZATION.md section 3.5). For rmse that is
+    1 - rmse / (rmse of predicting the training mean), floored at 0. For
+    spearman it is the correlation floored at 0. The engine does it on one
+    train/validation carve; here it is done on each fold and averaged.
+
+    Before 2026-09-28 c32 only ran the sanitiser, which on an rmse dataset
+    shifts every score up by the worst one. The worst of all staged
+    representations then weighed zero, and the rest were weighted by their
+    distance from it rather than by their skill.
+
+    Returns (scores, unscored). `scores` is sanitised and ready for
+    _compute_allocation_weights. `unscored` is the set whose raw score was not
+    finite; the engine gives those weight zero under every scheme.
+    """
+    reps_ = list(per_fold_raw)
+    mean_raw = {rn: gs * float(np.mean(per_fold_raw[rn])) for rn in reps_}
+    unscored = {rn for rn, s in mean_raw.items() if not np.isfinite(s)}
+    mn = metric_name_for_fn(metric_fn)
+    per_fold_norm = []
+    for j, (a, b) in enumerate(fold_pairs):
+        s_j = {rn: gs * float(per_fold_raw[rn][j]) for rn in reps_}
+        null = origin_null_reference(mn, y_all[a], y_all[b]) if mn else None
+        out = origin_normalise_scores(s_j, mn, null, where="c32 sizing")
+        if out is None:
+            # A metric the rule does not cover, or a null model with zero
+            # error on this fold: the engine keeps the old shift for that
+            # vector. Same here, for the whole vector.
+            per_fold_norm = None
+            break
+        per_fold_norm.append(out)
+    if per_fold_norm is None:
+        return _sanitize_baseline_scores(mean_raw), unscored
+    skill = {rn: float(np.mean([o[rn] for o in per_fold_norm])) for rn in reps_}
+    return _sanitize_baseline_scores(skill), unscored
 
 
 def score_selection(reps, y, folds, per_fold_sel, task_type, metric_fn, model):
@@ -351,8 +403,12 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
     #    row.  train_score is the raw direction-corrected score (higher better);
     #    hib is the engine's shifted form, used only for the weights.
     score_whole = {rn: gs * rep_native[rn][0] for rn in all_reps}
-    hib_whole = _sanitize_baseline_scores(score_whole)
-    fold_hib, fold_train_score, fold_pool_train, size_fallback = [], [], [], []
+    # Sizing scores go through the engine's origin rule (see
+    # _engine_sizing_scores). The ranking below still uses the raw score.
+    hib_whole, unscored_whole = _engine_sizing_scores(
+        {rn: rep_native[rn][1] for rn in all_reps}, folds, y, mfn, gs)
+    fold_hib, fold_unscored = [], []
+    fold_train_score, fold_pool_train, size_fallback = [], [], []
     for i, (tr, va) in enumerate(folds):
         sub_groups, sub_y = groups[tr], y[tr]
         n_inner = min(N_INNER, len(np.unique(sub_groups)))
@@ -361,23 +417,31 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
         if n_inner < 2:
             fold_train_score.append(dict(score_whole))
             fold_hib.append(dict(hib_whole))
+            fold_unscored.append(set(unscored_whole))
             size_fallback.append(i)
             continue
         try:
             inner = H.make_folds(sub_groups, sub_y, task, n=n_inner)
-            sc = {}
+            sc, sc_pf = {}, {}
             for rn in all_reps:
                 m_native, _pf, _oof = H.score_matrix(
                     train_mats[rn], sub_y, inner, model, mfn, lower, task)
                 sc[rn] = m_native
+                sc_pf[rn] = _pf
             tsc = {rn: gs * sc[rn] for rn in all_reps}
             fold_train_score.append(tsc)
-            fold_hib.append(_sanitize_baseline_scores(tsc))
+            _hib, _uns = _engine_sizing_scores(sc_pf, inner, sub_y, mfn, gs)
+            fold_hib.append(_hib)
+            fold_unscored.append(_uns)
         except Exception as e:
             print(f"  [size-fallback] fold {i}: inner CV failed ({type(e).__name__}: {e})")
             fold_train_score.append(dict(score_whole))
             fold_hib.append(dict(hib_whole))
+            fold_unscored.append(set(unscored_whole))
             size_fallback.append(i)
+    mout["sizing_scores_per_fold"] = {
+        str(i): {rn: round(float(v), 5) for rn, v in fold_hib[i].items()}
+        for i in range(NFOLDS)}
     mout["size_fallback_folds"] = size_fallback
 
     # -- per-fold ranking, target and candidate pool (all train-only) ----------
@@ -521,7 +585,11 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
                 w = _compute_allocation_weights(
                     hib_i, scheme=scheme, params=params,
                     rep_dict_train={rn: fold_pool_train[i][rn] for rn in Pi})
-                wl.append({rn: float(w.get(rn, 0.0)) for rn in Pi})
+                # The engine zeroes a representation it could not score under
+                # every scheme; softmax and rank_exp would otherwise give it a
+                # share.
+                wl.append({rn: (0.0 if rn in fold_unscored[i]
+                                else float(w.get(rn, 0.0))) for rn in Pi})
 
             for B in BUDGETS:
                 # -- QUOTA: per-rep weighted budget, summing to exactly B -----
@@ -678,7 +746,10 @@ def main(datasets):
                          "schemes": list(SCHEMES), "mechanisms": MECHANISMS,
                          "pool_total_mult": POOL_TOTAL_MULT, "n_folds": NFOLDS,
                          "n_inner_sizing_folds": N_INNER, "n_boot": N_BOOT,
-                         "weighting_source": "kirby.hybrid._compute_allocation_weights"}
+                         "weighting_source": "kirby.hybrid._compute_allocation_weights",
+                         # 2026-09-28: sizing scores pass the engine's origin
+                         # rule first. A file written before is not comparable.
+                         "sizing_scores": "origin_rule_then_sanitize"}
     # A resumed run keeps the dataset entries already in the file and then
     # overwrites the settings block with the CURRENT settings. So a file could
     # report scores computed under one set of models, budgets or importance
