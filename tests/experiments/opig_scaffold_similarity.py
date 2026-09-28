@@ -330,9 +330,11 @@ def mode_representations(ctx):
             r = dict(rep=name, metric=metric)
             basis = REP_BASIS[name]
             # An undefined correlation stays NaN, as score_subset does. It was
-            # written as 0.0, which reads as a measured zero. BaseDelta under
-            # euclidean is sqrt(2 x differing positions), so its count-
-            # controlled score has a zero denominator and is undefined.
+            # written as 0.0, which reads as a measured zero. On a single-
+            # mutation library MutID under cosine is 1 for every pair of
+            # distinct variants, so its correlation is undefined. BaseDelta
+            # under euclidean is sqrt(2 x differing positions), so its count-
+            # controlled score is 0 up to rounding (about 1e-8).
             cleans = []
             for g in GRADERS:
                 raw = spearmanr(d, ctx['truth'][g])[0]
