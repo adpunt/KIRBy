@@ -465,6 +465,13 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             'per_rep': per_rep,
             'best_single': per_budget[budgets[0]]['best_single_reselected'],
             'excluded_folds': excluded,
+            # Added 2026-09-28: each representation's held-out score on every
+            # fold, None where a fold is excluded, so phase 2d can hold one
+            # representation fixed across levels. Not written to the results.
+            'rep_fold_scores': {
+                rep: [None if (i in _drop or f is None or not np.isfinite(f))
+                      else float(f) for i, f in enumerate(folds)]
+                for rep, folds in bases.items()},
             'recipes': {
                 # rep_count added 2026-09-28, or phase 2a could not see a
                 # recipe that changed only its number of representations.
@@ -875,6 +882,92 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         "per-fold curve and hybrid minus best_single; only folds scored at every "
         "level. Excluded folds are None. One noise draw per condition: the fold "
         "spread is the only spread here.")
+
+    # --- Phase 2d: hybrid against a representation fixed on clean labels ---
+    # Added 2026-09-28 (dirty local review). Additive: no number above changes
+    # and no model is fitted. best_single re-picks its representation at every
+    # level from the other folds' NOISY scores, so at high noise it pays for a
+    # pick among every representation from two folds, while the hybrid has one
+    # recipe. This control picks each fold's representation ONCE, from the
+    # other folds' CLEAN held-out scores, and reads that same representation at
+    # every level. The held-out fold's own scores never enter its pick.
+    # Positive delta means the hybrid is better, in the dataset's own metric.
+    print("\n  Phase 2d: hybrid minus a representation fixed on clean labels, "
+          "per fold (+ = hybrid better)")
+    fixed = {}
+    for budget in budgets:
+        _b_out = {}
+        for strategy in strategies:
+            try:
+                _levels = sorted(float(lv) for lv in _levels_for(strategy))
+                clean = cells.get((strategy, 0.0))
+                if clean is None:
+                    _b_out[strategy] = {'error': 'no clean cell'}
+                    continue
+                cr = clean['rep_fold_scores']
+                _n_f = max((len(v) for v in cr.values()), default=0)
+                pick = {}
+                for f in range(_n_f):
+                    best_rep, best_val = None, None
+                    for rep, fs in cr.items():
+                        if f >= len(fs) or fs[f] is None:
+                            continue
+                        others = [x for i, x in enumerate(fs)
+                                  if i != f and x is not None]
+                        if not others:
+                            continue
+                        m = float(np.mean(others))
+                        if (best_val is None
+                                or (m < best_val if lower_is_better
+                                    else m > best_val)):
+                            best_rep, best_val = rep, m
+                    if best_rep is not None:
+                        pick[f] = best_rep
+                _by_level = {}
+                for level in _levels:
+                    cell = cells.get((strategy, level))
+                    if cell is None:
+                        continue
+                    hyb = cell['per_budget'][budget].get('hybrid_fold_scores') or []
+                    rows = {}
+                    for f, rep in pick.items():
+                        h = hyb[f] if f < len(hyb) else None
+                        rs = cell['rep_fold_scores'].get(rep) or []
+                        x = rs[f] if f < len(rs) else None
+                        if h is None or x is None or not np.isfinite(h):
+                            continue
+                        d = (x - h) if lower_is_better else (h - x)
+                        rows[f] = {'rep': rep, 'fixed_score': x,
+                                   'hybrid_score': float(h), 'delta': d}
+                    _by_level[level] = {
+                        'by_fold': rows,
+                        'n_folds_hybrid_better': sum(
+                            1 for r in rows.values() if r['delta'] > 0),
+                        'mean_delta': (float(np.mean([r['delta'] for r in rows.values()]))
+                                       if rows else float('nan')),
+                    }
+                _b_out[strategy] = {'fixed_rep_by_fold': pick,
+                                    'by_level': _by_level}
+                _top = max(_by_level) if _by_level else None
+                if _top is not None:
+                    _t = _by_level[_top]
+                    print(f"    b{budget} {strategy}: fixed reps "
+                          f"{sorted(set(pick.values()))}; at level {_top:g}, "
+                          f"{metric_name} delta per fold "
+                          + ", ".join(f"{r['delta']:+.4f}"
+                                      for r in _t['by_fold'].values()))
+            except Exception as _e:
+                _b_out[strategy] = {'error': f'{type(_e).__name__}: {_e}'}
+                print(f"    b{budget} {strategy}: FAILED, {_b_out[strategy]['error']}")
+        fixed[budget] = _b_out
+    results['hybrid_vs_clean_fixed_rep_by_fold'] = convert_numpy(fixed)
+    results['hybrid_vs_clean_fixed_rep_by_fold_schema'] = (
+        "Per budget, then noise condition. fixed_rep_by_fold: for each reported "
+        "fold, the representation with the best mean CLEAN held-out score on the "
+        "other folds, held fixed at every level. by_level: that "
+        "representation's held-out score and the hybrid's on each fold, and "
+        "delta with + meaning the hybrid is better in the dataset's own metric. "
+        "Unlike best_single, this control does not re-pick under noise.")
 
     # --- Phase 2a: does the recipe move under noise? ---
     # Every hybrid number above now comes from a search run on that cell's own
