@@ -19,16 +19,145 @@ from sklearn.metrics import r2_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_model_factories, evaluate_cv_with_train,
+    get_model_factories,
     estimate_mutual_information_knn, compute_effective_rank,
     apply_feature_selection,
     find_best_hybrid, get_domain_metric,
     get_best_search_for_downstream,
     INTERNAL_EVALUATORS)
 from kirby.hybrid import create_hybrid
-from experiments._shared import create_hybrid_cached
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
 #       semantics may change after framework experiments. Revisit call sites below.
+
+
+# =========================================================================
+# One way to rebuild a searched recipe inside an outer fold, for 9b, 9c, 9d
+# =========================================================================
+#
+# ⛔ THE REBUILT HYBRID MUST BE THE ONE THE SEARCH BUILT. Before 2026-09-28
+# 9b and 9c went through create_hybrid_cached and 9d through
+# evaluate_cv_with_train, and both differed from the search in two ways.
+#
+# The budget split. The search sizes each representation's share by the
+# dataset's own metric (find_best_hybrid.py passes metric_fn and
+# lower_is_better, and its precomputed allocation scores are keyed by the
+# metric name). Neither door here passed a metric, so create_hybrid scored each
+# representation by R2 on a regression set and by accuracy on a classification
+# set (hybrid.py _evaluate_allocation), and skipped the per-metric origin rule.
+# On an rmse set R2 ranks the same way but weighs differently. On spearman and
+# auc sets it can rank differently.
+#
+# The representation count. The recipe carries rep_count, and the search keeps
+# only the rep_count representations its allocation scores rank highest in
+# each fold before splitting the budget (find_best_hybrid.py, the top-N
+# restriction in _evaluate_hybrid_config). Neither door here takes rep_count,
+# so on a pool wider than rep_count every representation was used.
+#
+# The hybrid does not depend on the downstream model (no model is passed, as
+# before), so one build per (recipe, budget, fold) is shared by 9b, 9c and all
+# of 9d's models. 9d used to rebuild it once per model.
+_FOLD_HYBRID_MEMO = {}
+
+
+def _recipe_from_blueprint(bp, augs):
+    """The recipe a sub-analysis rebuilds, or the engine defaults with no search."""
+    if bp is None:
+        return {'allocation': 'performance_weighted',
+                'importance': 'lightgbm_gain',
+                'internal_evaluator': 'rf',
+                'augmentation_strategy': 'uncapped' if augs else 'none',
+                'rep_count': None,
+                'recipe_budget': None,
+                'from_fallback': True}
+    rc = getattr(bp, 'rep_count', None)
+    return {'allocation': bp.allocation_method,
+            'importance': bp.importance_method,
+            'internal_evaluator': bp.internal_evaluator,
+            'augmentation_strategy': bp.augmentation_strategy,
+            'rep_count': None if rc is None else int(rc),
+            # The budget the search scored this recipe at. A requested budget
+            # the search did not cover is served the recipe from another
+            # budget (_shared.get_best_for_downstream), so this can differ
+            # from the budget it is rebuilt at.
+            'recipe_budget': getattr(bp, 'budget', None),
+            'from_fallback': False}
+
+
+def _build_fold_hybrid(data, train_idx, val_idx, recipe, budget):
+    """(X_train, X_val, feature_info) for one outer fold, built as the search builds it.
+
+    Selection sees the fold's training rows only. The held-out rows only have
+    the selected columns read off them.
+    """
+    import hashlib
+    from kirby.hybrid import (apply_feature_selection as _afs,
+                              apply_augmentation_selection as _aas)
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data.get('groups')
+    augs = data.get('augmentations')
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+
+    train_reps = {k: v[train_idx] for k, v in reps.items()}
+    val_reps = {k: v[val_idx] for k, v in reps.items()}
+    y_train = labels[train_idx]
+    train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+    val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
+
+    key = (recipe['allocation'], recipe['importance'],
+           recipe['internal_evaluator'], recipe['augmentation_strategy'],
+           recipe['rep_count'], int(budget),
+           hashlib.sha1(np.ascontiguousarray(train_idx).tobytes()).hexdigest())
+    info = _FOLD_HYBRID_MEMO.get(key)
+    if info is None:
+        kw = dict(allocation_method=recipe['allocation'],
+                  importance_method=recipe['importance'],
+                  budget=budget,
+                  internal_evaluator=recipe['internal_evaluator'],
+                  augmentation_strategy=recipe['augmentation_strategy'],
+                  groups=groups[train_idx] if groups is not None else None,
+                  metric_fn=metric_fn, lower_is_better=lower_is_better,
+                  is_clf=(data.get('task_type') == 'classification'))
+        rc = recipe['rep_count']
+        if rc is not None and rc < len(train_reps):
+            # First pass on the whole pool only to read each representation's
+            # allocation score on this fold; the search ranks by the same
+            # numbers (higher is better whatever the metric).
+            _, info0 = create_hybrid(train_reps, y_train,
+                                     augmentations=train_augs, **kw)
+            scores = info0.get('allocation_baseline_scores') or {}
+            if not scores:
+                raise ValueError(
+                    f"rep_count={rc} needs this fold's allocation scores to "
+                    f"rank the representations, and allocation "
+                    f"{recipe['allocation']!r} returned none")
+
+            def _sc(r):
+                v = scores.get(r, float('-inf'))
+                return v if np.isfinite(v) else float('-inf')
+
+            keep = sorted(train_reps, key=_sc, reverse=True)[:rc]
+            _, info = create_hybrid(
+                {k: train_reps[k] for k in keep}, y_train,
+                augmentations=train_augs,
+                precomputed_alloc_scores={k: scores[k] for k in keep}, **kw)
+            info['rep_count_kept'] = sorted(keep)
+        else:
+            _, info = create_hybrid(train_reps, y_train,
+                                    augmentations=train_augs, **kw)
+        _FOLD_HYBRID_MEMO[key] = info
+
+    X_train = _afs(train_reps, info, base_only=True)
+    X_val = _afs(val_reps, info, base_only=True)
+    aug_info = info.get('augmentation_info')
+    if aug_info and augs:
+        _xa_tr = _aas(train_augs, aug_info)
+        _xa_va = _aas(val_augs, aug_info)
+        if _xa_tr is not None and _xa_va is not None:
+            X_train = np.hstack([X_train, _xa_tr])
+            X_val = np.hstack([X_val, _xa_va])
+    return X_train, X_val, info
 
 
 # =========================================================================
@@ -453,26 +582,24 @@ def _run_information_retention(data, budgets, dataset_name=None,
         # engine and did not, so a budget with no pool blueprint was built
         # under a different evaluator from one that had a blueprint naming
         # 'rf' -- inside the same curve.
-        alloc = bp.allocation_method if bp else 'performance_weighted'
-        imp = bp.importance_method if bp else 'lightgbm_gain'
-        int_eval = bp.internal_evaluator if bp else 'rf'
-        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. create_hybrid_cached
-        # refuses any keyword it cannot hash into its fold key, and model,
-        # metric_fn and lower_is_better are not in _HYBRID_FOLD_KEY_KWARGS
-        # (_shared.py:107). With no model, create_hybrid resolves
+        recipe = _recipe_from_blueprint(bp, augs)
+        alloc, imp, int_eval = (recipe['allocation'], recipe['importance'],
+                                recipe['internal_evaluator'])
+        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. _build_fold_hybrid passes
+        # no model, and with no model create_hybrid resolves
         # internal_evaluator='match' to 'lightgbm' (hybrid.py:5952) whatever
-        # downstream model the recipe was chosen for -- and with no metric_fn
-        # the budget split is ranked on R2 or accuracy rather than the
-        # dataset's own metric. Recorded rather than silently different.
+        # downstream model the recipe was chosen for. Recorded rather than
+        # silently different. The dataset's metric IS passed since 2026-09-28.
         if int_eval == 'match':
             _match_resolved.setdefault(budget, 'lightgbm')
-        aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         # from_fallback says the recipe is the engine's default, not a recipe
         # any search picked. Without it a fallback budget reads like a searched
         # one in the saved file.
         results['best_configs'].append({'budget': budget, 'importance': imp,
                                         'allocation': alloc,
-                                        'from_fallback': bp is None})
+                                        'rep_count': recipe['rep_count'],
+                                        'recipe_budget': recipe['recipe_budget'],
+                                        'from_fallback': recipe['from_fallback']})
         if bp is None:
             print(f"      9b budget={budget}: no search found, using engine "
                   f"defaults {alloc}/{imp}/{int_eval}")
@@ -482,33 +609,13 @@ def _run_information_retention(data, budgets, dataset_name=None,
         fold_mi_xy = []
         fold_mi_xx = []
         from experiments._shared import cv_split as _cv_split_9b
-        from kirby.hybrid import apply_feature_selection as _afs_9b
-        from kirby.hybrid import apply_augmentation_selection as _aas_9b
         _mode_9b = 'intermediary' if n_folds == 1 else 'full'
         for train_idx, val_idx in _cv_split_9b(groups, n_folds, sample_X, labels, mode=_mode_9b):
-            train_reps = {k: v[train_idx] for k, v in reps.items()}
-            val_reps = {k: v[val_idx] for k, v in reps.items()}
-            y_train = labels[train_idx]
             y_val = labels[val_idx]
-            train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
-            val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
             try:
-                X_hybrid, _finfo = create_hybrid_cached(
-                    train_reps, y_train, train_idx,
-                    groups=groups[train_idx], dataset_name=dataset_name,
-                    allocation_method=alloc,
-                    importance_method=imp,
-                    budget=budget,
-                    internal_evaluator=int_eval,
-                    augmentations=train_augs,
-                    augmentation_strategy=aug_strat)
                 # Same features, applied to the rows that did not choose them.
-                X_hybrid_val = _afs_9b(val_reps, _finfo)
-                _aug_info = _finfo.get('augmentation_info')
-                if _aug_info and val_augs:
-                    _X_aug_val = _aas_9b(val_augs, _aug_info)
-                    if _X_aug_val is not None:
-                        X_hybrid_val = np.hstack([X_hybrid_val, _X_aug_val])
+                X_hybrid, X_hybrid_val, _finfo = _build_fold_hybrid(
+                    data, train_idx, val_idx, recipe, budget)
             except Exception as exc:
                 # N7: dropping a fold here silently shrinks the MI average;
                 # log so "fold genuinely empty" != "create_hybrid threw".
@@ -634,7 +741,7 @@ def _run_information_retention(data, budgets, dataset_name=None,
     if _match_resolved:
         print(f"    {len(_match_resolved)} budget(s) named internal "
               f"evaluator 'match'; this path built them under lightgbm "
-              f"because create_hybrid_cached cannot take a model")
+              f"because this path passes create_hybrid no model")
     return results
 
 
@@ -716,23 +823,16 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         # engine and did not, so a budget with no pool blueprint was built
         # under a different evaluator from one that had a blueprint naming
         # 'rf' -- inside the same curve.
-        alloc = bp.allocation_method if bp else 'performance_weighted'
-        imp = bp.importance_method if bp else 'lightgbm_gain'
-        int_eval = bp.internal_evaluator if bp else 'rf'
-        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. create_hybrid_cached
-        # refuses any keyword it cannot hash into its fold key, and model,
-        # metric_fn and lower_is_better are not in _HYBRID_FOLD_KEY_KWARGS
-        # (_shared.py:107). With no model, create_hybrid resolves
-        # internal_evaluator='match' to 'lightgbm' (hybrid.py:5952) whatever
-        # downstream model the recipe was chosen for -- and with no metric_fn
-        # the budget split is ranked on R2 or accuracy rather than the
-        # dataset's own metric. Recorded rather than silently different.
+        recipe = _recipe_from_blueprint(bp, augs)
+        alloc, imp, int_eval = (recipe['allocation'], recipe['importance'],
+                                recipe['internal_evaluator'])
+        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH; see the same note in 9b.
         if int_eval == 'match':
             _match_resolved.setdefault(budget, 'lightgbm')
-        aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         # Same marker as 9b: the recipe came from the engine's defaults, not a
         # search.
-        results['from_fallback'].append(bp is None)
+        results['from_fallback'].append(recipe['from_fallback'])
+        results.setdefault('recipe', []).append(dict(recipe, budget=budget))
         if bp is None:
             print(f"      9c budget={budget}: no search found, using engine "
                   f"defaults {alloc}/{imp}/{int_eval}")
@@ -765,20 +865,12 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         fold_widths = []
         pca_failures = []
         hybrid_failures = []
-        for fold_i, (train_idx, _) in enumerate(
+        for fold_i, (train_idx, val_idx) in enumerate(
                 _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c)):
             try:
-                train_reps = {k: v[train_idx] for k, v in reps.items()}
-                train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
-                X_hybrid, _ = create_hybrid_cached(
-                    train_reps, labels[train_idx], train_idx,
-                    groups=groups[train_idx], dataset_name=dataset_name,
-                    allocation_method=alloc,
-                    importance_method=imp,
-                    budget=budget,
-                    internal_evaluator=int_eval,
-                    augmentations=train_augs,
-                    augmentation_strategy=aug_strat)
+                # Rank is read on the training rows only.
+                X_hybrid, _, _ = _build_fold_hybrid(
+                    data, train_idx, val_idx, recipe, budget)
             except Exception as exc:
                 msg = f"fold {fold_i}: {type(exc).__name__}: {exc}"
                 hybrid_failures.append(msg)
@@ -843,7 +935,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
     if _match_resolved:
         print(f"    {len(_match_resolved)} budget(s) named internal "
               f"evaluator 'match'; this path built them under lightgbm "
-              f"because create_hybrid_cached cannot take a model")
+              f"because this path passes create_hybrid no model")
     return results
 
 
@@ -946,35 +1038,48 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
             except Exception as e:
                 print(f"    {model_name}/b={budget}: pool helper failed - {e}")
                 _s, _m = None, None
-            if _m:
-                bp = _m['best_config']['blueprint']
-                alloc = bp.allocation_method
-                imp = bp.importance_method
-                int_eval = bp.internal_evaluator
-                aug_strat = bp.augmentation_strategy
-            else:
-                # Fallback when no search is found: the engine's own current
-                # defaults. Was 'greedy'/'treeshap'/'ridge' -- greedy is cut,
-                # and treeshap/ridge are neither the engine default nor what
-                # the search would have picked. The evaluator is 'rf', the
-                # engine's default since 2026-09-16 and what 9b and 9c fall
-                # back to; it was 'lightgbm' here alone.
-                alloc, imp, int_eval = ('performance_weighted',
-                                        'lightgbm_gain', 'rf')
-                aug_strat = 'uncapped' if augs else 'none'
-            _from_fallback = _m is None
+            # No search found means the engine's own current defaults
+            # (performance_weighted / lightgbm_gain / rf), the same fallback
+            # 9b and 9c use.
+            recipe = _recipe_from_blueprint(
+                _m['best_config']['blueprint'] if _m else None, augs)
+            alloc, imp = recipe['allocation'], recipe['importance']
+            _from_fallback = recipe['from_fallback']
 
             try:
-                val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
-                    reps, labels, groups, model_factory, n_folds,
-                    allocation_method=alloc,
-                    importance_method=imp,
-                    budget=budget,
-                    mode=mode,
-                    metric_fn=metric_fn,
-                    internal_evaluator=int_eval,
-                    augmentations=augs,
-                    augmentation_strategy=aug_strat)
+                # One outer fold at a time, on the folds 9b and 9c use. The
+                # hybrid is built by _build_fold_hybrid (the dataset's metric,
+                # the recipe's representation count) and shared across models.
+                # Replaces evaluate_cv_with_train, which passed neither and
+                # dropped a failed fold without saying so.
+                from experiments._shared import cv_split as _cv_split_9d
+                from kirby.find_best_hybrid import _predict_for_metric as _pfm
+                _val_scores, _train_scores, _widths, _fold_errors = [], [], [], []
+                for _fi, (train_idx, val_idx) in enumerate(_cv_split_9d(
+                        groups, n_folds, next(iter(reps.values())), labels,
+                        mode=mode)):
+                    try:
+                        X_tr, X_va, _ = _build_fold_hybrid(
+                            data, train_idx, val_idx, recipe, budget)
+                        _sc = StandardScaler()
+                        X_tr_s = _sc.fit_transform(X_tr)
+                        X_va_s = _sc.transform(X_va)
+                        _mdl = model_factory()
+                        _mdl.fit(X_tr_s, labels[train_idx])
+                        _val_scores.append(float(metric_fn(
+                            labels[val_idx], _pfm(_mdl, X_va_s, metric_fn))))
+                        _train_scores.append(float(metric_fn(
+                            labels[train_idx], _pfm(_mdl, X_tr_s, metric_fn))))
+                        _widths.append(int(X_tr.shape[1]))
+                    except Exception as _fe:
+                        _fold_errors.append(
+                            f"fold {_fi}: {type(_fe).__name__}: {_fe}")
+                        print(f"    {model_name}/b={budget} fold {_fi} failed: "
+                              f"{type(_fe).__name__}: {_fe}")
+                if not _val_scores:
+                    raise RuntimeError(f"no fold scored ({_fold_errors})")
+                val_r2 = float(np.mean(_val_scores))
+                train_r2 = float(np.mean(_train_scores))
                 if model_name not in results['models']:
                     results['models'][model_name] = {}
                 # train_r2/val_r2 hold the domain metric (RMSE for molecular);
@@ -990,6 +1095,14 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     'budget': budget,
                     'importance': imp,
                     'allocation': alloc,
+                    'rep_count': recipe['rep_count'],
+                    'recipe_budget': recipe['recipe_budget'],
+                    'val_fold_scores': _val_scores,
+                    'train_fold_scores': _train_scores,
+                    'hybrid_width_per_fold': _widths,
+                    'n_folds_scored': len(_val_scores),
+                    'n_folds_asked': int(n_folds),
+                    'fold_errors': _fold_errors,
                     # These four came from a search over every row, so
                     # val_score is not held out from the rows that picked them.
                     'recipe_selected_on': 'all rows',
