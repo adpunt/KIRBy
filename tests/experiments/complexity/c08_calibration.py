@@ -287,6 +287,9 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         'used_hardcoded_fallback': bool(used_pool_fallback),
         'conditions': {},
         'task_type': task_type,
+        # The metric every condition's val_score is in, and its direction.
+        'metric': metric_name,
+        'lower_is_better': bool(lower_is_better),
         'total_dim': total_dim,
         'condition_budgets': _cond_budgets,
         # {condition: [features built, per fold]}. Read beside
@@ -546,13 +549,13 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                       f"cal_error={fold_result['cal_error']:.3f}")
             else:
                 # Regression: conformal prediction intervals.
-                # val_r2 must come from model_conf (not `model` trained on full
-                # y_train) so the reported performance number and the
-                # calibration metrics (PICP/MPIW) are from the same model.
+                # val_score is the dataset's own metric (RMSE on herg_ki, logd,
+                # caco2, buchwald_hartwig; spearman on flab_expression_koenig).
+                # It was stored as 'val_r2', which it never was.
                 # The calibration rows were cut on scaffold groups at the top
                 # of the fold, before the hybrid was built.
                 y_pred_val = model_conf.predict(X_val_s)
-                val_r2 = metric_fn(y_val, y_pred_val)
+                val_metric = float(metric_fn(y_val, y_pred_val))
 
                 y_pred_cal = model_conf.predict(X_cal)
                 cal_residuals = np.abs(y_cal - y_pred_cal)
@@ -607,7 +610,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     ue_corr = float(ue_corr)
 
                 fold_result = {
-                    'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
+                    'val_score': val_metric, 'picp': picp, 'mpiw': mpiw,
                     'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
                     'conformal_q': float(q), 'n_val': len(y_val),
                     'n_cal': int(_n_cal_used),
@@ -615,7 +618,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     'ue_corr': ue_corr,
                 }
                 fold_metrics.append(fold_result)
-                print(f"    fold {fold_i}: {metric_name}={val_r2:.4f}, PICP={picp:.3f}, "
+                print(f"    fold {fold_i}: {metric_name}={val_metric:.4f}, PICP={picp:.3f}, "
                       f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
 
         # ⛔ A CONDITION WHOSE EVERY FOLD FAILED USED TO VANISH. `if
@@ -668,7 +671,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 'n_folds_requested': int(n_folds),
                 'folds': fold_metrics,
             }
-            score_key = 'val_score' if is_classification else 'val_r2'
+            score_key = 'val_score'
             picp_val = avg.get('picp', float('nan'))
             if is_classification:
                 set_key = avg.get('avg_set_size', float('nan'))
@@ -696,7 +699,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         print("  " + "-" * 56)
         for cond_name, cond_data in results['conditions'].items():
             a = cond_data['avg']
-            print(f"  {cond_name:<14} {a.get('val_r2', float('nan')):.4f}  "
+            print(f"  {cond_name:<14} {a.get('val_score', float('nan')):.4f}  "
                   f"{a.get('picp', float('nan')):.3f}  "
                   f"{a.get('mpiw', float('nan')):.3f}  "
                   f"{a.get('cal_error', float('nan')):.4f}    {cond_data['budget']}")
