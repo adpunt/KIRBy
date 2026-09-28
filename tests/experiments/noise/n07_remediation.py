@@ -2650,6 +2650,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # First per-fold build failure per space, filled by _fold_space below. A
     # space whose every fold failed would otherwise leave no rows and no reason.
     _fold_space_errors = {}
+    # DIRTY-LOCAL 2026-09-28: the representations each fold's hybrid was built
+    # on, and where that list came from, per '<model>:<space>' and fold.
+    _fold_space_reps = {}
     for _mname in models_requested:
         _recipes, _unavail = pool_recipes_by_family(
             meta_by_model.get(_mname), SPACE_FOR_FAMILY,
@@ -3076,6 +3079,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # first per-fold build error per space.
         'hybrid_spaces_unavailable': hybrid_spaces_unavailable,
         'hybrid_space_build_errors': _fold_space_errors,
+        'hybrid_fold_reps': _fold_space_reps,
         'hybrid_space_objective': dict(space_objective),
         'hybrid_spaces_note': (
             'One hybrid space per family of stored search, per downstream '
@@ -3377,6 +3381,36 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
             train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
             val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
+
+            # DIRTY-LOCAL 2026-09-28. A recipe with rep_count below the pool
+            # size is built, in the search, on the representations THIS fold's
+            # training rows rank highest. Handed the whole pool and no per-fold
+            # scores, build_fold_hybrid ranks by Blueprint.rep_scores instead
+            # (_shared.py:5270-5300), one score per representation over every
+            # molecule, this fold's held-out ones included. That is a choice
+            # made with held-out labels, and on herg_ki it built a different
+            # hybrid from the one the search scored: rf 0.6152 RMSE here and in
+            # n02 before its fix, against the search's 0.6058 on the same
+            # folds. Same defect and same helper as n02 (736ec93) and n37
+            # (7d9f64f). With no per-fold record the old behaviour stands and
+            # the source says so. The fold-space cache key hashes every
+            # representation it is handed, so a build on the whole pool is
+            # never read back as a build on the fold's list.
+            from experiments.noise.n02_sample_weighting import search_fold_reps
+            _keep, _keep_src = search_fold_reps(model_bp, fold_i, n_folds,
+                                                list(train_reps_fold))
+            if _keep is not None:
+                train_reps_fold = {k: v for k, v in train_reps_fold.items()
+                                   if k in _keep}
+                val_reps_fold = {k: v for k, v in val_reps_fold.items()
+                                 if k in _keep}
+            _fold_space_reps.setdefault(
+                f'{model_name}:{space_name}', {})[str(fold_i)] = {
+                    'reps': sorted(_keep) if _keep is not None else None,
+                    'source': _keep_src}
+            print(f"    fold {fold_i} {model_name}:{space_name}: built on "
+                  f"{sorted(_keep) if _keep is not None else 'the pool'} "
+                  f"({_keep_src})")
 
             def _fold_space(y_for_features, _tr=train_reps_fold, _va=val_reps_fold,
                             _ta=train_augs, _va_a=val_augs, _tri=train_idx,
