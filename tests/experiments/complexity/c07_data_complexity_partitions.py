@@ -67,6 +67,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     # feature selection is redone per partition. So the scores under
     # 'all_rows_bp_scores' are not held-out scores.
     all_rows_blueprints = {}
+    # Per model: why no full-data recipe was found. This lookup used to end in
+    # `except: pass`, so a model missing from the second pass left no trace.
+    all_rows_blueprints_missing = {}
     full_augs_all = data.get('augmentations')
     for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
         try:
@@ -83,8 +86,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     _m_fd['best_config']['blueprint'],
                     _m_fd['tier'], _m_fd['aug_condition'],
                 )
-        except Exception:
-            pass
+            else:
+                all_rows_blueprints_missing[cand_model] = 'no stored search'
+        except Exception as _e_fd:
+            all_rows_blueprints_missing[cand_model] = (
+                f'{type(_e_fd).__name__}: {_e_fd}')
+    results['all_rows_blueprints_missing'] = all_rows_blueprints_missing
     results['all_rows_blueprints_meta'] = {
         m: {'tier': t, 'aug_condition': a, 'budget': bp.budget,
             'allocation': bp.allocation_method, 'importance': bp.importance_method}
