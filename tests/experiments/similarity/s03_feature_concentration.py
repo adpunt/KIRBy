@@ -67,8 +67,9 @@ def _mi_knn_capped(X, y, k=5, max_rows=MI_MAX_ROWS, seed=42):
 
     Returns (mi, n_components): the MI on a fixed random subset of <= max_rows
     rows, and the number of PCA components the estimator summed that MI over.
-    Below the row cap every row is used (identical to calling the estimator
-    directly).
+    Below the row cap every row is used. Below the component cap the block is
+    PCA-rotated here first (see the comment in the body), so every block is
+    summed over decorrelated components.
 
     The component count is returned because the MI is NOT measured over the
     features handed in. estimate_mutual_information_knn PCA-reduces to
@@ -78,16 +79,58 @@ def _mi_knn_capped(X, y, k=5, max_rows=MI_MAX_ROWS, seed=42):
     mixes two different denominators; dividing by the component count gives
     nats per component on both sides of mi_density_ratio.
     """
-    X = np.asarray(X)
+    X = np.asarray(X, dtype=float)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
     y = np.asarray(y)
     if max_rows is not None and X.shape[0] > max_rows:
         idx = np.random.RandomState(seed).choice(X.shape[0], max_rows, replace=False)
         X, y = X[idx], y[idx]
-    n_rows, n_features = X.shape[0], (X.shape[1] if X.ndim > 1 else 1)
-    # Mirrors the estimator's own cap; it PCA-reduces only when the features
-    # outnumber it, so the components actually used are the smaller of the two.
-    n_components = min(n_features, max(1, min(50, n_rows // 5)))
+    n_rows, n_features = X.shape
+    # Mirrors the estimator's own cap.
+    cap = max(1, min(50, n_rows // 5))
+    if n_features > cap:
+        # The estimator PCA-reduces to `cap` decorrelated components itself.
+        n_components = cap
+    else:
+        # Under the cap the estimator skips its PCA and sums per-feature MI
+        # over the raw, correlated features, so information two features
+        # share is counted twice. The full representation (over the cap) is
+        # always decorrelated, so the two sides of mi_density_ratio were
+        # measured two different ways. Rotate here instead, keeping every
+        # component with non-zero variance: duplicate fingerprint bits give
+        # zero-variance components, which the estimator would rescale to unit
+        # variance and count as components. (dirty local 2026-09-28)
+        Xs = StandardScaler().fit_transform(X)
+        pca = PCA(n_components=n_features, random_state=42).fit(Xs)
+        ev = pca.explained_variance_
+        keep = ev > 1e-10 * max(float(ev.max()), 1e-300)
+        n_components = int(keep.sum())
+        if n_components == 0:
+            return 0.0, 0
+        X = pca.transform(Xs)[:, keep]
     return estimate_mutual_information_knn(X, y, k=k), n_components
+
+
+def _effective_rank_from_singular_values(s):
+    """exp(entropy of normalised singular values), as compute_effective_rank.
+
+    Used for the PCA-matched block. compute_effective_rank standardises its
+    input first, and standardising PCA scores gives every component unit
+    variance, so it returns the component count whatever the spectrum.
+    """
+    s = np.asarray(s, dtype=float)
+    s = s[s > 1e-10]
+    if len(s) == 0:
+        return 0.0
+    p = s / s.sum()
+    return float(np.exp(-np.sum(p * np.log(p))))
+
+
+# How many random subsets of the selected size are drawn per representation.
+# One draw was a single sample of the control; the median over draws is
+# reported (a median across replicates), and every draw is written.
+N_RANDOM_DRAWS = 5
 
 
 def _cell_key(downstream_model, budget):
@@ -229,17 +272,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         rep_result['n_selected'] = n_selected
                         rep_result['effective_rank_selected'] = compute_effective_rank(X_sel)
 
-                        # Random subset of same size
-                        rand_idx = rng.choice(n_features, n_selected, replace=False)
-                        X_rand = X[:, rand_idx]
-                        try:
-                            mi_rand, n_comp_rand = _mi_knn_capped(
-                                StandardScaler().fit_transform(X_rand), labels, k=5)
-                        except Exception:
-                            mi_rand, n_comp_rand = float('nan'), 0
+                        # Random subsets of the same size, N_RANDOM_DRAWS of
+                        # them; the median over draws is the reported value.
+                        _mi_r, _nc_r, _er_r = [], [], []
+                        for _ in range(N_RANDOM_DRAWS):
+                            rand_idx = rng.choice(n_features, n_selected, replace=False)
+                            X_rand = X[:, rand_idx]
+                            try:
+                                _m, _c = _mi_knn_capped(
+                                    StandardScaler().fit_transform(X_rand), labels, k=5)
+                            except Exception:
+                                _m, _c = float('nan'), 0
+                            _mi_r.append(_m)
+                            _nc_r.append(_c)
+                            _er_r.append(compute_effective_rank(X_rand))
+                        _dens_r = [m / c if c > 0 else float('nan')
+                                   for m, c in zip(_mi_r, _nc_r)]
+                        # nanmedian of an all-NaN list warns and returns NaN.
+                        _med = (lambda v: float(np.nanmedian(v))
+                                if np.any(np.isfinite(v)) else float('nan'))
+                        mi_rand = _med(_mi_r)
                         rep_result['mi_random'] = mi_rand
-                        rep_result['mi_components_random'] = n_comp_rand
-                        rep_result['effective_rank_random'] = compute_effective_rank(X_rand)
+                        rep_result['mi_random_draws'] = [float(v) for v in _mi_r]
+                        rep_result['mi_components_random'] = int(np.median(_nc_r))
+                        rep_result['effective_rank_random'] = _med(_er_r)
+                        rep_result['n_random_draws'] = N_RANDOM_DRAWS
 
                         # PCA to same dim — cap at min(50, n//5) so the KSG
                         # estimator's internal PCA does not further reduce
@@ -250,9 +307,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_scaled_rep = StandardScaler().fit_transform(X)
                         if n_features > 2000:
                             from sklearn.decomposition import TruncatedSVD
-                            X_pca_match = TruncatedSVD(n_components=n_pca_comp, random_state=42).fit_transform(X_scaled_rep)
+                            _pca_model = TruncatedSVD(n_components=n_pca_comp, random_state=42)
                         else:
-                            X_pca_match = PCA(n_components=n_pca_comp, random_state=42).fit_transform(X_scaled_rep)
+                            _pca_model = PCA(n_components=n_pca_comp, random_state=42)
+                        X_pca_match = _pca_model.fit_transform(X_scaled_rep)
                         try:
                             mi_pca, n_comp_pca = _mi_knn_capped(
                                 X_pca_match, labels, k=5)
@@ -260,7 +318,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             mi_pca, n_comp_pca = float('nan'), 0
                         rep_result['mi_pca'] = mi_pca
                         rep_result['mi_components_pca'] = n_comp_pca
-                        rep_result['effective_rank_pca'] = compute_effective_rank(X_pca_match)
+                        # From the singular values of the standardised
+                        # representation, as the other blocks are. Standardising
+                        # the PCA scores instead returned n_pca_comp always.
+                        rep_result['effective_rank_pca'] = \
+                            _effective_rank_from_singular_values(
+                                _pca_model.singular_values_)
 
                         # MI density = nats per PCA COMPONENT, on both sides.
                         # It used to be nats per feature: mi_full divided by
@@ -271,23 +334,55 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # ONLY: this ratio is a full-data concentration
                         # diagnostic (no held-out fold), NOT a hybrid win — see
                         # module docstring.
-                        rep_result['mi_density_full'] = (
-                            mi_full / n_comp_full if n_comp_full > 0 else 0)
-                        rep_result['mi_density_selected'] = (
-                            mi_sel / n_comp_sel if n_comp_sel > 0 else 0)
+                        # A failed estimate (NaN, 0 components) is NaN here,
+                        # not 0: 0 read as "no concentration" and gave a ratio
+                        # of 0 when only the selected block failed.
+                        def _dens(m, c):
+                            return m / c if c > 0 else float('nan')
+
+                        def _ratio(a, b):
+                            return (a / b if np.isfinite(a) and np.isfinite(b)
+                                    and b > 0 else float('nan'))
+                        rep_result['mi_density_full'] = _dens(mi_full, n_comp_full)
+                        rep_result['mi_density_selected'] = _dens(mi_sel, n_comp_sel)
+                        rep_result['mi_density_random'] = _med(_dens_r)
+                        rep_result['mi_density_pca'] = _dens(mi_pca, n_comp_pca)
                         rep_result['mi_density_unit'] = 'nats_per_pca_component'
-                        rep_result['mi_density_ratio'] = (
-                            rep_result['mi_density_selected'] / rep_result['mi_density_full']
-                            if rep_result['mi_density_full'] > 0 else float('nan')
-                        )
+                        rep_result['mi_density_ratio'] = _ratio(
+                            rep_result['mi_density_selected'],
+                            rep_result['mi_density_full'])
+                        # Selected against the two blocks of the same size.
+                        # The ratio against the full representation divides a
+                        # sum over up to 50 components by a sum over as few as
+                        # the selected block has, so it moves with that count.
+                        rep_result['mi_density_ratio_vs_random'] = _ratio(
+                            rep_result['mi_density_selected'],
+                            rep_result['mi_density_random'])
+                        rep_result['mi_density_ratio_vs_pca'] = _ratio(
+                            rep_result['mi_density_selected'],
+                            rep_result['mi_density_pca'])
+                        # The same comparisons as differences, in nats per
+                        # component. The estimator clamps at 0 after its
+                        # permutation correction, so a control block often
+                        # scores exactly 0 and the ratio is then undefined.
+                        rep_result['mi_density_minus_random'] = (
+                            rep_result['mi_density_selected']
+                            - rep_result['mi_density_random'])
+                        rep_result['mi_density_minus_pca'] = (
+                            rep_result['mi_density_selected']
+                            - rep_result['mi_density_pca'])
 
                         print(f"    MI full={mi_full:.4f} ({n_features} features "
                               f"-> {n_comp_full} components), "
                               f"selected={mi_sel:.4f} ({n_selected} features "
                               f"-> {n_comp_sel} components), "
                               f"random={mi_rand:.4f}, pca={mi_pca:.4f}")
-                        print(f"    MI density ratio (selected/full): "
-                              f"{rep_result['mi_density_ratio']:.2f}x")
+                        print(f"    MI per component, selected / full = "
+                              f"{rep_result['mi_density_ratio']:.2f}, "
+                              f"selected / random = "
+                              f"{rep_result['mi_density_ratio_vs_random']:.2f}, "
+                              f"selected / PCA = "
+                              f"{rep_result['mi_density_ratio_vs_pca']:.2f}")
                     else:
                         print(f"    No features selected from this rep")
                 else:
