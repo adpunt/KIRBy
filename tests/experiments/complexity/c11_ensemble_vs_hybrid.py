@@ -627,7 +627,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         baseline_folds = {}
         hybrid_cands = []
 
-        for rep_name in rep_names:
+        # general_reps, not rep_names. A tier-1 representation (<50 features,
+        # e.g. onehot_components at 45 on buchwald_hartwig) is never a
+        # standalone baseline and never an ensemble member, so it must not be
+        # eligible as best_single either. Looping rep_names let it win
+        # best_single and best_single_reselected while the ensemble and the
+        # oracle arms could not use it. Nothing below reads a member outside
+        # general_reps.
+        for rep_name in general_reps:
             X = reps[rep_name]
             o_scores, o_agg, o_hard = [], [], []
             i_agg_f, i_hard_f, i_score_f = [], [], []
