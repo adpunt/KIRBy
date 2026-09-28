@@ -1487,6 +1487,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         except Exception as exc:
                             print(f"      {space}/{arm}/{mname} fold {fold_i} "
                                   f"failed: {type(exc).__name__}: {exc}")
+                            # Recorded, as the comment above says a fit that
+                            # takes no row weight is. Until 2026-09-28 a failed
+                            # fit was printed and nothing else: the arm's mean
+                            # then covered fewer folds than no_cleaning's and
+                            # 'folds_the_arm_refused' said none were missing.
+                            refused[space][mname].setdefault(arm, []).append(
+                                int(fold_i))
 
                 # One row per (arm, model) against no_cleaning on this matrix.
                 cell_D = {mname: cell_scores[('no_cleaning', mname)]
