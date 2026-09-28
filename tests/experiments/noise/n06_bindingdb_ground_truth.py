@@ -1042,6 +1042,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'notes': gt.notes,
             'per_space': convert_numpy(per_space),
         }
+        # DIRTY-LOCAL 2026-09-28. What the dataset's own label value scores,
+        # with no estimator and no features. On herg_ki the four curators
+        # disagree mostly about weak binders: the label alone, negated, gives
+        # an AUROC of 0.82 against the curator flag over 65 molecules, and a
+        # Spearman of +0.35 against the ChEMBL Ki spread over 211. An
+        # estimator whose score tracks the label value inherits that without
+        # finding any noise, so its number is read against these.
+        _y = labels
+        _dist = np.abs(_y - np.nanmedian(_y))
+        results['ground_truth'][gt.provider]['label_only_reference'] = {
+            'what_this_is': (
+                f'the {gt.statistic} of a score that is the label itself, or '
+                f'its distance from the dataset median, in each sign. No '
+                f'estimator, no feature space. An estimator scoring no better '
+                f'than the best of these has not been shown to find noise.'),
+            'label': convert_numpy(agreement(gt, _y)),
+            'minus_label': convert_numpy(agreement(gt, -_y)),
+            'distance_from_median': convert_numpy(agreement(gt, _dist)),
+            'minus_distance_from_median': convert_numpy(agreement(gt, -_dist)),
+        }
         # The hybrid minus each single representation, per estimator. Both
         # numbers were already written before 2026-09-11 and never subtracted.
         # One block per single-representation space (base_1, base_2).
