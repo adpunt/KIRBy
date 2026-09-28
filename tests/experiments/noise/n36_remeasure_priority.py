@@ -51,9 +51,12 @@ constant still multiplied in; the order is the same.
 
 LEVERAGE, AND WHY THIS ONE. The report says "model leverage or influence" and
 names no formula. Used here: 1 + the number of training molecules that have this
-candidate among their 5 nearest neighbours, Euclidean, in the standardised
-space being scored. It counts how many other molecules' neighbourhoods a label
-feeds, and needs no held-out molecule. `sparsest` reads the same neighbour
+candidate among their 5 nearest neighbours, under the process-wide distance
+(manhattan by default; Euclidean before 2026-09-25, see neighbour_stats), in
+the space being scored. That space is standardised on the training molecules,
+except a single representation whose every value is 0 or 1, which
+noise_cache.cached_scaled leaves unscaled. It counts how many other molecules'
+neighbourhoods a label feeds, and needs no held-out molecule. `sparsest` reads the same neighbour
 search the other way round: a molecule far from its neighbours feeds few of
 them.
 
@@ -390,7 +393,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             f'among their {N_NEIGHBOURS} nearest neighbours in the similarity '
             'setting; under model_input, the process-wide distance '
             '(manhattan by default; Euclidean before 2026-09-25) in the '
-            'standardised space being scored'),
+            'space being scored, standardised on the training molecules '
+            'except a single 0/1 representation, which is left unscaled'),
         'similarity_settings': [st.name for st in sweep_settings()],
         'similarity_ks': list(sweep_ks(N_NEIGHBOURS)),
         'controls_run': controls_enabled(),
