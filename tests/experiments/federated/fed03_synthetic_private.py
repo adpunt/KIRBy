@@ -1463,6 +1463,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 # comparison a comparison of two sizes.
                 silo_fis = {}
                 silo_scores = {}
+                _families_dropped = {}
                 _n_fam = max(1, len(silo_names))
                 # DIRTY-LOCAL 2026-09-28: was PART_B_BUDGET (fixed 100) inside
                 # the _pb_budget sweep, so C3 was the same 100-feature build
@@ -1535,9 +1536,15 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                             metric_fn=metric_fn_b,
                             lower_is_better=lower_is_better_b)
                         silo_fis[i] = fi_s
-                    except Exception:
+                    except Exception as _fam_err:
                         silo_fis[i] = None
                         silo_scores[i] = 0.0
+                        # DIRTY-LOCAL 2026-09-28: a family whose selection
+                        # raised was dropped in silence, so C3 came out
+                        # narrower than C2 with nothing saying why.
+                        _families_dropped[sname] = repr(_fam_err)
+                        print(f"    C3: {sname} selection FAILED "
+                              f"({_fam_err!r}); this family is left out")
 
                 h_parts_tr = []
                 h_parts_te = []
@@ -1553,7 +1560,12 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                             apply_feature_selection(silo_rep_tr, fi))
                         h_parts_te.append(
                             apply_feature_selection(silo_rep_te, fi))
-                    except Exception:
+                    except Exception as _app_err:
+                        # A train part appended before the test part raised
+                        # would leave the two stacks different widths.
+                        if len(h_parts_tr) > len(h_parts_te):
+                            h_parts_tr.pop()
+                        _families_dropped[sname] = repr(_app_err)
                         continue
 
                 if h_parts_tr:
@@ -1580,6 +1592,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                     'or r2 (regression); not used to allocate')
                 c3['budget_total'] = int(_pb_budget)
                 c3['budget_per_family'] = _per_family_budget
+                c3['families_dropped'] = _families_dropped
                 results['c3_federated_fs'] = convert_numpy(c3)
                 primary = c3.get('mcc', c3.get('rmse', float('nan')))
                 # The width is printed beside the score so C2 and C3 can be seen
