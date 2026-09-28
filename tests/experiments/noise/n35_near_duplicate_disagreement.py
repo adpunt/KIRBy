@@ -1009,7 +1009,11 @@ def _paired(base, got, lower_is_better):
     gains = np.array([(base[k] - got[k]) if lower_is_better
                       else (got[k] - base[k]) for k in shared], dtype=float)
     gains = gains[np.isfinite(gains)]
-    scale = max(abs(float(np.mean(list(base.values())))) if base else 1.0, 1.0)
+    # Finite scores only: one NaN untouched score made max(nan, 1.0) return
+    # nan, so the tolerance was nan and every pass counted as neither won,
+    # lost nor tied.
+    _fin = np.asarray([v for v in base.values() if np.isfinite(v)], dtype=float)
+    scale = max(abs(float(_fin.mean())) if _fin.size else 1.0, 1.0)
     tol = 1e-9 * scale
     return {
         'n_passes_paired': int(gains.size),
@@ -1047,7 +1051,12 @@ def _summarise(acc, tails, models, metric_name, lower_is_better):
                 b = base.get(m) or {}
                 if not b:
                     continue
-                row = {'untouched_mean': float(np.mean(list(b.values()))),
+                _bv = np.asarray(list(b.values()), dtype=float)
+                row = {'untouched_mean': (float(_bv[np.isfinite(_bv)].mean())
+                                          if np.isfinite(_bv).any()
+                                          else float('nan')),
+                       'untouched_nonfinite_passes': int(
+                           (~np.isfinite(_bv)).sum()),
                        'untouched_tails': _tail_means(
                            tails[lvl][space]['untouched'][m]),
                        'per_arm': {}}
