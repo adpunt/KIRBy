@@ -700,6 +700,26 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                       f"PICP={picp_val:.3f}, MPIW={avg.get('mpiw', float('nan')):.3f}, "
                       f"cal_error={avg.get('cal_error', float('nan')):.3f}")
 
+    # conditions_distinct above compares the budgets ASKED FOR. The width built
+    # can fall short of the budget (create_hybrid stops each representation at
+    # its last feature with positive importance), so two conditions asking for
+    # different budgets can still be built on the same number of features.
+    # This compares the widths built, fold by fold, over the three budget
+    # conditions. None when fewer than two of them were built, or when they
+    # were built on different numbers of folds.
+    _bw = {c: _built_widths[c] for c in ('optimal', 'underfit', 'overfit')
+           if c in _built_widths}
+    _nf = {len(v) for v in _bw.values()}
+    if len(_bw) >= 2 and len(_nf) == 1:
+        results['conditions_distinct_built'] = all(
+            len({_bw[c][i] for c in _bw}) == len(_bw)
+            for i in range(next(iter(_nf))))
+    else:
+        results['conditions_distinct_built'] = None
+    if results['conditions_distinct_built'] is False:
+        print(f"  WARNING: on at least one fold two budget conditions were "
+              f"built on the same number of features: {_bw}")
+
     # Summary table
     print("\n  CALIBRATION SUMMARY:")
     if is_classification:
