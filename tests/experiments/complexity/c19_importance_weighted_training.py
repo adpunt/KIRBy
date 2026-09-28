@@ -93,7 +93,15 @@ def _compute_reliability_scores(X, y, importance_weights, k=10):
 # MODELS THAT SUPPORT SAMPLE WEIGHT
 # =========================================================================
 
-WEIGHTED_MODELS = {'rf', 'lightgbm', 'xgboost'}
+# svm added 2026-09-28. It was left out as if it had no sample_weight, but
+# sklearn's SVR.fit and SVC.fit both take one. It is also the only model here
+# for which feature_weighted is a real condition: rf and lightgbm split on the
+# ORDER of each feature's values, so X * w with every w > 0 gives the same
+# predictions (checked on synthetic data: max difference 4e-16 for rf, 0 for
+# lightgbm, 0.92 for svm). For the two tree models feature_weighted differs from
+# unweighted only through the features whose importance is exactly zero, which
+# become constant columns. That count is written per fold below.
+WEIGHTED_MODELS = {'rf', 'lightgbm', 'xgboost', 'svm'}
 
 
 # =========================================================================
