@@ -209,6 +209,20 @@ def _parse_skempi_mutations(mutation_str: str) -> List[Dict]:
     return mutations
 
 
+def _parse_temperature(temp_raw) -> float:
+    """Kelvin from SKEMPI's Temperature field.
+
+    SKEMPI writes 611 of its 1,231 antibody-antigen rows as '298(assumed)'.
+    float() raises on that string, and the caller's except clause then
+    skipped the row, so half the antibody-antigen data never loaded.
+    The leading number is read; a missing or unreadable field gives 298.15.
+    """
+    if temp_raw is None or (isinstance(temp_raw, float) and math.isnan(temp_raw)):
+        return 298.15
+    m = re.match(r'\s*([0-9]+(?:\.[0-9]+)?)', str(temp_raw))
+    return float(m.group(1)) if m else 298.15
+
+
 def _compute_ddg(kd_mut: float, kd_wt: float, temperature: float) -> Optional[float]:
     """Compute ΔΔG = RT * ln(Kd_mut / Kd_wt) in kcal/mol."""
     if kd_mut <= 0 or kd_wt <= 0 or temperature <= 0:
@@ -297,7 +311,7 @@ def _process_skempi_entries(df: pd.DataFrame) -> List[Dict]:
                 kd_mut = float(row.get('Affinity_mut_parsed', np.nan))
                 kd_wt = float(row.get('Affinity_wt_parsed', np.nan))
                 temp_raw = row.get('Temperature', 298.15)
-                temp = float(temp_raw) if pd.notna(temp_raw) else 298.15
+                temp = _parse_temperature(temp_raw)
                 if np.isfinite(kd_mut) and np.isfinite(kd_wt):
                     ddg = _compute_ddg(kd_mut, kd_wt, temp)
             except (ValueError, TypeError):
@@ -506,7 +520,7 @@ def _process_skempi_all_entries(df: pd.DataFrame) -> List[Dict]:
                 kd_mut = float(row.get('Affinity_mut_parsed', np.nan))
                 kd_wt = float(row.get('Affinity_wt_parsed', np.nan))
                 temp_raw = row.get('Temperature', 298.15)
-                temp = float(temp_raw) if pd.notna(temp_raw) else 298.15
+                temp = _parse_temperature(temp_raw)
                 if np.isfinite(kd_mut) and np.isfinite(kd_wt):
                     ddg = _compute_ddg(kd_mut, kd_wt, temp)
             except (ValueError, TypeError):
