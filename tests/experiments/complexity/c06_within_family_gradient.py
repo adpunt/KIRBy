@@ -192,6 +192,28 @@ def _keep_variant_k(est):
 _COND_SUFFIX_EXTRA = {'kNN': '_ownk'}
 
 
+def _exact_spearman_p(x, y, rho_obs):
+    """Two-sided exact permutation p for Spearman's rho, over every ordering.
+
+    Counts the orderings of y against x whose |rho| is at least the observed
+    |rho|. Ties in y are kept as they are, so the count is exact for them too.
+    Above 8 points (40,320 orderings) it returns scipy's p instead.
+    """
+    from itertools import permutations
+    x = list(x)
+    y = list(y)
+    if len(x) > 8:
+        return float(spearmanr(x, y)[1])
+    target = abs(float(rho_obs)) - 1e-12
+    hits = total = 0
+    for perm in permutations(y):
+        total += 1
+        r = spearmanr(x, list(perm))[0]
+        if np.isfinite(r) and abs(r) >= target:
+            hits += 1
+    return hits / total
+
+
 def _evaluator_label(fam_name, evaluator):
     """DECIDED 2026-09-12: file the matched evaluator under its resolved name.
 
@@ -591,11 +613,40 @@ def run(data, config, output_dir, dataset_name, families=None):
                       f"[{bp.importance_method}/{bp.allocation_method}/"
                       f"{cell['evaluator_label']}]")
 
+            # FIXED 2026-09-28 (dirty local): a variant whose score is the same
+            # at EVERY budget has no peak budget. That is what a model that
+            # ignores its features does -- Lasso at alpha 1, 10 and 100 zeroes
+            # every coefficient on log-unit labels and predicts the training
+            # mean. min/max then returned the first key, the SMALLEST budget, and
+            # that invented number entered the rho below, pulling low-capacity
+            # variants to small budgets. Such a variant is now recorded with no
+            # budget and left out of the correlation. A tie among SOME budgets
+            # (e.g. two budgets past the pool width that select the same
+            # features) still resolves to the smallest of them, now recorded.
+            _tied = []
             if per_budget_val:
+                _vals = {b: v[0] for b, v in per_budget_val.items()}
+                _best = (min if lower_is_better else max)(_vals.values())
+                _tied = sorted(b for b, v in _vals.items()
+                               if np.isclose(v, _best, rtol=1e-9, atol=0.0))
+            if len(per_budget_val) >= 2 and len(_tied) == len(per_budget_val):
+                print(f"      >> no peak: {metric_name} is the same at every "
+                      f"budget {_tied}; left out of the correlation")
+                fam_result['optimal_budget'][var_name] = {
+                    'budget': None, 'r2': float(_best),
+                    'capacity_index': capacity_idx,
+                    'status': 'flat_across_budgets',
+                    'tied_budgets': _tied,
+                    'evaluator': None, 'evaluator_label': None,
+                    'fold_scores': None,
+                    'n_folds_scored': None, 'n_folds_asked': None,
+                }
+            elif per_budget_val:
                 cmp_fn = min if lower_is_better else max
                 opt_budget, (opt_val, opt_bp, opt_cell) = cmp_fn(
                     per_budget_val.items(), key=lambda kv: kv[1][0])
                 fam_result['optimal_budget'][var_name] = {
+                    'tied_budgets': _tied,
                     'budget': opt_budget,
                     'r2': opt_val,
                     'capacity_index': capacity_idx,
@@ -639,9 +690,19 @@ def run(data, config, output_dir, dataset_name, families=None):
         # measured correlation so the result is interpretable (not a bare NaN).
         n_distinct_budgets = len(set(opt_budgets))
         if len(capacities) >= 3 and n_distinct_budgets >= 2:
-            rho, pval = spearmanr(capacities, opt_budgets)
+            rho, pval_t = spearmanr(capacities, opt_budgets)
+            # FIXED 2026-09-28 (dirty local): 'p' is now the exact two-sided
+            # permutation p. scipy's p uses a t approximation that is wrong at
+            # four points: rho = 1 over four variants printed p = 0.0, while
+            # only 2 of the 24 orderings reach |rho| = 1, so the exact p is
+            # 0.083. Four variants can never give an exact p below 0.05.
+            pval = _exact_spearman_p(capacities, opt_budgets, rho)
             fam_result['capacity_budget_correlation'] = {
                 'rho': float(rho), 'p': float(pval),
+                'p_method': ('exact_permutation' if len(capacities) <= 8
+                             else 'scipy_t_approximation'),
+                'p_scipy_t_approximation': float(pval_t),
+                'n_variants': len(capacities),
                 'n_distinct_budgets': n_distinct_budgets,
                 'status': 'measured',
             }
