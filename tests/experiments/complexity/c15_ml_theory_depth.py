@@ -130,6 +130,66 @@ def _fold_importance(train_idx, train_reps, y_train, groups_train, method,
     return imp
 
 
+# 1b. Which representations a fold keeps when the recipe uses fewer than it
+# is given. Added 2026-09-28, same fix as c13's _c13_fold_alloc_scores.
+#
+# A recipe carries rep_count. When a fold is handed more representations than
+# that, build_fold_hybrid keeps the best rep_count of them, and without scores
+# passed in it ranks them by blueprint.rep_scores -- which the search measured
+# over EVERY row. The held-out fold's own labels then chose which
+# representations that fold's hybrid was built from. Under the local run the
+# pools of logd and buchwald_hartwig hold 6 representations and rep_count is 5,
+# so every c15 rebuild there was cut this way.
+#
+# This scores each representation on the fold's own internal carve with the
+# recipe's internal evaluator and the dataset's metric, higher is better --
+# the same call create_hybrid makes (hybrid.py:3213). It returns None when
+# nothing is cut, so every other fold builds exactly as before.
+_ALLOC_MEMO = {}
+
+
+def _fold_alloc_scores(train_idx, train_reps, y_train, groups_train,
+                       blueprint, metric_fn, space='reps'):
+    """{rep: fold-local allocation score} when rep_count cuts, else None."""
+    rep_count = getattr(blueprint, 'rep_count', None)
+    if rep_count is None or int(rep_count) >= len(train_reps):
+        return None
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    from kirby.find_best_hybrid import (OBJECTIVE_PREDICTIVE,
+                                        _is_geometry_objective)
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or (objective is not None and (isinstance(objective, dict)
+                                           or _is_geometry_objective(objective)))):
+        print(f"    [c15] fold-local representation ranking not computed "
+              f"(evaluator={evaluator!r}); build_fold_hybrid ranks on the "
+              f"whole-dataset rep_scores")
+        return None
+    from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
+    from experiments._shared import object_direction
+    lib = object_direction(blueprint, 'the c15 recipe')
+    key = (space, np.asarray(train_idx, dtype=np.int64).tobytes(), evaluator,
+           bool(lib), getattr(metric_fn, '__name__', repr(metric_fn)),
+           tuple(sorted(train_reps)))
+    if key in _ALLOC_MEMO:
+        return _ALLOC_MEMO[key]
+    inner_tr, inner_va = internal_holdout_split(
+        len(y_train), y_train, groups_train)
+    out = {}
+    for name, X in train_reps.items():
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        out[name] = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lib,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=False))
+    _ALLOC_MEMO[key] = out
+    return out
+
+
 # 2. The whole-dataset hybrid behind 15a's and 15b's budget sweeps.
 #
 # Both sub-analyses ask for the same thing: the pool's best recipe for
@@ -415,6 +475,9 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
 
     n = len(sub_labels)
     sub_groups = np.asarray(groups)[idx] if groups is not None else None
+    # The dataset's metric, used only to rank representations on the alignment
+    # split's training rows when the recipe keeps fewer than the pool holds.
+    _metric_fn_15b = get_domain_metric(data)[1]
     results = {'per_rep': {}, 'per_budget': {}}
 
     # Kernel-target alignment is a score against the labels, and the hybrid's
@@ -524,7 +587,12 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                             (sub_groups[_align_tr]
                              if sub_groups is not None else None),
                             bp_15b.importance_method, _tr_augs,
-                            space='15b_alignment'))
+                            space='15b_alignment'),
+                        precomputed_alloc_scores=_fold_alloc_scores(
+                            _align_tr, _tr_reps, sub_labels[_align_tr],
+                            (sub_groups[_align_tr]
+                             if sub_groups is not None else None),
+                            bp_15b, _metric_fn_15b, space='15b_alignment'))
                     align_ho = _heldout_alignment(X_h_tr, X_h_te)
                 except Exception as _be:
                     print(f"      budget={budget}: held-out alignment "
@@ -593,7 +661,12 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                         (sub_groups[_align_tr]
                          if sub_groups is not None else None),
                         bp50.importance_method, _tr_a,
-                        space='15b_alignment'))
+                        space='15b_alignment'),
+                    precomputed_alloc_scores=_fold_alloc_scores(
+                        _align_tr, _tr_reps, sub_labels[_align_tr],
+                        (sub_groups[_align_tr]
+                         if sub_groups is not None else None),
+                        bp50, _metric_fn_15b, space='15b_alignment'))
                 sweep_splits['hybrid_b50'] = (Xh_tr, Xh_te)
         except Exception:
             pass
@@ -1100,7 +1173,11 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                 precomputed_importance=_fold_importance(
                     train_idx, train_reps, y_train,
                     groups[train_idx] if groups is not None else None,
-                    bp.importance_method, train_augs))
+                    bp.importance_method, train_augs),
+                precomputed_alloc_scores=_fold_alloc_scores(
+                    train_idx, train_reps, y_train,
+                    groups[train_idx] if groups is not None else None,
+                    bp, metric_fn))
             widths.append(int(X_train.shape[1]))
 
             scaler = StandardScaler()
@@ -1414,6 +1491,9 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
               f"precompute's --with-ridge pass.")
         return float('nan')
     bp = meta['best_config']['blueprint']
+    # Only ranks representations per fold when the recipe keeps fewer than the
+    # pool holds. See _fold_alloc_scores.
+    metric_fn = get_domain_metric(data)[1]
 
     sample_X = next(iter(reps.values()))
     folds = list(cv_split(groups, n_folds, sample_X, y, mode=mode))
@@ -1451,7 +1531,11 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
                 precomputed_importance=_fold_importance(
                     train_idx, train_reps, y[train_idx],
                     groups[train_idx] if groups is not None else None,
-                    bp.importance_method, train_augs))
+                    bp.importance_method, train_augs),
+                precomputed_alloc_scores=_fold_alloc_scores(
+                    train_idx, train_reps, y[train_idx],
+                    groups[train_idx] if groups is not None else None,
+                    bp, metric_fn))
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train_hyb)
         except Exception as _fe:
