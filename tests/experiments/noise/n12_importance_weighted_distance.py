@@ -60,6 +60,7 @@ Usage:
     python n12_importance_weighted_distance.py --dataset caco2 --mode full
 """
 import copy
+import json
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -1158,7 +1159,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     _dup_copied = results['duplicate_conditions_copied']
     features_in_space = results['features_in_space']
 
-    for sigma in sigmas:
+    # DIRTY-LOCAL 2026-09-28: the injected levels run largest first and level 0.0
+    # last. Each level is computed on its own (its own clean and noisy references,
+    # its own seeded draw, content-keyed caches), so the order changes no number.
+    # It decides which level a run stopped by a wall-time cap has measured: at
+    # 0.0 recovery is refused and detection undefined, and the largest level is
+    # the least likely to fall under the 2% gap floor. per_sigma is put back in
+    # the original order after the loop.
+    _level_order = ([s for s in sorted(sigmas, reverse=True) if s > 0]
+                    + [s for s in sigmas if not s > 0])
+    _partial_path = (None if output_dir is None else os.path.join(
+        str(output_dir), 'n12_importance_weighted_distance', '_partial',
+        f'{dataset_name}__{noise_condition}.partial.json'))
+    for sigma in _level_order:
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
 
@@ -1196,6 +1209,156 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         _passes = [(_fi + 1, _tr, _va, _ns)
                    for _fi, (_tr, _va) in enumerate(_splits)
                    for _ns in _seeds]
+        # Aggregate. DIRTY-LOCAL 2026-09-28: a function, so the same
+        # arithmetic can be read after every pass for the partial file
+        # below, and once at the end of the level as before. Unchanged
+        # otherwise; it reads the score lists as they stand when called.
+        def _aggregate_level():
+            clean_by_model = {m: float(np.mean(v)) for m, v in clean_scores.items() if v}
+            noisy_by_model = {m: float(np.mean(v)) for m, v in noisy_scores.items() if v}
+            _models_scored = [u for u in eval_units
+                              if u in clean_by_model and u in noisy_by_model]
+            if not _models_scored:
+                raise RuntimeError(
+                    f"n12: no evaluation unit produced both a clean and a noisy "
+                    f"reference score at level {sigma}. Units: {list(eval_units)}.")
+            gap_by_model = {}
+            for _m in _models_scored:
+                _c, _nz = clean_by_model[_m], noisy_by_model[_m]
+                gap_by_model[_m] = (_nz - _c) if lower_is_better else (_c - _nz)
+            # The first model in the roster fills the three top-level fields, and
+            # 'reference_model' says which model that is.
+            _ref_model = _models_scored[0]
+            clean_mean = clean_by_model[_ref_model]
+            noisy_mean = noisy_by_model[_ref_model]
+            # Sign-normalised so a positive gap always means the injected noise cost
+            # the model something. Unguarded clean-minus-noisy is NEGATIVE on rmse
+            # exactly when the noise did damage. n07 was fixed this way on 2026-09-10
+            # (metric-direction audit); this file was not, so the same field name
+            # meant opposite things on an rmse dataset. Fixed 2026-09-12.
+            # The recovery RATIO below is unaffected either way: its numerator and
+            # denominator are both differences in the same metric, so the sign cancels.
+            gap = gap_by_model[_ref_model]
+
+            sigma_result = {
+                'clean_score': clean_mean,
+                'noisy_score': noisy_mean,
+                'gap': float(gap),
+                'reference_model': _ref_model,
+                'models_scored': list(_models_scored),
+                'clean_score_by_model': clean_by_model,
+                'noisy_score_by_model': noisy_by_model,
+                'gap_by_model': {k: float(v) for k, v in gap_by_model.items()},
+                'per_importance_method': {},
+            }
+
+            for imp_method in IMPORTANCE_METHODS:
+                imp_result = {}
+                for cond_name in CONDITION_NAMES:
+                    cond_agg = {}
+                    cond_errors = None
+                    for ek, score_list in grid_acc.get(imp_method, {}).get(cond_name, {}).items():
+                        if ek == '_detection_per_pass':
+                            cond_agg['detection'] = {
+                                _ek2: _mean_detection(_rows)
+                                for _ek2, _rows in score_list.items()}
+                            continue
+                        if ek == '_errors':
+                            # Diagnostic marker: pass the error dict straight
+                            # through rather than averaging it as a score list.
+                            cond_errors = score_list
+                            continue
+                        if score_list:
+                            denoised = float(np.mean(score_list))
+                            _mn = ek.split('|', 1)[0]
+                            _c = clean_by_model.get(_mn)
+                            _nz = noisy_by_model.get(_mn)
+                            # ⛔ THE GAP THIS DIVIDES BY HAS A FLOOR.
+                            #
+                            # Recovery is how far the repaired fit moved from the
+                            # noisy fit, as a share of how far the clean fit is
+                            # from the noisy fit. When that second distance is a
+                            # few thousandths, a small swing in the repaired score
+                            # comes out as hundreds of percent. Measured on
+                            # flab_thermo_tresanco under outlier_p10 at level 0.5:
+                            # the random forest's clean-to-noisy gap was 0.008551
+                            # spearman against a clean score of 0.458964 -- 1.86% of
+                            # it. Of the 192 recovery readings in that result file,
+                            # 104 fell outside 0 to 100 percent: 68 below 0 and 36
+                            # above 100. The random forest's 96 readings ran from
+                            # -615.6 to +578.0 percent. lightgbm's gap on the same
+                            # folds was 0.048543 against a clean score of 0.426777,
+                            # which is 11.37% of it, and its 96 readings ran from
+                            # -33.9 to +149.3 percent. This floor refuses all 96 of
+                            # the random forest's and keeps all 96 of lightgbm's,
+                            # which removes 79 of those 104 and leaves 25.
+                            #
+                            # n06, n07, n11 and n21 all refuse the figure when the
+                            # gap is under GAP_MIN_FRAC of the clean score. n12 was
+                            # the one file in this directory that did not: its only
+                            # guard was abs(gap) > 1e-10. Same floor, same wording,
+                            # since 2026-09-21. A refused cell keeps its denoised
+                            # score and says in 'recovery_note' why no percentage
+                            # was written.
+                            _floor = (max(1e-10, GAP_MIN_FRAC * abs(_c))
+                                      if (_c is not None and np.isfinite(_c))
+                                      else 1e-10)
+                            _gap_too_small = not (abs(gap_by_model[_mn]) > _floor)
+                            # gap_by_model is sign-normalised: positive means the
+                            # noise cost this unit something. When the noise HELPED
+                            # (negative gap), dividing by it turns the ratio inside
+                            # out -- a repair that moved the score back toward the
+                            # clean fit, i.e. made it worse, read as positive
+                            # recovery. n07 refuses that case (its _hurt test);
+                            # n12 only tested the size of the gap. Fixed
+                            # 2026-09-28.
+                            _hurt = bool(np.isfinite(gap_by_model[_mn])
+                                         and gap_by_model[_mn] > 0)
+                            if (_c is not None and _nz is not None
+                                    and np.isfinite(_c) and np.isfinite(_nz)
+                                    and not _gap_too_small and _hurt):
+                                recovery = float((denoised - _nz) / (_c - _nz) * 100)
+                                recovery_note = None
+                            else:
+                                recovery = float('nan')
+                                if not (_c is not None and _nz is not None
+                                        and np.isfinite(_c) and np.isfinite(_nz)):
+                                    recovery_note = 'not computed: a score was not finite'
+                                elif not _hurt:
+                                    recovery_note = (
+                                        f'not computed: the noise did not degrade '
+                                        f'this unit (clean {_c:.6g}, noisy '
+                                        f'{_nz:.6g}, lower_is_better='
+                                        f'{lower_is_better})')
+                                else:
+                                    recovery_note = (
+                                        f'not computed: the clean-to-noisy gap '
+                                        f'({gap_by_model[_mn]:.6g}) is under '
+                                        f'{GAP_MIN_FRAC:.0%} of the clean score '
+                                        f'({_c:.6g})')
+                            cond_agg[ek] = {
+                                'denoised': denoised,
+                                'recovery': recovery,
+                                'recovery_note': recovery_note,
+                                # Named, not only encoded in the key. 'model'
+                                # is the evaluation unit ('rf@base_1'); the two
+                                # fields after it split it.
+                                'model': _mn,
+                                'downstream_model': eval_units[_mn][0],
+                                'fitted_on': f'base_{eval_units[_mn][1]}',
+                                'fitted_on_representation': eval_units[_mn][2],
+                                'estimator': ek.split('|', 1)[-1],
+                            }
+                    if cond_errors and not cond_agg:
+                        # Every estimator failed for this condition: keep the
+                        # errors so a future rerun isn't blind to the cause.
+                        cond_agg['_errors'] = cond_errors
+                    if cond_agg:
+                        imp_result[cond_name] = cond_agg
+                sigma_result['per_importance_method'][imp_method] = imp_result
+            return sigma_result
+
+        _n_passes_done = 0
         for fold_idx, train_idx, val_idx, noise_seed in _passes:
             y_train_clean = labels[train_idx]
             y_val = labels[val_idx]
@@ -1445,6 +1608,40 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         if score is not None:
                             grid_acc[imp_method][cond_name][ek].append(score)
 
+            # DIRTY-LOCAL 2026-09-28: a partial file after every pass, so a run
+            # stopped by a wall-time cap keeps what it measured. The result file
+            # is written only when all levels of a noise type finish
+            # (noise_helpers.sweep_conditions), and on herg_ki one pass took about
+            # 1 h 45 min, so a 3-hour cap never reached it. The level in progress
+            # averages only the passes done so far, and says how many. Changes no
+            # number: the same aggregation runs again at the end of the level.
+            _n_passes_done += 1
+            if _partial_path is not None:
+                try:
+                    _snap = dict(results)
+                    _snap['per_sigma'] = dict(results['per_sigma'])
+                    _snap['per_sigma'][str(sigma)] = convert_numpy(_aggregate_level())
+                    _snap['summary'] = _compute_summary(_snap)
+                    _snap['partial'] = {
+                        'level_in_progress': sigma,
+                        'passes_done_at_this_level': _n_passes_done,
+                        'passes_at_this_level': len(_passes),
+                        'levels_finished': [k for k in results['per_sigma']],
+                        'level_order_run': list(_level_order),
+                        'note': ('Written after the n12 conditions of each (level, fold, '
+                                 'draw) pass, before that pass\'s similarity sweep. The '
+                                 'level in progress averages only the passes done. The '
+                                 'final result file, when written, supersedes this.'),
+                    }
+                    os.makedirs(os.path.dirname(_partial_path), exist_ok=True)
+                    with open(_partial_path + '.tmp', 'w') as _fh:
+                        json.dump(convert_numpy(_snap), _fh, indent=1, default=str)
+                    os.replace(_partial_path + '.tmp', _partial_path)
+                    print(f'    partial result written: level {sigma}, '
+                          f'{_n_passes_done} of {len(_passes)} passes -> {_partial_path}')
+                except Exception as _exc:
+                    print(f'    partial result not written: {_exc!r}')
+
             # ── The similarity sweep for this (level, fold, draw). ──
             # One pass per evaluation unit: the model input is that unit's
             # single representation, the similarity spaces are that unit's
@@ -1494,149 +1691,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     recipes=sim_recipes, base_reps=base_by_model.get(_m, []),
                     make_dprimes=_dprimes, level=sigma)
 
-        # Aggregate
-        clean_by_model = {m: float(np.mean(v)) for m, v in clean_scores.items() if v}
-        noisy_by_model = {m: float(np.mean(v)) for m, v in noisy_scores.items() if v}
-        _models_scored = [u for u in eval_units
-                          if u in clean_by_model and u in noisy_by_model]
-        if not _models_scored:
-            raise RuntimeError(
-                f"n12: no evaluation unit produced both a clean and a noisy "
-                f"reference score at level {sigma}. Units: {list(eval_units)}.")
-        gap_by_model = {}
-        for _m in _models_scored:
-            _c, _nz = clean_by_model[_m], noisy_by_model[_m]
-            gap_by_model[_m] = (_nz - _c) if lower_is_better else (_c - _nz)
-        # The first model in the roster fills the three top-level fields, and
-        # 'reference_model' says which model that is.
-        _ref_model = _models_scored[0]
-        clean_mean = clean_by_model[_ref_model]
-        noisy_mean = noisy_by_model[_ref_model]
-        # Sign-normalised so a positive gap always means the injected noise cost
-        # the model something. Unguarded clean-minus-noisy is NEGATIVE on rmse
-        # exactly when the noise did damage. n07 was fixed this way on 2026-09-10
-        # (metric-direction audit); this file was not, so the same field name
-        # meant opposite things on an rmse dataset. Fixed 2026-09-12.
-        # The recovery RATIO below is unaffected either way: its numerator and
-        # denominator are both differences in the same metric, so the sign cancels.
-        gap = gap_by_model[_ref_model]
+        sigma_result = _aggregate_level()
 
-        sigma_result = {
-            'clean_score': clean_mean,
-            'noisy_score': noisy_mean,
-            'gap': float(gap),
-            'reference_model': _ref_model,
-            'models_scored': list(_models_scored),
-            'clean_score_by_model': clean_by_model,
-            'noisy_score_by_model': noisy_by_model,
-            'gap_by_model': {k: float(v) for k, v in gap_by_model.items()},
-            'per_importance_method': {},
-        }
-
-        for imp_method in IMPORTANCE_METHODS:
-            imp_result = {}
-            for cond_name in CONDITION_NAMES:
-                cond_agg = {}
-                cond_errors = None
-                for ek, score_list in grid_acc.get(imp_method, {}).get(cond_name, {}).items():
-                    if ek == '_detection_per_pass':
-                        cond_agg['detection'] = {
-                            _ek2: _mean_detection(_rows)
-                            for _ek2, _rows in score_list.items()}
-                        continue
-                    if ek == '_errors':
-                        # Diagnostic marker: pass the error dict straight
-                        # through rather than averaging it as a score list.
-                        cond_errors = score_list
-                        continue
-                    if score_list:
-                        denoised = float(np.mean(score_list))
-                        _mn = ek.split('|', 1)[0]
-                        _c = clean_by_model.get(_mn)
-                        _nz = noisy_by_model.get(_mn)
-                        # ⛔ THE GAP THIS DIVIDES BY HAS A FLOOR.
-                        #
-                        # Recovery is how far the repaired fit moved from the
-                        # noisy fit, as a share of how far the clean fit is
-                        # from the noisy fit. When that second distance is a
-                        # few thousandths, a small swing in the repaired score
-                        # comes out as hundreds of percent. Measured on
-                        # flab_thermo_tresanco under outlier_p10 at level 0.5:
-                        # the random forest's clean-to-noisy gap was 0.008551
-                        # spearman against a clean score of 0.458964 -- 1.86% of
-                        # it. Of the 192 recovery readings in that result file,
-                        # 104 fell outside 0 to 100 percent: 68 below 0 and 36
-                        # above 100. The random forest's 96 readings ran from
-                        # -615.6 to +578.0 percent. lightgbm's gap on the same
-                        # folds was 0.048543 against a clean score of 0.426777,
-                        # which is 11.37% of it, and its 96 readings ran from
-                        # -33.9 to +149.3 percent. This floor refuses all 96 of
-                        # the random forest's and keeps all 96 of lightgbm's,
-                        # which removes 79 of those 104 and leaves 25.
-                        #
-                        # n06, n07, n11 and n21 all refuse the figure when the
-                        # gap is under GAP_MIN_FRAC of the clean score. n12 was
-                        # the one file in this directory that did not: its only
-                        # guard was abs(gap) > 1e-10. Same floor, same wording,
-                        # since 2026-09-21. A refused cell keeps its denoised
-                        # score and says in 'recovery_note' why no percentage
-                        # was written.
-                        _floor = (max(1e-10, GAP_MIN_FRAC * abs(_c))
-                                  if (_c is not None and np.isfinite(_c))
-                                  else 1e-10)
-                        _gap_too_small = not (abs(gap_by_model[_mn]) > _floor)
-                        # gap_by_model is sign-normalised: positive means the
-                        # noise cost this unit something. When the noise HELPED
-                        # (negative gap), dividing by it turns the ratio inside
-                        # out -- a repair that moved the score back toward the
-                        # clean fit, i.e. made it worse, read as positive
-                        # recovery. n07 refuses that case (its _hurt test);
-                        # n12 only tested the size of the gap. Fixed
-                        # 2026-09-28.
-                        _hurt = bool(np.isfinite(gap_by_model[_mn])
-                                     and gap_by_model[_mn] > 0)
-                        if (_c is not None and _nz is not None
-                                and np.isfinite(_c) and np.isfinite(_nz)
-                                and not _gap_too_small and _hurt):
-                            recovery = float((denoised - _nz) / (_c - _nz) * 100)
-                            recovery_note = None
-                        else:
-                            recovery = float('nan')
-                            if not (_c is not None and _nz is not None
-                                    and np.isfinite(_c) and np.isfinite(_nz)):
-                                recovery_note = 'not computed: a score was not finite'
-                            elif not _hurt:
-                                recovery_note = (
-                                    f'not computed: the noise did not degrade '
-                                    f'this unit (clean {_c:.6g}, noisy '
-                                    f'{_nz:.6g}, lower_is_better='
-                                    f'{lower_is_better})')
-                            else:
-                                recovery_note = (
-                                    f'not computed: the clean-to-noisy gap '
-                                    f'({gap_by_model[_mn]:.6g}) is under '
-                                    f'{GAP_MIN_FRAC:.0%} of the clean score '
-                                    f'({_c:.6g})')
-                        cond_agg[ek] = {
-                            'denoised': denoised,
-                            'recovery': recovery,
-                            'recovery_note': recovery_note,
-                            # Named, not only encoded in the key. 'model'
-                            # is the evaluation unit ('rf@base_1'); the two
-                            # fields after it split it.
-                            'model': _mn,
-                            'downstream_model': eval_units[_mn][0],
-                            'fitted_on': f'base_{eval_units[_mn][1]}',
-                            'fitted_on_representation': eval_units[_mn][2],
-                            'estimator': ek.split('|', 1)[-1],
-                        }
-                if cond_errors and not cond_agg:
-                    # Every estimator failed for this condition: keep the
-                    # errors so a future rerun isn't blind to the cause.
-                    cond_agg['_errors'] = cond_errors
-                if cond_agg:
-                    imp_result[cond_name] = cond_agg
-            sigma_result['per_importance_method'][imp_method] = imp_result
 
         results['per_sigma'][str(sigma)] = convert_numpy(sigma_result)
 
@@ -1654,6 +1710,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     print(f"      {cond_name:25s}: avg_recovery={avg_r:+.1f}%, "
                           f"positive={n_pos}/{len(recoveries)}")
         print(f"    [{time.time() - t_sigma:.0f}s]")
+
+    # DIRTY-LOCAL 2026-09-28: per_sigma back in the order the levels were asked
+    # for, whatever order they ran in.
+    results['per_sigma'] = {str(s): results['per_sigma'][str(s)]
+                            for s in sigmas if str(s) in results['per_sigma']}
+    results['level_order_run'] = list(_level_order)
 
     # The similarity axis, 2026-09-25. Every key above is n12's own
     # conditions, unchanged. The swept numbers are the D-versus-D' rows in
