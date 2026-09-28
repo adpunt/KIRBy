@@ -5328,7 +5328,12 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         **({'objective': objective, 'is_clf': is_clf}
            if objective is not None else {}),
     )
-    X_va_h = apply_feature_selection(val_reps, feat_info)
+    # base_only=True: the augmentation block is appended just below from
+    # augmentations_val (and any demoted reps). Without it
+    # apply_feature_selection printed "what comes back is the base block
+    # ALONE" on every augmented recipe although the rows were completed a few
+    # lines later -- a false alarm seen in n02 on 2026-09-27.
+    X_va_h = apply_feature_selection(val_reps, feat_info, base_only=True)
 
     # Apply augmentation selection to val if the hybrid included augmentations.
     #
