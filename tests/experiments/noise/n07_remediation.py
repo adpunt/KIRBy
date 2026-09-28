@@ -2441,10 +2441,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     so it sweeps the whole list. The sweep, the per-condition checkpointing,
     the resume and the stride slice are noise_helpers.sweep_conditions.
     """
+    # DIRTY-LOCAL 2026-09-28: the recorded labels go LAST, not first. Nothing
+    # is injected under AS_THEY_COME, so no_noise and noisy_baseline are one
+    # fit and the recovery percentage is undefined by construction. A job with
+    # a wall clock keeps the conditions it reaches (noise_helpers.SWEEP_ORDER
+    # comment), and on herg_ki the first condition alone ran past the 3-hour
+    # cap, so first place meant a capped job wrote no recovery at all. This is
+    # an order, not a selection: every condition still runs.
     return sweep_conditions(
         _run_one_condition, 'n07_remediation',
         data, config, output_dir, dataset_name,
-        default_conditions=[AS_THEY_COME] + list(conditions_for_task(data)),
+        default_conditions=list(conditions_for_task(data)) + [AS_THEY_COME],
         kwargs=kwargs, groups_needed=GROUPED_STRATEGIES)
 
 
