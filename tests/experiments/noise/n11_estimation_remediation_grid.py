@@ -521,8 +521,14 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                          corrupted_mask=None, noise_condition=None,
                          extra_targets=None, eval_by_model=None,
                          precomputed_neighbors=None, k_override=None,
-                         dprime_cb=None, fit_models=True):
+                         dprime_cb=None, fit_models=True,
+                         predict_mode='predict'):
     """Run full alpha × remediation grid for one estimator config.
+
+    predict_mode, added 2026-09-28: noise_cache.predict_mode_for(metric) --
+    'proba' under auc, so a classifier is scored on its positive-class
+    probability and not on hard class labels. The clean and noisy references
+    are predicted the same way, so all three scores share one rule.
 
     precomputed_neighbors / k_override / dprime_cb / fit_models, added
     2026-09-25 for the similarity sweep (plan sections 1-2). All four default
@@ -653,7 +659,7 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                     model = mf()
                     _xtr, _xva = _xy(mn)
                     model.fit(_xtr, y_noisy, sample_weight=weights)
-                    y_pred = model.predict(_xva)
+                    y_pred = _nc._predict(model, _xva, predict_mode)
                     results[key] = float(metric_fn(y_val, y_pred))
                 except Exception as exc:
                     failure_log[key] = f'{type(exc).__name__}: {exc}'
@@ -694,7 +700,7 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                             model = mf()
                             _xtr, _xva = _xy(mn)
                             model.fit(_xtr, y_smoothed)
-                            y_pred = model.predict(_xva)
+                            y_pred = _nc._predict(model, _xva, predict_mode)
                             results[key] = float(metric_fn(y_val, y_pred))
                         except Exception as exc:
                             failure_log[key] = f'{type(exc).__name__}: {exc}'
@@ -730,7 +736,7 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                         model = mf()
                         _xtr, _xva = _xy(mn)
                         model.fit(_xtr, y_clipped)
-                        y_pred = model.predict(_xva)
+                        y_pred = _nc._predict(model, _xva, predict_mode)
                         results[key] = float(metric_fn(y_val, y_pred))
                     except Exception as exc:
                         failure_log[key] = f'{type(exc).__name__}: {exc}'
@@ -776,6 +782,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    # Positive-class probability under auc, the prediction otherwise. Every
+    # score in this file -- clean, noisy, repaired -- is predicted this way.
+    _predict_mode = _nc.predict_mode_for(metric_name)
     n_samples = len(labels)
 
     # The whole roster, not random forest alone. Owner's decision 2026-09-12.
@@ -1185,7 +1194,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 _xtr, _xva = eval_by_unit[_u]
                 _clean_f = float(metric_fn(y_val, _nc.cached_fit_predict(
                     dataset_name, eval_units[_u][0], unit_factories[_u],
-                    _xtr, y_train_clean, _xva)))
+                    _xtr, y_train_clean, _xva,
+                    predict_mode=_predict_mode)))
                 clean_scores[_u].append(_clean_f)
                 clean_by_fold[_u][fold_idx] = _clean_f
 
@@ -1224,7 +1234,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     _xtr, _xva = eval_by_unit[_u]
                     _noisy_fs = float(metric_fn(y_val, _nc.cached_fit_predict(
                         dataset_name, eval_units[_u][0], unit_factories[_u],
-                        _xtr, y_noisy, _xva)))
+                        _xtr, y_noisy, _xva, predict_mode=_predict_mode)))
                     noisy_scores[_u].append(_noisy_fs)
                     noisy_by_fold[_u].setdefault(fold_idx, []).append(_noisy_fs)
 
@@ -1330,6 +1340,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 noise_condition=noise_condition,
                                 extra_targets=extra_targets,
                                 eval_by_model=eval_by_unit,
+                                predict_mode=_predict_mode,
                             )
 
                             if est_key not in grid_acc[space_name]:
