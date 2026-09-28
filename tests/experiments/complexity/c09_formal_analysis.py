@@ -723,8 +723,8 @@ def _run_information_retention(data, budgets, dataset_name=None,
         max_gain = float(np.max(np.abs(finite_gains))) if len(finite_gains) else 0.0
         if n_nan:
             print(f"    {n_nan} of {len(gains)} budget steps have no finite "
-                  f"mutual-information gain; they cannot start or end a "
-                  f"plateau and are excluded.")
+                  f"mutual-information gain. Each counts as not flat, so no "
+                  f"plateau can start at or before it.")
             results['n_nonfinite_gains'] = n_nan
         if max_gain > 0:
             thresh = 0.1 * max_gain
