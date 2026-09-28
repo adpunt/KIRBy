@@ -23,7 +23,7 @@ Fold discipline (load-bearing):
     both downstream models reuse it: 50 rankings per dataset, not 100.
 
 "Scores as well as all of them" is set from the folds (user decision
-2026-09-11): the tolerance is one standard deviation of the five full-width
+2026-09-11): the tolerance is one standard deviation of the full-width
 fold scores, averaged over the dataset's representations, per downstream model.
 The value used is written into the results as plateau_tol.
 
@@ -113,17 +113,17 @@ def smoke_reps(ds):
 # 2026-09-11, user decision: set it from the folds, not from a fixed number.
 # It was max(0.01 in metric units, 2% of the full-width score), which meant the
 # same absolute size on an RMSE dataset and on a Spearman one. It is now one
-# standard deviation of the five full-width fold scores, averaged over the
+# standard deviation of the full-width fold scores (one per fold), averaged over the
 # dataset's representations, computed separately under each downstream model.
 # So "as well as" means "inside this dataset's own fold-to-fold wobble, in its
 # own metric". The value actually used is written into the results.
-PLATEAU_TOL_DDOF = 1   # five fold scores treated as a sample, not a population
+PLATEAU_TOL_DDOF = 1   # the fold scores treated as a sample, not a population
 
 
 def fold_spread(per_fold_scores):
     """Standard deviation of one representation's full-width fold scores.
 
-    Takes the five held-out scores at full width, in the dataset's own metric.
+    Takes the held-out scores at full width, one per fold, in the dataset's own metric.
     Returns nan when fewer than two folds produced a number.
     """
     vals = np.asarray([v for v in per_fold_scores if v is not None],
@@ -138,7 +138,7 @@ def plateau_tolerance(curves):
     """One tolerance for a whole dataset under one downstream model.
 
     `curves` is every representation's saturation curve under that model. Each
-    representation contributes the standard deviation of its own five
+    representation contributes the standard deviation of its own
     full-width fold scores; the tolerance is the mean of those, in the
     dataset's own metric units. Returns nan when no representation gave a
     usable spread.
@@ -151,8 +151,8 @@ def plateau_tolerance(curves):
 
 
 def _find_plateau(ks, scores, full_score, lower_is_better, tol):
-    """Smallest feature count whose 5-fold mean reaches within `tol` of the
-    full-width 5-fold mean, in the improving direction.
+    """Smallest feature count whose mean over all folds reaches within `tol`
+    of the full-width mean over all folds, in the improving direction.
 
     `tol` is in the metric's own units and comes from plateau_tolerance().
         lower_is_better  (RMSE):     first k with score(k) <= full + tol
@@ -177,6 +177,35 @@ def _find_plateau(ks, scores, full_score, lower_is_better, tol):
     return None
 
 
+def plateau_status(ks, scores, full_score, tol, plateau_k):
+    """Why plateau_n_features has the value it has.
+
+    _find_plateau returns None for five different reasons, and the table used
+    to print every one of them as "FULL". Only one means the representation
+    needs more features than the ladder tested.
+        reached              a tested count scored within tol of full width
+        above_largest_tested no tested count did; the signal needs more than
+                             max(ks) features (not necessarily all of them)
+        no_count_below_width the width is at or under the smallest requested
+                             count, so nothing below full width was tested
+        ladder_scores_nan    no tested count below full width scored on
+                             every fold
+        full_score_nan       the full-width mean is not a number
+        tol_nan              the tolerance is not a number
+    """
+    if plateau_k is not None:
+        return "reached"
+    if full_score is None or not np.isfinite(full_score):
+        return "full_score_nan"
+    if not np.isfinite(tol):
+        return "tol_nan"
+    if len(ks) == 0:
+        return "no_count_below_width"
+    if not any(s is not None and np.isfinite(s) for s in scores):
+        return "ladder_scores_nan"
+    return "above_largest_tested"
+
+
 def rank_folds(X, y, folds):
     """Rank one representation's own features on each fold's TRAINING rows.
 
@@ -187,11 +216,16 @@ def rank_folds(X, y, folds):
     """
     X = H._clean(X)
     y = np.asarray(y, dtype=float)
-    orders = []
+    orders, n_ranked = [], []
     for tr, _va in folds:
         imp = H.rank_columns(X[tr], y[tr], method="lightgbm_gain")
         orders.append(np.argsort(imp)[::-1])   # descending importance
-    return orders
+        # Features the ranker gave any gain at all. The rest tie at exactly 0
+        # (never split on, or cut by the 2,000-feature variance pre-screen in
+        # compute_feature_importance), so past this count the top-k is filled
+        # in argsort's arbitrary tie order, not by importance.
+        n_ranked.append(int(np.sum(imp > 0)))
+    return orders, n_ranked
 
 
 def saturation_curve(X, y, folds, orders, model_name, metric_fn,
@@ -247,11 +281,17 @@ def saturation_curve(X, y, folds, orders, model_name, metric_fn,
             pred = _predict_for_metric(model, Xva, metric_fn)
             per_fold[j].append(float(metric_fn(y[va], pred)))
 
-    mean = [float(np.nanmean(f)) if len(f) else float("nan") for f in per_fold]
+    # Plain mean over ALL folds: a feature count where any fold failed to score
+    # is nan, not a mean over the folds that did. A nanmean there compared a
+    # mean over fewer folds against a full-width mean over all of them.
+    mean = [float(np.mean(f)) if len(f) else float("nan") for f in per_fold]
+    n_finite = [int(np.sum(np.isfinite(np.asarray(f, dtype=float))))
+                for f in per_fold]
     return {
         "ks": [int(k) for k in ladder],
         "width": int(width),
         "mean": mean,
+        "n_folds_scored": n_finite,
         "per_fold": per_fold,
         "full_mean": mean[-1],
         "full_per_fold": per_fold[-1],
@@ -288,24 +328,30 @@ def run_dataset(name, rep_filter=None, models=DEFAULT_MODELS, ks=DEFAULT_KS,
         "models": {},
         "plateau_tol_by_model": {},
         "plateau_definition": (
-            "plateau_n_features = the smallest feature count whose 5-fold mean "
-            "sits within plateau_tol of the full-width 5-fold mean, in the "
-            "improving direction. plateau_tol is in %s units: it is the mean "
-            "over this dataset's representations of the standard deviation "
-            "(ddof=%d) of that representation's 5 full-width fold scores, taken "
-            "separately under each downstream model. "
-            "plateau_n_features=None means the representation needs its full "
-            "native width." % (mname, PLATEAU_TOL_DDOF)),
+            "plateau_n_features = the smallest feature count whose %d-fold "
+            "mean sits within plateau_tol of the full-width %d-fold mean, in "
+            "the improving direction. plateau_tol is in %s units: it is the "
+            "mean over this dataset's representations of the standard "
+            "deviation (ddof=%d) of that representation's %d full-width fold "
+            "scores, taken separately under each downstream model. "
+            "plateau_n_features=None: plateau_status says why. "
+            "'above_largest_tested' means more features than the largest "
+            "tested count below the width, not necessarily all of them. "
+            "k_exceeds_ranked marks counts above the smallest per-fold number "
+            "of features with nonzero lightgbm gain; past that the top-k is "
+            "filled in arbitrary tie order, not by importance."
+            % (n_folds, n_folds, mname, PLATEAU_TOL_DDOF, n_folds)),
     }
 
     # Feature rankings, once per representation per fold. They read only the
     # training rows and the labels, never the downstream model, so both models
-    # below reuse them: 10 representations x 5 folds = 50 rankings per dataset,
-    # not 100.
-    orders = {}
+    # below reuse them: one ranking per representation per fold, not one per
+    # representation per fold per model.
+    orders, n_ranked = {}, {}
     for rep_name in used:
         t0 = time.time()
-        orders[rep_name] = rank_folds(reps[rep_name], labels, folds)
+        orders[rep_name], n_ranked[rep_name] = rank_folds(
+            reps[rep_name], labels, folds)
         if verbose:
             print(f"    ranked {rep_name:<14} {reps[rep_name].shape[1]:>5} features "
                   f"x {n_folds} folds ({round(time.time() - t0, 1)}s)")
@@ -321,6 +367,12 @@ def run_dataset(name, rep_filter=None, models=DEFAULT_MODELS, ks=DEFAULT_KS,
                                      orders[rep_name], model_name, mfn, task, ks)
             curve["full_score"] = curve["full_mean"]
             curve["full_fold_std"] = fold_spread(curve["full_per_fold"])
+            # How far down the ranking is an actual ranking. A feature count
+            # above the smallest per-fold count of nonzero-gain features is
+            # partly filled with features the ranker never distinguished.
+            nr = n_ranked[rep_name]
+            curve["n_nonzero_importance_per_fold"] = nr
+            curve["k_exceeds_ranked"] = [bool(k > min(nr)) for k in curve["ks"]]
             curve["seconds"] = round(time.time() - t0, 1)
             ds_result["models"][model_name][rep_name] = curve
             if verbose:
@@ -336,16 +388,24 @@ def run_dataset(name, rep_filter=None, models=DEFAULT_MODELS, ks=DEFAULT_KS,
         if verbose:
             print(f"  [{model_name}] tolerance = {tol:.4f} {mname}, the mean over "
                   f"{len(used)} representations of the standard deviation of "
-                  f"that representation's 5 full-width fold scores")
+                  f"that representation's {n_folds} full-width fold scores")
         for rep_name, curve in ds_result["models"][model_name].items():
             curve["plateau_tol"] = tol
             curve["plateau_n_features"] = _find_plateau(
                 curve["ks"][:-1], curve["mean"][:-1], curve["full_mean"],
                 lower, tol)
+            curve["plateau_status"] = plateau_status(
+                curve["ks"][:-1], curve["mean"][:-1], curve["full_mean"], tol,
+                curve["plateau_n_features"])
+            pn = curve["plateau_n_features"]
+            curve["plateau_beyond_ranked"] = (
+                None if pn is None
+                else bool(pn > min(curve["n_nonzero_importance_per_fold"])))
             if verbose:
-                pn = curve["plateau_n_features"]
                 print(f"    [{model_name}] {rep_name:<12} plateau at "
-                      f"{pn if pn is not None else 'full width'} features")
+                      f"{pn if pn is not None else curve['plateau_status']}"
+                      f" features (nonzero-gain features per fold: "
+                      f"{curve['n_nonzero_importance_per_fold']})")
 
     return ds_result
 
@@ -369,7 +429,8 @@ def _plateau_table(results):
                          f"(mean fold-to-fold spread at full width)")
             for rep_name, c in reps.items():
                 pn = (c["plateau_n_features"]
-                      if c["plateau_n_features"] is not None else "FULL")
+                      if c["plateau_n_features"] is not None
+                      else c.get("plateau_status", "FULL"))
                 lines.append(f"    {rep_name:<14} plateau@{str(pn):<6} features  "
                              f"full_score={c['full_score']:.4f} "
                              f"fold_std={c['full_fold_std']:.4f} "
