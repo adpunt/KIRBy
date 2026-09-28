@@ -368,17 +368,33 @@ def apply_operation(op, y, flag, p, w_shrink=None):
     raise ValueError(f'unknown operation {op!r}')
 
 
-def break_even_precision(precisions, gains):
+def break_even_precision(precisions, gains, weights=None):
     """Lowest precision where the mean gain crosses from below zero to above.
 
     Linear interpolation between the two precisions either side. Returns
     (value, why): value None when the gain never crosses, with which side it
     stays on.
+
+    Points that share one precision are averaged into one point first,
+    weighted by `weights` (the passes behind each gain) when given. This
+    happens whenever the flag share is larger than the share the injector
+    moved: every asked-for precision at or above (moved / flagged) takes the
+    whole mask and fills the rest from outside it, so they all land on the
+    same realised precision. Until 2026-09-28 those points were sorted by
+    their gain, which put a negative one before a positive one and reported
+    a crossing at that precision from two draws of the same flag set.
     """
-    pts = [(float(q), float(g)) for q, g in zip(precisions, gains)
-           if g is not None and np.isfinite(g)
-           and q is not None and np.isfinite(q)]
-    pts.sort()
+    if weights is None:
+        weights = [1.0] * len(gains)
+    merged = {}
+    for q, g, w in zip(precisions, gains, weights):
+        if (g is None or not np.isfinite(g) or q is None
+                or not np.isfinite(q)):
+            continue
+        w = float(w) if w is not None and np.isfinite(w) and w > 0 else 1.0
+        merged.setdefault(float(q), []).append((float(g), w))
+    pts = sorted((q, sum(g * w for g, w in gw) / sum(w for _, w in gw))
+                 for q, gw in merged.items())
     if len(pts) < 2:
         return None, 'fewer than two precisions scored'
     if pts[0][1] >= 0:
@@ -1170,9 +1186,21 @@ def _summarise(acc, diag, models, precisions, flag_seeds, metric_name,
                             be, why = break_even_precision(
                                 [curve[k]['realised_precision_mean']
                                  for k in curve],
-                                [curve[k]['mean_gain'] for k in curve])
+                                [curve[k]['mean_gain'] for k in curve],
+                                [curve[k]['n_paired'] for k in curve])
+                            # Asked-for precisions that landed on the same
+                            # realised precision, averaged into one point
+                            # by break_even_precision.
+                            _by_rp = {}
+                            for k in curve:
+                                _by_rp.setdefault(
+                                    curve[k]['realised_precision_mean'],
+                                    []).append(k)
                             row['synthetic'].setdefault(shk, {})[op] = {
                                 'curve': curve,
+                                'precisions_sharing_a_realised_precision': [
+                                    ks for rp, ks in _by_rp.items()
+                                    if len(ks) > 1 and np.isfinite(rp)],
                                 'break_even_precision': be,
                                 'break_even_refused_because': why,
                                 'detector_precision_at_this_share_mean': det[
