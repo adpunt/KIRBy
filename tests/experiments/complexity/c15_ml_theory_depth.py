@@ -966,9 +966,13 @@ def _run_double_descent(data, config, dataset_name=None):
         )
 
         # --- Random features ---
+        # 2026-09-28: capped at the feature count only. n_feat's extra cap at
+        # the row count is PCA's limit, not a random subset's, and applied
+        # here it gave the random arm fewer features than the hybrid beside it
+        # at every budget above the row count.
         random_score, random_w, _ = _eval_at_budget_random(
             X_concat, labels, groups, n_folds, mode, metric_fn,
-            n_features=n_feat
+            n_features=min(budget, total_dim)
         )
 
         # --- Ridge only (most sensitive to interpolation) ---
