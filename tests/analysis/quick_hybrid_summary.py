@@ -293,8 +293,13 @@ def analyze_c04():
     for f in files:
         ds = dsname(f); j = load(f)
         if "_error" in j: continue
-        if j.get("skipped") or not j.get("methods"):
+        if j.get("skipped"):
             print(f"  {ds:<27}{'(classification — skipped)':<40}"); skipped += 1; continue
+        if not j.get("methods"):
+            # A regression file whose importance weighting failed. It used to be
+            # printed and counted as a skipped classification dataset.
+            why = j.get("methods_failed") or j.get("importance_failed") or "no reason saved"
+            print(f"  {ds:<27}FAILED: {str(why)[:60]}"); continue
         real += 1
         methods = j.get("methods", {})
         bk = j.get("best_knn_method"); bs = j.get("best_sim_method")
