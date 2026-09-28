@@ -380,6 +380,17 @@ def n11_ranking(path):
     import json
     with open(path) as fh:
         doc = json.load(fh)
+    # DIRTY-LOCAL 2026-09-28. n11.run is a condition sweep, and <ds>.json is
+    # the sweep's index of per-condition files, with no per_sigma. Read as a
+    # result it gave an empty ordering, and every space then reported "0
+    # estimators in common" instead of the real reason. Which condition file
+    # n06 should read is the author's decision, so this refuses.
+    if 'conditions_written' in doc and 'per_sigma' not in doc:
+        raise ValueError(
+            'this is the index of an n11 condition sweep, not a result: the '
+            'orderings are in the per-condition files '
+            f'({len(doc.get("conditions_written") or [])} listed), and which '
+            'of them n06 compares against has not been decided')
     lower_is_better = bool(doc.get('lower_is_better', False))
     cells = {}
     per_space = {}
@@ -853,7 +864,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     split_args = ((sample_X, labels, search_groups) if use_groups
                   else (sample_X, labels))
     folds = list(splitter.split(*split_args))
-    print(f"  {len(folds)} folds, split so no protein group sits on both sides")
+    # DIRTY-LOCAL 2026-09-28: the folds are grouped by data['groups'], which
+    # is the protein on BindingDB and the Murcko scaffold on a molecular set
+    # such as herg_ki. The text said "protein" on every dataset.
+    print(f"  {len(folds)} folds, split so no group in data['groups'] sits on "
+          f"both sides")
 
     # A group whose rows land in two different folds has its rows scored in two
     # different feature spaces, and the group's mean score then mixes them.
@@ -1000,7 +1015,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['failures'] = convert_numpy(failures)
     results['how_a_molecule_was_scored'] = {
         'n_folds': len(folds),
-        'folds': 'split so no protein group sits on both sides',
+        'folds': ("split so no group in data['groups'] sits on both sides: "
+                  "the protein on a drug-target set, the scaffold on a "
+                  "molecular one"),
         'features': "each fold's features are chosen on the other folds' "
                     "rows, so no molecule helps choose the features its own "
                     "score is computed in. Nothing is stacked across folds: "
