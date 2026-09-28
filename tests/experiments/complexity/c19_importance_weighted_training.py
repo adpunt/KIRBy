@@ -434,6 +434,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              if not np.isnan(model_results[k]) else _sentinel)
                     if any(not np.isnan(v) for v in model_results.values())
                     else None),
+                # Every condition whose score equals the best one exactly. For
+                # rf and lightgbm feature_weighted often equals unweighted to the
+                # last digit, and min/max then hands the win to whichever is
+                # listed first, which is always unweighted.
+                'best_condition_ties': sorted(
+                    c for c, v in model_results.items()
+                    if not np.isnan(v) and any(not np.isnan(x) for x in model_results.values())
+                    and v == (min if lower_is_better else max)(
+                        x for x in model_results.values() if not np.isnan(x))),
             }
 
         results['per_space'][space_name] = convert_numpy(space_results)
@@ -456,6 +465,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # max() return whichever condition is listed first.
         'most_winning_condition': (max(condition_wins, key=condition_wins.get)
                                    if any(condition_wins.values()) else None),
+        # Every condition holding the top count. max() above returns the first
+        # listed on a tie, which is unweighted.
+        'most_winning_tied': (
+            sorted(c for c, n in condition_wins.items()
+                   if n == max(condition_wins.values()))
+            if any(condition_wins.values()) else []),
     }
     print(f"\n  Condition wins: {condition_wins}")
 
