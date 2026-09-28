@@ -1674,6 +1674,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     settings=settings, namespace=ns_c,
                                     cache=cache, cache_dir=cache_dir,
                                     verbose=search_verbose)
+                                if search_cleaned is None:
+                                    errors[f'{regime}|{lvl_key}|{base_sp}|'
+                                           f'{cleanup}|{rate}|f{fold_i}|'
+                                           f'search_cleaned'] = (
+                                        'the search on the cleaned labels did '
+                                        'not return; its two arms are absent')
 
                             if search_cleaned is not None:
                                 probe_row = {
