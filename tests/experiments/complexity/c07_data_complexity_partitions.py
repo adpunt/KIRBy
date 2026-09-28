@@ -186,7 +186,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # given 0, which is at or below any median, so every singleton
             # scaffold landed in 'easy' and that half became mostly the rare
             # scaffolds -- the scaffold_frequency split again. Such rows now
-            # sit in neither half and are counted in n_undefined.
+            # sit in neither half and are counted in n_neither.
             has_var = np.array([g in scaffold_var for g in groups])
             mask_easy = has_var & np.array(
                 [scaffold_var.get(g, np.inf) <= median_var for g in groups])
