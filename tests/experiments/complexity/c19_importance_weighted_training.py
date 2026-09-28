@@ -300,6 +300,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _dims = [m[0].shape[1] for m in fold_matrices if m is not None]
             print(f"\n    {model_name} (dim per fold={_dims}):")
             model_results = {}
+            # Features with importance exactly zero in each fold, out of that
+            # fold's width. For rf and lightgbm these are the ONLY features
+            # feature_weighted changes (see WEIGHTED_MODELS), so this count is
+            # the size of that condition for the two tree models.
+            n_zero_importance = {}
 
             for cond in conditions:
                 fold_scores = []
@@ -325,6 +330,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_tr_s, y_train,
                         method=getattr(blueprint, 'importance_method',
                                        'lightgbm_gain'))
+                    if cond == 'unweighted':
+                        n_zero_importance[_fold_i] = {
+                            'zero': int(np.sum(imp_weights == 0)),
+                            'of_features': int(len(imp_weights))}
 
                     # Apply condition transforms
                     fit_kwargs = {}
@@ -416,6 +425,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # Positive always means the weighting helped, on rmse as well as
                 # on spearman/auc. Added 2026-09-10 (metric-direction audit).
                 'deltas_oriented': deltas_oriented,
+                'n_zero_importance_features_per_fold': n_zero_importance,
                 'best_condition': _best_fn(model_results, key=lambda k: model_results[k]
                                            if not np.isnan(model_results[k]) else _sentinel),
             }
