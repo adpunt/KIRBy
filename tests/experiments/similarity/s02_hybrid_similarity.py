@@ -261,6 +261,66 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
     }
 
 
+def _merge_family_reselection(budget_block):
+    """One held-out comparison over every search family scored at one budget.
+
+    Each family's cell holds its own fold_reselection block: the hybrid arms
+    that family built, and the single representations. The single
+    representations do not depend on the family (same rows, same folds, same
+    importance fit), so they are checked equal and taken once. The hybrid arms
+    of every family go into one candidate list, named '<family>|<arm>', and
+    fold_reselection re-picks the winner, family included, on each held-out
+    fold from the other folds.
+
+    Returns (block, result, None), or (None, None, reason) when fewer than two
+    families produced a block or their single-representation scores disagree.
+    """
+    blocks = {fam: c.get('fold_reselection') for fam, c in budget_block.items()
+              if isinstance(c.get('fold_reselection'), dict)}
+    if len(blocks) < 2:
+        return None, None, 'fewer than two families produced held-out scores'
+    fams = list(blocks)
+    ref = (blocks[fams[0]].get('baselines_by_model') or {}).get(_SAC_MODEL_KEY)
+    if not ref:
+        return None, None, f'family {fams[0]} has no single-representation scores'
+    for f in fams[1:]:
+        other = (blocks[f].get('baselines_by_model') or {}).get(_SAC_MODEL_KEY) or {}
+        if set(other) != set(ref):
+            return None, None, (f'families {fams[0]} and {f} scored different '
+                                f'single representations')
+        for k in ref:
+            a = np.asarray(ref[k], dtype=float)
+            b = np.asarray(other[k], dtype=float)
+            if a.shape != b.shape or not np.allclose(a, b, atol=1e-9,
+                                                     equal_nan=True):
+                return None, None, (f'single-representation fold scores for '
+                                    f'{k} differ between {fams[0]} and {f}')
+    cands = []
+    for f in fams:
+        for c in (blocks[f].get('candidates_by_model') or {}).get(
+                _SAC_MODEL_KEY) or []:
+            cands.append({'name': f"{f}|{c['name']}",
+                          'fold_scores': list(c['fold_scores'])})
+    if not cands:
+        return None, None, 'no family produced a hybrid arm'
+    recipe_sel = blocks[fams[0]].get('recipe_selection')
+    block = {
+        'lower_is_better': False,
+        'exclude_folds': [],
+        'candidates_by_model': {_SAC_MODEL_KEY: cands},
+        'baselines_by_model': {_SAC_MODEL_KEY: dict(ref)},
+        'recipe_selection': recipe_sel,
+        'families_pooled': fams,
+        'hybrid_family': None,
+        'budget': blocks[fams[0]].get('budget'),
+        'distance_lineage': blocks[fams[0]].get('distance_lineage'),
+    }
+    result = fold_reselection(
+        block['candidates_by_model'], block['baselines_by_model'], False,
+        exclude_folds=[], recipe_selection=recipe_sel)
+    return block, result, None
+
+
 # =============================================================================
 # ONE POOL CELL — one distance lineage at one budget
 # =============================================================================
@@ -979,6 +1039,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _rule if len(budget_block) > 1 else 'only one family scored')
             cell['family_heldout_deltas'] = _heldout_scored
             cell['family_wholedata_sac'] = _sac_scored
+            # The held-out number this cell reports must not be the one that
+            # chose the family. Picking the family with the larger held-out
+            # delta and then reporting that delta is the maximum of two noisy
+            # numbers, biased upward. So the reported held-out block puts every
+            # family's hybrid arms into one candidate list and lets
+            # fold_reselection re-pick the family on each held-out fold from
+            # the other folds, the same rule it applies to weight methods and
+            # to the single representations. family_chosen above still decides
+            # which family's WHOLE-DATASET numbers are mirrored; those are
+            # labelled optimistic already. (dirty-local 2026-09-28)
+            if len(budget_block) > 1:
+                _mblock, _mres, _mwhy = _merge_family_reselection(budget_block)
+                if _mblock is not None:
+                    cell['fold_reselection'] = _mblock
+                    cell['fold_reselection_result'] = _mres
+                    cell.pop('fold_reselection_error', None)
+                    cell['fold_reselection_scope'] = (
+                        'families pooled; family re-picked per held-out fold '
+                        'on the other folds')
+                    _k = (_mres or {}).get(_SAC_MODEL_KEY) or {}
+                    if _k:
+                        print(f"      held-out, family re-picked per fold: "
+                              f"delta={_k.get('delta_mean_of_folds'):+.4f}, "
+                              f"winners={_k.get('hybrid_winners_per_fold')}")
+                else:
+                    cell['fold_reselection_scope'] = (
+                        f'family chosen by its own held-out delta '
+                        f'(optimistic): {_mwhy}')
+                    print(f"      families not pooled: {_mwhy}")
             if len(budget_block) > 1:
                 print(f"    family chosen: {_win} ({_rule})")
                 print(f"      held-out delta   "
@@ -1006,7 +1095,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                  'pool_by_objective', 'top3_base_reps',
                  'top3_base_reps_metric', 'top3_base_reps_family',
                  'sac_delta_comparator', 'fold_reselection',
-                 'fold_reselection_result', 'fold_reselection_error'):
+                 'fold_reselection_result', 'fold_reselection_error',
+                 'fold_reselection_scope', 'family_chosen'):
         if _key in _primary:
             results[_key] = _primary[_key]
 
