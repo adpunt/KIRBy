@@ -505,19 +505,22 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             print(f"FAILED: {e}")
         fold_c2.append(c2)
 
+        # C3's weights come from each silo's cross-validated error on the
+        # training rows. Since 2026-09-28 those folds are scaffold-grouped,
+        # like every other split in this file; they were random KFold.
         print("  C3: FLuID quality...", end=' ')
         try:
             if is_clf:
                 y_pred_c3, y_prob_c3, mcc_w_c3 = predict_fluid_quality_ensemble_classification(
                     teacher_models, silo_train_features_qual,
-                    silo_test_features_qual, K)
+                    silo_test_features_qual, K, groups=groups[train_idx])
                 c3 = _compute_metrics(y_test, y_pred_c3, y_prob=y_prob_c3)
                 c3['mcc_weights'] = convert_numpy(mcc_w_c3)
                 print(f"MCC={c3['mcc']:.4f}")
             else:
                 y_pred_c3, rmse_w_c3 = predict_fluid_quality_ensemble_regression(
                     teacher_models, silo_train_features_qual,
-                    silo_test_features_qual, K)
+                    silo_test_features_qual, K, groups=groups[train_idx])
                 c3 = _compute_metrics(y_test, y_pred_c3)
                 c3['rmse_weights'] = convert_numpy(rmse_w_c3)
                 print(f"RMSE={c3['rmse']:.4f}")
