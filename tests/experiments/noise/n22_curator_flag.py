@@ -754,12 +754,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _recipes_rf['hybrid'] = _bp
         elif _kind == 'hybrid' and _nm == _space_name('similarity'):
             _recipes_rf['hybrid_similarity'] = _bp
+    # The code that computes the scores is in the signature (2026-09-28).
+    # run_signature holds the data, the settings and the similarity setting,
+    # not the code, so a run killed at the time cap and resumed after an edit
+    # to a detector or to this file would have joined folds scored by the old
+    # code to folds scored by the new, under one set of numbers. Any byte
+    # change to these three files now starts the scoring again.
+    import hashlib as _hashlib
+    import kirby.utils.noise_estimation as _ne_mod
+    import n06_bindingdb_ground_truth as _n06_mod
+    _code = {}
+    for _mod_path in (os.path.abspath(__file__), _ne_mod.__file__,
+                      _n06_mod.__file__):
+        try:
+            with open(_mod_path, 'rb') as _fh:
+                _code[os.path.basename(_mod_path)] = _hashlib.sha1(
+                    _fh.read()).hexdigest()[:12]
+        except OSError:
+            _code[os.path.basename(str(_mod_path))] = 'unreadable'
     ck = sx.FoldCheckpoint(
         output_dir, EXP_FULL_NAME, dataset_name,
         sx.run_signature(data, config, {
             'estimators': estimators, 'spaces': sorted(spaces),
             'base_spaces': base_spaces, 'budget': budget,
-            'pool_subset': pool_subset}))
+            'pool_subset': pool_subset, 'code': _code}))
     if ck.state is not None:
         (scores, failures, est_seconds, timings, exclusion_note, sim_graded,
          sim_unavailable, sim_scores) = ck.state
