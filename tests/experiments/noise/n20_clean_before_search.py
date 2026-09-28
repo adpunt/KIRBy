@@ -2326,7 +2326,10 @@ def _print_summary(results, metric_name):
                   f"{row['n_cells_where_the_recipe_moved']} of "
                   f"{row['n_cells']} cells{tail}")
             def _rc(v):
-                return ', '.join('all ten' if x is None else str(x) for x in v)
+                # None is the whole pool, which is 5 or 6 representations
+                # in the local run, not ten.
+                return ', '.join('the whole pool' if x is None else str(x)
+                                 for x in v)
             print(f"      representations the recipe used, one entry per cell: "
                   f"searching on the labels as they are {_rc(row['rep_count_asis'])}; "
                   f"searching on the cleaned labels {_rc(row['rep_count_cleaned'])}")
