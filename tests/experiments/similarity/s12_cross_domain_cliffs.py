@@ -640,6 +640,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'n_folds_in_pool': pool.get('n_folds_in_pool'),
                     'fold0_pruned': pool.get('fold0_pruned'),
                     'selection_scope': pool.get('selection_scope'),
+                    # True when no configuration was scored at `budget` and the
+                    # pool ranked over every budget it holds instead, so the
+                    # recipe's own budget (in fold_recipes) is the one built.
+                    'budget_requested': budget,
+                    'budget_relaxed': pool.get('budget_relaxed'),
+                    'budgets_ranked_over': pool.get('budgets_ranked_over'),
                     'base_rep': _base.get('rep'),
                     'base_rep_score_other_folds': _base.get('score_other_folds'),
                     'hybrids': [
@@ -801,6 +807,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _fold0_pruned = True if fold0_pruned_any is None else bool(fold0_pruned_any)
     _folds_match_pool = (pool_n_folds_seen == {len(folds)})
     results['fold_reselection'] = {
+        # Stored so hr_direction can cross-check the flag against
+        # BUILTIN_METRICS instead of trusting a bare bool. (dirty-local)
+        'metric_name': metric_name,
         'lower_is_better': lower_is_better,
         'exclude_folds': ([0] if (_fold0_pruned and _folds_match_pool) else []),
         'fold0_pruned': _fold0_pruned,
@@ -892,6 +901,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['fold_reselection']['candidates_by_model'],
         results['fold_reselection']['baselines_by_model'],
         lower_is_better,
+        metric_name=metric_name,
         exclude_folds=hr_exclude_folds(results['fold_reselection']),
         # 2026-09-12: copied onto every model entry, so a stored result says
         # what chose the recipe without opening this file.
