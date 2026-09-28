@@ -117,7 +117,7 @@ from experiments.noise.noise_helpers import (
     inject_train_labels, noise_spec_for, detection_scores,
     DETECTION_IS_DEFINED, hybrid_for_fold, sweep_conditions,
 )
-from kirby.noise_spec import GROUPED_STRATEGIES
+from kirby.noise_spec import GROUPED_STRATEGIES, DEFAULT_STRATEGY_CLF
 from kirby.noise_spec import REGRESSION_STRATEGIES as _REG_STRATEGIES
 # dirty-local 2026-09-28: the members of DETECTION_IS_DEFINED an injector
 # can produce. See run().
@@ -716,7 +716,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     constant-width condition every training molecule's label moves, so the list
     of molecules that moved is the list of all of them and average precision is
     1.0 by construction.
+
+    ON A CLASSIFICATION DATASET THE DEFAULT IS ONE CONDITION, NOT EIGHT.
+    noise_spec_for replaces every regression condition name with the one
+    symmetric flip model before it seeds the draw, so all eight names give
+    the same spec id and the same flipped labels (checked 2026-09-28 on
+    humanness_therapeutic: one spec id for all eight). Eight runs were eight
+    identical copies. The one kept is filed under NOISE_CONDITION's name, and
+    the result says which injection it really was.
     """
+    default = _INJECTABLE_CONDITIONS
+    if data.get('task_type') == 'classification':
+        default = (NOISE_CONDITION,)
     return sweep_conditions(
         _run_one_condition, 'n21_neighbour_distance',
         data, config, output_dir, dataset_name,
@@ -724,7 +735,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # DETECTION_IS_DEFINED also holds shift_only_* and sparse_dprime_*,
         # which noise_spec_for refuses with ValueError (not in the NoiseInject
         # registry), so the default sweep crashed after the eighth condition.
-        default_conditions=_INJECTABLE_CONDITIONS, kwargs=kwargs,
+        default_conditions=default, kwargs=kwargs,
         groups_needed=GROUPED_STRATEGIES)
 
 
@@ -966,6 +977,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             f'with the one it was built on or scored on. base_reps_by_model '
             f"is every model's own ranking, recorded and not used."),
         'noise_condition': condition,
+        # On classification noise_spec_for swaps every regression name for
+        # the symmetric flip model, so the name above is a label only.
+        'noise_condition_injected': (DEFAULT_STRATEGY_CLF if is_clf
+                                     else condition),
         'levels': levels,
         'levels_dropped': levels_dropped,
         'noise_seeds': seeds,
