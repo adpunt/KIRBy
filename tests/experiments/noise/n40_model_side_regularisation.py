@@ -101,7 +101,8 @@ fixed preference list was deleted; the owner has not signed it off.
 Ridge is not used anywhere (the owner's no-ridge rule); the report's Cp example on
 ridge is replaced by the two linear smoothers the model set already has.
 
-THE GAMMA ESTIMATE. noise_helpers.gamma_test on Euclidean distances in the matrix
+THE GAMMA ESTIMATE. noise_helpers.gamma_test on the process-wide distance
+(distance_config, manhattan by default; Euclidean until 2026-09-25) in the matrix
 the GP and kNN see, k = 1..GAMMA_K_MAX neighbours. Above GAMMA_MAX_MOLECULES
 training molecules it runs on a seeded subset of that many. Its intercept is an
 upper bound on the label noise: it also holds variation the features cannot
