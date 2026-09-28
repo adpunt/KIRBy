@@ -25,7 +25,7 @@ from scipy.stats import wilcoxon
 
 from experiments._shared import (
     save_experiment_results, load_experiment_results, fold_reselection,
-    hr_exclude_folds,
+    hr_exclude_folds, hr_direction,
 )
 from experiments.similarity._summary_keys import (
     ACCEPTED_INPUT_KEYS, MIN_DATASETS_FOR_WILCOXON,
@@ -161,6 +161,12 @@ def _heldout_delta(hr_result, model_key):
     # instead of the reader having to know which experiment did which.
     if entry.get('recipe_selection') == 'whole_dataset':
         arm += ' (recipe picked on all rows; only the features are refit)'
+    elif entry.get('recipe_selection') == 'other_folds_of_pool_search':
+        # s04 and s05: the recipe was ranked on the pool search's other folds,
+        # but that search ran over every row. The fold's scores are held out
+        # of the ranking; its rows are not. (dirty-local 2026-09-28)
+        arm += (' (recipe ranked on the pool search\'s other folds; that '
+                'search saw every row)')
     # Fold 0 chose which recipes survived, so its term was dropped from both
     # arms. Say how many folds the mean actually covers.
     if entry.get('excluded_folds'):
@@ -189,10 +195,18 @@ def _rescore_block(block):
     # The block says which folds the search filtered its own recipes on; those
     # folds come out of both arms. s02, s05, s12 and s13 all read it the same
     # way, so s04's block is re-scored on the same folds they would use.
+    # Direction through hr_direction, not bool(block.get('lower_is_better')):
+    # a missing flag read as False is higher-is-better, which inverts every
+    # RMSE delta. hr_direction checks the stored metric name against
+    # BUILTIN_METRICS and raises when the block carries no direction at all.
+    # The recipe label s04 writes is passed through so the arm label says it.
+    # (dirty-local 2026-09-28)
     try:
-        return fold_reselection(candidates, baselines,
-                              bool(block.get('lower_is_better')),
-                              exclude_folds=hr_exclude_folds(block)), None
+        _lib = hr_direction(block)
+        return fold_reselection(candidates, baselines, _lib,
+                              metric_name=block.get('metric_name'),
+                              exclude_folds=hr_exclude_folds(block),
+                              recipe_selection=block.get('recipe_selection')), None
     except Exception as e:
         return None, f'fold_reselection raised {type(e).__name__}: {e}'
 
@@ -383,12 +397,23 @@ def run(all_dataset_results):
 
         # Counterpart arm, outside the guard above: s04 stores per-fold scores
         # for both arms under 'fold_reselection' but no re-scored result, so it is
-        # computed here. Those fold scores are the OVERALL metric over every
-        # compound in the fold, not rmse_cliff, so this delta is a different
-        # statistic from the two reductions above.
+        # computed here. Which rows those fold scores cover is read from the
+        # block: s04 files written since the cliff-rows change store the
+        # dataset's own metric over each fold's CLIFF rows
+        # (fold_score_stratum='cliff_rows_only'); older files stored the metric
+        # over every molecule in the fold. The key name 'cliff_overall_...' is
+        # kept so existing readers still find it; the source string says which.
+        # Either way it is the dataset's metric, not rmse_cliff, so this delta
+        # is a different statistic from the two reductions above.
+        # (dirty-local 2026-09-28: the label said OVERALL for both.)
         if exp4:
+            _stratum4 = ((exp4.get('fold_reselection') or {})
+                         .get('fold_score_stratum') or 'all_rows_in_fold')
+            _metric4 = ((exp4.get('fold_reselection') or {})
+                        .get('metric_name') or 'the dataset metric')
             _src4h = ('s04 fold_reselection -> knn.delta_mean_of_folds '
-                      '(per-fold OVERALL metric, not rmse_cliff)')
+                      f'(per-fold {_metric4} over {_stratum4}, not rmse_cliff)')
+            ds_summary['cliff_overall_delta_heldout_stratum'] = _stratum4
             _hr4, _why4h = _rescore_block(exp4.get('fold_reselection'))
             if _hr4 is None:
                 _record_absent(ds_summary, 'cliff_overall_delta_heldout',
