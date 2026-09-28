@@ -1809,7 +1809,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         lower_is_better)
                                     if X_keep is None:
                                         continue
-                                    s2 = StandardScaler().fit(X_keep)
+                                    # Scaled on EVERY training row, as the
+                                    # other three arms are (space_asis above,
+                                    # and the smoothers' branch below). Fitting
+                                    # it on the kept rows alone made the
+                                    # scaler a third thing differing between
+                                    # the arms, beside the two the table
+                                    # names; only svm could feel it. The
+                                    # scaler reads features, never a label.
+                                    s2 = StandardScaler().fit(X_rest[:n_tr])
                                     X_all = s2.transform(X_rest[:n_tr])
                                     X_va_c = s2.transform(X_rest[n_tr:])
                                     pairs = (
