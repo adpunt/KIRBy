@@ -649,6 +649,46 @@ def _mean_detection(rows):
     return out
 
 
+def _neighbours_without_self(X, k):
+    """Each molecule's k nearest OTHER molecules, the molecule removed by index.
+
+    The estimators' own search (noise_estimation._knn_indices without
+    exclude_groups) asks for k + 1 neighbours and drops column 0, assuming
+    the molecule is its own first neighbour. When two molecules have the same
+    features they tie at distance 0 and come back in either order, so about
+    half of them keep themselves as a neighbour. Their own noisy label then
+    enters their neighbour mean, and they look less suspect than they are.
+
+    That hits the weighted conditions harder than the unweighted ones,
+    because a weighted space drops every feature with zero importance and
+    more molecules then share a vector. Measured on herg_ki ECFP4, one
+    3-fold training split of 943 molecules, clean labels: 32 molecules share
+    a vector in all 2048 bits, and 90 share one in the 171 bits lightgbm_gain
+    scores above zero.
+
+    Same query as before (k + 1 neighbours, the same distance), so every
+    molecule whose own index was in column 0 gets exactly the list it had.
+    A molecule whose own index is elsewhere loses itself instead of its first
+    neighbour; one whose own index was not returned at all (more than k + 1
+    exact ties) loses the farthest. Same rule as simopt's bc394a6 and c19's
+    cbcd07e.
+    """
+    from sklearn.neighbors import NearestNeighbors
+    from kirby.similarity.distance_config import (
+        resolve as _resolve_metric, sklearn_kwargs as _sk_kwargs)
+    X = np.asarray(X)
+    n = len(X)
+    k = int(min(k, n - 1))
+    nn = NearestNeighbors(n_neighbors=k + 1,
+                          **_sk_kwargs(_resolve_metric(None)))
+    nn.fit(X)
+    idx = nn.kneighbors(X, return_distance=False)
+    is_self = idx == np.arange(n)[:, None]
+    absent = ~is_self.any(axis=1)
+    is_self[absent, -1] = True
+    return idx[~is_self].reshape(n, k)
+
+
 def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
                     model_factories, metric_fn, is_clf=False,
                     corrupted_mask=None, noise_condition=None,
@@ -682,11 +722,17 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
     errors = {}
     detection = {}
 
+    # One neighbour list per k, shared by both estimators, with each molecule
+    # itself removed BY INDEX. See _neighbours_without_self.
+    _lists = {}
     for est_name, est_cls in ESTIMATOR_FACTORIES.items():
         for k in K_VALUES:
             est_key = f'{est_name}_k{k}'
             try:
-                est = est_cls(k=k, metric=None, is_clf=is_clf)
+                if k not in _lists:
+                    _lists[k] = _neighbours_without_self(X_space, k)
+                est = est_cls(k=k, metric=None, is_clf=is_clf,
+                              precomputed_neighbors=_lists[k])
                 scores = est.estimate(X_space, y_noisy)
                 if corrupted_mask is not None:
                     _det = detection_scores(corrupted_mask, scores, noise_condition)
