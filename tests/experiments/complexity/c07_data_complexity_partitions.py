@@ -269,8 +269,23 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 continue
 
             # Complexity metrics
-            X_concat = np.hstack([sub_reps[k] for k in sorted(sub_reps.keys())])
-            metrics = {}
+            X_concat = np.hstack([np.asarray(sub_reps[k], dtype=float)
+                                  for k in sorted(sub_reps.keys())])
+            # These three numbers are descriptive. compute_effective_rank and
+            # compute_intrinsic_dimensionality both raise on a NaN, and they sit
+            # outside any try, so one missing feature value ended the whole run.
+            # Non-finite values take the column median of this half; columns
+            # with no finite value are dropped. No label is involved.
+            _bad = ~np.isfinite(X_concat)
+            n_nonfinite = int(_bad.sum())
+            if n_nonfinite:
+                X_concat = np.where(_bad, np.nan, X_concat)
+                _keep = ~np.isnan(X_concat).all(axis=0)
+                X_concat = X_concat[:, _keep]
+                _med = np.nanmedian(X_concat, axis=0)
+                _r, _c = np.where(np.isnan(X_concat))
+                X_concat[_r, _c] = _med[_c]
+            metrics = {'n_nonfinite_filled': n_nonfinite}
             try:
                 n_comp = min(50, X_concat.shape[1], X_concat.shape[0] - 1)
                 X_reduced = PCA(n_components=n_comp).fit_transform(
@@ -278,13 +293,21 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 metrics['mi'] = float(estimate_mutual_information_knn(X_reduced, sub_labels, k=5))
             except Exception:
                 metrics['mi'] = None
-            metrics['effective_rank'] = compute_effective_rank(X_concat)
-            dim_info = compute_intrinsic_dimensionality(X_concat)
+            try:
+                metrics['effective_rank'] = compute_effective_rank(X_concat)
+            except Exception as _e_er:
+                metrics['effective_rank'] = None
+                metrics['effective_rank_error'] = f'{type(_e_er).__name__}: {_e_er}'
+            try:
+                dim_info = compute_intrinsic_dimensionality(X_concat)
+            except Exception as _e_id:
+                dim_info = {}
+                metrics['dimensionality_error'] = f'{type(_e_id).__name__}: {_e_id}'
             metrics['pca_95'] = dim_info.get('pca_95')
             metrics['mle_dim'] = dim_info.get('mle')
             metrics['n_samples'] = int(mask.sum())
 
-            print(f"    {subpop_name}: eff_rank={metrics['effective_rank']:.1f}, "
+            print(f"    {subpop_name}: eff_rank={metrics['effective_rank']}, "
                   f"MI={metrics.get('mi', '?')}, PCA95={metrics.get('pca_95', '?')}")
 
             # Use find_best_hybrid for proper search.
