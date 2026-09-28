@@ -15,8 +15,9 @@ folds it also reports the spread (std); treat any condition ordering as
 suggestive only unless the gap clearly exceeds that spread. Do not read the
 boolean "helps"/"redundant" flags as significance tests.
 
-5 conditions × 3 estimators × 3 k values × 2 importance methods × 2 sigmas, per
-hybrid space. With both search families in the pool it is 8 conditions: the two
+The base pair of conditions per rank, plus three per hybrid space, × 2
+estimators (neighbor_residual, local_variance_ratio) × 3 k values × 2
+importance methods × the dataset's noise levels. With both search families in the pool it is 8 conditions: the two
 base ones, plus three in each hybrid space.
 
 2026-09-12, user decision: the hybrid conditions may draw their recipe from the
@@ -652,14 +653,15 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
                     model_factories, metric_fn, is_clf=False,
                     corrupted_mask=None, noise_condition=None,
                     eval_by_model=None, predict_mode='predict'):
-    """Run 3 estimators × 3 k values on one condition.
+    """Run the 2 estimators of ESTIMATOR_FACTORIES × 3 k values on one condition.
 
     eval_by_model: {model key: (X_train, X_val)} -- the features each entry of
     model_factories is fitted and scored on. run() passes one pair per
     evaluation unit ('<model>@base_<k>'). None fits every entry on
     X_eval_train/X_eval_val.
 
-    Fixed remediation: exponential weighting, alpha=0.1.
+    Fixed remediation: REPAIR_WEIGHT_METHOD at REPAIR_STRENGTH ('inverse' at
+    3.0, a 4-to-1 weight ratio from least to most suspect).
     Passes is_clf to each estimator so classification uses class-disagreement
     instead of the regression value-residual that's meaningless for class
     labels.
@@ -1364,8 +1366,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             # single representation, the similarity spaces are that unit's
             # model's (its top 2, the two hybrids of the pool's recipes).
             # Neighbour lists without group exclusion, as ESTIMATOR_FACTORIES
-            # are built above (no exclude_groups), so MODEL_INPUT at k=5, 10
-            # and 20 is the base_<k>_unweighted condition's list.
+            # are built above (no exclude_groups). MODEL_INPUT is the unit's
+            # own model input (noise_cache.cached_scaled), which leaves an
+            # all-binary representation unscaled. The base_<k>_unweighted
+            # conditions z-score every representation (_build_conditions), so
+            # on ECFP4 the two neighbour lists are NOT the same list.
             _g_tr = (groups[train_idx] if groups is not None else None)
             for _u, (_m, _k_rank, _rn) in eval_units.items():
                 _xtr, _xva = eval_by_unit[_u]
