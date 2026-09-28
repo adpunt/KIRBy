@@ -176,6 +176,10 @@ CAVEATS = [
     "scores were shifted by the pool minimum, so on rmse datasets the worst "
     "representation got zero weight under linear and power_law. Files written "
     "before this date sized the pool differently from the engine.",
+    "2026-09-28: the scores that size the pool are handed to the engine's "
+    "weighting in name order, as allocate_weighted_global does. Before, they "
+    "went in held-out rank order, and rank_linear, rank_exp and entropy break a "
+    "tie in score by that order.",
     "2026-09-28: a requested pool size larger than the representations loaded is "
     "cut to that number and coinciding sizes run once. pool_sizes_used says what "
     "ran; keys carry the size used.",
@@ -678,8 +682,14 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # The engine shifts the scores of exactly the reps it is handed, so the shift
     # is taken over each candidate pool on its own: pool5's weights are not
     # pool10's weights read on five names.
+    #
+    # NAME ORDER, 2026-09-28. The engine builds this dict over sorted(rep_names),
+    # and rank_linear, rank_exp and entropy break a tie in score by dict order.
+    # pools[p] is in held-out rank order, so a tie (two representations at
+    # exactly 0 after the origin clip) used to be broken by the outer folds'
+    # held-out scores, and differently from the engine. Sorted by name now.
     fold_hib = {p: [_sanitize_baseline_scores(
-                        {rn: fold_size_score[i][rn] for rn in pools[p]})
+                        {rn: fold_size_score[i][rn] for rn in sorted(pools[p])})
                     for i in range(NFOLDS)] for p in pool_sizes}
 
     # ======================================================================
@@ -721,7 +731,8 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
             for i in range(NFOLDS):
                 w = _compute_allocation_weights(
                     fold_hib[p][i], scheme=scheme, params=params,
-                    rep_dict_train={rn: fold_pool_train[i][rn] for rn in pools[p]})
+                    rep_dict_train={rn: fold_pool_train[i][rn]
+                                    for rn in sorted(pools[p])})
                 # As the engine does: a representation that could not be scored
                 # weighs zero under every scheme, including the rank-based ones.
                 wl.append({rn: (float(w.get(rn, 0.0))
