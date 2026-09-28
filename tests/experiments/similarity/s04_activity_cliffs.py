@@ -715,6 +715,63 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     return h
             return None
 
+        # Which representations a fold's hybrid keeps when the recipe uses
+        # fewer than the job loads. Added 2026-09-28, same fix as c13, c15 and
+        # c22. Without scores passed in, build_fold_hybrid keeps the best
+        # rep_count by blueprint.rep_scores, which the search measured over
+        # every row (find_best_hybrid.py:9492-9522), this fold's held-out rows
+        # included. Under the local run logd loads 6 representations and
+        # rep_count is 5, so the held-out labels chose which one each fold's
+        # hybrid dropped. This scores each representation the way the search
+        # and create_hybrid do: the recipe's internal evaluator, fitted on the
+        # internal carve of the fold's training rows, read off with the
+        # dataset's metric. None when nothing is cut, so herg_ki and caco2
+        # build exactly as before. A geometry recipe (the similarity family)
+        # is left on blueprint.rep_scores and says so.
+        _alloc_cache = {}
+
+        def _fold_alloc_scores(fold_i, train_reps_h, yt, groups_tr, bp):
+            rep_count = getattr(bp, 'rep_count', None)
+            if rep_count is None or int(rep_count) >= len(train_reps_h):
+                return None
+            evaluator = getattr(bp, 'internal_evaluator', None)
+            objective = getattr(bp, 'objective', None)
+            from kirby.find_best_hybrid import (OBJECTIVE_PREDICTIVE,
+                                                _is_geometry_objective)
+            if (not isinstance(evaluator, str) or evaluator == 'match'
+                    or (objective is not None
+                        and (isinstance(objective, dict)
+                             or _is_geometry_objective(objective)))):
+                print(f"      [s04] fold-local representation ranking not "
+                      f"computed (evaluator={evaluator!r}, "
+                      f"objective={objective!r}); build_fold_hybrid ranks on "
+                      f"the whole-dataset rep_scores")
+                return None
+            key = (int(fold_i), evaluator)
+            if key in _alloc_cache:
+                return _alloc_cache[key]
+            from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
+            # The direction of metric_fn, which is what build_fold_hybrid hands
+            # create_hybrid for this recipe, so the scores match the ones
+            # create_hybrid would compute on the kept representations.
+            lib = bool(lower_is_better)
+            inner_tr, inner_va = internal_holdout_split(len(yt), yt, groups_tr)
+            out = {}
+            for name in sorted(train_reps_h):
+                X = train_reps_h[name]
+                Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                                    nan=0.0, posinf=1e10, neginf=-1e10)
+                Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                                    nan=0.0, posinf=1e10, neginf=-1e10)
+                out[name] = float(_score_rep_for_budget(
+                    Xtr, Xva, yt[inner_tr], yt[inner_va],
+                    internal_evaluator=evaluator, metric_fn=metric_fn,
+                    lower_is_better=lib,
+                    objective=objective or OBJECTIVE_PREDICTIVE,
+                    is_clf=is_clf))
+            _alloc_cache[key] = out
+            return out
+
         def _build_arm(tr, va, yt, fold_i, objective, rank):
             """(X_train, X_val, feature_info, blueprint) for one arm, one fold."""
             h = _arm_entry(fold_i, objective, rank)
@@ -727,10 +784,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _use_aug = augmentations if aug_cond != 'none' else None
             aug_tr = {k: v[tr] for k, v in _use_aug.items()} if _use_aug else None
             aug_va = {k: v[va] for k, v in _use_aug.items()} if _use_aug else None
+            _g_tr = groups[tr] if groups is not None else None
             X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                 train_reps_h, val_reps_h, yt, bp_fold,
                 augmentations_train=aug_tr, augmentations_val=aug_va,
-                groups=(groups[tr] if groups is not None else None),
+                groups=_g_tr,
+                precomputed_alloc_scores=_fold_alloc_scores(
+                    fold_i, train_reps_h, yt, _g_tr, bp_fold),
                 **fold_hybrid_scoring_kwargs(
                     bp_fold, model=_make_knn(len(yt)),
                     metric_fn=metric_fn, lower_is_better=lower_is_better))
