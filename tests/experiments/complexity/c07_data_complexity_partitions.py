@@ -177,7 +177,13 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             for s in unique_scaffolds:
                 s_labels = labels[groups == s]
                 if len(s_labels) >= 2:
-                    scaffold_var[s] = np.var(s_labels)
+                    # ddof=1: np.var's default divides by n, which shrinks a
+                    # 2-molecule scaffold's variance by half and a 10-molecule
+                    # one by a tenth, so small scaffolds were pushed into
+                    # 'easy' by the estimator. Scaffold size still leans the
+                    # split (a 2-point variance is noisy and skewed low); the
+                    # trace records the counts.
+                    scaffold_var[s] = np.var(s_labels, ddof=1)
             if not scaffold_var:
                 print("    Not enough scaffolds with 2+ members, skipping")
                 continue
@@ -214,7 +220,8 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 _in = groups == s
                 if _in.sum() >= 2:
                     scaffold_spread[s] = float(np.nanmean(
-                        [np.nanmean(np.nanvar(_Z[_in], axis=0))
+                        # ddof=1 for the same reason as target_variance.
+                        [np.nanmean(np.nanvar(_Z[_in], axis=0, ddof=1))
                          for _Z in _z.values()]))
             if not scaffold_spread:
                 print("    Not enough scaffolds with 2+ members, skipping")
