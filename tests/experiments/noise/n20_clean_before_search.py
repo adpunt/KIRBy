@@ -2043,9 +2043,11 @@ def _mean_detection(rows):
     """Average the detection readings over the (fold, draw) passes."""
     if not rows:
         return None
+    # detection_auroc added 2026-09-28: detection_scores has returned it since
+    # 2026-09-24 and this average dropped it.
     keys = ('detection_average_precision', 'detection_precision_at_k',
-            'detection_recall_at_k', 'detection_n_corrupted',
-            'detection_n_training')
+            'detection_recall_at_k', 'detection_auroc',
+            'detection_n_corrupted', 'detection_n_training')
     out = {}
     for k in keys:
         vals = [float(r[k]) for r in rows
