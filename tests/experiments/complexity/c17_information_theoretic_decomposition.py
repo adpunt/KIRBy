@@ -426,6 +426,11 @@ def _evaluate_strategy(select_fn, y, splits, metric_fn):
         'fold_scores': scores,
         'fold_mi_density': densities,
         'n_folds_used': len(scores),
+        # _m drops a NaN fold before averaging, so a strategy that lost a fold
+        # is averaged over fewer folds than the others in its budget. These
+        # say how many folds each mean actually holds.
+        'n_folds_finite_mi': int(np.sum(np.isfinite(np.asarray(mis, float)))),
+        'n_folds_finite_score': int(np.sum(np.isfinite(np.asarray(scores, float)))),
         'measured_on': 'held-out rows',
     }
 
