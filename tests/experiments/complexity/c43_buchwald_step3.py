@@ -94,7 +94,8 @@ BEST = "cgr_morgan"
 _ANCHOR = None
 
 def _lightgbm_anchor():
-    """cgr_morgan alone, lightgbm, 5-fold — written by c43_buchwald_signal.
+    """cgr_morgan alone, lightgbm, KIRBY_LOCAL_FOLDS folds (5 when unset) —
+    written by c43_buchwald_signal.
 
     Was a typed-in literal, 14.3664, which was a RANDOM FOREST number. This
     file fits lightgbm, so subtracting it compared two different models.
