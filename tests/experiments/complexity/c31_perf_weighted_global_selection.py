@@ -42,7 +42,8 @@ Design (implemented exactly), per downstream model:
   1. Score each rep standalone (grouped CV, full native width) -> per-rep score,
      rank, pool = top-p for each p in POOLS, target = best rep x THIS model.
   2. PER FOLD (item 4): inner group-aware CV over TRAIN indices only -> per-rep
-     TRAIN score -> gs*score -> `_sanitize_baseline_scores` -> ENGINE
+     TRAIN score -> gs*score -> ENGINE `_apply_origin_rule` on each inner fold,
+     averaged (since 2026-09-28) -> `_sanitize_baseline_scores` -> ENGINE
      `_compute_allocation_weights(scheme, params, rep_dict_train=train_pool)`.
   3. pool_slots_i = round(w_i/sum(w) * POOL_TOTAL), capped at rep width, PER FOLD.
      POOL_TOTAL swept over {2*B, 4*B}.
@@ -105,6 +106,7 @@ from sklearn.metrics import r2_score  # noqa: E402
 # strategies do.
 from kirby.hybrid import (  # noqa: E402
     create_hybrid, _compute_allocation_weights, _sanitize_baseline_scores,
+    _apply_origin_rule,
 )
 from kirby.find_best_hybrid import get_model  # noqa: E402
 
@@ -358,7 +360,9 @@ def main(datasets):
                          "per_fold_sizing": True,
                          "noise_floor": "group_block_bootstrap",
                          "n_boot": N_BOOT,
-                         "weighting_source": "kirby.hybrid._compute_allocation_weights"}
+                         "weighting_source": "kirby.hybrid._compute_allocation_weights",
+                         "sizing_score": "engine _apply_origin_rule per inner fold, "
+                                         "averaged over inner folds, then shifted"}
     # Same guard as c32: a resumed run keeps the dataset entries already in the
     # file and overwrites the settings block with the current settings, so one
     # file could report two sweeps under one description. Added 2026-09-11.
@@ -607,9 +611,31 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # derive per-scheme weights cheaply.  Inner CV is GROUP-AWARE (no random).
     # ======================================================================
     fold_train_score = []         # [i] -> {rn: raw direction-corrected train score}
+    fold_size_score = []          # [i] -> {rn: origin-normalised score that sizes}
     fold_pool_train = []          # [i] -> {rn: cleaned train matrix} (for entropy)
     size_fallback_folds = []
     score_whole = {rn: gs * rep_native[rn][0] for rn in P}
+
+    # THE ENGINE'S ORIGIN RULE, added here 2026-09-28. Since 2026-09-10 both
+    # allocate_performance_weighted and allocate_weighted_global pass the
+    # direction-corrected scores through _apply_origin_rule BEFORE the shift:
+    # rmse becomes 1 - rmse / (rmse of predicting the training mean), clipped at
+    # 0; spearman is clipped at 0. This file still shifted the raw -rmse by its
+    # own minimum, so on every rmse dataset the worst representation in the pool
+    # got zero weight under linear and power_law, and the weights were not the
+    # engine's although the docstring says they are. The engine applies the rule
+    # to one train/validation carve; here it is applied to each inner fold's
+    # carve with that fold's own labels and then averaged over inner folds.
+    def _origin_skill(per_fold_native, y_sub, folds_sub):
+        per_fold = []
+        for j, (itr, iva) in enumerate(folds_sub):
+            raw = {rn: gs * float(per_fold_native[rn][j]) for rn in per_fold_native}
+            per_fold.append(_apply_origin_rule(raw, mfn, y_sub[itr], y_sub[iva],
+                                               where='c31 pool sizing'))
+        return {rn: float(np.mean([d[rn] for d in per_fold]))
+                for rn in per_fold_native}
+
+    size_whole = _origin_skill({rn: rep_native[rn][1] for rn in P}, y, folds)
     for i, (tr, va) in enumerate(folds):
         sub_groups = groups[tr]
         sub_y = y[tr]
@@ -619,27 +645,33 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         fold_pool_train.append(train_mats)
         if n_inner < 2:
             fold_train_score.append(dict(score_whole))   # fallback: whole-data
+            fold_size_score.append(dict(size_whole))
             size_fallback_folds.append(i)
             continue
         try:
             inner = H.make_folds(sub_groups, sub_y, task, n=n_inner)
-            sc = {}
+            sc, sc_pf = {}, {}
             for rn in P:
                 m_native, _pf, _oof = H.score_matrix(
                     train_mats[rn], sub_y, inner, model, mfn, lower, task)
                 sc[rn] = m_native
+                sc_pf[rn] = _pf
             fold_train_score.append({rn: gs * sc[rn] for rn in P})
+            fold_size_score.append(_origin_skill(sc_pf, sub_y, inner))
         except Exception as e:
             print(f"  [size-fallback] fold {i}: inner CV failed ({type(e).__name__}: {e})")
             fold_train_score.append(dict(score_whole))
+            fold_size_score.append(dict(size_whole))
             size_fallback_folds.append(i)
     mout["size_fallback_folds"] = size_fallback_folds
+    mout["fold_size_score"] = [{rn: round(v, 5) for rn, v in d.items()}
+                               for d in fold_size_score]
 
     # The engine shifts the scores of exactly the reps it is handed, so the shift
     # is taken over each candidate pool on its own: pool5's weights are not
     # pool10's weights read on five names.
     fold_hib = {p: [_sanitize_baseline_scores(
-                        {rn: fold_train_score[i][rn] for rn in pools[p]})
+                        {rn: fold_size_score[i][rn] for rn in pools[p]})
                     for i in range(NFOLDS)] for p in pool_sizes}
 
     # ======================================================================
@@ -682,8 +714,14 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                 w = _compute_allocation_weights(
                     fold_hib[p][i], scheme=scheme, params=params,
                     rep_dict_train={rn: fold_pool_train[i][rn] for rn in pools[p]})
-                wl.append({rn: float(w.get(rn, 0.0)) for rn in pools[p]})
+                # As the engine does: a representation that could not be scored
+                # weighs zero under every scheme, including the rank-based ones.
+                wl.append({rn: (float(w.get(rn, 0.0))
+                                if np.isfinite(fold_size_score[i][rn]) else 0.0)
+                           for rn in pools[p]})
             scheme_fold_weights[(label, p)] = wl
+
+    degenerate_sizing = set()     # (scheme, pool size, fold) split equally
 
     def slots_for(label, p, POOL_TOTAL):
         """Per-fold slot dict for a scheme on the top-p pool at a given
@@ -692,9 +730,18 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
         for i in range(NFOLDS):
             w = scheme_fold_weights[(label, p)][i]
             tot = sum(w.values())
+            # All-zero weights: the engine splits the candidate pool equally and
+            # says so; this used to give every representation zero slots, and
+            # score_selection then predicted the training mean.
+            degenerate = not (np.isfinite(tot) and tot > 0)
+            if degenerate:
+                degenerate_sizing.add((label, p, i))
             slots = {}
             for rn in pools[p]:
-                s = int(round((w[rn] / tot) * POOL_TOTAL)) if tot > 0 else 0
+                if degenerate:
+                    s = int(round(POOL_TOTAL / len(pools[p])))
+                else:
+                    s = int(round((w[rn] / tot) * POOL_TOTAL))
                 slots[rn] = min(max(s, 0), rep_width[rn])
             sbf[i] = slots
         return sbf
@@ -794,6 +841,10 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                             "pool_slots_mean": smean, "pool_slots_std": sstd,
                             "candidate_pool_size": cand, "origin_counts": oc,
                             "scheme": label, "B": B, "mult": mult}
+
+    # Which (weighting, pool size, fold) had every weight at zero and so split
+    # the candidate pool equally, as the engine does in that case.
+    mout["degenerate_sizing_equal_split"] = [list(t) for t in sorted(degenerate_sizing)]
 
     # ======================================================================
     # ARM1 — per-rep equal quota (create_hybrid 'fixed'). IMPORTANCE-INVARIANT.
