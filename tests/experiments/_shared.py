@@ -2769,6 +2769,7 @@ def evaluate_single_rep_cv(
     metric_fn=None,
     return_width: bool = False,
     cap: bool = True,
+    binary_raw: bool = False,
 ):
     """Simple CV for a single representation matrix.
 
@@ -2800,19 +2801,36 @@ def evaluate_single_rep_cv(
     splits on one feature at a time, so rotating the axes is not free for it.
     c11 took the same rotation off its baselines for the same reason
     (c11_ensemble_vs_hybrid.py _prep).
+
+    binary_raw=True passes a matrix whose every value is 0 or 1 through
+    unscaled, which is the search's own rule for its baselines
+    (find_best_hybrid._evaluate_single, 'leave binary (ECFP, MACCS, etc.)
+    raw'). Standardising the bits changes nothing for a tree but moves an
+    RBF svm: about 0.07 RMSE on herg_ki ecfp4 (noise_cache.cached_scaled,
+    commit 808df51). Off by default, so f06 is unchanged.
     """
     if metric_fn is None:
         metric_fn = r2_score
 
     from kirby.find_best_hybrid import _predict_for_metric
 
+    _is_binary = False
+    if binary_raw:
+        _u = np.unique(X)
+        _is_binary = (X.dtype == np.uint8 or
+                      (len(_u) <= 2 and set(_u.tolist()).issubset({0, 0.0, 1, 1.0})))
+
     scores = []
     widths = []
     # `mode` is vestigial in cv_split; do not forward it.
     for train_idx, val_idx in cv_split(groups, n_folds, X, labels):
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X[train_idx])
-        X_val = scaler.transform(X[val_idx])
+        if _is_binary:
+            X_train = X[train_idx].astype(np.float32)
+            X_val = X[val_idx].astype(np.float32)
+        else:
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X[train_idx])
+            X_val = scaler.transform(X[val_idx])
 
         # PCA-reduce if features exceed training samples
         if cap:
