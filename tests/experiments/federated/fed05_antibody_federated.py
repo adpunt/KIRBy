@@ -861,8 +861,19 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
 
         # FLuID-style quality ensemble
         try:
+            # Each teacher's weight is 1/RMSE from cross-validation on the
+            # lead silo's training rows. With no groups that cross-validation
+            # is a random KFold, which puts two antibodies of one
+            # sequence-identity cluster on both sides and rewards memorising
+            # them, while every other number in this file is scored across
+            # clusters. flab_thermo_tresanco, the lead silo, has 247 clusters
+            # in its training rows (measured 2026-09-28), so GroupKFold's five
+            # folds are always available there.
+            _lead_g = sd_lead.get('groups')
             y_pred_ens, rmse_w = predict_fluid_quality_ensemble_regression(
-                teacher_models, silo_train_qual, silo_test_qual, K_div)
+                teacher_models, silo_train_qual, silo_test_qual, K_div,
+                groups=(np.asarray(_lead_g)[tr]
+                        if _lead_g is not None else None))
             ensemble_metrics = compute_reg_metrics(y_te, y_pred_ens)
             ensemble_metrics['rmse_weights'] = rmse_w
             print(f"    Quality ensemble: RMSE={ensemble_metrics['rmse']:.4f}")
