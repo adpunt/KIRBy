@@ -1197,10 +1197,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     and under a constant-width condition every training label moves, so the
     suspect set is every molecule and precision is 1.0 by construction.
     """
+    # dirty-local 2026-09-28: on a classification set noise_spec_for replaces
+    # every regression condition name with DEFAULT_STRATEGY_CLF before the seed
+    # is taken, so the eight names were eight bit-identical symmetric-flip runs
+    # filed under eight regression names. The default sweep there is the one
+    # injection that actually happens, under its own name. A caller naming a
+    # condition still gets it.
+    default_conditions = SWEPT_CONDITIONS
+    if data.get('task_type') == 'classification':
+        from kirby.noise_spec import DEFAULT_STRATEGY_CLF
+        default_conditions = (DEFAULT_STRATEGY_CLF,)
     return sweep_conditions(
         _run_one_condition, 'n23_uncertainty_cleaning',
         data, config, output_dir, dataset_name,
-        default_conditions=SWEPT_CONDITIONS, kwargs=kwargs,
+        default_conditions=default_conditions, kwargs=kwargs,
         groups_needed=GROUPED_STRATEGIES)
 
 
