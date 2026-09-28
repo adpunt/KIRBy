@@ -96,7 +96,8 @@ def _nogueira_stability(feature_sets, total_features):
     return float(phi), float(np.sqrt(var))
 
 
-def _fold_alloc_scores(train_reps, y_train, groups_train, blueprint, metric_fn):
+def _fold_alloc_scores(train_reps, y_train, groups_train, blueprint, metric_fn,
+                       search=None, fold_idx=None):
     """{rep: score on this fold's training rows} when rep_count cuts, else None.
 
     Added 2026-09-28, the same fix c15, c18 and c22 received. When the recipe's
@@ -113,6 +114,17 @@ def _fold_alloc_scores(train_reps, y_train, groups_train, blueprint, metric_fn):
     recipe's internal evaluator, fitted on the internal carve of this fold's
     training rows (the fold's noisy labels) and scored with the dataset's
     metric, higher is better. Returns None when nothing is cut.
+
+    `search` and `fold_idx` (added 2026-09-28): the search this level's recipe
+    came from already scored every representation on this fold, with this
+    evaluator, on the same internal carve of the same noisy training rows
+    (SearchResult.alloc_cache, key (fold, evaluator, metric)). Those scores are
+    read back when they cover every representation, which makes phase 3 rank
+    exactly as the search did and saves refitting the evaluator on every
+    representation for every (level, fold): measured at about 12 minutes per
+    level on herg_ki under the shared load, about 48 minutes over the four
+    levels, which would have pushed the c10__herg_ki rerun past the 3-hour cap.
+    Anything missing falls through to the refit below.
     """
     rep_count = getattr(blueprint, 'rep_count', None)
     if rep_count is None or int(rep_count) >= len(train_reps):
@@ -128,6 +140,16 @@ def _fold_alloc_scores(train_reps, y_train, groups_train, blueprint, metric_fn):
               f"(evaluator={evaluator!r}); build_fold_hybrid ranks on the "
               f"whole-dataset rep_scores")
         return None
+    _ac = getattr(search, 'alloc_cache', None) if search is not None else None
+    if _ac and fold_idx is not None:
+        _cached = _ac.get((int(fold_idx), evaluator,
+                           getattr(search, 'metric_name', None)))
+        if (isinstance(_cached, dict)
+                and all(r in _cached and np.isfinite(float(_cached[r]))
+                        for r in train_reps)):
+            return {r: float(_cached[r]) for r in sorted(train_reps)}
+        print(f"    [c10] fold {fold_idx}: the search's allocation scores do "
+              f"not cover every representation; refitting the evaluator")
     from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
     from experiments._shared import object_direction
     lib = object_direction(blueprint, 'the c10 recipe')
@@ -883,7 +905,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                     # otherwise, which leaves the build exactly as it was.
                     _alloc = _fold_alloc_scores(
                         train_reps, y_train, groups[train_idx], bp_stab,
-                        metric_fn)
+                        metric_fn, search=_search_stab, fold_idx=fold_idx)
                     # build_fold_hybrid carries the whole recipe — evaluator,
                     # augmentation strategy, candidate ranking, margin — where
                     # a bare create_hybrid call passed four of them and took
