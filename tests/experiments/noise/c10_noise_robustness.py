@@ -10,8 +10,6 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-import zlib
-
 import numpy as np
 
 from experiments._shared import (
@@ -214,32 +212,31 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     def _spec_for(strategy, level):
         """The noise condition for one (condition, level). None at level 0.
 
-        A fresh seed per (condition, level): the injector advances its generator
-        on every draw, so re-using one across the sweep would make a level's
-        realisation depend on how many levels ran before it. The seed depends on
-        the condition as well, or two conditions at one level would share a
-        realisation and the comparison between them would measure nothing.
+        Built by noise_helpers.noise_spec_for, the one every other noise
+        experiment uses. The seed depends on the condition, so two conditions
+        at one level do not share a realisation. THE LEVEL IS NOT IN THE SEED
+        (author's decision 2026-09-12, recorded at noise_spec_for): every level
+        of one condition is the same errors scaled, on the same molecules, so
+        auc_norm summarises a curve that moves for one reason.
 
-        WHICH molecules are hit is seeded from the condition alone, with the
-        level left out, so one condition's levels hit the same molecules and
-        auc_norm summarises a curve of rising dose rather than a curve of
-        re-drawn victims. The fold index is not part of either seed: the random
-        draws are made once over every row, and each fold's training labels
-        are then corrupted with the amount, censoring limit and grouped-wider
-        families taken from that fold's training labels alone
-        (kirby.noise_spec.inject_training_rows). find_best_hybrid does the same
-        with a spec, so the recipe a search picks and the features phase 3
-        rebuilds come from the same corrupted training labels.
+        ⛔ FIXED 2026-09-28. c10 built its own spec with the level added to the
+        draw seed, which the shared builder dropped on 2026-09-12. Each level
+        re-drew every error, so neighbouring points on a curve differed by the
+        draw as much as by the amount of noise. base_seed=noise_seed and
+        noise_seed=0 give the same selection seed c10 used before.
+
+        The fold index is not part of either seed: the random draws are made
+        once over every row, and each fold's training labels are then corrupted
+        with the amount, censoring limit and grouped-wider families taken from
+        that fold's training labels alone (kirby.noise_spec.inject_training_rows).
+        find_best_hybrid does the same with a spec, so the recipe a search picks
+        and the features phase 3 rebuilds come from the same corrupted labels.
         """
         if float(level) == 0.0:
             return None
-        digest = zlib.crc32(strategy.encode('utf-8'))
-        selection_seed = (int(noise_seed) * 1000003 + digest) & 0x7FFFFFFF
-        seed = (selection_seed
-                + int(round(float(level) * 1000)) * 7919) & 0x7FFFFFFF
-        return NoiseSpec(strategy=strategy, target_effective_noise=float(level),
-                         noise_seed=seed, selection_seed=selection_seed,
-                         dose_units=dose_units)
+        from experiments.noise.noise_helpers import noise_spec_for
+        return noise_spec_for(dataset_name, strategy, float(level),
+                              base_seed=int(noise_seed), noise_seed=0)
 
     def _noisy_column(spec):
         """The noise source for one condition: `src[train_idx]` is that fold's
