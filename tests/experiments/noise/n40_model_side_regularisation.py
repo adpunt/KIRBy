@@ -1143,7 +1143,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 a_g = sigma2 / var_y
                                 _store(lvl_key, space, 'fixed', 'gp_nugget_from_gamma',
                                        pass_key, egp.predict(X_va_s, a_g), y_val)
-                                a_cp, cps = gp_cp_choice(egp, y0, sigma2, grid + [a_g])
+                                # The same grid gp_nugget_cv searches, as the
+                                # module docstring says. Until 2026-09-28 the
+                                # Gamma value was added to Cp's grid alone, so
+                                # the Cp-versus-CV pair differed in the
+                                # candidates as well as the criterion.
+                                a_cp, cps = gp_cp_choice(egp, y0, sigma2, grid)
                                 _store(lvl_key, space, 'fixed', 'gp_nugget_cp', pass_key,
                                        egp.predict(X_va_s, a_cp), y_val)
                                 # The same two arms with sigma^2 from every
@@ -1155,7 +1160,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                            pass_key, egp.predict(X_va_s, a_gk),
                                            y_val)
                                     a_cpk, _c = gp_cp_choice(
-                                        egp, y0, s2_k, grid + [a_gk])
+                                        egp, y0, s2_k, grid)
                                     _store(lvl_key, space, 'fixed',
                                            f'gp_nugget_cp@{nm}', pass_key,
                                            egp.predict(X_va_s, a_cpk), y_val)
