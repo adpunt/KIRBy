@@ -484,7 +484,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                               f"alpha={alpha} needs; q is the largest "
                               f"residual and the interval is NOT at the "
                               f"{100 * (1 - alpha):.0f}% level")
-                    q = np.quantile(cal_scores, conformal_level)
+                    q = np.quantile(cal_scores, conformal_level, method='inverted_cdf')
 
                     # Prediction sets on val
                     val_probs = model_conf.predict_proba(X_val_s)
@@ -582,7 +582,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                           f"alpha={alpha} needs; q is the largest residual and "
                           f"the interval is NOT at the "
                           f"{100 * (1 - alpha):.0f}% level")
-                q = np.quantile(cal_residuals, conformal_level)
+                # inverted_cdf returns exactly the ceil((n+1)(1-alpha))-th
+                # smallest residual, the split-conformal quantile. numpy's
+                # default 'linear' interpolated slightly above it.
+                q = np.quantile(cal_residuals, conformal_level, method='inverted_cdf')
 
                 # Reuse y_pred_val above (same model, same X_val_s).
                 interval_lo = y_pred_val - q
