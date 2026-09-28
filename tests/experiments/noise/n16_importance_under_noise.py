@@ -21,7 +21,8 @@ replicate):
      each over all features and over the features either level scored non-zero, plus
      top-k set overlap. Reused from f30_analyse._pair_stats.
   3. Turnover in the top set — which features left the clean top set and which
-     entered, plus Nogueira phi-hat set stability over the whole level sweep. The top
+     entered, plus Nogueira phi-hat stability of the top set across the folds at
+     each level (level 0.0's value is the reference for resampling alone). The top
      set is capped at how many features the scorer actually ranked, never at the
      representation's width: lightgbm_gain scores 39 of diff_maccs's 167 features on
      buchwald_hartwig, so an uncapped top-50 overlap is 1.00 at every level (tied
@@ -59,32 +60,12 @@ held-out part too let "keep the base as it is" win more often than it should. So
 arm is compared only against its own level-0.0 row, never against the other, and the
 base arm's vector is NEVER passed in as precomputed_importance.
 
-NOISE. This does NOT use noise_helpers.inject_train_labels, and as of 2026-09-12 only
-ONE of the three reasons it did not still holds.
-
-  GONE: the fold no longer reaches either seed, and the amount is no longer solved
-  against the fold's own training labels. Both were fixed on 2026-09-12 —
-  inject_train_labels now draws once over the whole label column and indexes the
-  training rows out, and noise_spec_for no longer takes a fold. That is what
-  RERUN_PLAN.md 3.3b ruled on 2026-09-04. Measured after the change on 600 molecules
-  over five scaffold folds: 0 of 600 molecules carry more than one corrupted value,
-  in gaussian, outlier_p10, grouped_wider, grouped_shifted and censoring alike.
-
-  ALSO GONE, 2026-09-12 (user decision): the level is out of the seed too, so the
-  shared route now scales one draw across the level grid. Measured on 1000 labels:
-  the error at level 0.30 is exactly 2.0000 times the error at level 0.15 on every
-  molecule, Spearman +1.000, same direction on 1000 of 1000 — in gaussian,
-  student_t_nu5, laplace and outlier_p10 alike. It was Spearman +0.037 and 500 of
-  1000 before.
-
-  SO ALL THREE REASONS ARE GONE. This file's private injection is now a second
-  definition of something the shared route already does, which is the duplication
-  the suite removed once before. Moving it onto noise_helpers.inject_train_labels
-  has NOT been done and is not mine to do — it is one line of the audit's open list.
-  Until then the two must be kept in step by hand.
-Measured on 400 molecules through that route: the error at level 0.15 and at level
-0.30 have Spearman +0.015 (gaussian) and +0.037 (outlier_p10), signs agreeing on 200
-and 196 of 400 — chance.
+NOISE. The specs come from noise_helpers.noise_spec_for, the suite's shared route,
+with the level held out of both seeds. The labels come from
+kirby.noise_spec.TrainingNoise, which is the same make_noisy_train_labels that
+noise_helpers.inject_train_labels calls. Two things differ from that wrapper: a
+missed amount is printed here rather than raised as DoseError, and no
+corrupted-molecule mask is returned, because nothing here scores detection.
 
 Every comparison here is against the level-0.0 vector, so the levels have to NEST:
 same molecules, same directions, more magnitude. Both seeds are therefore held
@@ -488,10 +469,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     runs it once per. The sweep, the per-condition checkpointing, the resume
     and the stride slice are noise_helpers.sweep_conditions.
 
-    Its headline is a downstream score, which is defined under every condition,
-    so it sweeps the whole list rather than only the ones where a corrupted
-    SUBSET exists. It also records detection, and detection_scores already
-    returns None where that is undefined.
+    It fits no downstream model and scores no detection. Its numbers are
+    feature-ranking agreements against level 0.0, defined under every
+    condition, so it sweeps the whole list. Censoring's level is a clipped
+    fraction, not an amount, and its ladder is checked in _inject_ladder.
     """
     return sweep_conditions(
         _run_one_condition, 'n16_importance_under_noise',
