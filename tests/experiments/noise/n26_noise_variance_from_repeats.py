@@ -351,10 +351,13 @@ def split_half(values_per_molecule, n_repeats, seed=0,
             repeats.append({'r_one_measurement': float('nan')})
             continue
         r = float(np.corrcoef(a, b)[0, 1])
+        # 1 + (c - 1) r is zero at r = -1/(c - 1), e.g. r = -1 for c = 2. That
+        # raised ZeroDivisionError and stopped the run (2026-09-28); it is NaN.
         repeats.append({
             'r_one_measurement': r,
             'spearman_brown_projected': {
-                str(c): float(c * r / (1.0 + (c - 1.0) * r))
+                str(c): (float(c * r / (1.0 + (c - 1.0) * r))
+                         if (1.0 + (c - 1.0) * r) != 0.0 else float('nan'))
                 for c in project_to},
         })
     return {'molecules': len(multi), 'repeats': repeats, 'failed': None}
