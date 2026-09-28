@@ -519,8 +519,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         has_replicates = bool(has_rep.any())
         n_replicate_samples = int(has_rep.sum())
     meta = data.get('metadata') or {}
+    # The molecular loader never sets data['metadata']; it hands the per-row
+    # ChEMBL assay ids out as data['record_assays'] (herg_ic50 today,
+    # _shared.py load_data). Before 2026-09-28 only the metadata keys were
+    # read, so a dataset that has assay ids reported none.
+    _rec_assays = data.get('record_assays')
+    n_record_assays = (0 if _rec_assays is None else
+                       int(len(np.unique(np.asarray(_rec_assays).astype(str)))))
     has_multi_assay = bool(meta.get('assay_ids') is not None or
-                           meta.get('n_assays', 0) and meta.get('n_assays', 0) > 1)
+                           meta.get('n_assays', 0) and meta.get('n_assays', 0) > 1
+                           or n_record_assays > 1)
 
     feasibility = {
         'n_high_conf_cliffs': int(n_cliffs),
@@ -529,6 +537,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'has_replicates': has_replicates,
         'n_replicate_samples': n_replicate_samples,
         'has_multi_assay': has_multi_assay,
+        'n_record_assays': n_record_assays,
     }
     print(f"  Feasibility: PU-calibratable={feasibility['pu_calibration_feasible']}, "
           f"replicates={has_replicates} (n={n_replicate_samples}), "
