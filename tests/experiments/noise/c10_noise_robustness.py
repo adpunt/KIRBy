@@ -96,6 +96,59 @@ def _nogueira_stability(feature_sets, total_features):
     return float(phi), float(np.sqrt(var))
 
 
+def _fold_alloc_scores(train_reps, y_train, groups_train, blueprint, metric_fn):
+    """{rep: score on this fold's training rows} when rep_count cuts, else None.
+
+    Added 2026-09-28, the same fix c15, c18 and c22 received. When the recipe's
+    rep_count is smaller than the pool, build_fold_hybrid keeps the best
+    rep_count representations. Given no scores it ranks them by
+    blueprint.rep_scores, which the search measured over every row, so the
+    held-out rows' labels chose which representations phase 3 selected from.
+    It also chose the SAME representations on every fold, while the search
+    re-ranks them per fold, so the fold-to-fold Jaccard and the Nogueira index
+    measured a selection held partly fixed by construction. Under the local run
+    every c10 dataset loads all its representations and rep_count is 5.
+
+    This is the call create_hybrid makes to score a representation: the
+    recipe's internal evaluator, fitted on the internal carve of this fold's
+    training rows (the fold's noisy labels) and scored with the dataset's
+    metric, higher is better. Returns None when nothing is cut.
+    """
+    rep_count = getattr(blueprint, 'rep_count', None)
+    if rep_count is None or int(rep_count) >= len(train_reps):
+        return None
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    from kirby.find_best_hybrid import (OBJECTIVE_PREDICTIVE,
+                                        _is_geometry_objective)
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or (objective is not None and (isinstance(objective, dict)
+                                           or _is_geometry_objective(objective)))):
+        print(f"    [c10] fold-local representation ranking not computed "
+              f"(evaluator={evaluator!r}); build_fold_hybrid ranks on the "
+              f"whole-dataset rep_scores")
+        return None
+    from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
+    from experiments._shared import object_direction
+    lib = object_direction(blueprint, 'the c10 recipe')
+    y_train = np.asarray(y_train, dtype=float)
+    inner_tr, inner_va = internal_holdout_split(
+        len(y_train), y_train, groups_train)
+    out = {}
+    for name in sorted(train_reps):
+        X = train_reps[name]
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        out[name] = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lib,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=False))
+    return out
+
+
 def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         noise_seed=42, **retired):
     """Exp 10: Noise robustness (auc_norm / Weibull) across noise strategies.
@@ -760,12 +813,16 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     # since 2026-09-28. Neither the draw nor the selection code was in either,
     # and c10 is never handed force_rerun, so a run after 4858717 took the level
     # out of the draw seed read back selections made on the old draw.
+    # 'fold_local_rep_ranking_v1': phase 3 ranks representations on each
+    # fold's training rows (_fold_alloc_scores), and each stored value carries
+    # the representations it kept.
     ckpt = FoldCheckpoint(output_dir, 'c10_noise_robustness', dataset_name,
                           tag='stability', fingerprint={
                               'input': input_fingerprint(data, config),
                               'noise_seed': int(noise_seed),
                               'budget': budget_for_stability,
-                              'selection': 'v1'})
+                              'selection': 'fold_local_rep_ranking_v1'})
+    results['feature_stability']['reps_kept_by_level'] = {}
 
     for strategy in strategies[:1]:
         features_by_level = {}
@@ -773,6 +830,9 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
         for level in _levels_stability:
             fold_features = []
+            _kept_by_fold = {}
+            results['feature_stability']['reps_kept_by_level'][
+                float(level)] = _kept_by_fold
             _spec_stab = _spec_for(strategy, level)
             _spec_key = 'clean' if _spec_stab is None else _spec_stab.spec_id
             _search_stab = _search_for(strategy, level)
@@ -794,7 +854,9 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 _ck = [strategy, float(level), int(fold_idx), _spec_key]
                 _stored = ckpt.get(_ck)
                 if _stored is not None:
-                    fold_features.append({(r, int(i)) for r, i in _stored})
+                    fold_features.append(
+                        {(r, int(i)) for r, i in _stored['features']})
+                    _kept_by_fold[int(fold_idx)] = _stored['kept']
                     continue
                 y_train = label_rows(y_noisy_full, train_idx)
 
@@ -803,6 +865,11 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 train_augs_stab = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
                 val_augs_stab = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
                 try:
+                    # Fold-local ranking when rep_count cuts the pool; None
+                    # otherwise, which leaves the build exactly as it was.
+                    _alloc = _fold_alloc_scores(
+                        train_reps, y_train, groups[train_idx], bp_stab,
+                        metric_fn)
                     # build_fold_hybrid carries the whole recipe — evaluator,
                     # augmentation strategy, candidate ranking, margin — where
                     # a bare create_hybrid call passed four of them and took
@@ -819,6 +886,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                         model=_rf_factory(),
                         metric_fn=metric_fn,
                         lower_is_better=lower_is_better,
+                        precomputed_alloc_scores=_alloc,
                     )
                     # Collect selected feature identifiers: (rep_name, feature_idx) tuples
                     selected = set()
@@ -827,8 +895,12 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                             for idx in rep_info['selected_indices']:
                                 selected.add((rep_name, int(idx)))
                     fold_features.append(selected)
-                    ckpt.put(_ck,
-                             sorted([r, int(i)] for r, i in selected))
+                    _kept = {'kept': fi.get('rep_count_kept') or sorted(train_reps),
+                             'ranked_by': fi.get('rep_count_ranked_by')}
+                    _kept_by_fold[int(fold_idx)] = _kept
+                    ckpt.put(_ck, {
+                        'features': sorted([r, int(i)] for r, i in selected),
+                        'kept': _kept})
                 except Exception as _e:
                     print(f"    level={level} fold {fold_idx}: rebuild failed, "
                           f"{type(_e).__name__}: {_e}")
