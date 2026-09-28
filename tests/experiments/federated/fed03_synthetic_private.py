@@ -1106,6 +1106,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         ('c5_naive_pool', 'C5: Naive pool'),
         ('c6_kirby_single_rep', 'C6: KIRBy single-rep'),
         ('c7_fluid_multi_rep', 'C7: FLuID multi-rep'),
+        ('c8_fed_fit_all_features', 'C8: federated fit, Morgan'),
+        ('c9_fed_fit_selected', 'C9: federated fit, selected'),
     ]:
         a = aggregated.get(key, {})
         m = a.get('mcc_mean', float('nan'))
