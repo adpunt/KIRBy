@@ -6,8 +6,9 @@ things. It does not open the npz files beside them.
 
 1. THE CONTROLS. Two of them.
    (a) Level 0.0 must have delivered no noise at all: the delivered amount the injector
-       recorded at level 0.0 must be exactly 0.0. This one can fail, and if it does the
-       reference row is not the clean labels and nothing below can be read.
+       recorded at level 0.0 must be exactly 0.0, in every fold of every noise draw.
+       This one can fail, and if it does the reference row is not the clean labels
+       and nothing below can be read.
    (b) Level 0.0 against itself must give Spearman 1.0 and keep every top-k feature.
        n16 compares the level-0.0 vector with the very same array here
        (_summarise_replicate reads one key twice), so this only proves the comparison
@@ -131,19 +132,35 @@ def control_clean_reference(p):
 
     This is the control that can fail. n16 compares every level with level 0.0, so
     a level 0.0 that moved any label would make every drift below a comparison of
-    two noisy rankings. Returns (n_rows_checked, failures, n_rows_unrecorded).
+    two noisy rankings. The delivered amount is the root mean square of the error
+    added to that fold's training labels (kirby/noise_spec.py:588), so exactly 0.0
+    means not one training label moved.
+
+    Every fold is checked. `dose_check` holds the FIRST fold only
+    (n16_importance_under_noise.py:239-240); `noise_provenance` holds one row per
+    fold per noise draw (:234), and is read when present. Returns
+    (n_rows_checked, failures, n_rows_unrecorded), one row per fold per draw.
     """
     bad, checked, unrecorded = [], 0, 0
-    for r in p.get('dose_check') or []:
-        if float(r.get('level', -1)) != 0.0:
-            continue
+    prov = p.get('noise_provenance') or {}
+    rows = []
+    for spec_id, per_fold in prov.items():
+        for fold, r in enumerate(per_fold or []):
+            if isinstance(r, dict) and _finite(r.get('noise_level')) \
+                    and float(r['noise_level']) == 0.0:
+                rows.append((f'{spec_id} fold {fold}', r))
+    if not rows:
+        rows = [(f"replicate {r.get('replicate')} fold 0", r)
+                for r in (p.get('dose_check') or [])
+                if float(r.get('level', -1)) == 0.0]
+    for where, r in rows:
         got = r.get('realised_dose_label_units')
         if not _finite(got):
             unrecorded += 1
             continue
         checked += 1
         if float(got) != 0.0:
-            bad.append((r.get('replicate'), f'delivered {float(got):.9g}'))
+            bad.append((where, f'delivered {float(got):.9g}'))
     return checked, bad, unrecorded
 
 
@@ -439,18 +456,19 @@ def report(path, p):
     n0, bad0, un0 = control_clean_reference(p)
     if bad0:
         print(f"\n  CONTROL FAILED: level 0.0 delivered noise in {len(bad0)} of "
-              f"{n0} draws. The reference row is not the clean labels, so no "
-              f"drift below can be read.")
-        for rep, msg in bad0[:10]:
-            print(f"    replicate {rep}: {msg}")
+              f"{n0} folds across the noise draws. The reference row is not the "
+              f"clean labels, so no drift below can be read.")
+        for where, msg in bad0[:10]:
+            print(f"    {where}: {msg}")
     elif n0:
         print(f"\n  CONTROL: level 0.0 delivered exactly 0.0 label units in all "
-              f"{n0} draws, so the reference row is the clean labels.")
+              f"{n0} folds across the noise draws, so the reference row is the "
+              f"clean labels.")
     else:
         print("\n  CONTROL: this file records no delivered amount at level 0.0, so "
               "whether the reference row is clean is NOT checked.")
     if un0:
-        print(f"    {un0} level-0.0 rows carry no delivered amount.")
+        print(f"    {un0} level-0.0 folds carry no delivered amount.")
 
     checked, bad, thin = control(p)
     if not checked and not thin:
