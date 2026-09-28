@@ -7035,6 +7035,52 @@ def get_fitted_pool_hybrid(
     aug_strat = meta['aug_condition']
     augs = augmentations if aug_strat != 'none' else None
 
+    # ⛔ THE DATASET'S METRIC, OR THE BUDGET SPLIT IS NOT THE RECIPE'S (dirty
+    # local 2026-09-28). The search sizes each representation's share of the
+    # budget from the internal evaluator's predictions read with the dataset's
+    # metric (find_best_hybrid.py, the fold allocation precompute, keyed by
+    # metric name), and hands create_hybrid model, metric_fn and
+    # lower_is_better for every configuration. This door passed none of them,
+    # so the rebuild split the budget by the evaluator's own r2 / accuracy
+    # instead. Measured on a synthetic 3-representation set, budget 30:
+    # {a: 22, b: 8} without the metric, {a: 24, b: 6} with rmse. apply_blueprint
+    # documents the same defect for its own door and passes all three.
+    #
+    # Under a geometry or blended objective create_hybrid fits no model for the
+    # split and metric_fn is a raising guard, so nothing is added there.
+    #
+    # The model is built only where create_hybrid consults it — greedy
+    # allocation, an augmentation keep-or-drop test, or an evaluator of
+    # 'match' — because constructing some models (dnn) imports a framework that
+    # hangs in the local environment, and a recipe that never reads the model
+    # should not pay that.
+    from kirby.find_best_hybrid import (
+        BUILTIN_METRICS as _BM, OBJECTIVE_PREDICTIVE as _OBJ_PRED,
+        get_model as _get_model)
+    from kirby.hybrid import NAMED_ALLOCATIONS as _NAMED_ALLOC
+    _rebuild_obj = meta.get('objective', objective)
+    _rebuild_task = (getattr(bp, 'task_type', None) or task_type
+                     or getattr(search, 'task_type', None) or 'regression')
+    _metric_kw = {}
+    if _rebuild_obj is None or _rebuild_obj == _OBJ_PRED:
+        _mname = (getattr(bp, 'metric', None)
+                  or getattr(search, 'metric_name', None))
+        if _mname not in _BM:
+            raise ValueError(
+                f"get_fitted_pool_hybrid: the recipe's metric {_mname!r} is not "
+                f"a built-in metric, so the budget split cannot be scored the "
+                f"way the search scored it.")
+        _base_alloc = (_NAMED_ALLOC[bp.allocation_method][0]
+                       if bp.allocation_method in _NAMED_ALLOC
+                       else bp.allocation_method)
+        _needs_model = (aug_strat != 'none' or _base_alloc == 'greedy'
+                        or getattr(bp, 'internal_evaluator', None) == 'match')
+        _metric_kw = dict(
+            metric_fn=_BM[_mname][0], lower_is_better=_BM[_mname][1],
+            is_clf=(_rebuild_task == 'classification'),
+            model=(_get_model(downstream_model, _rebuild_task,
+                              n_samples=len(labels)) if _needs_model else None))
+
     # The recipe's representation count (dirty local 2026-09-28). The search
     # ran each configuration on the top `bp.rep_count` representations only;
     # this rebuild handed create_hybrid the whole pool, so a recipe that won
@@ -7099,6 +7145,9 @@ def get_fitted_pool_hybrid(
         # is create_hybrid's own default.
         **({'objective': meta.get('objective', objective)}
            if meta.get('objective', objective) is not None else {}),
+        # The dataset's metric, its direction and the task, as the search
+        # passed them (see the block above the representation count).
+        **_metric_kw,
     )
     return X_hybrid, fi, search, meta
 
