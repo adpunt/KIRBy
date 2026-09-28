@@ -1263,6 +1263,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # pruned, the same reading hr_exclude_folds takes.
     _exclude = [0] if (pool_fold0_pruned is None or pool_fold0_pruned) else []
     results['fold_reselection'] = {
+        # Persisted so hr_direction can check the flag against BUILTIN_METRICS.
+        'metric_name': metric_name,
         'lower_is_better': bool(lower_is_better),
         'recipe_selection': 'other_folds_of_pool_search',
         'exclude_folds': _exclude,
@@ -1306,6 +1308,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             results['fold_reselection']['candidates_by_model'],
             results['fold_reselection']['baselines_by_model'],
             bool(lower_is_better),
+            metric_name=metric_name,
             exclude_folds=hr_exclude_folds(results['fold_reselection']),
             # 2026-09-12: carried onto every model entry so a reader is told
             # what chose the recipe — the pool search's other folds.
