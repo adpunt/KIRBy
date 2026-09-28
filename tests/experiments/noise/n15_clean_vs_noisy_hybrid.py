@@ -428,6 +428,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # a model has no cell rather than a cell built from another model's
         # recipe.
         'models_requested': list(model_factories),
+        # Since 2026-09-28: both arms' per-fold feature build reads the noisy
+        # search's stored scores, fitted on the noisy training labels. The
+        # clean search contributes its recipe only.
+        'feature_build_labels': 'noisy_training_labels_both_arms',
+        'search_folds_match_rows': bool(_folds_match),
         'models_unscored': {},
         'adaptive_pruning_schedule': search_settings.get(
             'adaptive_pruning_schedule'),
@@ -612,18 +617,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"  {model_name}: skipped -- {_why}")
                 continue
 
-            # Each arm reads its OWN search's stored per-fold numbers: the
-            # clean lineage's importance was fitted on the clean labels and the
-            # noisy lineage's on the corrupted ones, so the two must not be
-            # crossed.
-            arm_caches = {
-                'clean_bp': _reusable_caches(clean_search, n_folds,
-                                             'clean_bp', model_name,
-                                             folds_match=_folds_match),
-                'noisy_bp': _reusable_caches(noisy_search, n_folds,
-                                             'noisy_bp', model_name,
-                                             folds_match=_folds_match),
-            }
+            # ⛔ BOTH ARMS READ THE NOISY SEARCH'S STORED PER-FOLD NUMBERS.
+            # Fixed 2026-09-28 (dirty local). Until then each arm read its own
+            # search's, so the clean arm's feature ranking, budget split and
+            # choice of representations were fitted on the CLEAN training
+            # labels. The docstring says both arms get the same features
+            # pipeline on the noisy training labels, and the comment at the
+            # build_fold_hybrid call says a clean-label feature build is "a
+            # second, hidden look at truth". No other noise experiment gets
+            # that look: none passes precomputed_importance, so each rebuilds
+            # from the fold's noisy labels. oracle_advantage therefore carried
+            # a head start the experiments it audits do not have.
+            #
+            # The noisy search's numbers are the ones build_fold_hybrid would
+            # compute itself from y_train: same folds, same internal carve,
+            # same noisy column (TrainingNoise is deterministic per training
+            # rows, checked above). So this is the stated design, not a new one.
+            # The clean search now contributes its RECIPE and nothing else.
+            _noisy_caches = _reusable_caches(noisy_search, n_folds,
+                                             'both arms (noisy search)',
+                                             model_name,
+                                             folds_match=_folds_match)
+            arm_caches = {'clean_bp': _noisy_caches,
+                          'noisy_bp': _noisy_caches}
 
             fp_c, fp_n = _bp_fingerprint(clean_bp), _bp_fingerprint(noisy_bp)
             agree = _agreement(fp_c, fp_n)
