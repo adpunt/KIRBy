@@ -1353,10 +1353,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'recipe the search picked for that model, and every source, shape '
             'and setting shares it. No cleaning reaches the feature '
             "ranking or the budget split. Whether it should is n20's question."),
+        # dirty-local 2026-09-28: on a classification set level 0.0 is NOT
+        # zero. The flip calibrator returns a floor there (_levels_and_draws
+        # docstring); a synthetic 0/1 column of 300 training labels had 2
+        # flipped under 'uniform' at level 0.0. The note said otherwise.
         'zero_noise_control_note': (
-            'Level 0.0 under injection corrupts nothing, so there is nothing '
-            'to clean. A source that still wins folds there is removing or '
-            'moving the molecules the model finds hard.'),
+            ('On a classification set level 0.0 is the flip calibrator\'s '
+             'floor, not zero: a few labels are flipped there, so this is not '
+             'a zero-noise control and wins there are not only the cleaning '
+             'removing hard molecules.') if is_clf else
+            ('Level 0.0 under injection corrupts nothing, so there is nothing '
+             'to clean. A source that still wins folds there is removing or '
+             'moving the molecules the model finds hard.')),
+        'level_zero_corrupts_nothing': bool(not is_clf),
         # The two families do not score a molecule the same way, and the
         # difference is not a setting anyone chose -- it is what each estimator
         # is. A model-based source fits on the other inner folds and scores the
