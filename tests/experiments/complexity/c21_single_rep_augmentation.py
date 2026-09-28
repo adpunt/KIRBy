@@ -1227,7 +1227,14 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                      and not np.isnan(r['base_mean'])]
         if base_rows:
             best_base = max(base_rows, key=lambda r: sign * r['base_mean'])
-            print(f"    best single base rep : {best_base['base_rep']:<22s} "
+            # Best of the base representations THIS RUN LOOPED, not of the
+            # pool. Under the local cut that is one representation, the first
+            # in DATASET_REPS order, so "best single base rep" named a
+            # representation that was never compared with any other.
+            _nb = len({r['base_rep'] for r in base_rows})
+            _lbl = ('best single base rep' if _nb == len(top_tier_reps)
+                    else f'best of {_nb} base run')
+            print(f"    {_lbl:<21s}: {best_base['base_rep']:<22s} "
                   f"{best_base['base_mean']:+.4f}")
         aug_rows = [r for r in rep_results
                     if r['condition'] != 'A_baseline' and r['model'] == model_name
