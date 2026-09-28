@@ -226,13 +226,14 @@ def _score_combination_on_fold(rep_names, reps, labels, fold_indices, fold_i,
     """
     X = np.hstack([reps[r] for r in rep_names])
     train_idx, val_idx = fold_indices[fold_i]
-
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X[train_idx])
-    X_val = scaler.transform(X[val_idx])
     y_train, y_val = labels[train_idx], labels[val_idx]
 
     try:
+        # Inside the try: StandardScaler raises on an infinite value, and that
+        # ended the run instead of scoring this fold NaN (fixed 2026-09-28).
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X[train_idx])
+        X_val = scaler.transform(X[val_idx])
         model = model_factory()
         model.fit(X_train, y_train)
         predict_fn = get_predict_fn(model, task_type, n_classes)
@@ -609,12 +610,14 @@ def eval_single_rep(X, labels, groups, model_factories, n_folds, task_type,
         fold_scores = []
         for f, (train_idx, val_idx) in enumerate(
                 cv_split(groups, n_folds, sample_X, labels, mode=mode)):
-            scaler = StandardScaler()
-            X_train = scaler.fit_transform(X[train_idx])
-            X_val = scaler.transform(X[val_idx])
             y_train, y_val = labels[train_idx], labels[val_idx]
 
             try:
+                # Inside the try, so an infinite value scores this fold NaN
+                # instead of ending the run (fixed 2026-09-28).
+                scaler = StandardScaler()
+                X_train = scaler.fit_transform(X[train_idx])
+                X_val = scaler.transform(X[val_idx])
                 model = model_factory()
                 model.fit(X_train, y_train)
                 predict_fn = get_predict_fn(model, task_type, n_classes)
@@ -666,12 +669,14 @@ def eval_concat_reps(rep_arrays, labels, groups, model_factories, n_folds,
         fold_scores = []
         for f, (train_idx, val_idx) in enumerate(
                 cv_split(groups, n_folds, X, labels, mode=mode)):
-            scaler = StandardScaler()
-            X_train = scaler.fit_transform(X[train_idx])
-            X_val = scaler.transform(X[val_idx])
             y_train, y_val = labels[train_idx], labels[val_idx]
 
             try:
+                # Inside the try, so an infinite value scores this fold NaN
+                # instead of ending the run (fixed 2026-09-28).
+                scaler = StandardScaler()
+                X_train = scaler.fit_transform(X[train_idx])
+                X_val = scaler.transform(X[val_idx])
                 model = model_factory()
                 model.fit(X_train, y_train)
                 predict_fn = get_predict_fn(model, task_type, n_classes)
