@@ -297,7 +297,15 @@ def run(all_dataset_results):
             best_rep_sac = best_rep_info.get('sac_rho', float('nan'))
             best_rep_name = best_rep_info.get('name', '?')
             best_hybrid_sac = exp2.get('best_sac', float('nan'))
-            delta_sac = best_hybrid_sac - best_rep_sac
+            # s02 writes best_sac=None when the pool search failed or no weight
+            # method produced a hybrid SAC (s02 _score_pool_cell), and mirrors
+            # that None to the top level. None minus a float raised TypeError
+            # here and stopped the whole summary for every dataset. A side that
+            # is not a number now makes the delta NaN, which the check below
+            # records as absent. (dirty-local 2026-09-28)
+            delta_sac = (float(best_hybrid_sac) - float(best_rep_sac)
+                         if _is_number(best_hybrid_sac)
+                         and _is_number(best_rep_sac) else float('nan'))
             _src2 = ('s02 best_sac - best_individual_rep.sac_rho '
                      '(both scored on the whole dataset; best_sac is a max '
                      'over weight methods)')
@@ -309,7 +317,8 @@ def run(all_dataset_results):
                 _record_absent(
                     ds_summary, 'sac_delta', _src2,
                     f"best_sac={best_hybrid_sac!r}, "
-                    f"best_individual_rep.sac_rho={best_rep_sac!r}")
+                    f"best_individual_rep.sac_rho={best_rep_sac!r}, "
+                    f"s02 hybrid_status={exp2.get('hybrid_status')!r}")
                 print(f"    SAC delta [{_ARM_OPTIMISTIC}]: not read "
                       f"(best_sac={best_hybrid_sac!r}, "
                       f"best_rep sac_rho={best_rep_sac!r})")
