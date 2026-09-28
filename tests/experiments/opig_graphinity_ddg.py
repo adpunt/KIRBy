@@ -197,11 +197,20 @@ def evaluate_rep_ddg(X, labels, groups, model, n_folds):
 
     if not fold_metrics:
         return None
-    all_keys = fold_metrics[0].keys()
+    # Every metric any fold produced, not only the ones fold 0 produced.
+    # _score computes spearman, pearson and the concordance index inside their
+    # own try blocks, so a fold can come back without one of them. Reading the
+    # key list off fold 0 alone dropped a metric the other folds did have.
+    all_keys = []
+    for f in fold_metrics:
+        for k in f:
+            if k not in all_keys:
+                all_keys.append(k)
     result = {}
     for k in all_keys:
         vals = [f[k] for f in fold_metrics if k in f]
-        result[k] = {'mean': float(np.mean(vals)), 'std': float(np.std(vals))}
+        result[k] = {'mean': float(np.mean(vals)), 'std': float(np.std(vals)),
+                     'n_folds': len(vals)}
 
     valid = ~np.isnan(all_preds)
     if valid.sum() > 2:
@@ -652,9 +661,13 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
             elapsed = time.time() - t0
             if res is not None:
                 rep_results[model_name] = res
-                r_p = res['pearson']['mean']
+                # .get, because a fold whose predictions were constant leaves
+                # _score without a pearson or spearman entry, and a KeyError
+                # here took the whole condition down after the fits were paid
+                # for.
+                r_p = _metric_value(res, 'pearson')
                 r_g = res.get('pearson_global', float('nan'))
-                rho = res['spearman']['mean']
+                rho = _metric_value(res, 'spearman')
                 tag = ' ***' if rep_name == 'kirby_hybrid' else ''
                 print(f"    {rep_name:25s} {model_name:8s}  "
                       f"r={r_p:.4f}  r_g={r_g:.4f}  rho={rho:.4f}  "
