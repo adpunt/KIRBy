@@ -1175,7 +1175,10 @@ def main():
     os.makedirs(args.output, exist_ok=True)
     print(f"[cache] caching ON, cache_dir={cache_dir}")
     all_results = {}
+    import time as _time
     for ds in args.datasets:
+        _ds_path = os.path.join(args.output, f'{ds}.json')
+        _ds_t0 = _time.time()
         try:
             # output_dir => run_dataset streams partial JSON after each seed and
             # each noise model, so preliminary results appear (and survive a kill).
@@ -1190,8 +1193,25 @@ def main():
         except Exception as e:
             import traceback
             traceback.print_exc()
-            all_results[ds] = {'error': str(e)}
-        with open(os.path.join(args.output, f'{ds}.json'), 'w') as f:
+            # run_dataset streams partial JSON after every seed and every noise
+            # condition. Replacing that file with {'error': ...} threw away every
+            # finished seed. Keep what THIS run wrote (a file newer than the start
+            # of this dataset, less 2 s for exFAT's timestamp resolution) and add
+            # the error to it; an older file is from a previous run and is not
+            # merged.
+            _prior = None
+            try:
+                if (os.path.exists(_ds_path)
+                        and os.path.getmtime(_ds_path) >= _ds_t0 - 2):
+                    with open(_ds_path) as f:
+                        _prior = json.load(f)
+            except Exception:
+                _prior = None
+            if isinstance(_prior, dict) and 'error' not in _prior:
+                all_results[ds] = dict(_prior, error=str(e), partial=True)
+            else:
+                all_results[ds] = {'error': str(e)}
+        with open(_ds_path, 'w') as f:
             json.dump(all_results[ds], f, indent=2)
     with open(os.path.join(args.output, 'summary.json'), 'w') as f:
         json.dump(all_results, f, indent=2)
