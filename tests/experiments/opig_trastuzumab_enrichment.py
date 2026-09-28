@@ -370,7 +370,8 @@ def _evaluate_hybrid_enrichment_per_fold(
     from experiments._shared import resolve_pruning_kwargs
 
     labels = np.asarray(labels, dtype=np.int64)
-    per_model = {m: {'enrich': [], 'auroc': [], 'acc': [], 'no_recipe': []}
+    per_model = {m: {'enrich': [], 'auroc': [], 'acc': [], 'no_recipe': [],
+                     'dims': []}
                  for m in models}
     dims = []
     top3_first_fold = None
@@ -428,8 +429,8 @@ def _evaluate_hybrid_enrichment_per_fold(
             continue
 
         if fold_idx == 0 and fold_search is not None:
-            # A printed diagnostic -- the three best base representations on
-            # fold 0 -- and nothing below reads it. It sat outside every try in
+            # A printed diagnostic — the three best base representations on
+            # fold 0 — and nothing below reads it. It sat outside every try in
             # this loop, so a search result that carries no metric name and no
             # lower_is_better made extract_top3_base_reps raise
             # (_shared.py:1775, reproduced this session against a stub search),
@@ -490,6 +491,12 @@ def _evaluate_hybrid_enrichment_per_fold(
                 per_model[model_name]['enrich'].append(None)
                 continue
 
+            # How wide this model's own hybrid is on this fold. The search
+            # picks a separate recipe per downstream model, so the three models
+            # do not get the same number of features and a single width cannot
+            # describe them.
+            per_model[model_name]['dims'].append(int(train_hybrid.shape[1]))
+
             if not fold_dim_recorded:
                 dims.append(train_hybrid.shape[1])
                 fold_dim_recorded = True
@@ -540,6 +547,13 @@ def _evaluate_hybrid_enrichment_per_fold(
             # scored under this model's name.
             'folds_without_a_recipe_for_this_model': list(s['no_recipe']),
         }
+        # This model's own hybrid width, one entry per fold it built one on.
+        # results['kirby_hybrid']['dim'] beside it is the mean over folds of
+        # whichever model assembled first on each fold, so it describes one
+        # model's recipe and is printed for all of them.
+        if s['dims']:
+            res['n_features_per_fold'] = [int(d) for d in s['dims']]
+            res['n_features_mean'] = float(np.mean(s['dims']))
         if s['acc']:
             res['accuracy'] = {'mean': np.mean(s['acc']),
                                'std': np.std(s['acc'])}
