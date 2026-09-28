@@ -144,6 +144,12 @@ def _default_param_value(fam_name, variants):
         f"move to another setting.")
 
 
+# Threads per RandomForest: KIRBY_RF_JOBS in the local run, every core
+# otherwise (same rule as c15). A seeded forest gives the same trees at any
+# thread count, so this changes no number; it stops c16 taking every core
+# while the local queue runs other jobs beside it.
+_RF_JOBS = int(os.environ.get('KIRBY_RF_JOBS') or -1)
+
 # SVC(probability=True) fits its Platt scaling on an internal cross-validation
 # whose shuffle is seeded by random_state. Unset, the SVM family's AUROC on a
 # classification set changed from run to run with nothing else changed.
@@ -171,10 +177,10 @@ def _get_regularization_families(task_type='regression'):
                 ('C', 1000.0, lambda: LogisticRegression(C=1000.0, max_iter=2000)),
             ],
             'RF': [
-                ('max_depth', 3, lambda: RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1)),
-                ('max_depth', 5, lambda: RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)),
-                ('max_depth', 10, lambda: RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)),
-                ('max_depth', None, lambda: RandomForestClassifier(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)),
+                ('max_depth', 3, lambda: RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42, n_jobs=_RF_JOBS)),
+                ('max_depth', 5, lambda: RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=_RF_JOBS)),
+                ('max_depth', 10, lambda: RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=_RF_JOBS)),
+                ('max_depth', None, lambda: RandomForestClassifier(n_estimators=100, max_depth=None, random_state=42, n_jobs=_RF_JOBS)),
             ],
             'SVM': [
                 ('C', 0.01, lambda: SVC(kernel='rbf', C=0.01, probability=True, random_state=42)),
@@ -193,10 +199,10 @@ def _get_regularization_families(task_type='regression'):
             ('alpha', 100.0, lambda: Ridge(alpha=100.0)),
         ],
         'RF': [
-            ('max_depth', 3, lambda: RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1)),
-            ('max_depth', 5, lambda: RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)),
-            ('max_depth', 10, lambda: RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)),
-            ('max_depth', None, lambda: RandomForestRegressor(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)),
+            ('max_depth', 3, lambda: RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42, n_jobs=_RF_JOBS)),
+            ('max_depth', 5, lambda: RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42, n_jobs=_RF_JOBS)),
+            ('max_depth', 10, lambda: RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=_RF_JOBS)),
+            ('max_depth', None, lambda: RandomForestRegressor(n_estimators=100, max_depth=None, random_state=42, n_jobs=_RF_JOBS)),
         ],
         'SVM': [
             ('C', 0.01, lambda: SVR(kernel='rbf', C=0.01)),
