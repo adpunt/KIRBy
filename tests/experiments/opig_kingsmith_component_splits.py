@@ -37,7 +37,8 @@ Motivation:
   to individual reps on each component split axis.
 
 Split conditions (true leave-one-group-out GroupKFold; n_folds == n_groups):
-  - additive:    leave-one-additive-out (23 groups → 23 folds)
+  - additive:    leave-one-additive-out (22 groups → 22 folds on
+                 buchwald_hartwig, counted 2026-09-28; was written as 23)
   - aryl_halide: leave-one-aryl-halide-out (15 groups → 15 folds)
   - ligand:      leave-one-ligand-out (4 groups → 4 folds — hardest)
   - base:        leave-one-base-out (3 groups → 3 folds — very few, extreme OOS)
@@ -264,34 +265,18 @@ def assign_component_groups(components, split_key):
     Returns:
         (groups, n_groups, group_names) tuple.
     """
-    # Collect raw values + their lowercased forms in parallel.
-    raw_values = []
+    # Grouped on the exact string, case kept. The component values are SMILES
+    # (reaction_yields.load_buchwald_hartwig builds them from the Dreher-Doyle
+    # sheet), and in SMILES case is chemistry: 'c' is an aromatic carbon, 'C'
+    # an aliphatic one. This used to lowercase first, which could merge two
+    # different compounds into one held-out group. On buchwald_hartwig it
+    # merged none (22 additives, 15 aryl halides, 4 ligands, 3 bases either
+    # way, checked 2026-09-28), so no stored number moves.
     norm_values = []
     for comp in components:
         val = comp.get(split_key, '')
-        raw = str(val).strip() if val else ''
-        raw_values.append(raw)
-        norm_values.append(raw.lower())
-
-    # P1-12 warning: case-insensitive grouping merges entries that differed
-    # only in capitalisation. If your BH CSV uses case to distinguish two
-    # distinct compounds this will silently collapse them.
-    raw_unique = set(raw_values)
+        norm_values.append(str(val).strip() if val else '')
     norm_unique = set(norm_values)
-    if len(raw_unique) != len(norm_unique):
-        # Find the names that collapsed.
-        from collections import defaultdict
-        per_norm = defaultdict(set)
-        for raw, norm in zip(raw_values, norm_values):
-            per_norm[norm].add(raw)
-        collisions = {n: sorted(r) for n, r in per_norm.items() if len(r) > 1}
-        warnings.warn(
-            f"assign_component_groups[{split_key}]: case-insensitive grouping "
-            f"merged {len(raw_unique)} raw names into {len(norm_unique)} "
-            f"groups. Collisions: {collisions}. If these names refer to "
-            f"distinct compounds, drop the .lower() step.",
-            RuntimeWarning, stacklevel=2,
-        )
 
     unique_vals = sorted(norm_unique)
     val_to_id = {v: i for i, v in enumerate(unique_vals)}
