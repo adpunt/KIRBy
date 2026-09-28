@@ -1555,7 +1555,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         # there the ratio's sign flips: a repair that moved
                         # the score further in the good direction read as a
                         # negative recovery. No damage, no recovery ratio.
+                        # 2026-09-28: and only when this config scored on
+                        # every (fold, draw) pass the two references were
+                        # averaged over. A hybrid space that failed to build
+                        # on one fold, or a fit that raised on one fold, left
+                        # a mean over fewer folds divided by a gap over all of
+                        # them -- a ratio of two different fold sets.
+                        _n_passes = len(score_list)
+                        _n_expected = len(noisy_scores.get(_mn) or [])
                         if (_c is not None and _nz is not None
+                                and _n_passes == _n_expected
                                 and gap_by_model[_mn] > gap_floor_by_model[_mn]):
                             recovery = float((denoised - _nz) / (_c - _nz) * 100)
                         else:
@@ -1564,6 +1573,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             'denoised_score': denoised,
                             'lower_is_better': bool(lower_is_better),
                             'recovery': recovery,
+                            # (fold, draw) passes this config scored on, and
+                            # the number the clean and noisy references use.
+                            # recovery is NaN when they differ.
+                            'n_passes': int(_n_passes),
+                            'n_passes_expected': int(_n_expected),
                             # Named, not only encoded in the key, so no reader has
                             # to split a string to know which model this is.
                             # 'model' is the evaluation unit ('rf@base_1');
@@ -1761,8 +1775,11 @@ def _heldout_recovery(clean_by_fold, noisy_by_fold, denoised_by_fold,
     for space, ed in denoised_by_fold.items():
         for est, rd in ed.items():
             for remed, fd in rd.items():
+                # Every draw of the fold, as the noisy reference has; a fold
+                # with a draw missing is a fold this config did not score.
                 per_fold = {f: float(np.mean(v)) for f, v in fd.items()
-                            if f in clean_f and len(v)}
+                            if f in clean_f and len(v)
+                            and len(v) == len(noisy_by_fold[f])}
                 if len(per_fold) == len(folds):
                     flat[(space, est, remed)] = per_fold
     if not flat:
