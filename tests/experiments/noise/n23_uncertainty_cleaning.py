@@ -2284,9 +2284,12 @@ def _mean_detection(rows):
     """Average the detection readings over the folds and draws."""
     if not rows:
         return None
+    # dirty-local 2026-09-28: detection_auroc added. detection_scores has
+    # returned it since 2026-09-24 and this list dropped it, so no n23 result
+    # file carried the AUROC the n31 ceiling formulas are written in.
     keys = ('detection_average_precision', 'detection_precision_at_k',
-            'detection_recall_at_k', 'detection_n_corrupted',
-            'detection_n_training')
+            'detection_recall_at_k', 'detection_auroc',
+            'detection_n_corrupted', 'detection_n_training')
     out = {}
     for k in keys:
         vals = [float(r[k]) for r in rows
