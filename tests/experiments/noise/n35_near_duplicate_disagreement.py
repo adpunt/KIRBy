@@ -186,6 +186,46 @@ ARMS = ('untouched', 'downweight_pairs_this_space',
         'downweight_pairs_forest_proximity')
 
 
+def search_fold_reps(bp, fold_idx, n_folds, pool):
+    """The representations the stored search built this fold's hybrid on.
+
+    DIRTY-LOCAL 2026-09-28, the same rule n02 took in 736ec93. A recipe with
+    rep_count N below the pool size is built, in the search, on the N
+    representations that fold's own training rows rank highest.
+    build_fold_hybrid, handed the whole pool and no per-fold scores, ranks by
+    Blueprint.rep_scores instead (_shared.py:5277-5307): each
+    representation's best score over EVERY molecule, held-out ones included,
+    on clean labels (find_best_hybrid.py:9492-9522). On herg_ki that built
+    every fold's predictive hybrid on mhg_gnn, ecfp4, atom_pair, graph_kernel
+    and smited, while the search used mordred in every fold and ecfp4 in none.
+
+    Blueprint.allocation_per_fold records the representations each search
+    fold gave features to. The search folds are this file's folds: both are
+    GroupKFold on the same groups, and the stored single-representation
+    baselines equal this file's level-0 scores (herg_ki rf on ecfp4, 0.6032
+    RMSE in both). Returns (names, source); names is None when the recipe does
+    not cut the pool or carries no per-fold record, and build_fold_hybrid
+    then does what it did before.
+    """
+    rc = getattr(bp, 'rep_count', None)
+    if rc is None or int(rc) >= len(pool):
+        return None, 'whole_pool'
+    apf = getattr(bp, 'allocation_per_fold', None)
+    if not apf:
+        return None, 'blueprint.rep_scores (no allocation_per_fold on the recipe)'
+    bp_folds = getattr(bp, 'n_folds', None)
+    if bp_folds is not None and int(bp_folds) != int(n_folds):
+        return None, (f'blueprint.rep_scores (recipe searched on {bp_folds} '
+                      f'folds, this run has {n_folds})')
+    per = apf.get(fold_idx, apf.get(str(fold_idx)))
+    if not per:
+        return None, f'blueprint.rep_scores (no allocation for fold {fold_idx})'
+    names = [r for r, n in per.items() if n and r in pool]
+    if not names:
+        return None, f'blueprint.rep_scores (fold {fold_idx} allocation empty)'
+    return names, 'allocation_per_fold'
+
+
 # ---------------------------------------------------------------------------
 # Distances and close pairs
 # ---------------------------------------------------------------------------
@@ -510,6 +550,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             'finds the close pairs in that setting\'s distance; its pair record '
             'is written under <space key>@<setting>[|<model>].'),
         'controls_run': controls_enabled(),
+        # In the header, so the ledger signature changes and a checkpoint
+        # written under the whole-pool rebuild is set aside, not read back.
+        'hybrid_fold_rep_rule': 'allocation_per_fold (search_fold_reps)',
         'rows_note': ('D is untouched; score_clean is the same model fitted on '
                       'the clean training labels, fitted for the rows only and '
                       'not an arm of the summary.'),
@@ -784,9 +827,26 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
-                    # Cached per (fold, recipe, labels), 2026-09-25.
+                    # DIRTY-LOCAL 2026-09-28: the representations the search
+                    # built THIS fold's hybrid on (search_fold_reps). Before
+                    # this, build_fold_hybrid ranked the whole pool by
+                    # Blueprint.rep_scores, a whole-dataset clean-label score
+                    # that saw this fold's held-out molecules.
+                    _keep, _keep_src = search_fold_reps(
+                        _bp_m, fold_i, n_folds, list(train_reps))
+                    results.setdefault('hybrid_fold_reps', {}).setdefault(
+                        _sp, {}).setdefault(_mnames[0], {})[str(fold_i)] = {
+                            'reps': sorted(_keep) if _keep else None,
+                            'source': _keep_src}
+                    _tr_h = (train_reps if _keep is None else
+                             {k: v for k, v in train_reps.items() if k in _keep})
+                    _va_h = (val_reps if _keep is None else
+                             {k: v for k, v in val_reps.items() if k in _keep})
+                    # Cached per (fold, recipe, labels), 2026-09-25. The cache
+                    # key holds each used matrix's content hash, so a cut pool
+                    # never reads back a whole-pool build.
                     X_tr_h, X_va_h = cached_hybrid(
-                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        dataset_name, _tr_h, _va_h, y0, _bp_m, g_tr,
                         _mnames[0], model_factories, metric, train_idx,
                         _shareable)
                     if X_tr_h is None:
