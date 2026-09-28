@@ -1655,7 +1655,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # it made all 90 of its picks on a tied Expected Improvement with
         # nothing saying so.
         _is_random_only = condition in ('random_acq', 'multi_obj_random')
-        _max_possible_fails = n_seeds * max_iterations
+        # Picks actually made, counted from the curves. n_seeds x max_iterations
+        # counted seeds that were refused (no recipe) or whose feature build
+        # failed, so one lost seed of three made both flags below unreachable.
+        _picks_made = int(sum(max(0, len(c) - 1) for c in all_curves))
+        _max_possible_fails = _picks_made
         degenerate_random = (
             not _is_random_only
             and _max_possible_fails > 0
@@ -1669,9 +1673,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # so np.argmax handed back the lowest row number among the tied
         # molecules. Those picks are dataset row order, not acquisition, and
         # not random either.
-        _successful_picks = max(0, (n_seeds * max_iterations)
-                                - total_gp_failures - degenerate_split_seeds
-                                * max_iterations)
+        _successful_picks = max(0, _picks_made - total_gp_failures)
         degenerate_row_order = (
             not _is_random_only
             and _successful_picks > 0
@@ -1684,6 +1686,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'std_curve': std_curve,
             'n_curves': len(all_curves),
             'total_gp_failures': total_gp_failures,
+            # picks made across the seeds that ran; the denominator of both
+            # degeneracy flags
+            'picks_made': _picks_made,
             'degenerate_random_fallback': bool(degenerate_random),
             # picks made on a tied Expected Improvement, summed over seeds
             'flat_acquisition_picks': int(total_flat_acq),
@@ -1693,6 +1698,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'no_blueprint_seeds': no_blueprint_seeds,
             'dim': cond_dim,
         }
+        if condition in ('ecfp4_raw', 'tanimoto_ecfp4'):
+            # Which representation the "ecfp4" condition ran on. Without ecfp4
+            # in the pool (buchwald_hartwig) ecfp4_raw takes the widest
+            # representation instead, and the result was still filed as ecfp4.
+            results['conditions'][condition]['rep_used'] = (
+                'ecfp4' if _has_ecfp4 else
+                max(reps.keys(), key=lambda k: reps[k].shape[1]))
         if best_single_selection:
             # SIMA-F09: which splitter chose the comparator rep, per seed. Both
             # arms of this comparison are now selected group-aware: the hybrid
