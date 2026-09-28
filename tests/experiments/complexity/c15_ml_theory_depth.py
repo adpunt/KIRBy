@@ -745,6 +745,7 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                     pass
             sweep_row['gammas'][g] = {
                 'log_condition': m['log_condition'],
+                'n_eigenvalues_below_1e-12': m['n_eigenvalues_below_1e-12'],
                 'kernel_cv': m['kernel_cv'],
                 'kernel_target_alignment': m['kernel_target_alignment'],
                 'kernel_target_alignment_all_rows': m['kernel_target_alignment'],
@@ -827,6 +828,14 @@ def _compute_kernel_metrics(X, y, gamma=None):
     # Condition number
     eigvals = np.linalg.eigvalsh(K)
     eigvals_pos = eigvals[eigvals > 1e-12]
+    # 2026-09-28. How many eigenvalues the condition number above leaves out.
+    # log_condition is largest over smallest among eigenvalues above 1e-12, so
+    # it cannot exceed about 14.5 for an n x n kernel, and an exactly singular
+    # kernel still reads finite. Two duplicate rows make two identical kernel
+    # rows and one zero eigenvalue: a synthetic 300-row set with 50 duplicate
+    # rows reads log_condition 6.5 to 6.8 (two seeds) with 50 eigenvalues dropped. Nothing about
+    # log_condition changes; this count says when it is truncated.
+    n_eig_dropped = int(len(eigvals) - len(eigvals_pos))
     if len(eigvals_pos) > 0:
         cond = eigvals_pos[-1] / eigvals_pos[0]
         log_cond = float(np.log10(cond)) if cond > 0 else float('inf')
@@ -853,6 +862,7 @@ def _compute_kernel_metrics(X, y, gamma=None):
         'kernel_max': k_max,
         'kernel_cv': float(k_cv),
         'log_condition': log_cond,
+        'n_eigenvalues_below_1e-12': n_eig_dropped,
         'kernel_effective_rank': k_erank,
         'kernel_participation_ratio': part_ratio,
         'kernel_target_alignment': float(alignment),
