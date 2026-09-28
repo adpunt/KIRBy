@@ -1054,7 +1054,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sx.run_signature(data, config, {
             'models': downstream_models, 'flag_rates': flag_rates,
             'detectors': detectors, 'shuffle_seeds': shuffle_seeds,
-            'base_reps': base_reps_override, 'spaces': list(spaces)}))
+            'base_reps': base_reps_override, 'spaces': list(spaces),
+            # DIRTY-LOCAL 2026-09-28. The signature held no cleanup list, so a
+            # checkpoint written before a cleanup was added resumed into
+            # accumulators without its key (KeyError), and one written before a
+            # change to what a fold computes resumed silently. These three name
+            # what the pickled accumulators were computed under.
+            'cleanups': list(CLEANUPS),
+            'strengths': {k: list(v) for k, v in STRENGTHS.items()},
+            'fold_rule': 'hybrid_reps_from_allocation_per_fold;'
+                         'score_free_under_first_detector'}))
     if ck.state is not None:
         acc = ck.state['acc']
         folds_ran = ck.state['folds_ran']
