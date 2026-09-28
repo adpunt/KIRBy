@@ -1780,23 +1780,28 @@ def _summarise(results, models, spaces, metric_name, lower_is_better,
     def _cross_for(hybrid_space):
         """One hybrid space against every base representation, per arm."""
         cross = {}
+
+        # NaN when this run did not measure the arm or its floor. Fixed
+        # 2026-09-28: this indexed the arm directly, and
+        # 'gain_over_its_own_floor' holds only the arms whose floor ran
+        # (floor_for above). A run given `arms` without `remove` -- the
+        # ranking-quantity-only run the WHICH ARMS RUN comment in run()
+        # describes -- raised KeyError here, after every fit and before the
+        # result file was written.
+        def _own(space, m, arm):
+            return out['per_space'][space]['per_model'][m][
+                'gain_over_its_own_floor'].get(arm, float('nan'))
+
         for arm in ('ceiling',) + tuple(REMOVING_CORRECTIONS):
             per_model = {}
             for m in models:
-                h = out['per_space'][hybrid_space]['per_model'][m][
-                    'gain_over_its_own_floor'][arm]
+                h = _own(hybrid_space, m, arm)
                 per_model[m] = {
                     'gain_in_hybrid': h,
-                    'gain_in_base': {
-                        s: out['per_space'][s]['per_model'][m][
-                            'gain_over_its_own_floor'][arm]
-                        for s in base_spaces},
+                    'gain_in_base': {s: _own(s, m, arm) for s in base_spaces},
                     'hybrid_minus_base': {
-                        s: (float(h - out['per_space'][s]['per_model'][m][
-                            'gain_over_its_own_floor'][arm])
-                            if np.isfinite(h) and np.isfinite(
-                                out['per_space'][s]['per_model'][m][
-                                    'gain_over_its_own_floor'][arm])
+                        s: (float(h - _own(s, m, arm))
+                            if np.isfinite(h) and np.isfinite(_own(s, m, arm))
                             else float('nan'))
                         for s in base_spaces},
                 }
