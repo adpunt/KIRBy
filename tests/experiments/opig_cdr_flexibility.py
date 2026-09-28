@@ -214,15 +214,32 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
     if not acc_scores:
         return None
 
+    # Every mean carries the number of held-out folds it is a mean OVER.
+    # ROC AUC and PR AUC are undefined on a fold whose held-out antibodies are
+    # all flexible or all rigid, and the except below drops that fold from
+    # those two lists only. So a row could report accuracy over 3 folds beside
+    # ROC AUC over 2 with nothing saying so, and two rows of the table could be
+    # means over different fold counts. 'n_folds' is the count of held-out
+    # folds behind that one mean, and 'n_folds_split' is how many the splitter
+    # made.
     result = {
-        'accuracy': {'mean': np.mean(acc_scores), 'std': np.std(acc_scores)},
-        'balanced_accuracy': {'mean': np.mean(bacc_scores), 'std': np.std(bacc_scores)},
-        'mcc': {'mean': np.mean(mcc_scores), 'std': np.std(mcc_scores)},
+        'n_folds_split': len(splits),
+        'accuracy': {'mean': np.mean(acc_scores), 'std': np.std(acc_scores),
+                     'n_folds': len(acc_scores)},
+        'balanced_accuracy': {'mean': np.mean(bacc_scores),
+                              'std': np.std(bacc_scores),
+                              'n_folds': len(bacc_scores)},
+        'mcc': {'mean': np.mean(mcc_scores), 'std': np.std(mcc_scores),
+                'n_folds': len(mcc_scores)},
     }
     if roc_scores:
-        result['roc_auc'] = {'mean': np.mean(roc_scores), 'std': np.std(roc_scores)}
+        result['roc_auc'] = {'mean': np.mean(roc_scores),
+                             'std': np.std(roc_scores),
+                             'n_folds': len(roc_scores)}
     if pr_scores:
-        result['pr_auc'] = {'mean': np.mean(pr_scores), 'std': np.std(pr_scores)}
+        result['pr_auc'] = {'mean': np.mean(pr_scores),
+                            'std': np.std(pr_scores),
+                            'n_folds': len(pr_scores)}
     return result
 
 
@@ -612,9 +629,14 @@ def print_analysis(all_results):
         print(f"\n  --- CDR types: {cdr_types} ({ds['n_samples']} samples, "
               f"{ds['n_flexible']} flexible) ---")
 
+        # One row is one (representation, model) pair. Every number on it is a
+        # mean over held-out folds, and 'AUCfolds' is how many folds that ROC
+        # AUC is a mean over — smaller than the split's fold count whenever a
+        # held-out fold held only flexible or only rigid antibodies, where ROC
+        # AUC is undefined.
         print(f"  {'Rep':25s} {'Model':8s} {'ROC AUC':>8s} {'PR AUC':>8s} "
-              f"{'MCC':>8s} {'BalAcc':>8s}")
-        print(f"  {'-'*25} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+              f"{'MCC':>8s} {'BalAcc':>8s} {'AUCfolds':>9s}")
+        print(f"  {'-'*25} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*9}")
 
         rows = []
         for rep_name, rep_data in results.items():
@@ -623,15 +645,19 @@ def print_analysis(all_results):
                 pr = metrics.get('pr_auc', {}).get('mean', float('nan'))
                 mcc = metrics.get('mcc', {}).get('mean', float('nan'))
                 bacc = metrics.get('balanced_accuracy', {}).get('mean', float('nan'))
-                rows.append((rep_name, model_name, roc, pr, mcc, bacc))
+                nf = metrics.get('roc_auc', {}).get('n_folds')
+                nsp = metrics.get('n_folds_split')
+                rows.append((rep_name, model_name, roc, pr, mcc, bacc, nf, nsp))
 
         rows.sort(key=lambda r: (r[2] if not np.isnan(r[2]) else 0), reverse=True)
 
-        for rep_name, model_name, roc, pr, mcc, bacc in rows:
+        for rep_name, model_name, roc, pr, mcc, bacc, nf, nsp in rows:
             roc_s = f"{roc:.4f}" if not np.isnan(roc) else "—"
             pr_s = f"{pr:.4f}" if not np.isnan(pr) else "—"
+            f_s = ("—" if nf is None else
+                   (f"{nf}" if nsp is None else f"{nf}/{nsp}"))
             print(f"  {rep_name:25s} {model_name:8s} {roc_s:>8s} {pr_s:>8s} "
-                  f"{mcc:8.4f} {bacc:8.4f}")
+                  f"{mcc:8.4f} {bacc:8.4f} {f_s:>9s}")
 
         # Hybrid: leave-one-fold-out re-score, the same held-out treatment the
         # per-representation AUCs above get. The search's own winning mean is
