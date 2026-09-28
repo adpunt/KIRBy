@@ -1056,6 +1056,9 @@ def print_analysis(all_results):
         print(f"\n  Honest per-model held-out (LOFO) QSAR-MAE — hybrid vs best single rep:")
         print(f"  {'Target':10s} {'Model':8s} {'Hybrid':>9s} {'BestSingle':>11s} "
               f"{'Delta':>9s} {'Folds':>6s}")
+        print(f"  Delta is MAE of the best single representation minus MAE of "
+              f"the hybrid, averaged over paired folds; positive means the "
+              f"hybrid has the lower error.")
         print(f"  {'-'*10} {'-'*8} {'-'*9} {'-'*11} {'-'*9} {'-'*6}")
         for target in ALL_TARGETS:
             blk = all_results.get(target, {}).get('fold_reselection')
@@ -1069,7 +1072,10 @@ def print_analysis(all_results):
                 r = res[model_name]
                 h_v = r['hybrid_reselected']
                 b_v = r['best_single_reselected']
-                d_v = r['delta']
+                # The paired mean of per-fold differences, which is what
+                # fold_reselection says to report; r['delta'] is a difference
+                # of two means and drifts when either side drops a fold.
+                d_v = r.get('delta_mean_of_folds', r['delta'])
                 h_str = f"{h_v:.4f}" if not np.isnan(h_v) else "—"
                 b_str = f"{b_v:.4f}" if not np.isnan(b_v) else "—"
                 d_str = f"{d_v:+.4f}" if not np.isnan(d_v) else "—"
