@@ -401,7 +401,14 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             all_rows_bp_not_scored = {}
             from sklearn.preprocessing import StandardScaler as _SS
             from experiments._shared import cv_split as _cv_sp7, get_model_factories as _gmf
-            n_folds = config.get('n_splits', 5)
+            # The fold count the search above used. find_best_hybrid is called
+            # without n_folds, so it reads DEFAULT_N_FOLDS at call time, and the
+            # local grid sets that to 3 while --mode full still puts 5 in
+            # config['n_splits']. Reading config here scored this pass on 5
+            # folds beside a 3-fold search, so the per-fold columns were not
+            # paired. On the cluster both are 5.
+            import kirby.find_best_hybrid as _fbh7
+            n_folds = int(_fbh7.DEFAULT_N_FOLDS)
             n_sub_groups = len(np.unique(sub_groups))
             sub_folds = min(n_folds, max(2, n_sub_groups))
             sub_sample_X = next(iter(sub_reps.values()))
@@ -523,6 +530,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'all_rows_bp_scores': all_rows_bp_scores,
                 'all_rows_bp_fold_scores': all_rows_bp_fold_scores,
                 'all_rows_bp_not_scored': all_rows_bp_not_scored,
+                'all_rows_bp_n_folds': int(sub_folds),
                 # Per-model per-fold reselection inputs (per-fold, both arms). Exact
                 # CONTRACT keys inside: lower_is_better / candidates_by_model /
                 # baselines_by_model. None if the search itself failed.
