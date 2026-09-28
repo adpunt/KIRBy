@@ -247,8 +247,11 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
 
     Matches Dablander et al. 2023:
       - AC = |ΔpActivity| >= 2.0 (label 1)
-      - Non-AC = |ΔpActivity| < 1.0 (label 0)
-      - Half-cliffs (1.0 <= |Δ| < 2.0) are EXCLUDED from evaluation
+      - Non-AC = |ΔpActivity| <= 1.0 (label 0)
+      - Half-cliffs (1.0 < |Δ| < 2.0) are EXCLUDED from evaluation.
+        Strict at 1.0, as in his notebook (`1 < abs(...) < 2`): a pair exactly
+        ten-fold apart is a non-cliff, not a half-cliff. Until 2026-09-28 this
+        file dropped those pairs, 32 of d2's and 130 of fxa's.
       - Predicted AC probability = 2*arctan(|Δpred|/1.5)/π  (soft score)
 
     That soft score crosses 0.5 exactly when |Δpred| > 1.5, which is
@@ -291,8 +294,8 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
             continue
         true_delta = abs(labels[i] - labels[j])
 
-        # Exclude half-cliffs: 1.0 <= |Δ| < 2.0
-        if 1.0 <= true_delta < ac_threshold:
+        # Exclude half-cliffs: 1.0 < |Δ| < 2.0 (strict, as Dablander)
+        if 1.0 < true_delta < ac_threshold:
             continue
 
         is_ac = int(true_delta >= ac_threshold)
@@ -316,7 +319,7 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
     n_excluded_half = sum(
         1 for i, j, _ in mmp_pairs
         if not (np.isnan(predictions[i]) or np.isnan(predictions[j]))
-        and 1.0 <= abs(labels[i] - labels[j]) < ac_threshold
+        and 1.0 < abs(labels[i] - labels[j]) < ac_threshold
     )
     result['n_half_cliffs_excluded'] = n_excluded_half
     result['ac_threshold'] = ac_threshold
@@ -337,7 +340,7 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
             if fi < 0 or fj < 0:
                 continue
             true_delta = abs(labels[i] - labels[j])
-            if 1.0 <= true_delta < ac_threshold:
+            if 1.0 < true_delta < ac_threshold:
                 continue
             is_ac = int(true_delta >= ac_threshold)
             if fi == fj:
