@@ -1597,17 +1597,25 @@ def _emit(results, cost_rows, reselection_ens_candidates, model_key, method,
     # Re-running the selection with 'all' instead described a process this arm
     # never ran, so the membership, the model count and the whole cost row
     # below belonged to the all-representation arm.
+    #
+    # The top-k aggregator uses only the AGG_TOP_K members with the largest
+    # rank weight, which are the first AGG_TOP_K of select_fn's order (both
+    # rank by the same inner scores). The others are never run, so they are
+    # not deployed and not counted. Counting them made 'all|top3_mean', and
+    # any auto fold that chose it, cost every representation.
     per_fold_members = []
     for f in range(n_out):
-        rep_set_f = rep_set
+        rep_set_f, agg_f = rep_set, agg_name
         if rep_set == 'auto':
             choice = auto_choice[f] if (auto_choice and f < len(auto_choice)) else None
             if choice is None:
                 per_fold_members.append([])   # this fold made no choice
                 continue
-            rep_set_f = choice.split('|', 1)[0]
+            rep_set_f, agg_f = choice.split('|', 1)
         try:
             members, _ = select_fn(f, model_key, rep_set_f)
+            if agg_f == f'top{AGG_TOP_K}_mean':
+                members = members[:AGG_TOP_K]
             per_fold_members.append(sorted(f'{m}:{r}' for m, r in members))
         except Exception:
             per_fold_members.append([])
