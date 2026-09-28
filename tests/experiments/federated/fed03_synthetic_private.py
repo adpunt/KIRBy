@@ -234,7 +234,11 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     try:
         _search, _meta = get_best_search_for_downstream(
             reps_chembl, labels_chembl_binary, data.get('groups'),
-            downstream_model=fed_to_kirby_model(fed_model), budget=100,
+            # The width the headline row is read at. It was a fixed 100, so
+            # under a sweep that does not contain 100 the lookup fell through
+            # to the best recipe at whatever width the search liked.
+            downstream_model=fed_to_kirby_model(fed_model),
+            budget=HEADLINE_BUDGET,
             augmentations=augs,
             metric=metric_name,
             task_type='classification',
@@ -246,14 +250,24 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             **smoke_search_kwargs(config),
         )
         _bp = _meta['best_config']['blueprint'] if _meta else None
-    except Exception:
+    except Exception as _search_err:
         _bp = None
+        print(f"  recipe search FAILED ({_search_err!r}); Part A falls back "
+              f"to the hard-coded recipe below")
     # Part A does not pass augmentations to create_hybrid (C6 uses 'none'
     # explicitly because Lhasa rows have no aligned aug arrays). The pool's
     # aug_condition is therefore not consumed here — removed dead aug_cond.
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'
+    # Which recipe every KIRBy condition below was built with, and where it
+    # came from. The fallback is a different recipe from any searched one,
+    # and nothing in the result file used to say which of the two ran.
+    _recipe = {'allocation': _alloc, 'importance': _imp,
+               'internal_evaluator': _int_eval,
+               'source': 'search' if _bp else 'fallback'}
+    print(f"  recipe ({_recipe['source']}): allocation {_alloc}, "
+          f"importance {_imp}, internal evaluator {_int_eval}")
 
     print(f"  ChEMBL silo labels: {_chembl_cut_note}")
 
@@ -1096,6 +1110,9 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             'pki_threshold': PKI_THRESHOLD,
             'pki_threshold_note': PKI_THRESHOLD_NOTE,
             'n_folds': n_folds,
+            'recipe': _recipe,
+            'representations': {k: int(v.shape[1])
+                                for k, v in combined_reps.items()},
         },
         'cross_curator_disagreement': convert_numpy(_cross),
         **aggregated,
