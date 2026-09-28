@@ -276,7 +276,9 @@ def _build_ac_reference(data, dataset_name, labels):
     n = len(labels)
     provenance = {
         'potency_threshold_log_units': AC_POTENCY_THRESHOLD,
-        'potency_criterion': '>=100-fold (2 log units)',
+        # Strict: a gap of exactly 2.0 log units is not a cliff (the mask
+        # uses >). The label said >= until 2026-09-28.
+        'potency_criterion': '>100-fold (|delta label| > 2 log units)',
         # These two are honestly unavailable to this survey: same-assay and
         # ChEMBL dup/transcription flags are pre-applied inside cleaned loaders
         # (e.g. Dablander CSVs) and are NOT re-checkable from `data` here.
@@ -306,22 +308,31 @@ def _build_ac_reference(data, dataset_name, labels):
             "No MMP pairs and no SMILES available; cannot build an activity-"
             "cliff reference for this dataset.")
     sim = _compute_ecfp4_tanimoto_sim(smiles)
-    # Absolute 0.55 first; if it flags nothing (rep-dependent), fall back to the
-    # distribution-relative top-percentile cutoff n01 uses.
+    # The list is always the absolute Tanimoto 0.55. Until 2026-09-28 a zero
+    # count here was replaced by the top-2% most-similar pairs, which on a
+    # dataset with no cliff at 0.55 turned "none" into a positive count under
+    # the same high-confidence name and fed it to the feasibility flag. n01
+    # keeps 0.55 for Tanimoto for the reason that applies here (0.55 is
+    # meaningful for Tanimoto; n01:86-88). The relaxed count is still
+    # computed when the strict one is zero, and written beside it under its
+    # own name, never in its place.
     adj, sim_cutoff = _cliff_mask_from_similarity(
         sim, labels, ECFP4_SIM_THRESHOLD, AC_POTENCY_THRESHOLD)
-    similar_percentile = None
-    if adj.sum() == 0:
-        adj, sim_cutoff = _cliff_mask_from_similarity(
-            sim, labels, ECFP4_SIM_THRESHOLD, AC_POTENCY_THRESHOLD,
-            similar_percentile=SIMILAR_PERCENTILE)
-        similar_percentile = SIMILAR_PERCENTILE
     provenance.update({
         'similarity_criterion': 'ecfp4_tanimoto',
         'similarity_source': 'computed_from_smiles',
         'similarity_cutoff': float(sim_cutoff),
-        'similar_percentile': similar_percentile,
+        'similar_percentile': None,
     })
+    if adj.sum() == 0:
+        adj_p, cut_p = _cliff_mask_from_similarity(
+            sim, labels, ECFP4_SIM_THRESHOLD, AC_POTENCY_THRESHOLD,
+            similar_percentile=SIMILAR_PERCENTILE)
+        provenance['relaxed_top_percentile_not_high_confidence'] = {
+            'similar_percentile': SIMILAR_PERCENTILE,
+            'similarity_cutoff': float(cut_p),
+            'geometry': _geometry(adj_p)[0],
+        }
     return adj, provenance
 
 
