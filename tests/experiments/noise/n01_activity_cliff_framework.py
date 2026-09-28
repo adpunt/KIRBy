@@ -927,9 +927,25 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                 continue
             folds_scored.append(int(fold_i))
 
-            scaler = StandardScaler()
-            X_tr_s = scaler.fit_transform(X_tr)
-            X_va_s = scaler.transform(X_va)
+            # A matrix whose every value is 0 or 1 (ECFP4, Avalon, atom pairs)
+            # is passed through unscaled, the rule of the search's own
+            # baselines (find_best_hybrid._evaluate_single, 'leave binary
+            # raw') and of noise_cache.cached_scaled since 808df51. Until
+            # 2026-09-28 n01 standardised the bits, which changes nothing for
+            # rf or lightgbm but cost svm 0.0719 RMSE on herg_ki ECFP4 (0.6841
+            # here against 0.6122 in the search on the same folds). The model
+            # input handed to the similarity sweep below follows the same rule.
+            _u = np.unique(np.concatenate([np.ravel(X_tr), np.ravel(X_va)]))
+            _raw_bits = bool(
+                np.asarray(X_tr).dtype == np.uint8 or
+                (len(_u) <= 2 and set(_u.tolist()).issubset({0, 0.0, 1, 1.0})))
+            if _raw_bits:
+                X_tr_s = np.asarray(X_tr, dtype=float)
+                X_va_s = np.asarray(X_va, dtype=float)
+            else:
+                scaler = StandardScaler()
+                X_tr_s = scaler.fit_transform(X_tr)
+                X_va_s = scaler.transform(X_va)
 
             def _fit_predict(X_tr_s=X_tr_s, X_va_s=X_va_s, y_train=y_train):
                 model = model_factory()
@@ -949,6 +965,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             # precision and rebuilt in its own dtype, so a resumed fold scores
             # the same numbers.
             _key = [model_name, label, int(fold_i), _msig]
+            # Only a raw-bit fit carries this, so a prediction made on
+            # standardised bits before 2026-09-28 is never read back, and a
+            # continuous representation's stored prediction still is.
+            if _raw_bits:
+                _key.append('binary_raw')
             if key_extra is not None:
                 _key.append(key_extra(fold_i))
             _rec = ckpt.cached(_key, _fit_predict)
