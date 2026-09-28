@@ -148,7 +148,8 @@ def test_shift_and_counts():
     d = y0 - y[tr]
     check('2. the shift moves 10% of the training molecules up by 2 SDs and '
           'nothing else',
-          int(m.sum()) == 15 and np.allclose(d[m], 2.0 * np.std(y))
+          # SDs of the fold's clean TRAINING labels, since 620308e.
+          int(m.sum()) == 15 and np.allclose(d[m], 2.0 * np.std(y[tr]))
           and np.all(d[~m] == 0.0),
           f"{int(m.sum())} moved by {prov['shift_label_units']:.3f}")
     keep = n32.lowest_share(np.arange(100.0), 0.9)
