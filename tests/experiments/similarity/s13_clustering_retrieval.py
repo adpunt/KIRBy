@@ -722,6 +722,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"no blueprint")
                     continue
                 aug_cond = h.get('aug_condition')
+                # WHICH REPRESENTATIONS THIS RECIPE IS REBUILT ON (2026-09-28).
+                # A recipe searched with rep_count=N used the N representations
+                # that fold's TRAINING rows ranked highest. Handed the whole
+                # pool, build_fold_hybrid instead ranks by blueprint.rep_scores,
+                # which are cross-validated means over every row, this fold's
+                # held-out rows included. That let fold i's labels choose fold
+                # i's representations, and could pick a different N from the
+                # search. The search recorded its own per-fold choice in
+                # allocation_per_fold; this file's fold i is the search's fold i
+                # (same splitter, seed and count), so that choice is reused.
+                # Handed exactly N, build_fold_hybrid does no ranking of its own.
+                _rep_set, _rep_set_from = sorted_reps, 'whole_pool'
+                _rc = getattr(blueprint, 'rep_count', None)
+                if _rc is not None and int(_rc) < len(sorted_reps):
+                    _apf = (getattr(blueprint, 'allocation_per_fold', None)
+                            or {}).get(fold_i) or {}
+                    if (len(_apf) == int(_rc)
+                            and all(r in reps for r in _apf)
+                            and pool.get('n_folds_in_pool') == len(folds)):
+                        _rep_set = sorted(_apf)
+                        _rep_set_from = 'search_fold_training_rows'
+                    else:
+                        # Not recorded for this fold: build_fold_hybrid falls
+                        # back to whole-dataset scores. Written into
+                        # fold_recipes so the leak is visible per fold.
+                        _rep_set_from = ('blueprint.rep_scores_whole_dataset'
+                                         '_INCLUDES_THIS_FOLD')
+                        print(f"    fold {fold_i}: {sname} has no per-fold "
+                              f"representation choice stored; its {_rc} "
+                              f"representations are ranked on scores that "
+                              f"include this fold")
                 try:
                     _use_augs = sorted_augs if aug_cond != 'none' else []
                     aug_tr = ({a: augmentations[a][tr] for a in _use_augs}
@@ -729,8 +760,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     aug_va = ({a: augmentations[a][va] for a in _use_augs}
                               if _use_augs else None)
                     Xh_tr, Xh_va, _feat_info = build_fold_hybrid(
-                        {r: reps[r][tr] for r in sorted_reps},
-                        {r: reps[r][va] for r in sorted_reps},
+                        {r: reps[r][tr] for r in _rep_set},
+                        {r: reps[r][va] for r in _rep_set},
                         y_tr, blueprint,
                         augmentations_train=aug_tr, augmentations_val=aug_va,
                         groups=(groups[tr] if groups is not None else None))
@@ -742,6 +773,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         'evaluator': blueprint.internal_evaluator,
                         'budget': blueprint.budget,
                         'augmentation_strategy': blueprint.augmentation_strategy,
+                        'rep_count': _rc,
+                        'reps_used': (_feat_info.get('rep_count_kept')
+                                      or list(_rep_set)),
+                        'reps_chosen_by': _rep_set_from,
                         'objective': h['objective'],
                         'rank': h['rank'],
                         'recipe': h.get('recipe'),
