@@ -4508,6 +4508,34 @@ def augment_uncapped(
 # FEATURE IMPORTANCE COMPUTATION
 # ============================================================================
 
+import contextlib as _contextlib
+
+
+@_contextlib.contextmanager
+def _transformers_hidden_from_shap():
+    """Take `transformers` out of sys.modules for one shap call, then put it back.
+
+    shap's Explainer asks `safe_isinstance(model, 'transformers.TFPreTrainedModel')`.
+    That check is skipped when `transformers` is not in sys.modules, and when it
+    is, the lazy module answers by importing TensorFlow. On a machine whose
+    protobuf TensorFlow cannot read, that import raises -- and with more than one
+    OpenMP thread in the process it segfaults instead (measured 2026-09-28: every
+    dnn x treeshap x wglobal_power2 search configuration on caco2 and
+    flab_thermo_tresanco, exit 139). A representation builder that imports
+    transformers is what puts it in sys.modules. Same fix as
+    tests/experiments/complexity/c22_explainability.py:275.
+    """
+    import sys as _s
+    lifted = {k: v for k, v in list(_s.modules.items())
+              if k == 'transformers' or k.startswith('transformers.')}
+    for k in lifted:
+        del _s.modules[k]
+    try:
+        yield
+    finally:
+        _s.modules.update(lifted)
+
+
 def compute_feature_importance(base_reps, labels, method='treeshap', model=None, **kwargs):
     """
     Compute feature importance scores for each representation.
@@ -4655,8 +4683,9 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
                 tree_model.fit(X_fit, labels)
 
             # Compute SHAP values using TreeExplainer (fast, exact for trees)
-            explainer = shap.TreeExplainer(tree_model)
-            shap_values = explainer.shap_values(X_fit)
+            with _transformers_hidden_from_shap():
+                explainer = shap.TreeExplainer(tree_model)
+                shap_values = explainer.shap_values(X_fit)
 
             # Handle different SHAP output formats:
             # - Older SHAP: list of arrays [class0_values, class1_values, ...]
@@ -5039,8 +5068,15 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             import torch
             import torch.nn as nn
             from captum.attr import DeepLift
-        except ImportError:
-            raise ImportError("DeepLIFT requires 'torch' and 'captum'. Install with: pip install torch captum")
+        except ImportError as _imp_err:
+            # The original error is kept: on 2026-09-27 this fired inside a c02
+            # job on htc-g010 although `import torch` and
+            # `from captum.attr import DeepLift` both worked in a shell on the
+            # same node, and the bare message hid what actually failed.
+            raise ImportError(
+                "DeepLIFT requires 'torch' and 'captum'. Install with: pip "
+                f"install torch captum. The import failed with: "
+                f"{type(_imp_err).__name__}: {_imp_err}") from _imp_err
 
         hidden_dims = kwargs.get('hidden_dims', [64, 32])
         epochs = kwargs.get('epochs', 100)
