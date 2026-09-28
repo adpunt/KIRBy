@@ -546,14 +546,38 @@ def _report_arm(arm_name, rows, oracles, train_keys):
             out['by_oracle'][tag] = {'note': 'no valid unique molecule to score'}
             continue
         p, n_unscored = _score_with_oracle(unique_smiles, oracle)
+        # The same numbers over the molecules that are not already in the
+        # steering set. A molecule the generator rediscovered from its own
+        # predictor's training molecules is a measured hERG binder, so it
+        # scores high under the oracle without anything having been invented,
+        # and the arms do not rediscover at the same rate: each arm's predictor
+        # is fitted on those 1,412 molecules through a different set of
+        # features. Both pools are reported; neither replaces the other.
+        novel_set = set(novel)
+        is_novel = np.array([s in novel_set for s in unique_smiles], dtype=bool)
         finite = p[np.isfinite(p)]
         finite = np.sort(finite)[::-1]
+        novel_p = p[is_novel & np.isfinite(p)]
+        novel_p = np.sort(novel_p)[::-1]
         entry = {
             'oracle_representation': oracle['rep_name'],
             'oracle_heldout_auroc_mean': oracle['heldout_auroc_mean'],
             'molecules_scored': int(len(finite)),
+            'molecules_scored_that_are_novel': int(len(novel_p)),
             'molecules_the_oracle_could_not_featurise': n_unscored,
         }
+        if len(novel_p):
+            entry['mean_blocker_probability_over_every_scored_novel_molecule'] = float(
+                np.mean(novel_p))
+            entry['median_blocker_probability_over_every_scored_novel_molecule'] = float(
+                np.median(novel_p))
+            entry['blocker_probability_of_the_single_best_novel_molecule'] = float(
+                novel_p[0])
+            for k in (10, 100):
+                take = novel_p[:k]
+                entry[f'mean_blocker_probability_of_the_best_{k}_novel_molecules'] = float(
+                    np.mean(take))
+                entry[f'novel_molecules_actually_in_that_best_{k}'] = int(len(take))
         if len(finite):
             # The best-of-k numbers below rise with the number of molecules an
             # arm produced, and the arms do not all produce the same number:
