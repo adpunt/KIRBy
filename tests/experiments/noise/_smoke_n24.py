@@ -150,7 +150,11 @@ def test_the_control():
     print("the control — deleting the same number at random:")
     r = run_it(make_data(seed=1), 'toy')
 
-    deleted = r['molecules_deleted']['0.5']['base_1']
+    # dirty-local 2026-09-28: ensure_dprime_models adds svm (2026-09-25), and
+    # svm has no single representation here, so rf's matrix is not shared by
+    # every model and its record is keyed 'base_1/rf' (n24: ckey).
+    _dl = r['molecules_deleted']['0.5']
+    deleted = _dl['base_1'] if 'base_1' in _dl else _dl['base_1/rf']
     who = sorted(deleted)
     # dirty-local 2026-09-28: since a9a933b the random seeds' counts are kept
     # per detector, under '<detector>/random_seed<k>'.
