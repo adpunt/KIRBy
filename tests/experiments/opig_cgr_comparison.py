@@ -706,7 +706,10 @@ def linear_cka(X, Y):
 
     denom = np.sqrt(XtX_norm_sq * YtY_norm_sq)
     if denom < 1e-10:
-        return 0.0
+        # One side has no variance after centring, so CKA is undefined. It
+        # returned 0.0 until 2026-09-28, which reads as "no similarity at all";
+        # the all-zero chytorch_graphormer matrix got 0.0 against everything.
+        return float('nan')
     return float(YtX_norm_sq / denom)
 
 
