@@ -2062,7 +2062,11 @@ def _paired(a, b, lower_is_better):
     gains = np.array([(a[k] - b[k]) if lower_is_better else (b[k] - a[k])
                       for k in shared], dtype=float)
     gains = gains[np.isfinite(gains)]
-    scale = max(abs(float(np.mean(list(a.values())))) if a else 1.0, 1.0)
+    # Finite scores only. One nan fold score made the mean nan, max(nan, 1.0)
+    # returns nan, and every comparison against a nan tolerance is False, so
+    # the finite folds were counted as neither won, lost nor tied.
+    _fin_a = [float(v) for v in a.values() if np.isfinite(float(v))]
+    scale = max(abs(float(np.mean(_fin_a))) if _fin_a else 1.0, 1.0)
     tol = 1e-9 * scale
     return {
         'n_folds_paired': int(gains.size),
@@ -2281,9 +2285,14 @@ def _identity(arms):
                 if arms.get(a) and f in arms[a]]
         if len(vals) < 2:
             continue
-        per_fold[f] = float(max(vals) - min(vals))
-    spreads = list(per_fold.values())
+        # nan when an arm scored nan on this fold: builtin max/min on a list
+        # holding nan return a value that depends on the list's order.
+        per_fold[f] = (float(max(vals) - min(vals))
+                       if all(np.isfinite(float(v)) for v in vals)
+                       else float('nan'))
+    spreads = [v for v in per_fold.values() if np.isfinite(v)]
     seen = [v for a in ARMS for v in (arms.get(a) or {}).values()]
+    seen = [float(v) for v in seen if np.isfinite(float(v))]
     scale = max(abs(float(np.mean(seen))) if seen else 1.0, 1.0)
     return {
         'n_folds_with_all_four': int(sum(
