@@ -980,11 +980,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         est_kwargs['exclude_groups'] = excl_e
                     if is_clf and 'is_clf' in params:
                         est_kwargs['is_clf'] = True
+                    # DIRTY-LOCAL 2026-09-28: the inner folds follow
+                    # data['groups'], the scaffold on herg_ki; this said
+                    # "protein" on every dataset.
                     exclusion_note[est_name] = (
                         'its own repeat measurements are excluded from its '
                         'neighbours and its folds'
                         if 'exclude_groups' in est_kwargs
-                        else ('protein-grouped folds' if 'groups' in est_kwargs
+                        else ("inner folds grouped by data['groups'] (the "
+                              "protein on a drug-target set, the scaffold on "
+                              "a molecular one)" if 'groups' in est_kwargs
                               else 'nothing was excluded'))
                     est = get_noise_estimator(est_name, **est_kwargs)
                     s = np.asarray(est.estimate(X_e, y_e), dtype=float)
