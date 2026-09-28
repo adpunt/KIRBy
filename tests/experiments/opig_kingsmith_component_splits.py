@@ -347,7 +347,12 @@ def evaluate_rep(X, labels, groups, model, n_folds):
         else:
             spearman_scores.append(np.nan)
 
-    if not r2_scores or all(np.isnan(v) for v in r2_scores):
+    # Dropped only when no fold produced an RMSE. It used to test R2, which is
+    # NaN on a held-out component with constant yield even when the RMSE is
+    # fine, so a representation could vanish from the RMSE pairing for a
+    # reason that does not apply to RMSE. The hybrid side (below) already
+    # tests RMSE; this makes the two arms drop on the same rule.
+    if not rmse_scores or all(np.isnan(v) for v in rmse_scores):
         return None
 
     return _summarize_scores(r2_scores, rmse_scores, spearman_scores)
@@ -738,7 +743,10 @@ def _evaluate_hybrid_per_fold(
                 m = clone(factory())
                 m.fit(train_hybrid_s, y_train)
                 preds = m.predict(val_hybrid_s)
-            except Exception:
+            except Exception as e:
+                # Named, as the single-representation side names its own.
+                print(f"    fold {fold_idx} {model_name}: hybrid fit failed: "
+                      f"{type(e).__name__}: {e}", flush=True)
                 per_model_scores[model_name]['r2'].append(np.nan)
                 per_model_scores[model_name]['rmse'].append(np.nan)
                 per_model_scores[model_name]['spearman'].append(np.nan)
