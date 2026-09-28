@@ -976,6 +976,32 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     mout["arm3_naive"] = {imp: {k: summarize(v) for k, v in arm3[imp].items()}
                           for imp in imps_ok}
 
+    # ---- WEIGHTED minus EQUAL, at the same candidate pool size (2026-09-28) --
+    # The question this file asks is whether sizing each representation's share
+    # of the candidate pool by its score beats giving every representation the
+    # same share. Every delta above is against the best single representation,
+    # so that answer was only readable by subtracting two deltas by hand. This
+    # pairs each weighted configuration with the equal-share configuration whose
+    # per-representation cap N = round(POOL_TOTAL / pool size), at the same pool,
+    # budget and global importance, fold by fold. No new model fits.
+    for imp in imps_ok:
+        for k, rec in weighted[imp].items():
+            p, B, mult = rec["pool"], rec["B"], rec["mult"]
+            N = max(1, int(round((mult * B) / p)))
+            a2 = arm2[imp].get(f"pool{p}_N{N}_B{B}")
+            if a2 is None:
+                continue
+            dR2 = np.array(rec["r2_pf"]) - np.array(a2["r2_pf"])
+            dNat = gs * (np.array(rec["native_pf"]) - np.array(a2["native_pf"]))
+            mout["weighted_global"][imp][k].update({
+                "equal_global_matched_key": f"pool{p}_N{N}_B{B}",
+                "r2_delta_mean_vs_equal_global": float(np.mean(dR2)),
+                "r2_delta_per_fold_vs_equal_global": [round(float(x), 5) for x in dR2],
+                "r2_folds_won_vs_equal_global": int(np.sum(dR2 > 0)),
+                "native_delta_mean_vs_equal_global": float(np.mean(dNat)),
+                "native_folds_won_vs_equal_global": int(np.sum(dNat > 0)),
+            })
+
     # ---- BEST SCHEME per (importance, pool, POOL_TOTAL, budget) by R2 delta --
     # 2026-09-04 (SPLIT_AUDIT c31:711): the winning weighting method is chosen on
     # the same 5 folds it is then reported on, so this delta is a MAXIMUM over
