@@ -1506,8 +1506,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         _mn = remed_key.split('|', 1)[0]
                         _c = clean_by_model.get(_mn)
                         _nz = noisy_by_model.get(_mn)
+                        # The gap is sign-normalised (positive = the noise
+                        # did damage), so it is compared SIGNED. abs() let a
+                        # noisy score better than the clean one through, and
+                        # there the ratio's sign flips: a repair that moved
+                        # the score further in the good direction read as a
+                        # negative recovery. No damage, no recovery ratio.
                         if (_c is not None and _nz is not None
-                                and abs(gap_by_model[_mn]) > gap_floor_by_model[_mn]):
+                                and gap_by_model[_mn] > gap_floor_by_model[_mn]):
                             recovery = float((denoised - _nz) / (_c - _nz) * 100)
                         else:
                             recovery = float('nan')
@@ -1535,7 +1541,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # the config is re-picked from the other folds within that model's own arm.
         sigma_result['heldout_recovery_by_model'] = {
             _m: _heldout_recovery(clean_by_fold[_m], noisy_by_fold[_m],
-                                  denoised_by_fold[_m], GAP_MIN_FRAC)
+                                  denoised_by_fold[_m], GAP_MIN_FRAC,
+                                  lower_is_better=lower_is_better)
             for _m in _models_scored}
         sigma_result['heldout_recovery'] = (
             sigma_result['heldout_recovery_by_model'][_ref_model])
@@ -1681,7 +1688,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
 
 def _heldout_recovery(clean_by_fold, noisy_by_fold, denoised_by_fold,
-                      gap_min_frac):
+                      gap_min_frac, lower_is_better=False):
     """Recovery for a config chosen WITHOUT the fold it is read on.
 
     n11 reports the largest recovery among about 4,800 space x estimator x
@@ -1724,7 +1731,12 @@ def _heldout_recovery(clean_by_fold, noisy_by_fold, denoised_by_fold,
         n = float(np.mean([noisy_f[f] for f in use]))
         d = float(np.mean([cfg_folds[f] for f in use]))
         gap = c - n
-        if abs(gap) <= max(1e-10, gap_min_frac * abs(c)):
+        # Damage in the metric's own direction: positive when the noise made
+        # the score worse. A fold set where the noise did no damage (or
+        # helped) has no recovery to measure; abs() here let it through with
+        # the ratio's sign flipped.
+        damage = -gap if lower_is_better else gap
+        if not damage > max(1e-10, gap_min_frac * abs(c)):
             return float('nan')
         return float((d - n) / gap * 100)
 
