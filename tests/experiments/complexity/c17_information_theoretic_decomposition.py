@@ -278,6 +278,69 @@ def _hybrid_fold_importance(fold_idx, train_reps, y_train, groups_train,
     return imp
 
 
+_C17_FOLD_ALLOC = {}
+
+
+def _hybrid_fold_alloc_scores(fold_idx, train_reps, y_train, groups_train,
+                              blueprint, metric_fn, lower_is_better,
+                              dataset_name):
+    """Per-representation scores for one fold, from that fold's training rows.
+
+    WHY. When the recipe was searched over fewer representations than the pool
+    holds (rep_count 5 on a pool of 6, as on logd and buchwald_hartwig in the
+    local run), build_fold_hybrid must decide WHICH ones to keep. Without this
+    it ranks them by blueprint.rep_scores, which the search measured on every
+    row. The held-out rows of this fold then help choose the hybrid's
+    representations, and no other strategy sees those labels.
+
+    SAME NUMBERS AS create_hybrid'S OWN. These are the scores
+    allocate_performance_weighted computes when it is given none: the internal
+    evaluator fitted on the internal_holdout_split carve of the fold's training
+    rows and read with the dataset's metric (hybrid.py _score_rep_for_budget).
+    Passed in, they are used both to pick the representations and to split the
+    budget, so the kept ones get exactly the budget they would have got.
+
+    Returns None when the recipe keeps the whole pool; nothing changes then.
+    """
+    rep_count = getattr(blueprint, 'rep_count', None)
+    if rep_count is None or int(rep_count) >= len(train_reps):
+        return None
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    from kirby.find_best_hybrid import (OBJECTIVE_PREDICTIVE,
+                                        _is_geometry_objective)
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or (objective is not None and (isinstance(objective, dict)
+                                           or _is_geometry_objective(objective)))):
+        print(f"      fold {fold_idx}: representations ranked on the whole-"
+              f"dataset rep_scores (evaluator={evaluator!r} has no fold-local "
+              f"ranking here)")
+        return None
+    key = (dataset_name, fold_idx, evaluator, tuple(sorted(train_reps)))
+    if key in _C17_FOLD_ALLOC:
+        return _C17_FOLD_ALLOC[key]
+    from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
+    y_train = np.asarray(y_train)
+    inner_tr, inner_va = internal_holdout_split(
+        len(y_train), y_train, groups_train)
+    out = {}
+    for name, X in train_reps.items():
+        X = np.asarray(X)
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        out[name] = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lower_is_better,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=False))
+    print(f"      fold {fold_idx}: representations ranked on this fold's "
+          f"training rows: {out}")
+    _C17_FOLD_ALLOC[key] = out
+    return out
+
+
 # =========================================================================
 # RFE (recursive feature elimination with RF)
 # =========================================================================
@@ -641,6 +704,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _imp = _hybrid_fold_importance(
                 _fold_index(train_idx), tr_reps, labels[train_idx],
                 _groups_tr, hybrid_bp, tr_a, dataset_name)
+            # Which representations the hybrid keeps, ranked on this fold's
+            # training rows instead of on every row. See
+            # _hybrid_fold_alloc_scores.
+            _alloc = _hybrid_fold_alloc_scores(
+                _fold_index(train_idx), tr_reps, labels[train_idx],
+                _groups_tr, hybrid_bp, metric_fn, lower_is_better,
+                dataset_name)
             X_tr, X_va, _fi = build_fold_hybrid(
                 tr_reps, va_reps, labels[train_idx], hybrid_bp,
                 augmentations_train=tr_a, augmentations_val=va_a,
@@ -649,7 +719,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 model=RandomForestRegressor(n_estimators=100, random_state=42,
                                             n_jobs=-1),
                 metric_fn=metric_fn, lower_is_better=lower_is_better,
-                precomputed_importance=_imp)
+                precomputed_importance=_imp,
+                **({'precomputed_alloc_scores': _alloc}
+                   if _alloc is not None else {}))
             return X_tr, X_va
 
         def _sel_pca(train_idx, val_idx):
