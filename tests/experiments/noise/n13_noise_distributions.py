@@ -230,7 +230,7 @@ def _bp_sig(bp):
 def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
                   augmentations_val, bp, base_spaces, groups=None,
                   model=None, metric_fn=None, lower_is_better=None,
-                  objective=None, is_clf=None):
+                  objective=None, is_clf=None, base_train_scaled=None):
     """Build the single-representation spaces + hybrid, with the hybrid's val
     features.
 
@@ -258,6 +258,11 @@ def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
         base_spaces: {space name: representation} -- the single
             representations noise is detected in, each scaled on this fold's
             training rows.
+        base_train_scaled: {representation: X_train} already scaled by
+            noise_cache.cached_scaled, which leaves an all-binary matrix raw.
+            Those are the matrices each model is fitted on, so the detector
+            reads the same geometry. Without it every representation is
+            standardised here, bits included.
         model: The downstream estimator INSTANCE the accept-or-reject step
             scores with, or None to fall back on the internal evaluator.
         metric_fn / lower_is_better: The dataset's metric and its direction,
@@ -273,6 +278,9 @@ def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
     hybrid_val_s = None
 
     for _sp, _rn in base_spaces.items():
+        if base_train_scaled is not None and _rn in base_train_scaled:
+            spaces[_sp] = base_train_scaled[_rn]
+            continue
         sc = StandardScaler()
         spaces[_sp] = sc.fit_transform(train_reps[_rn])
 
@@ -1201,6 +1209,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'train_augs': train_augs,
             'val_augs': val_augs,
             'eval_by_unit': eval_by_unit,
+            # Training rows of every single representation, scaled as the
+            # models see them (all-binary left raw). Track B detects noise in
+            # these. Until 2026-09-28 _build_spaces standardised them again
+            # itself, so on ecfp4 and every other bit matrix the detector read
+            # standardised bits while the model it weights was fitted on raw
+            # ones, and the similarity sweep's MODEL_INPUT lists were not
+            # Track B's own lookup as the comment there says.
+            'train_scaled_by_rep': {_rn: _x[0] for _rn, _x in _by_rep.items()},
             'track_a_base': {_sp: _by_rep[_rn]
                              for _sp, (_k, _rn) in track_a_base.items()},
         })
@@ -1438,7 +1454,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                if hybrid_model_factory is not None else None),
                         metric_fn=metric_fn,
                         lower_is_better=lower_is_better,
-                        objective=bp_objective, is_clf=is_clf)
+                        objective=bp_objective, is_clf=is_clf,
+                        base_train_scaled=fd['train_scaled_by_rep'])
 
                     # similarity-objective hybrid arm. 2026-09-12 decision: the
                     # pool replaces the hand-built four-block stack, so this is
