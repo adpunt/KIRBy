@@ -82,7 +82,12 @@ def _staged_pool(ds=DATASET):
     return names
 
 
-POOL = _staged_pool()
+# The staged list, cut the same way load_data cuts it. Under a local run that
+# sets KIRBY_LOCAL_REPS, H.load_full returns only the kept representations, so
+# the uncut list made the "did not load" check below raise every time. Unset,
+# cut_pool returns the list unchanged.
+from experiments._local_grid import cut_pool  # noqa: E402
+POOL = cut_pool(DATASET, _staged_pool())
 BEST = "cgr_morgan"
 _ANCHOR = None
 
