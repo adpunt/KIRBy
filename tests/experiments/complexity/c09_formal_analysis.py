@@ -627,8 +627,20 @@ def _run_information_retention(data, budgets, dataset_name=None,
             # are fitted on the training rows only and applied to the held-out
             # rows, so nothing about the held-out rows shapes the space the
             # estimate is made in.
+            # ⛔ ALSO CAPPED AT A FIFTH OF THE HELD-OUT ROWS, the estimator's
+            # own limit (_shared.estimate_mutual_information_knn, max_dim capped
+            # at n_samples // 5). Above it the estimator re-standardises these
+            # components on the held-out rows and runs a second PCA on them.
+            # Standardised principal-component scores all have variance one,
+            # so that second PCA keeps arbitrary directions, not the top ones,
+            # and the label signal is spread thin. It bites when the held-out
+            # fold has under 250 rows: humanness_therapeutic, 564 rows over 3
+            # folds. Synthetic check, 188 held-out rows, signal on 3 of 203
+            # dimensions: 0.07, 0.54, 0.00, 0.06, 0.06 nats at 50 components
+            # against 0.57, 0.15, 0.31, 0.50, 0.31 at 37.
             n_comp = min(50, X_hybrid.shape[1], X_hybrid.shape[0] - 1,
-                         X_hybrid_val.shape[0] - 1)
+                         X_hybrid_val.shape[0] - 1,
+                         X_hybrid_val.shape[0] // 5)
             try:
                 if n_comp < 1:
                     raise ValueError(
