@@ -1052,7 +1052,7 @@ def predict_fluid_similarity_ensemble(teacher_models, cluster_data_train,
 
 
 def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
-                                   test_fps, k):
+                                   test_fps, k, groups=None):
     """Quality-weighted ensemble: weight teachers by cross-val MCC.
 
     Privacy: each silo shares one scalar (its MCC), not data.
@@ -1062,6 +1062,12 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
         cluster_data_train: list of TRAIN-ONLY DataFrames per cluster.
         test_fps: Morgan FP array for test molecules.
         k: number of silos.
+        groups: None, or a list indexed like cluster_data_train whose entry
+            t holds the scaffold group of each row of cluster_data_train[t].
+            Given, each silo's MCC is cross-validated on scaffold-grouped
+            folds (_quality_cv_kwargs); None keeps the random KFold, so a
+            caller that passes nothing (fed01) is unchanged. Per silo, not
+            one array, because here each silo holds different molecules.
 
     Returns:
         (pred_classes, pred_probs_positive, teacher_mcc_weights)
@@ -1096,7 +1102,9 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
         try:
             y_pred_cv = cross_val_predict(
                 clf, X_t, y_t,
-                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
+                **_quality_cv_kwargs(
+                    n_cv, None if groups is None else groups[t],
+                    len(y_t), classification=True))
             mccs[t] = max(0.0, matthews_corrcoef(y_t, y_pred_cv))
         except Exception:
             mccs[t] = 0.0
