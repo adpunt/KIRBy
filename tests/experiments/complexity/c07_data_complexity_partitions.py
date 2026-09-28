@@ -425,7 +425,14 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         X_va_s = sc.transform(X_va)
                         mdl = factory()
                         mdl.fit(X_tr_s, sub_labels[tr_i])
-                        fold_scores.append(metric_fn_part(sub_labels[va_i], mdl.predict(X_va_s)))
+                        # Graded scores for ranking metrics. mdl.predict gave
+                        # hard 0/1 labels, so on an AUROC dataset this column
+                        # scored a different quantity from the search beside it
+                        # (the same fault c05 fixed at c05:533). _predict_for_metric
+                        # returns predict() output for every other metric.
+                        from kirby.find_best_hybrid import _predict_for_metric as _pfm7
+                        fold_scores.append(metric_fn_part(
+                            sub_labels[va_i], _pfm7(mdl, X_va_s, metric_fn_part)))
                     if fold_scores:
                         all_rows_bp_scores[cand_model] = float(np.mean(fold_scores))
                         all_rows_bp_fold_scores[cand_model] = [

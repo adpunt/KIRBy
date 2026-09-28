@@ -398,9 +398,14 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     continue
                 idx = train_silo_indices[s]
                 X_s = apply_feature_selection(train_reps, fi)
-                clf = fit_fed_classifier(
-                    fed_model, X_s[idx], y_train[idx], seed=fed_seed)
-                per_cluster_models[s] = clf
+                # DIRTY-LOCAL 2026-09-28: a cluster holding one class cannot
+                # go through RandomUnderSampler (it raises, and nothing here
+                # caught it, so the whole run died). fed01 guards the same
+                # case. Its held-out molecules fall back to the global model
+                # and are counted in n_fallback.
+                if len(np.unique(y_train[idx])) >= 2:
+                    per_cluster_models[s] = fit_fed_classifier(
+                        fed_model, X_s[idx], y_train[idx], seed=fed_seed)
                 # Same features, every training row.
                 per_cluster_models_allrows[s] = fit_fed_classifier(
                     fed_model, X_s, y_train, seed=fed_seed)

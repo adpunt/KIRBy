@@ -197,7 +197,8 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
                                    if _augs else None),
                 groups=(np.asarray(groups)[train_idx]
                         if groups is not None else None))
-        except Exception:
+        except Exception as _exc:
+            print(f"    fold hybrid build failed: {type(_exc).__name__}: {_exc}")
             Xh_test, fi = None, None
 
         # Train-only importance for the WEIGHTED arms (lightgbm_gain matches the
@@ -217,9 +218,18 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
             if base_imp_train is not None and rep_name in base_imp_train:
                 _push(baseline_folds, f'{rep_name}|weighted',
                       _sac(Xt, y_test, weights=base_imp_train[rep_name]))
+            else:
+                # One slot per fold in every arm. fold_reselection reads these
+                # lists by POSITION, so skipping a fold here moved every later
+                # fold's score onto the wrong fold index. (dirty-local 2026-09-28)
+                _push(baseline_folds, f'{rep_name}|weighted', float('nan'))
 
         # --- hybrid candidate arm ---
         if Xh_test is None:
+            # Same positional rule: a NaN slot, not a skipped fold.
+            _push(cand_folds, 'hybrid_unweighted', float('nan'))
+            for wm in weight_methods:
+                _push(cand_folds, f'hybrid_weighted|{wm}', float('nan'))
             continue
         _push(cand_folds, 'hybrid_unweighted', _sac(Xh_test, y_test))
         for wm in weight_methods:
@@ -1033,5 +1043,11 @@ if __name__ == '__main__':
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
-    results = run(data, config, args.output, args.dataset)
+    # Same pair count and weight methods the similarity wave passes
+    # (similarity_helpers.run_all, SIMILARITY_EXTRA). Without them this entry
+    # point used run()'s 5,000 pairs. (dirty-local 2026-09-28)
+    from experiments.similarity.similarity_helpers import SIMILARITY_EXTRA
+    results = run(data, config, args.output, args.dataset,
+                  n_sample=SIMILARITY_EXTRA['n_sample'],
+                  weight_methods=SIMILARITY_EXTRA['weight_methods'])
     save_experiment_results(results, args.output, 's02_hybrid_similarity', args.dataset)

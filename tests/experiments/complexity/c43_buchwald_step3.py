@@ -43,8 +43,11 @@ from kirby import hybrid              # noqa: E402  read-only
 from scipy.stats import spearmanr  # noqa: E402
 
 # Checkpoint next to the other complexity results, not in a scratch directory.
-CKPT = os.path.join(_REPO, "tests", "results", "complexity",
-                    "c43_step3_ckpt.json")
+# C43_OUT_DIR (dirty local run 2026-09-28) redirects both the checkpoint and
+# the signal file the anchor is read from; unset -> tests/results/complexity.
+_OUT_DIR = (os.environ.get("C43_OUT_DIR")
+            or os.path.join(_REPO, "tests", "results", "complexity"))
+CKPT = os.path.join(_OUT_DIR, "c43_step3_ckpt.json")
 os.makedirs(os.path.dirname(CKPT), exist_ok=True)
 
 DATASET = "buchwald_hartwig"
@@ -91,8 +94,7 @@ def _lightgbm_anchor():
     Returns None when the signal file has not been run; the delta is then
     omitted rather than computed against the wrong model.
     """
-    path = os.path.join(_REPO, "tests", "results", "complexity",
-                        "c43_buchwald_signal_buchwald_hartwig.json")
+    path = os.path.join(_OUT_DIR, "c43_buchwald_signal_buchwald_hartwig.json")
     try:
         with open(path) as fh:
             blob = json.load(fh)
@@ -144,7 +146,10 @@ def main():
     print(f"  [pool] {len(POOL)} staged representations, read from "
           f"complexity_helpers.DATASET_REPS['{DATASET}']['general']: {POOL}",
           flush=True)
-    folds = H.make_folds(groups, y, task, n=5)
+    # Dirty local run 2026-09-28: KIRBY_LOCAL_FOLDS sets the fold count; unset
+    # -> 5. Must match c43_buchwald_signal, whose anchor is subtracted below.
+    folds = H.make_folds(groups, y, task,
+                         n=int(os.environ.get("KIRBY_LOCAL_FOLDS") or 5))
     R = {"pool": POOL, "best_rep": BEST, "budgets": BUDGETS, "methods": METHODS,
          "pool_source": (
              f"complexity_helpers.DATASET_REPS['{DATASET}']['general'] — the "

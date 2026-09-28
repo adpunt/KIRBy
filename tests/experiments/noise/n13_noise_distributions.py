@@ -1121,7 +1121,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     y_val, _nc.cached_fit_predict(
                         dataset_name, mname, model_factories[mname],
                         eval_by_unit[_u][0], y_train_clean,
-                        eval_by_unit[_u][1]))))
+                        eval_by_unit[_u][1],
+                        predict_mode=_nc.predict_mode_for(metric_name)))))
             except Exception:
                 pass
 
@@ -1372,7 +1373,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             _sc_base = float(metric_fn(
                                 fd['y_val'], _nc.cached_fit_predict(
                                     dataset_name, mname, model_factories[mname],
-                                    _xtr, y_noisy, _xva)))
+                                    _xtr, y_noisy, _xva,
+                                    predict_mode=_nc.predict_mode_for(
+                                        metric_name))))
                             noisy_baseline_by_model[_u].append(_sc_base)
                             # Per-fold single-representation arm for
                             # fold_reselection (reuses this same fit — no extra
@@ -1506,7 +1509,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             m = mfactory()
                             m.fit(_Xh_tr_s, y_noisy)
                             reselected_hyb_folds[mname].setdefault(fi, []).append(
-                                float(metric_fn(fd['y_val'], m.predict(_Xh_va_s))))
+                                float(metric_fn(fd['y_val'], _nc._predict(
+                                    m, _Xh_va_s,
+                                    _nc.predict_mode_for(metric_name)))))
                         except Exception:
                             pass
 
@@ -1707,8 +1712,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                             # a remediated one.
                                             UNWEIGHTED_TRACK_B_MODELS.add(mname)
                                             continue
+                                        # DIRTY-LOCAL 2026-09-28: AUC needs
+                                        # the positive-class probability, not
+                                        # the hard class (predict_mode_for).
                                         score = float(metric_fn(fd['y_val'],
-                                                                 m.predict(_xva)))
+                                                                 _nc._predict(
+                                            m, _xva,
+                                            _nc.predict_mode_for(metric_name))))
                                         track_b_acc[space_name][est_name][_u].append(score)
                                     except Exception:
                                         pass

@@ -38,6 +38,7 @@ from experiments._shared import (
     cv_split,
     save_experiment_results, convert_numpy,
     get_config,
+    _local_aug_conditions,
     extract_top3_base_reps,
     top_base_reps, hybrid_deltas, resolve_comparison_models,
     DOWNSTREAM_MODELS,
@@ -92,6 +93,16 @@ def _evaluate_task(task_name, rep_preset, config):
     # Load augmentation reps from DATASET_REPS (if configured)
     # -----------------------------------------------------------------
     aug_rep_names = DATASET_REPS.get(task_name, {}).get('augmentation', [])
+    # KIRBY_LOCAL_AUG_CONDITIONS (dirty local run 2026-09-28): the nested CV
+    # below hard-coded 'uncapped' whenever augmentation representations exist,
+    # so a local run cut to 'none' still searched 'uncapped' here and loaded
+    # augmentation representations that may not be cached. Routed through the
+    # same filter the pool uses; unset on the cluster, where it returns
+    # ['uncapped'] unchanged.
+    _c14_aug_strategy = (_local_aug_conditions(['uncapped'])[0]
+                         if aug_rep_names else 'none')
+    if _c14_aug_strategy == 'none':
+        aug_rep_names = []
     aug_dict = None
     if aug_rep_names:
         missing = [r for r in aug_rep_names if r not in reps]

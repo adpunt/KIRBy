@@ -129,7 +129,9 @@ POOLS = [5, 10]                  # candidate pool = the top-5 and the top-10 rep
 BUDGETS = [100, 500, 1000]       # B
 NCAPS = [50, 100, 200, 300]      # ARM2's equal per-rep cap, its own axis
 POOL_TOTAL_MULTS = [2, 4]        # POOL_TOTAL in {2B, 4B}
-NFOLDS = 5
+# Dirty local run 2026-09-28: KIRBY_LOCAL_FOLDS (env.sh) sets the outer fold
+# count here too, as get_config does for the other experiments. Unset -> 5.
+NFOLDS = int(os.environ.get("KIRBY_LOCAL_FOLDS") or 5)
 N_INNER = 3                      # ITEM 4: inner group-aware CV folds for sizing
 N_BOOT = int(os.environ.get("C31_BOOT", "1000"))   # ITEM 3: 0 disables
 DEFAULT_DATASETS = ["herg_ki", "logd", "flab_thermo_tresanco"]

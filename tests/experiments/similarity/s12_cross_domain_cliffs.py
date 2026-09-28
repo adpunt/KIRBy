@@ -86,6 +86,23 @@ def _finite_mean(fold_scores):
     return float(np.mean(finite)) if finite else float('nan')
 
 
+def _stratum_score(metric_fn, y_true, y_pred):
+    """The metric on one stratum of a held-out fold; NaN when it is undefined.
+
+    On a classification dataset the metric is AUC, and roc_auc_score raises
+    when the stratum's held-out rows hold only one class. That raise sat
+    outside every try in this file, so one single-class cliff stratum ended the
+    whole run (humanness_therapeutic, 564 antibodies). NaN is what this file
+    already writes for a stratum with fewer than two rows, and _finite_mean and
+    fold_reselection skip it. (dirty-local 2026-09-28)
+    """
+    try:
+        return float(metric_fn(y_true, y_pred))
+    except ValueError as e:
+        print(f"  [warn] stratum metric undefined: {e}")
+        return float('nan')
+
+
 # =========================================================================
 # CLIFF DETECTION (domain-generic, mirrors N01's identify_cliff_pairs)
 # =========================================================================
@@ -506,10 +523,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 if vi in scanned_indices and vi not in cliff_indices]
 
                 cliff_fold_scores.append(
-                    float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
+                    _stratum_score(metric_fn, labels[val_idx[val_cliff]],
+                                   y_pred[val_cliff])
                     if len(val_cliff) >= 2 else float('nan'))
                 noncliff_fold_scores.append(
-                    float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+                    _stratum_score(metric_fn, labels[val_idx[val_noncliff]],
+                                   y_pred[val_noncliff])
                     if len(val_noncliff) >= 2 else float('nan'))
 
             rep_model_results[mname] = {
@@ -562,9 +581,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Same rule as the per-rep arm: an unscanned row is in neither.
         val_noncliff = [i for i, vi in enumerate(val_idx)
                         if vi in scanned_indices and vi not in cliff_indices]
-        c = (float(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
+        c = (_stratum_score(metric_fn, labels[val_idx[val_cliff]],
+                            y_pred[val_cliff])
              if len(val_cliff) >= 2 else float('nan'))
-        nc = (float(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+        nc = (_stratum_score(metric_fn, labels[val_idx[val_noncliff]],
+                             y_pred[val_noncliff])
               if len(val_noncliff) >= 2 else float('nan'))
         return c, nc
 

@@ -239,7 +239,12 @@ def saturation_curve(X, y, folds, orders, model_name, metric_fn,
                 per_fold[j].append(float("nan"))
                 continue
             model.fit(Xtr, ytr)
-            pred = model.predict(Xva)
+            # _predict_for_metric, not .predict (dirty local run 2026-09-28):
+            # on an AUROC dataset (humanness_therapeutic) .predict returns hard
+            # 0/1 labels and the AUROC collapses to the mean of sensitivity and
+            # specificity. Falls through to .predict for rmse/spearman.
+            from kirby.find_best_hybrid import _predict_for_metric
+            pred = _predict_for_metric(model, Xva, metric_fn)
             per_fold[j].append(float(metric_fn(y[va], pred)))
 
     mean = [float(np.nanmean(f)) if len(f) else float("nan") for f in per_fold]
