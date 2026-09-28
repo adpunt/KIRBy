@@ -142,6 +142,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # Heavy atom count: <= median vs > median
             if smiles is None:
                 print("    No SMILES available (antibody dataset?), skipping molecular_complexity")
+                results['partitions'][partition_name] = {'skipped': 'no SMILES in this dataset'}
                 continue
             try:
                 from rdkit import Chem
@@ -157,12 +158,14 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         valid_mask[i] = True
                 if not valid_mask.any():
                     print("    No valid SMILES, skipping molecular_complexity")
+                    results['partitions'][partition_name] = {'skipped': 'no SMILES parsed'}
                     continue
                 median_hac = np.median(hac[valid_mask])
                 mask_easy = valid_mask & (hac <= median_hac)
                 mask_hard = valid_mask & (hac > median_hac)
             except ImportError:
                 print("    RDKit not available, skipping molecular_complexity")
+                results['partitions'][partition_name] = {'skipped': 'RDKit not importable'}
                 continue
 
         elif partition_name == 'target_variance':
@@ -186,6 +189,8 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     scaffold_var[s] = np.var(s_labels, ddof=1)
             if not scaffold_var:
                 print("    Not enough scaffolds with 2+ members, skipping")
+                results['partitions'][partition_name] = {
+                    'skipped': 'no scaffold holds 2 or more molecules'}
                 continue
             median_var = np.median(list(scaffold_var.values()))
             # A one-molecule scaffold has no label variance. It used to be
@@ -225,6 +230,8 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                          for _Z in _z.values()]))
             if not scaffold_spread:
                 print("    Not enough scaffolds with 2+ members, skipping")
+                results['partitions'][partition_name] = {
+                    'skipped': 'no scaffold holds 2 or more molecules'}
                 continue
             median_spread = np.median(list(scaffold_spread.values()))
             # One-molecule scaffolds have no spread; they sit in neither half
@@ -235,6 +242,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             mask_hard = has_var & ~mask_easy
         else:
             print(f"    Unknown partition: {partition_name}, skipping")
+            results['partitions'][partition_name] = {'skipped': 'unknown partition name'}
             continue
 
         n_easy = mask_easy.sum()
@@ -273,6 +281,8 @@ def run(data, config, output_dir, dataset_name, partitions=None):
 
             if n_unique_groups < 2:
                 print(f"    {subpop_name}: not enough groups for CV, skipping")
+                part_result[subpop_name] = {
+                    'skipped': f'{n_unique_groups} scaffold group(s), 2 needed for CV'}
                 continue
 
             # Complexity metrics
