@@ -1451,21 +1451,38 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                   if (_c is not None and np.isfinite(_c))
                                   else 1e-10)
                         _gap_too_small = not (abs(gap_by_model[_mn]) > _floor)
+                        # gap_by_model is sign-normalised: positive means the
+                        # noise cost this unit something. When the noise HELPED
+                        # (negative gap), dividing by it turns the ratio inside
+                        # out -- a repair that moved the score back toward the
+                        # clean fit, i.e. made it worse, read as positive
+                        # recovery. n07 refuses that case (its _hurt test);
+                        # n12 only tested the size of the gap. Fixed
+                        # 2026-09-28.
+                        _hurt = bool(np.isfinite(gap_by_model[_mn])
+                                     and gap_by_model[_mn] > 0)
                         if (_c is not None and _nz is not None
                                 and np.isfinite(_c) and np.isfinite(_nz)
-                                and not _gap_too_small):
+                                and not _gap_too_small and _hurt):
                             recovery = float((denoised - _nz) / (_c - _nz) * 100)
                             recovery_note = None
                         else:
                             recovery = float('nan')
-                            recovery_note = (
-                                f'not computed: the clean-to-noisy gap '
-                                f'({gap_by_model[_mn]:.6g}) is under '
-                                f'{GAP_MIN_FRAC:.0%} of the clean score '
-                                f'({_c:.6g})'
-                                if (_gap_too_small and _c is not None
-                                    and np.isfinite(_c))
-                                else 'not computed: a score was not finite')
+                            if not (_c is not None and _nz is not None
+                                    and np.isfinite(_c) and np.isfinite(_nz)):
+                                recovery_note = 'not computed: a score was not finite'
+                            elif not _hurt:
+                                recovery_note = (
+                                    f'not computed: the noise did not degrade '
+                                    f'this unit (clean {_c:.6g}, noisy '
+                                    f'{_nz:.6g}, lower_is_better='
+                                    f'{lower_is_better})')
+                            else:
+                                recovery_note = (
+                                    f'not computed: the clean-to-noisy gap '
+                                    f'({gap_by_model[_mn]:.6g}) is under '
+                                    f'{GAP_MIN_FRAC:.0%} of the clean score '
+                                    f'({_c:.6g})')
                         cond_agg[ek] = {
                             'denoised': denoised,
                             'recovery': recovery,
