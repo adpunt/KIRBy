@@ -738,6 +738,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
 
         # C4: KIRBy federated feature selection
         print("  C4: KIRBy federated FS...")
+        _c4_selections = {}
         try:
             train_reps = {r: arr[train_idx] for r, arr in combined_reps.items()}
             test_reps = {r: arr[test_idx] for r, arr in combined_reps.items()}
@@ -759,6 +760,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                         groups=pooled_groups[train_idx],
                         task_type='classification',
                         metric_fn=metric_fn, lower_is_better=lower_is_better)
+                # C9 reads this selection rather than making its own.
+                _c4_selections[str(_budget)] = silo_fis
 
                 h_test_parts = []
                 for s in range(1, K + 1):
@@ -869,17 +872,24 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                     convert_numpy(c7)
                 _entry = (results.get('c4_kirby_federated_by_budget') or {}
                           ).get(str(_budget), {})
-                _fis = None
+                # The selection C4 made at this width, so C4 and C9 differ
+                # only in how the model is fitted (pooled against one per
+                # source). This used to be a second, identical
+                # federated_feature_selection call: the costliest step of
+                # the fold, run twice. It runs here only if C4's failed.
+                _fis = _c4_selections.get(str(_budget))
                 try:
-                    _, _, _, _fis = federated_feature_selection(
-                        train_reps, y_train, train_silo_indices,
-                        K, budget=_budget,
-                        allocation_method=_alloc, importance_method=_imp,
-                        internal_evaluator=_int_eval,
-                        downstream_model=fed_to_kirby_model(fed_model),
-                        groups=pooled_groups[train_idx],
-                        task_type='classification',
-                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+                    if _fis is None:
+                        _, _, _, _fis = federated_feature_selection(
+                            train_reps, y_train, train_silo_indices,
+                            K, budget=_budget,
+                            allocation_method=_alloc, importance_method=_imp,
+                            internal_evaluator=_int_eval,
+                            downstream_model=fed_to_kirby_model(fed_model),
+                            groups=pooled_groups[train_idx],
+                            task_type='classification',
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
                 except Exception as e:
                     fed_by_budget['c9_fed_fit_selected'][str(_budget)] = {
                         'error': str(e)}
