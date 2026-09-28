@@ -595,7 +595,20 @@ def _aggregate(task_results):
     deltas = []
     pcts = []
     wins = 0
+    # Fixed 2026-09-28 (dirty local run): a task whose paired delta is NaN (no
+    # outer fold where both arms scored) used to enter np.mean, np.median and
+    # the Wilcoxon test, which turned every summary number into NaN, and it was
+    # counted as a loss in the win rate. It is now left out of every statistic
+    # below and named in 'tasks_without_delta'.
+    tasks_without_delta = [r['task'] for r in task_results
+                           if r.get('delta') is None
+                           or not np.isfinite(r['delta'])]
+    task_results = [r for r in task_results
+                    if r['task'] not in tasks_without_delta]
     total = len(task_results)
+    if tasks_without_delta:
+        print(f"  Left out of every statistic (no paired outer fold): "
+              f"{tasks_without_delta}")
 
     # Per-domain tracking
     domain_results = {}
@@ -619,8 +632,17 @@ def _aggregate(task_results):
     deltas_arr = np.array(deltas)
     pcts_arr = np.array(pcts)
 
+    if total == 0:
+        return {
+            'summary': {'n_tasks': 0,
+                        'tasks_without_delta': tasks_without_delta},
+            'wilcoxon_test': {'error': 'no task has a finite paired delta'},
+            'per_domain': {},
+        }
+
     summary = {
         'n_tasks': total,
+        'tasks_without_delta': tasks_without_delta,
         'win_rate': wins / total if total > 0 else 0,
         'wins': wins,
         'losses': total - wins,
@@ -630,8 +652,10 @@ def _aggregate(task_results):
         'mean_pct_improvement': float(np.mean(pcts_arr)),
         'median_pct_improvement': float(np.median(pcts_arr)),
         'std_pct_improvement': float(np.std(pcts_arr)),
-        'delta_basis': ('per-task delta against the best single rep scored on '
-                        'its own surviving folds'),
+        'delta_basis': ('per-task delta_mean_of_folds from nested_cv_evaluate: '
+                        'hybrid minus the single representation picked on each '
+                        "outer fold's training rows, same downstream model, "
+                        'paired per outer fold, positive = hybrid better'),
     }
 
     # Same statistics over the tasks whose single-rep side was re-scored on the
@@ -665,7 +689,8 @@ def _aggregate(task_results):
     print(f"  Median delta: {summary['median_delta']:+.4f}")
     print(f"  Mean %improvement:   {summary['mean_pct_improvement']:+.1f}%")
     print(f"  Median %improvement: {summary['median_pct_improvement']:+.1f}%")
-    print(f"  (single-rep side scored on each rep's own surviving folds)")
+    print(f"  (nested CV: both arms picked on training rows, scored on "
+          f"outer folds, paired per fold)")
     if 'n_tasks_common_folds' in summary:
         print(f"\n  Single-rep side scored on folds common to every rep:")
         print(f"    {summary['wins_common_folds']}/"
