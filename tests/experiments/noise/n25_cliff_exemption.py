@@ -635,7 +635,11 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
                   if similar_percentile is not None and off.size
                   else float(sim_threshold))
         delta = np.abs(labels[:, None] - labels[None, :])
-        pair_mask = (sim >= cutoff) & (delta > float(potency_threshold))
+        # `sim > 0`, n01.identify_cliff_pairs's guard (added there 2026-09-28):
+        # a percentile cutoff that lands on 0 would otherwise call every pair
+        # structurally similar, including rows zeroed for an unparsed SMILES.
+        pair_mask = ((sim >= cutoff) & (sim > 0)
+                     & (delta > float(potency_threshold)))
         np.fill_diagonal(pair_mask, False)
         info['sim_cutoff'] = cutoff
         info['n_cliff_pairs'] = int(pair_mask.sum()) // 2
