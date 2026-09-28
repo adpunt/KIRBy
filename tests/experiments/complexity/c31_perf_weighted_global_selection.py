@@ -908,6 +908,11 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                     arm2[imp][f"pool{p}_N{N}_B{B}"] = {
                         "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
                         "pool": p, "equal_cap_N": N, "pool_total": N * p,
+                        # N * p is the size asked for. A representation
+                        # narrower than N offers only its width, so the pool
+                        # that was ranked is this, the same field the
+                        # weighted configurations carry. Added 2026-09-28.
+                        "candidate_pool_size": float(sum(slots.values())),
                         "matched_pool_total_mult": matched.get(N),
                         "origin_counts": oc}
 
