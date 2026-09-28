@@ -577,7 +577,11 @@ def summarise_comparison(name, point, result, outer_folds, data, reps, donor_rep
             'donor_features_admitted': admitted,
             # Without the rebuild there is nothing to read admission from, so
             # say "not checked" rather than calling every point a no-op.
-            'no_op': (None if args.no_ties else
+            # Also "not checked" when no fold was rebuilt (every fold failed or
+            # had no recipe): an empty list of admitted features then says
+            # nothing about admission, and used to print as [no-op].
+            'no_op': (None if (args.no_ties
+                               or not any(t for t in ties_per_fold)) else
                       (point is not None
                        and point.get('augmentation_strategy') != 'none'
                        and not admitted)),
