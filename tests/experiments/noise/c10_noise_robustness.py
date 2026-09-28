@@ -967,7 +967,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 union = len(ref_features | noisy_features)
                 jaccard = inter / union if union > 0 else 0.0
                 noise_stability[level] = float(jaccard)
-                print(f"    level={level:.1f} vs level=0: Jaccard={jaccard:.3f} "
+                print(f"    level={level:g} vs level=0: Jaccard={jaccard:.3f} "
                       f"(shared={inter}/{len(ref_features)} ref features)")
 
             results['feature_stability']['noise_jaccard'] = noise_stability
@@ -996,7 +996,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                         rep_counts[rep_name].append(count)
                 counts_str = ", ".join(
                     f"{r}={np.mean(c):.0f}" for r, c in sorted(rep_counts.items()))
-                print(f"      level={level:.1f}: {counts_str}")
+                print(f"      level={level:g}: {counts_str}")
 
     # 2026-09-25: c10 finds no neighbours and changes no training data, so no
     # similarity setting is swept here; the checkpoint is recorded.
