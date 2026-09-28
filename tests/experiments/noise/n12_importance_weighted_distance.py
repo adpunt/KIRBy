@@ -627,7 +627,8 @@ def _mean_detection(rows):
     if not rows:
         return None
     keys = ('detection_average_precision', 'detection_precision_at_k',
-            'detection_recall_at_k', 'detection_n_corrupted', 'detection_n_training')
+            'detection_recall_at_k', 'detection_auroc',
+            'detection_n_corrupted', 'detection_n_training')
     out = {}
     for k in keys:
         vals = [float(r[k]) for r in rows if r.get(k) is not None
@@ -641,7 +642,7 @@ def _mean_detection(rows):
 def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
                     model_factories, metric_fn, is_clf=False,
                     corrupted_mask=None, noise_condition=None,
-                    eval_by_model=None):
+                    eval_by_model=None, predict_mode='predict'):
     """Run 3 estimators × 3 k values on one condition.
 
     eval_by_model: {model key: (X_train, X_val)} -- the features each entry of
@@ -698,7 +699,10 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
                     _xtr, _xva = (eval_by_model[mn] if eval_by_model is not None
                                   else (X_eval_train, X_eval_val))
                     model.fit(_xtr, y_noisy, sample_weight=weights)
-                    y_pred = model.predict(_xva)
+                    # Positive-class probability under auc, as the clean and
+                    # noisy references below are scored (predict_mode). Hard
+                    # labels under auc until 2026-09-28.
+                    y_pred = _nc._predict(model, _xva, predict_mode)
                     results[key] = float(metric_fn(y_val, y_pred))
                 except Exception as e:
                     results[key] = None
@@ -745,6 +749,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    # 'proba' under auc, 'predict' otherwise. Every fit this file scores goes
+    # through it: the clean and noisy references and every repaired fit.
+    _predict_mode = _nc.predict_mode_for(metric_name)
 
     # The whole roster, not random forest alone. Owner's decision 2026-09-12.
     # The distances and the suspicion scores do not involve a model at all; only
@@ -1131,7 +1138,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     clean_scores[_u].append(float(metric_fn(
                         y_val, _nc.cached_fit_predict(
                             dataset_name, eval_units[_u][0],
-                            unit_factories[_u], _xtr, y_train_clean, _xva))))
+                            unit_factories[_u], _xtr, y_train_clean, _xva,
+                            predict_mode=_predict_mode))))
 
             # Inject noise (training only)
             _spec = noise_spec_for(dataset_name, noise_condition, sigma,
@@ -1147,7 +1155,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 noisy_scores[_u].append(float(metric_fn(
                     y_val, _nc.cached_fit_predict(
                         dataset_name, eval_units[_u][0], unit_factories[_u],
-                        _xtr, y_noisy, _xva))))
+                        _xtr, y_noisy, _xva, predict_mode=_predict_mode))))
 
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
@@ -1284,6 +1292,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             corrupted_mask=_cmask,
                             noise_condition=noise_condition,
                             eval_by_model=eval_by_unit,
+                            predict_mode=_predict_mode,
                         )
                     _scored_here[cond_name] = cond_results
 
