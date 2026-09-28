@@ -937,7 +937,15 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         results.setdefault('hybrid_width_per_fold', []).append(
             list(hybrid_fold_widths))
         results.setdefault('hybrid_width_mean', []).append(_hw)
-        results.setdefault('pca_random_width_mean', []).append(_pw)
+        # PCA's width alone. It was stored as 'pca_random_width_mean', but since
+        # db87cea the random arm keeps the hybrid's width and only PCA is cut
+        # to the training rows minus one, so the two differ whenever the
+        # hybrid is wider than that (humanness_therapeutic, 376 training rows,
+        # at the larger budgets). n_feat_per_fold holds the same PCA widths.
+        results.setdefault('pca_width_mean', []).append(_pw)
+        results.setdefault('random_width_mean', []).append(
+            float(np.mean(random_fold_widths)) if random_fold_widths
+            else float('nan'))
         results.setdefault('random_width_per_fold', []).append(list(random_fold_widths))
         results.setdefault('hybrid_failures', []).append(hybrid_failures)
         results['pca_rank'].append(float(pca_rank))
