@@ -483,7 +483,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                               'input': input_fingerprint(data, config),
                               'noise_condition': noise_condition,
                               'methods': list(methods_to_test),
-                              'base_ranks': [list(x) for x in base_ranks]})
+                              'base_ranks': [list(x) for x in base_ranks],
+                              # Every pass's hybrid comes from a search over
+                              # these budgets, so a pass stored under another
+                              # grid is another measurement. Without this a
+                              # resumed run that changed the grid (the local
+                              # run cuts it to [100]) read the old passes back
+                              # as its own. Added 2026-09-28.
+                              'noisy_search_budgets': [
+                                  int(b) for b in NOISY_SEARCH_BUDGETS]})
 
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
