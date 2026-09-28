@@ -1392,6 +1392,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     best = get_best_for_downstream(search_asis, mname,
                                                    budget=None)
                     if not best:
+                        errors[f'{regime}|{lvl_key}|d{draw}|f{fold_i}|{mname}|'
+                               f'hybrid_asis'] = (
+                            'the search on the labels as they are holds no '
+                            'recipe for this model; its arms are absent')
                         continue
                     # Through noise_cache since 2026-09-25 (plan section
                     # 3): the same hybrid_for_fold call, stored under its
@@ -1403,6 +1407,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         metric_fn, lower_is_better, model_name=mname,
                         metric_name=metric_name, train_idx=train_idx)
                     if X_tr_h is None:
+                        errors[f'{regime}|{lvl_key}|d{draw}|f{fold_i}|{mname}|'
+                               f'hybrid_asis'] = (
+                            'the hybrid from the search on the labels as they '
+                            'are did not build (reason printed); every arm of '
+                            'this model is absent on this fold')
                         continue
                     s = StandardScaler()
                     space_asis[mname] = (s.fit_transform(X_tr_h),
@@ -1820,6 +1829,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 best_c = get_best_for_downstream(search_cleaned,
                                                                  mname, budget=None)
                                 if not best_c:
+                                    errors[f'{regime}|{lvl_key}|{base_sp}|'
+                                           f'{cleanup}|{rate}|{mname}|'
+                                           f'f{fold_i}|hybrid_cleaned'] = (
+                                        'the search on the cleaned labels '
+                                        'holds no recipe for this model; its '
+                                        'two arms are absent')
                                     continue
                                 if keep is not None:
                                     # The hybrid is built on the kept rows. Both
@@ -1836,6 +1851,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         model_factories[mname](), metric_fn,
                                         lower_is_better)
                                     if X_keep is None:
+                                        errors[f'{regime}|{lvl_key}|{base_sp}|'
+                                               f'{cleanup}|{rate}|{mname}|'
+                                               f'f{fold_i}|hybrid_cleaned'] = (
+                                            'the hybrid from the cleaned '
+                                            'search did not build (reason '
+                                            'printed); its two arms are absent')
                                         continue
                                     # Scaled on EVERY training row, as the
                                     # other three arms are (space_asis above,
@@ -1861,6 +1882,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         model_factories[mname](), metric_fn,
                                         lower_is_better)
                                     if X_tr_h is None:
+                                        errors[f'{regime}|{lvl_key}|{base_sp}|'
+                                               f'{cleanup}|{rate}|{mname}|'
+                                               f'f{fold_i}|hybrid_cleaned'] = (
+                                            'the hybrid from the cleaned '
+                                            'search did not build (reason '
+                                            'printed); its two arms are absent')
                                         continue
                                     s2 = StandardScaler()
                                     X_c = s2.fit_transform(X_tr_h)
