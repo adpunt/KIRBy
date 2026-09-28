@@ -369,6 +369,19 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                             f"rep_scores to say which. Rebuilding on all of "
                             f"them would score a different feature set under "
                             f"the winner's name.")
+                    # Same guard as build_fold_hybrid: a representation with no
+                    # score sorts last and ties break by name, so with fewer
+                    # scored representations than the recipe keeps, the rest
+                    # would be chosen alphabetically.
+                    _n_scored = sum(1 for r in train_reps
+                                    if r in optimal_rep_scores)
+                    if _n_scored < int(optimal_rep_count):
+                        raise ValueError(
+                            f"c08: the recipe keeps {optimal_rep_count} "
+                            f"representations and only {_n_scored} of the "
+                            f"{len(train_reps)} given carry a score in "
+                            f"rep_scores. Missing: "
+                            f"{sorted(r for r in train_reps if r not in optimal_rep_scores)}.")
                     _ranked = sorted(
                         train_reps,
                         key=lambda r: (-optimal_rep_scores.get(r, float('-inf')), r))
