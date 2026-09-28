@@ -287,7 +287,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, _ = get_domain_metric(data)
     task_type = data['task_type']
-    _RF = RandomForestClassifier if task_type == 'classification' else RandomForestRegressor
+    # The roster's rf (find_best_hybrid.DEFAULT_MODELS: 100 trees,
+    # max_features='sqrt', random_state=42), the model the search below is
+    # asked for and the one the top-2 rows and the two deltas are scored with.
+    # Until 2026-09-28 every arm here fitted sklearn's default forest instead,
+    # which for regression tries every feature at every split: the five arm
+    # scores came from a different model than the numbers written beside them
+    # under the name rf. Classification was unaffected (sklearn's classifier
+    # already defaults to sqrt). Threads from KIRBY_RF_JOBS as in c15/c16/c22;
+    # a seeded forest gives the same trees at any thread count.
+    from kirby.find_best_hybrid import get_model as _get_model
+    _rf_jobs = int(os.environ.get('KIRBY_RF_JOBS') or -1)
+
+    def _RF():
+        m = _get_model('rf', task_type)
+        m.set_params(n_jobs=_rf_jobs)
+        return m
 
     # Budget source priority: explicit kwargs override > config['budgets']
     # (set by get_config from FULL_BUDGETS, or --budgets) > legacy [50, 100]
@@ -611,7 +626,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     scaler = StandardScaler()
                     X_tr_s = scaler.fit_transform(X_tr)
                     X_va_s = scaler.transform(X_va)
-                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf = _RF()
                     rf.fit(X_tr_s, y_train)
                     fold_scores.setdefault(cond_name, []).append(
                         _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
@@ -624,7 +639,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_tr)
                 X_va_s = scaler.transform(X_va)
-                rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                rf = _RF()
                 rf.fit(X_tr_s, y_train)
                 fold_scores.setdefault('uniform_all', []).append(
                     _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
@@ -661,7 +676,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             augmentations_train=None,
                             augmentations_val=None,
                             groups=_g_tr,
-                            model=_RF(n_estimators=100, random_state=42, n_jobs=-1),
+                            model=_RF(),
                             metric_fn=metric_fn,
                             precomputed_alloc_scores=_alloc)
                         _rank_row['natural_reps_kept'] = (
@@ -670,7 +685,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         scaler = StandardScaler()
                         X_tr_s = scaler.fit_transform(X_tr_h)
                         X_va_s = scaler.transform(X_va_h)
-                        rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                        rf = _RF()
                         rf.fit(X_tr_s, y_train)
                         _arm_widths.setdefault('natural', []).append(
                             {'built': int(X_tr_h.shape[1]),
