@@ -94,7 +94,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # Mutual information (use PCA-reduced for stability)
         n_comp = min(50, X_cost.shape[1], X_cost.shape[0] - 1)
-        X_reduced = PCA(n_components=n_comp).fit_transform(StandardScaler().fit_transform(X_cost))
+        # svd_solver='full': the exact components. The default picks sklearn's
+        # randomized solver at this size with no seed, so the MI changed from
+        # run to run. Measured on caco2, 2,000 rows, four runs: ecfp4 0.90 to
+        # 1.05 nats (exact 0.948), avalon 1.28 to 1.43 (exact 1.403).
+        X_reduced = PCA(n_components=n_comp, svd_solver='full').fit_transform(
+            StandardScaler().fit_transform(X_cost))
         try:
             mi = estimate_mutual_information_knn(X_reduced, labels_cost, k=5)
             rep_result['mutual_info'] = float(mi)
