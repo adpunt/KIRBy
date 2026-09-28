@@ -551,8 +551,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # exponentiating, so every residual quantity stage0_diagnostics returns is
     # in units of "one label standard deviation", NOT pKi. The Kramer et al.
     # 2012 assay floor of 0.54 is in pKi. The two only coincide when a dataset's
-    # label standard deviation is 1.0. On herg_ki it is about 1.2, so a returned
-    # 0.45 is 0.54 pKi — exactly at the floor, while reading as well under it.
+    # label standard deviation is 1.0. On herg_ki it is 0.915 (1,412 molecules,
+    # measured 2026-09-28), so a returned 0.59 is 0.54 pKi — exactly at the
+    # floor, while reading as above it.
     # _rescale_stage0 multiplies the residual spread and the two bias terms by
     # that standard deviation and records which scale each number is on.
     reps = data.get('reps', {})
