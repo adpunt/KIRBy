@@ -809,6 +809,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         available_by_modality['expression'] = expr_avail
 
     active_modalities = sorted(available_by_modality.keys())
+    # A loaded representation named in no modality group is never scored.
+    # Nineteen loader names are in that position (wsi_virchow2, wsi_conch,
+    # cptac_proteomics, methyl_cpgpt, ...) and were dropped without a word.
+    # Named here and written to the results; no score changes (2026-09-28).
+    _assigned = {r for v in available_by_modality.values() for r in v}
+    unassigned_reps = sorted(r for r in reps if r not in _assigned)
+    if unassigned_reps:
+        print(f"  NOTE: {len(unassigned_reps)} loaded representation(s) belong to "
+              f"no modality group and are not scored: {', '.join(unassigned_reps)}")
     print(f"\n  Active modalities ({len(active_modalities)}): {', '.join(active_modalities)}")
     for mod in active_modalities:
         print(f"    {mod}: {available_by_modality[mod]}")
@@ -1258,6 +1267,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_samples': int(len(labels)),
         'active_modalities': active_modalities,
         'available_reps_per_modality': available_by_modality,
+        'unassigned_reps': unassigned_reps,
         'individual': {
             'best_rep_per_modality': best_rep_per_modality,
             'best_score_per_modality': {k: float(v)
