@@ -307,7 +307,13 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             if rn.startswith('_') or rn not in shared_rep_names:
                 continue
             for mn, sc in (mscores or {}).items():
-                if sc is None or np.isnan(sc):
+                # A baselines entry also carries non-score keys ('dimension',
+                # 'dimension_scored', and '_secondary', a dict when the search
+                # ran secondary metrics). np.isnan on that dict raises
+                # TypeError and ends the run; only a finite number is a score.
+                if (mn in ('dimension', 'dimension_scored', '_secondary')
+                        or not isinstance(sc, (int, float, np.floating))
+                        or not np.isfinite(sc)):
                     continue
                 cur = picks.get(mn)
                 if cur is None or cmp(sc, cur[1]) or (sc == cur[1] and rn < cur[0]):
