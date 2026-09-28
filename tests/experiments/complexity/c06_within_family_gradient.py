@@ -169,6 +169,29 @@ def _apply_model_njobs(est, fam_name, var_name):
     return est
 
 
+def _keep_variant_k(est):
+    """Stamp a kNN variant so the search fits it at its own n_neighbors.
+
+    FIXED 2026-09-28 (dirty local). find_best_hybrid calls _set_knn_k on every
+    downstream model just before the fit (find_best_hybrid.py:5244). Unstamped,
+    that sets n_neighbors = min(5, sqrt(n_train)), which is 5 on any fold of 25
+    rows or more. So k=20, k=10, k=5 and k=1 were all fitted at k=5, and the
+    kNN family's four capacity settings were one model. The stamp is the
+    library's own way to keep an explicit k; it only clamps k to n_train - 1.
+    deepcopy carries it (find_best_hybrid.py:4450-4456). No-op on other models.
+    """
+    from kirby.find_best_hybrid import KNN_TUNED_K_ATTR
+    if hasattr(est, 'n_neighbors'):
+        setattr(est, KNN_TUNED_K_ATTR, True)
+    return est
+
+
+# The search cache is keyed by file name and model NAME, not by the estimator's
+# settings, so a kNN search stored before the fix above would be read back with
+# its k=5 scores. The kNN searches are filed under a new suffix for that reason.
+_COND_SUFFIX_EXTRA = {'kNN': '_ownk'}
+
+
 def _evaluator_label(fam_name, evaluator):
     """DECIDED 2026-09-12: file the matched evaluator under its resolved name.
 
@@ -458,8 +481,8 @@ def run(data, config, output_dir, dataset_name, families=None):
                     base_reps=reps,
                     labels=labels,
                     groups=groups,
-                    models={model_key: _apply_model_njobs(
-                        var_factory(), fam_name, var_name)},
+                    models={model_key: _keep_variant_k(_apply_model_njobs(
+                        var_factory(), fam_name, var_name))},
                     budgets=eff_budgets,
                     task_type='regression',
                     metric=metric_name,
@@ -470,7 +493,8 @@ def run(data, config, output_dir, dataset_name, families=None):
                     # _DATASET_STRATEGY_SKIPS lookup still matches (the
                     # mangled dataset_name would never hit those entries).
                     dataset_name=dataset_name,
-                    condition_suffix=f"c06_{fam_name}_{var_name}",
+                    condition_suffix=(f"c06_{fam_name}_{var_name}"
+                                      f"{_COND_SUFFIX_EXTRA.get(fam_name, '')}"),
                     tier='c06_variant',
                     augmentations=augs,
                     augmentation_strategy=aug_strategy,
