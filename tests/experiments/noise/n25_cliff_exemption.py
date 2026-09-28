@@ -1017,8 +1017,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # is injected there, so the cleanup, the cliff exemption and the random
     # exemption are all applied to the labels as recorded, and each is scored
     # against the fit on those same labels.
+    # ⛔ ON A CLASSIFICATION SET THE LEVEL IS A FLIP RATE (noise_spec_for), and
+    # reference_noise_level's 0.5 flips half the labels, which makes the label
+    # independent of the molecule (dataset_policy.CLASSIFICATION_NOISE_LEVELS).
+    # Fixed 2026-09-28: the classification default is n07's flip rate, 0.1.
+    _default_level = (0.1 if is_clf
+                      else reference_noise_level(dataset_name))
     levels = [float(x) for x in (kwargs.get('levels')
-                                 or [0.0, reference_noise_level(dataset_name)])]
+                                 or [0.0, _default_level])]
     CLEANUPS = cleanups_for(is_clf, kwargs.get('cleanups'))
     # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
     # caller). None means: rank them from the stored search, below.
