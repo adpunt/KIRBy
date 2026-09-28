@@ -769,8 +769,19 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Pooling: {available_binding} (z-score normalized)")
         try:
             # Z-score normalize each silo's labels before pooling
+            # The representations BOTH binding silos have. This used to be
+            # shared_reps, the three-way intersection that also demands the
+            # developability silo's representations, which this condition
+            # never touches. With the DATASET_REPS 'general' lists of
+            # 2026-09-28 that three-way set is empty while ddg_combined and
+            # abagym_EGFR share mutation_features and esm2_concat, so the
+            # pool was skipped for a silo that is not in it.
+            c5_reps = sorted(set.intersection(
+                *[set(silo_data[s]['reps']) for s in available_binding]))
+            print(f"  Representations both binding silos have "
+                  f"({len(c5_reps)}): {', '.join(c5_reps)}")
             pool_labels = []
-            pool_reps = {r: [] for r in shared_reps}
+            pool_reps = {r: [] for r in c5_reps}
             pool_source = []
 
             for sname in available_binding:
@@ -781,13 +792,13 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                        else np.zeros_like(y_tr))
                 pool_labels.append(y_z)
                 pool_source.extend([sname] * len(tr))
-                for r in shared_reps:
+                for r in c5_reps:
                     if r in sd['reps']:
                         pool_reps[r].append(sd['reps'][r][tr])
 
             pool_labels = np.concatenate(pool_labels)
             pool_valid_reps = {}
-            for r in shared_reps:
+            for r in c5_reps:
                 parts = pool_reps[r]
                 if len(parts) == len(available_binding):
                     pool_valid_reps[r] = np.vstack(parts)
