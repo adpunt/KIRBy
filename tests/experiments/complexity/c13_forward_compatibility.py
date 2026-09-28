@@ -1562,6 +1562,14 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         def _interp(delta, pos, neg):
             if np.isnan(delta):
                 return 'insufficient data'
+            # Exactly zero means the two conditions scored the same on every
+            # paired fold: the same hybrid was built twice. It happens by
+            # construction when rep_count cuts the subject (the weakest of a
+            # 6-representation pool at rep_count 5) or when the Gaussian block
+            # gets no features. Calling that "selection noise" would read as a
+            # finding.
+            if delta == 0:
+                return 'no difference: both conditions scored the same on every fold'
             return pos if delta > 0 else neg
 
         rep_result['deltas'] = {
