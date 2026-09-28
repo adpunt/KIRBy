@@ -1276,11 +1276,18 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     model=model_factories[downstream_models[0]](),
                     metric_fn=metric_fn,
                     lower_is_better=lower_is_better,
-                    fold_idx=fold_idx, n_folds=n_folds)
+                    # DIRTY-LOCAL 2026-09-28. fold_idx counts from 1 in this
+                    # loop (_passes above), but the recipe's
+                    # allocation_per_fold counts from 0, as cv_split's
+                    # enumerate does in the search. Passing fold_idx gave
+                    # split 0 the search's fold-1 list, split 1 the fold-2
+                    # list, and split 2 no list at all (so the whole-dataset
+                    # ranking came back). The rows below already subtract 1.
+                    fold_idx=fold_idx - 1, n_folds=n_folds)
                 _hfr = fold_shared_by_space[_r['space']]['hybrid_fold_reps']
                 results.setdefault('hybrid_fold_reps', {}).setdefault(
-                    _r['space'], {})[str(fold_idx)] = _hfr
-                print(f"    fold {fold_idx} {_r['space']}: built on "
+                    _r['space'], {})[str(fold_idx - 1)] = _hfr
+                print(f"    fold {fold_idx - 1} (counted from 0) {_r['space']}: built on "
                       f"{_hfr['reps'] if _hfr['reps'] is not None else 'the pool'}"
                       f" ({_hfr['source']})")
                 results['n_hybrid_builds_by_space'][_r['space']] = (
