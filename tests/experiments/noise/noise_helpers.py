@@ -610,7 +610,7 @@ def inject_shift_train_labels(y_all, *, train_idx, condition, delta_sd, seed):
     y_all      the FULL clean label column
     train_idx  this fold's training rows
     condition  a key of SHIFT_ONLY_CONDITIONS; it sets the share moved
-    delta_sd   the shift, in SDs of the full clean label column
+    delta_sd   the shift, in SDs of this fold's clean TRAINING labels
     seed       the draw; the same seed picks the same molecules in every arm
 
     Returns (y_noisy_train, moved_mask_train, provenance), the same shape as
