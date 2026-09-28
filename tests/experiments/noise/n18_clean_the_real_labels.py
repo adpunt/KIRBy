@@ -127,6 +127,9 @@ from kirby.utils.noise_estimation import ESTIMATOR_REGISTRY
 from experiments.noise import noise_cache as nc
 from experiments.noise import _sim_axis_n15_n22 as sx
 from experiments.noise.similarity_space import SWEPT_KS
+# DIRTY-LOCAL 2026-09-28: the representations the stored search built each
+# outer fold's hybrid on (n02, commit 736ec93).
+from experiments.noise.n02_sample_weighting import search_fold_reps
 
 # The name the rows file, the checkpoint and the result file are filed under.
 EXP_FULL_NAME = 'n18_clean_the_real_labels'
@@ -995,6 +998,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         for k in shuffle_seeds}
                     for d in detectors} for s in spaces}
     hybrid_failures = []
+    # {fold: {'<space>:<models>': {'reps', 'source'}}}: which representations
+    # each fold's hybrid was built on, and where that list came from.
+    hybrid_fold_reps = {}
 
     # ── The main measurement, the similarity axis and the checkpoint ──
     # Added 2026-09-25 (plan sections 1-3).
@@ -1051,6 +1057,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         acc_ctrl = ck.state['acc_ctrl']
         hybrid_failures = ck.state['hybrid_failures']
         sim_unavailable = ck.state.get('sim_unavailable', {})
+        hybrid_fold_reps = ck.state.get('hybrid_fold_reps', {})
 
     def _cache_name(mname):
         # The name _evaluate_fold files a cached fit under, or None to fit it
@@ -1282,13 +1289,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             _cells = []
             for _bp_m, _mnames, _shareable in _groups:
+                # DIRTY-LOCAL 2026-09-28. A recipe with rep_count below the
+                # pool size keeps, in the search, the representations THIS
+                # fold's training rows rank highest. Handed the whole pool and
+                # no per-fold scores, build_fold_hybrid ranks by
+                # Blueprint.rep_scores instead (_shared.py:5277-5300): one score
+                # per representation over every molecule, this fold's held-out
+                # ones included. So the held-out labels chose which
+                # representations the hybrid was built from. The fold's own
+                # list from the recipe's allocation_per_fold is passed, as n02
+                # (736ec93) and n37 (7d9f64f) do; with no such record the old
+                # behaviour stands and the source written below says so. The
+                # similarity sweep's own hybrid spaces (sx.build_spaces) are
+                # not changed by this.
+                _keep, _keep_src = search_fold_reps(_bp_m, fold_i, n_folds,
+                                                    list(_tr_reps))
+                _tr_pool = (_tr_reps if _keep is None else
+                            {k: v for k, v in _tr_reps.items() if k in _keep})
+                _va_pool = (_va_reps if _keep is None else
+                            {k: v for k, v in _va_reps.items() if k in _keep})
+                hybrid_fold_reps.setdefault(str(int(fold_i)), {})[
+                    f"{_sp}:{'+'.join(_mnames)}"] = {
+                        'reps': sorted(_keep) if _keep is not None else None,
+                        'source': _keep_src}
+                print(f"    fold {fold_i} {_sp} ({'+'.join(_mnames)}): built "
+                      f"on {sorted(_keep) if _keep is not None else 'the pool'}"
+                      f" ({_keep_src})")
                 # The model instance is passed only when the build fits one.
                 # Through noise_cache since 2026-09-25 (plan section 3): the
                 # same hybrid_for_fold call, stored under its inputs, so the
                 # similarity sweep's 'hybrid' / 'hybrid_similarity' spaces for
                 # this model read this very build back instead of repeating it.
                 X_tr_h, X_va_h = nc.cached_hybrid_for_fold(
-                    dataset_name, _tr_reps, _va_reps, y_train, _bp_m, g_tr,
+                    dataset_name, _tr_pool, _va_pool, y_train, _bp_m, g_tr,
                     None if _shareable else model_factories[_mnames[0]](),
                     metric_fn, lower_is_better,
                     model_name=None if _shareable else _mnames[0],
@@ -1465,9 +1498,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         ck.save(fold_i, {'acc': acc, 'folds_ran': folds_ran,
                          'acc_ctrl': acc_ctrl,
                          'hybrid_failures': hybrid_failures,
-                         'sim_unavailable': sim_unavailable})
+                         'sim_unavailable': sim_unavailable,
+                         'hybrid_fold_reps': hybrid_fold_reps})
         print(f"    fold {fold_i}: [{time.time() - t0:.0f}s]")
     results['rows'] = rows.summary()
+    results['hybrid_fold_reps'] = hybrid_fold_reps
     if sim_unavailable:
         results['similarity_settings_unavailable'] = sim_unavailable
 
