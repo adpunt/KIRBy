@@ -200,7 +200,11 @@ def _cliff_mask_from_similarity(sim_matrix, labels, sim_threshold,
     else:
         sim_cutoff = float(sim_threshold)
     delta = np.abs(labels[:, None] - labels[None, :])
-    adj = (sim_matrix >= sim_cutoff) & (delta > potency_threshold)
+    # A pair with similarity 0 is never similar, as in n01 since 02847b1. A
+    # percentile cutoff that lands on 0 made `>= 0` true for every pair, and
+    # n01 gives a molecule RDKit refuses similarity 0 with everything.
+    adj = ((sim_matrix >= sim_cutoff) & (sim_matrix > 0)
+           & (delta > potency_threshold))
     np.fill_diagonal(adj, False)
     return adj, sim_cutoff
 
