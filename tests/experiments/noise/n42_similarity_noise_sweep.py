@@ -1075,6 +1075,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                tag='units', fingerprint=fingerprint)
     errors = _Errors()
     unavailable = {}
+    # prox_smooth reads forest-proximity neighbours and nothing else here
+    # (_fam_n07 skips it in every other space). Under a settings list without
+    # forest_proximity, KIRBY_SIMILARITY_SETTINGS=model_input included, it
+    # writes no row at all; say so rather than leave it silently absent.
+    if 'n07' in families and not any(s.space == ss.FOREST_SPACE
+                                     for s in settings):
+        unavailable['n07/prox_smooth'] = (
+            'runs only under the forest_proximity similarity setting, which '
+            'is not among the settings this run sweeps')
     counts = {}
     provenance = {}
     n_units_done = n_units_resumed = 0
