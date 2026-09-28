@@ -573,8 +573,22 @@ def _fingerprint(best):
     bp = best.get('blueprint')
     if bp is None:
         return None
+    # Which representations the rebuild will actually use. Under a rep_count
+    # below the pool, build_fold_hybrid keeps the top rep_count by
+    # bp.rep_scores, ties by name (_shared.py build_fold_hybrid). Those scores
+    # come from the search's own baselines, so two searches on two label
+    # columns can keep different ones while `reps` and `rep_count` read the
+    # same. Without this the probe called that "the same recipe".
+    reps = list(getattr(bp, 'reps', []) or [])
+    rc = getattr(bp, 'rep_count', None)
+    rs = getattr(bp, 'rep_scores', None) or {}
+    reps_used = sorted(reps)
+    if rc is not None and int(rc) < len(reps) and rs:
+        reps_used = sorted(sorted(
+            reps, key=lambda r: (-rs.get(r, float('-inf')), r))[:int(rc)])
     return {
-        'reps': sorted(getattr(bp, 'reps', []) or []),
+        'reps_used': reps_used,
+        'reps': sorted(reps),
         'allocation_method': getattr(bp, 'allocation_method', None),
         'importance_method': getattr(bp, 'importance_method', None),
         'budget': getattr(bp, 'budget', None),
