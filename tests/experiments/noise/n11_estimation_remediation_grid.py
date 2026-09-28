@@ -1863,6 +1863,10 @@ def _compute_summary(results):
                     if not np.isnan(r):
                         _p = _parse_remediation(remed_key)
                         all_configs.append({
+                            # The evaluation unit: one model on one of its
+                            # two single representations. Every mean below
+                            # stays inside one unit and one space.
+                            'unit': _p['model'],
                             'space': space_name,
                             'estimator': est_key,
                             'method': _p['method'],
@@ -1899,25 +1903,41 @@ def _compute_summary(results):
         # number. n07 measured that moving a label further helps and n18
         # measured the opposite on real labels; this is the field that answers
         # it here.
+        # 2026-09-28: kept apart by evaluation unit (model x its single
+        # representation) and by detection space (a representation or a
+        # hybrid). Until today this mean ran over every model, both of each
+        # model's representations and every detection space at once, which
+        # is a mean across models and across representations.
+        # {unit: {space: {family: {setting: [recovery, ...]}}}}; the mean is
+        # over estimators and rules inside one family only.
         setting_recoveries = {}
         for c in all_configs:
-            setting_recoveries.setdefault(c['correction'], {}).setdefault(
-                str(c['setting']), []).append(c['recovery'])
+            (setting_recoveries.setdefault(c['unit'], {})
+             .setdefault(c['space'], {})
+             .setdefault(c['correction'], {})
+             .setdefault(str(c['setting']), []).append(c['recovery']))
         setting_effect = {
-            fam: {
-                'unit': _CORRECTION_UNITS.get(fam, 'the value swept'),
-                'by_setting': {
-                    a: {
-                        'mean_recovery': float(np.mean(rs)),
-                        'n_cells': len(rs),
-                        'n_cells_positive': int(sum(1 for r in rs if r > 0)),
-                        'pct_positive': float(
-                            sum(1 for r in rs if r > 0) / len(rs) * 100),
+            unit: {
+                sp: {
+                    fam: {
+                        'unit': _CORRECTION_UNITS.get(fam, 'the value swept'),
+                        'by_setting': {
+                            a: {
+                                'mean_recovery': float(np.mean(rs)),
+                                'n_cells': len(rs),
+                                'n_cells_positive': int(sum(1 for r in rs if r > 0)),
+                                'pct_positive': float(
+                                    sum(1 for r in rs if r > 0) / len(rs) * 100),
+                            }
+                            for a, rs in sorted(by_a.items(),
+                                                key=lambda kv: float(kv[0]))
+                        },
                     }
-                    for a, rs in sorted(by_a.items(), key=lambda kv: float(kv[0]))
-                },
+                    for fam, by_a in by_fam.items()
+                }
+                for sp, by_fam in by_sp.items()
             }
-            for fam, by_a in setting_recoveries.items()
+            for unit, by_sp in setting_recoveries.items()
         }
 
         # Per-space recovery (single representations vs hybrid). This is the hybrid-vs-base
@@ -1934,18 +1954,22 @@ def _compute_summary(results):
         # recipes were ranked against clean activity labels, so the caveat above
         # covers both. Every space's recovery divides by the same clean-minus-
         # noisy gap, so the rows are comparable with each other.
+        # 2026-09-28: one table per evaluation unit, {unit: {space: ...}}, for
+        # the reason given at setting_effect.
         space_recoveries = {}
         for c in all_configs:
-            s = c['space']
-            if s not in space_recoveries:
-                space_recoveries[s] = []
-            space_recoveries[s].append(c['recovery'])
+            (space_recoveries.setdefault(c['unit'], {})
+             .setdefault(c['space'], []).append(c['recovery']))
         space_effect_oracle_biased = {
-            s: {
-                'mean_recovery': float(np.mean(rs)),
-                'pct_positive': float(sum(1 for r in rs if r > 0) / len(rs) * 100),
+            unit: {
+                s: {
+                    'mean_recovery': float(np.mean(rs)),
+                    'n_cells': len(rs),
+                    'pct_positive': float(sum(1 for r in rs if r > 0) / len(rs) * 100),
+                }
+                for s, rs in by_s.items()
             }
-            for s, rs in space_recoveries.items()
+            for unit, by_s in space_recoveries.items()
         }
 
         n_positive = sum(1 for c in all_configs if c['recovery'] > 0)
