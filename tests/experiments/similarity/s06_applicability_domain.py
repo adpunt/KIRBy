@@ -1147,7 +1147,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     tree_preds_cal = np.array([t.predict(X_cal) for t in rf.estimators_])
                     cal_std = tree_preds_cal.std(axis=0) + 1e-10
                     conformity = np.abs(y_cal - y_pred_cal) / cal_std
-                    q = np.quantile(conformity, 1 - alpha)
+                    # Split conformal's quantile is the ceil((n+1)(1-alpha))-th
+                    # smallest calibration score, not the interpolated
+                    # (1-alpha) quantile np.quantile gives by default. The
+                    # interpolated one sits below it, so every interval here
+                    # came out slightly narrower than the method's guarantee
+                    # (Lei et al. 2018; Papadopoulos 2008 for the normalised
+                    # score). Fixed 2026-09-28.
+                    _n_cal = len(conformity)
+                    _level = min(1.0, np.ceil((_n_cal + 1) * (1 - alpha)) / _n_cal)
+                    q = np.quantile(conformity, _level, method='higher')
 
                     # Val: predict + interval
                     y_pred_va = rf.predict(X_va_s)
