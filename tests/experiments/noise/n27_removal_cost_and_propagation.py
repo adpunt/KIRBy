@@ -629,6 +629,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 # construction, so it has no random twin.
                                 _ref = ((ref.get(space) or {}).get(mname)
                                         or {}).get(fkey) or {}
+                                # No row without both scores: a failed
+                                # reference fit is already in _errors, and a
+                                # NaN gain would read as a comparison made.
+                                if _ref.get('score') is None:
+                                    continue
                                 rows.add(method='removal_cost',
                                          method_setting=(f'share={share:g}|'
                                                          f'draw=r{rep_i}'),
@@ -672,6 +677,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     'moved_variance': moved_var}
                                 _ref = ((ref.get(space) or {}).get(mname)
                                         or {}).get(fkey) or {}
+                                if _ref.get('score') is None:
+                                    continue
                                 rows.add(method='move_toward_oof',
                                          method_setting=f'alpha={alpha:g}',
                                          similarity_setting=NO_NEIGHBOURS,
@@ -698,8 +705,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     pred, err = _fit_predict(
                                         model_factories[mname], X_tr_s,
                                         tw['y'], X_va_s, metric_name)
+                                    if pred is None:
+                                        # The fit failed: say why, write no
+                                        # row (it used to be a NaN row with
+                                        # the reason thrown away).
+                                        errors[f'{space}|a{akey}|{cname}|'
+                                               f'{mname}|{fkey}'] = err
+                                        continue
                                     _ref = ((ref.get(space) or {}).get(mname)
                                             or {}).get(fkey) or {}
+                                    if _ref.get('score') is None:
+                                        continue
                                     rows.add(
                                         method='move_toward_oof',
                                         method_setting=(f'alpha={alpha:g}|'
@@ -709,9 +725,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         noise_condition='none', level=None,
                                         draw=0, fold=fold_i,
                                         score_D=_ref.get('score'),
-                                        score_Dprime=(None if pred is None else
-                                                      _score(pred, y_va,
-                                                             metric_fn)[0]),
+                                        score_Dprime=_score(pred, y_va,
+                                                            metric_fn)[0],
                                         score_clean=_ref.get('score'))
 
         # ── injected ──
