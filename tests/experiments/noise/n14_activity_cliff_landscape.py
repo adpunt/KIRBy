@@ -84,6 +84,14 @@ from kirby.utils.noisy_labels import from_linear, stage0_diagnostics
 # unlikely to be a noise artefact.
 AC_POTENCY_THRESHOLD = 2.0
 
+# Added to the threshold in every "gap > threshold" test, so a gap that is
+# exactly 2 in the labels' decimals is never a cliff. Labels such as logd's
+# are given to one decimal, and in binary 3.1 - 1.1 comes out a hair above
+# 2.0 while 3.6 - 1.6 does not. Until 2026-09-28 that rounding decided the
+# pair: on logd 16 of the 1,285 similar pairs whose gap is exactly 2.0 were
+# counted as cliffs (7,336 against 7,320) and the other 1,269 were not.
+GAP_TOLERANCE = 1e-9
+
 # Structural-similarity cutoff for the ECFP4-Tanimoto reference (Bajorath 0.55).
 ECFP4_SIM_THRESHOLD = 0.55
 
@@ -175,7 +183,7 @@ def _cliff_mask_from_pairs(n, pair_iter, potency_threshold):
         if i < 0 or j < 0 or i >= n or j >= n:
             continue
         n_considered += 1
-        if abs(float(delta)) > potency_threshold:
+        if abs(float(delta)) > potency_threshold + GAP_TOLERANCE:
             adj[i, j] = True
             adj[j, i] = True
     np.fill_diagonal(adj, False)
@@ -204,7 +212,7 @@ def _cliff_mask_from_similarity(sim_matrix, labels, sim_threshold,
     # percentile cutoff that lands on 0 made `>= 0` true for every pair, and
     # n01 gives a molecule RDKit refuses similarity 0 with everything.
     adj = ((sim_matrix >= sim_cutoff) & (sim_matrix > 0)
-           & (delta > potency_threshold))
+           & (delta > potency_threshold + GAP_TOLERANCE))
     np.fill_diagonal(adj, False)
     return adj, sim_cutoff
 
@@ -454,6 +462,7 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
                           dataset_name, tag='geometry', fingerprint={
                               'input': input_fingerprint(data, config),
                               'potency': AC_POTENCY_THRESHOLD,
+                              'gap_tolerance': GAP_TOLERANCE,
                               'base': base,
                               **({'same_molecule_excluded': True}
                                  if same is not None else {})})
@@ -472,7 +481,8 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
                 adj = np.zeros((n, n), dtype=bool)
                 rows = np.repeat(np.arange(n), idx.shape[1])
                 cols = idx.ravel()
-                gap = np.abs(labels[rows] - labels[cols]) > AC_POTENCY_THRESHOLD
+                gap = (np.abs(labels[rows] - labels[cols])
+                       > AC_POTENCY_THRESHOLD + GAP_TOLERANCE)
                 adj[rows[gap], cols[gap]] = True
                 adj |= adj.T
                 np.fill_diagonal(adj, False)
