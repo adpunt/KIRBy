@@ -1230,6 +1230,10 @@ def main():
         kw['ridge_alpha'] = args.ridge_alpha
     if args.n_bootstrap is not None:
         kw['n_bootstrap'] = args.n_bootstrap
+    if args.tag:
+        # run() reads kwargs['tag'] for the rows file and the checkpoint; it
+        # was never passed, so both came out untagged beside a tagged result.
+        kw['tag'] = args.tag
     res = run(data, config, args.output, args.dataset, **kw)
     save_experiment_results(res, args.output, 'n29_document_bias',
                             args.dataset, filename_suffix=args.tag)
