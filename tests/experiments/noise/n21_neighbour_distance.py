@@ -1825,6 +1825,14 @@ def _level_block(specs, models, detectors, k_values, seeds, clean, noisy,
             'repair': repair,
             'recovery_percent_of_gap_mean': _mean(
                 [v['recovery_percent_of_gap'] for v in repair.values()]),
+            # DIRTY-LOCAL 2026-09-28: the mean above pools the downstream
+            # models, which the author's rule forbids reading. This is the
+            # same figure per model, over the detectors and k values only,
+            # and it is what the printed summary shows.
+            'recovery_percent_of_gap_by_model': {
+                m: _mean([v['recovery_percent_of_gap']
+                          for v in repair.values() if v['model'] == m])
+                for m in models},
             'detection_average_precision_per_pass': dict(ap),
             'repair_score_per_pass': dict(rs),
         }
@@ -1962,6 +1970,10 @@ def _summarise(results, specs, metrics, detectors, k_values,
             'recovery_percent_of_gap_by_space': {
                 s: block['per_space'][s]['recovery_percent_of_gap_mean']
                 for s in specs if s in block['per_space']},
+            'recovery_percent_of_gap_by_space_and_model': {
+                s: block['per_space'][s].get(
+                    'recovery_percent_of_gap_by_model', {})
+                for s in specs if s in block['per_space']},
             'beats_plain': beats_plain,
             'weighting_convention': convention,
         }
@@ -1985,9 +1997,11 @@ def _print_summary(results):
               f"fold, on average; a random ranking scores ap "
               f"{block.get('detection_average_precision_of_a_random_ranking', float('nan')):.4f}")
         for space, ap in row['average_precision_by_space'].items():
-            rec = row['recovery_percent_of_gap_by_space'].get(space,
-                                                             float('nan'))
-            print(f"    {space:44s} ap {ap:.4f}   recovery {rec:+7.1f}%")
+            # One recovery per downstream model, never their mean.
+            rec_m = row.get('recovery_percent_of_gap_by_space_and_model',
+                            {}).get(space, {})
+            print(f"    {space:44s} ap {ap:.4f}   recovery "
+                  + ', '.join(f"{m} {v:+.1f}%" for m, v in rec_m.items()))
         print("    against the plain distance, paired per (fold, draw, "
               "detector, k):")
         for name, cmp_row in row['beats_plain'].items():
