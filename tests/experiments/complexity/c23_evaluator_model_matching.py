@@ -388,8 +388,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Condition D: NN size mismatch ──
     print(f"\n  NN size mismatch pairs:")
+    # A pair whose downstream model is not in this run is skipped. It used to
+    # be skipped in silence while conditions_run still listed 'D', so a result
+    # file with no D row read as "D ran and produced nothing". Each skipped
+    # pair is now printed and written to the result.
+    nn_pairs_skipped = []
     for downstream, evaluator in (NN_PAIRS if 'D' in conditions else []):
         if downstream not in available_models:
+            print(f"    {downstream} -> eval={evaluator}: skipped, {downstream} "
+                  f"is not a downstream model in this run "
+                  f"({list(available_models.keys())})")
+            nn_pairs_skipped.append({
+                'downstream': downstream, 'evaluator': evaluator,
+                'reason': 'downstream model not in this run'})
             continue
         model_factory = available_models[downstream]
         print(f"    {downstream} -> eval={evaluator}...", end=' ', flush=True)
@@ -546,6 +557,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # _c23_budgets for what each omission costs.
         'conditions_run': sorted(conditions),
         'conditions_shipped': ['A', 'B', 'C', 'D', 'E'],
+        # D pairs asked for but not run, because their downstream model is not
+        # in this run. Empty when every pair ran or D was not asked for.
+        'nn_pairs_skipped': nn_pairs_skipped,
         # The list _c23_budgets was handed, i.e. before its own cut. On a
         # cluster run that IS the shipped list; locally _shared has already
         # replaced it with KIRBY_LOCAL_BUDGETS.
