@@ -442,10 +442,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'detection': {}, 'fold_records': {}, 'method_records': {},
     }
     if sparse:
+        # The levels this run sweeps, the same rule _passes applies: a --levels
+        # list replaces the default grid, so the theory is written at those.
+        _theory_levels = (relative_levels(condition)
+                          if kwargs.get('levels') is None else kwargs['levels'])
         results['theory_at_nominal_dprime'] = {
-            f'{d:g}': dict(theory_threshold(d, share),
-                           theory_auroc=theory_auroc_abs(d))
-            for d in relative_levels(condition) if d > 0}
+            f'{float(d):g}': dict(theory_threshold(d, share),
+                                  theory_auroc=theory_auroc_abs(d))
+            for d in _theory_levels if float(d) > 0}
 
     splits = list(cv_split(groups, n_folds, next(iter(reps.values())), labels,
                            mode=mode))
