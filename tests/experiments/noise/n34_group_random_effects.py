@@ -23,12 +23,16 @@ it. This file puts the two side by side.
 WHERE THE GROUPS COME FROM. `dataset_policy.noise_groups_for(data)`, the
 scaffold groups the injector draws its offsets over, sliced to this fold's
 training rows. They are NOT the outer fold grouping (`data['groups']`), which
-`cv_split` uses. So a held-out molecule can share a noise group with training
-molecules; the count of such held-out molecules is written per pass
-(`held_out_molecules_in_a_training_group`). It does not matter for scoring: every
-arm predicts held-out molecules with the fitted model alone, no offset added,
-and grades them against their CLEAN labels. An offset only changes what the
-model is trained on.
+`cv_split` uses, but they sit inside it: both are the canonical Murcko scaffold,
+and the noise grouping only splits the fold grouping's shared acyclic bucket
+(and unparseable SMILES) into singletons. So no held-out molecule shares a noise
+group with a training molecule, and `held_out_molecules_in_a_training_group`,
+written per pass, is 0 by construction; a nonzero count means the fold grouping
+changed. The out-of-fold model inside the offset estimate is grouped by the fold
+grouping, so each noise group is held out whole there too. Every arm predicts
+held-out molecules with the fitted model alone, no offset added, and grades
+them against their CLEAN labels. An offset only changes what the model is
+trained on.
 
 THE CONDITIONS.
   grouped_shifted   a shared offset per group plus a per-molecule error, with
