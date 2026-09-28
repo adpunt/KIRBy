@@ -384,7 +384,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                               'models': list(model_factories),
                               'importance_methods': list(importance_methods),
                               'k_neighbors': int(k_neighbors),
-                              'strength': DEFAULT_STRENGTH})
+                              'strength': DEFAULT_STRENGTH,
+                              # DIRTY-LOCAL 2026-09-28: a fold stored before
+                              # the classification weights were divided by
+                              # their mean is not read back.
+                              'weight_rule': 'clf_mean_1'})
     sweep_ctx = sweep_context(
         experiment='n02_sample_weighting', dataset_name=dataset_name,
         sink=sink, settings=sim_settings,
@@ -582,7 +586,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     return {'uw': fold_uw, 'w': fold_w, 'stats': fold_stats}
 
 
-                _rec = ckpt.cached(['per_rep', rep_name, model_name, _fi],
+                # DIRTY-LOCAL 2026-09-28: the key carries the content of the
+                # fold's matrices, so a change in how they are scaled (the
+                # binary-raw rule of 808df51) recomputes the fold instead of
+                # reading back a number made under the old rule.
+                _rec = ckpt.cached(['per_rep', rep_name, model_name, _fi,
+                                    _nc.array_hash(X_train, X_val)],
                                    _rep_fold)
                 # D versus D' and the similarity axis in this representation,
                 # 2026-09-25: the reliability weight and the cliff-aware
@@ -1000,7 +1009,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     return {'uw': fold_uw, 'w': fold_w, 'stats': fold_stats,
                             'ca': fold_ca}
 
-                _rec = ckpt.cached(['hybrid', model_name, space_name, _fi],
+                # DIRTY-LOCAL 2026-09-28: the key carries the content of the
+                # built hybrid. Without it a rerun whose pool returned a
+                # different recipe read back the old recipe's scores under
+                # the new recipe's name.
+                _rec = ckpt.cached(['hybrid', model_name, space_name, _fi,
+                                    _nc.array_hash(X_train_s, X_val_s)],
                                    _hyb_fold)
                 # D versus D' and the similarity axis in this hybrid,
                 # 2026-09-25.
