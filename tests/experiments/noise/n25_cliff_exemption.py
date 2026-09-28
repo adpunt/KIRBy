@@ -652,7 +652,9 @@ def put_back(cleaned, exempt, X_tr_s, y_tr):
     take:
 
       a deleted row     put back into `keep`
-      a lowered weight  set to 1, and the whole weight column renormalised to
+      a lowered weight  set to the largest weight in the column, which is what
+                        the cleanup gives a molecule it did not lower, and the
+                        whole weight column renormalised to
                         mean 1 afterwards, which multiplies every weight by one
                         constant and so leaves the ratios among the molecules
                         that were NOT put back exactly as the cleanup set them
@@ -675,7 +677,16 @@ def put_back(cleaned, exempt, X_tr_s, y_tr):
     new_w = None
     if w is not None:
         new_w = np.asarray(w, dtype=float).copy()
-        new_w[exempt] = 1.0
+        # ⛔ RESTORED TO THE WEIGHT OF A MOLECULE THE CLEANUP DID NOT LOWER, not
+        # to 1.0. Fixed 2026-09-28. Both weighting cleanups hand back weights
+        # already normalised to mean 1, so an untouched molecule sits ABOVE 1:
+        # downweight's least suspect molecule has raw weight 1 and is divided
+        # by a raw mean below 1, and huber_weight's flat top is divided the
+        # same way. Setting an exempt molecule to 1.0 left it at a fraction of
+        # an untouched molecule's weight -- about a quarter under downweight at
+        # strength 9 on uniform scores -- so the exemption only half ran. The
+        # largest weight in the column is the untouched level for both shapes.
+        new_w[exempt] = float(np.max(new_w)) if new_w.size else 1.0
         mean_w = float(new_w.mean())
         if np.isfinite(mean_w) and mean_w > 0:
             new_w = new_w / mean_w
@@ -706,9 +717,14 @@ def n_spared(cleaned, restored, exempt, y_tr):
         touched |= ~np.asarray(keep, dtype=bool)
     w = cleaned.get('sample_weight')
     if w is not None:
-        rw = restored.get('sample_weight')
-        touched |= ~np.isclose(np.asarray(w, dtype=float),
-                               np.asarray(rw, dtype=float))
+        # A molecule the cleanup lowered is one below the untouched level, the
+        # largest weight in the column. Until 2026-09-28 this compared the
+        # plain weights with the restored ones, and the restored column is
+        # renormalised, so every exempt molecule differed by the renormalising
+        # constant and counted as spared whether or not it had been lowered.
+        w = np.asarray(w, dtype=float)
+        if w.size:
+            touched |= ~np.isclose(w, float(np.max(w)))
     col = cleaned.get('label_column')
     if col is not None:
         touched |= ~np.isclose(np.asarray(col, dtype=float),
