@@ -1406,6 +1406,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     summary['ranking_changed_weighted'] = (
         None if (not top3_hybrid or not top3_whybrid)
         else top3_hybrid != top3_whybrid)
+    # The reference for the two verdicts above. `ranking_changed` is True when
+    # the ordered top 3 differs at all, from 3 to 5 passes and with no spread, so
+    # it can be True by chance alone. Swapping one single representation for
+    # another (rank 1 against rank 2) is a change of features that involves no
+    # hybrid. If that swap reorders the top 3 as often as the hybrid does, the
+    # hybrid verdict says nothing about the hybrid. Added 2026-09-28; no score
+    # changes.
+    summary['ranking_changed_between_single_reps'] = (
+        None if len(base_keys) < 2 or not top3_base[base_keys[0]]
+        or not top3_base[base_keys[1]]
+        else top3_base[base_keys[0]] != top3_base[base_keys[1]])
 
     results['summary'] = convert_numpy(summary)
     results['similarity'] = similarity_record(
@@ -1440,6 +1451,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
           f"{len(whybrid_improves)}/{len(methods_to_test)} methods")
     print(f"  Ranking changed: {summary['ranking_changed']}")
     print(f"  Ranking changed (weighted): {summary['ranking_changed_weighted']}")
+    print(f"  Ranking changed between the two single representations (reference): "
+          f"{summary['ranking_changed_between_single_reps']}")
     for _bk in base_keys:
         print(f"  Top-3 {_bk}: {top3_base[_bk]}")
     print(f"  Top-3 hybrid: {top3_hybrid}")
