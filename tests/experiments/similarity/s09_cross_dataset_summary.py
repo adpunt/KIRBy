@@ -69,6 +69,13 @@ HELDOUT_METRIC_FIELDS = [
     ('kNN_delta_fixed_ref', 'knn_delta_fixed_ref', 's05_knn_prediction'),
     ('kNN_delta_heldout', 'knn_delta_heldout', 's05_knn_prediction'),
     ('SAC_delta_heldout_s08', 'sac_delta_heldout_s08', 's08_optimal_dimension'),
+    # Two series that reach the aggregate but were missing from this list, so
+    # a run in which only they were read was refused as empty.
+    # (dirty-local 2026-09-28)
+    ('SAC_delta_vs_weighted_rep', 'sac_delta_vs_weighted_rep',
+     's02_hybrid_similarity'),
+    ('SAC_delta_heldout_s08_unweighted', 'sac_delta_heldout_s08_unweighted',
+     's08_optimal_dimension'),
 ]
 
 # ── Arm labels ───────────────────────────────────────────────────────────────
