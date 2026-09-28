@@ -308,6 +308,19 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
               f"out together as IGHV-rare "
               f"({sum(_sizes[f] for f in _rare)} of {n} antibodies): "
               f"{', '.join(_rare)}")
+    # Whether the fold plan is possible is a property of this CDR type, not of
+    # a representation, so it is settled once here. evaluate_rep_clf raises the
+    # same refusal per (representation, model) pair, which printed the identical
+    # line 24 times and left the caller to work out that nothing had been
+    # measured. Measured 2026-09-28: CDRL3 has 112 antibodies in 4 held-out
+    # groups after the rare families are pooled, so the default 5 folds cannot
+    # be built while 3 can.
+    if len(_fam_to_id) < n_folds:
+        return {'error': f"{cdr_types}: {n} antibodies fall into "
+                         f"{len(_fam_to_id)} held-out germline groups, and a "
+                         f"fold is a whole group, so a {n_folds}-fold split "
+                         f"cannot be built. Run it with --n-folds "
+                         f"{len(_fam_to_id)} or fewer."}
 
     # Generate representations (with disk caching for expensive LM reps)
     from experiments.rep_cache import compute_or_load_reps
