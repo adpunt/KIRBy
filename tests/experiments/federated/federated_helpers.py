@@ -2033,6 +2033,18 @@ def predict_fluid_similarity_ensemble_regression(teacher_models,
 
     # Normalize weights to sum to 1 per sample (active teachers only)
     weight_sum = sum(all_weights[t] for t in active_teachers)
+    # Each silo is min-max scaled on its own, so the held-out molecule
+    # farthest from silo t gets weight 0 from silo t. A molecule that is the
+    # farthest in EVERY silo got weight 0 from all of them, and the clamp
+    # below then divided 0 by 1e-10: its prediction came out as exactly 0
+    # (or class 0 at probability 0), whatever the teachers said. Measured
+    # 2026-09-28 on herg_ki, fold 3 of 3: one of 470 held-out molecules.
+    # All silos are equally far from such a molecule, so they share it.
+    _all_zero = weight_sum <= 0
+    if np.any(_all_zero):
+        for t in active_teachers:
+            all_weights[t] = np.where(_all_zero, 1.0, all_weights[t])
+        weight_sum = sum(all_weights[t] for t in active_teachers)
     weight_sum = np.maximum(weight_sum, 1e-10)
     for t in active_teachers:
         all_weights[t] = all_weights[t] / weight_sum
@@ -2187,6 +2199,18 @@ def predict_fluid_similarity_ensemble_classification(
 
     # Normalize weights to sum to 1 per sample (active teachers only)
     weight_sum = sum(all_weights[t] for t in active_teachers)
+    # Each silo is min-max scaled on its own, so the held-out molecule
+    # farthest from silo t gets weight 0 from silo t. A molecule that is the
+    # farthest in EVERY silo got weight 0 from all of them, and the clamp
+    # below then divided 0 by 1e-10: its prediction came out as exactly 0
+    # (or class 0 at probability 0), whatever the teachers said. Measured
+    # 2026-09-28 on herg_ki, fold 3 of 3: one of 470 held-out molecules.
+    # All silos are equally far from such a molecule, so they share it.
+    _all_zero = weight_sum <= 0
+    if np.any(_all_zero):
+        for t in active_teachers:
+            all_weights[t] = np.where(_all_zero, 1.0, all_weights[t])
+        weight_sum = sum(all_weights[t] for t in active_teachers)
     weight_sum = np.maximum(weight_sum, 1e-10)
     for t in active_teachers:
         all_weights[t] = all_weights[t] / weight_sum
