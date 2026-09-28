@@ -218,6 +218,34 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
     return metric_fn(y_val, _predict_for_metric(model, X_val, metric_fn))
 
 
+def _fold_rep_scores(train_reps, y_train, groups_train, blueprint, metric_fn):
+    """Each representation's budget-sizing score on this fold's training rows.
+
+    The same quantity allocate_performance_weighted computes inline: the
+    recipe's internal evaluator fitted on create_hybrid's internal carve of the
+    fold's training rows and read on the other side of that carve with the
+    dataset's metric, higher is better. Every representation in the pool is
+    scored, so the rep_count restriction can rank all of them.
+    """
+    from kirby.hybrid import internal_holdout_split, _score_rep_for_budget
+    from experiments._shared import object_direction
+    _tr, _va = internal_holdout_split(len(y_train), y_train, groups_train)
+    _lib = object_direction(blueprint, 'the c16 recipe')
+    _ev = getattr(blueprint, 'internal_evaluator', None) or 'rf'
+
+    def _clean(X):
+        X = np.clip(X, -1e10, 1e10)
+        return np.nan_to_num(X, nan=0.0, posinf=1e10, neginf=-1e10)
+
+    out = {}
+    for name, X in train_reps.items():
+        out[name] = float(_score_rep_for_budget(
+            _clean(X[_tr]), _clean(X[_va]), y_train[_tr], y_train[_va],
+            internal_evaluator=_ev, metric_fn=metric_fn,
+            lower_is_better=_lib))
+    return out
+
+
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
                    metric_fn, augmentations=None, blueprint=None,
                    task_type='regression',
@@ -304,6 +332,28 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         _akey = (_fold_i, getattr(blueprint, 'internal_evaluator', None))
         _pre_alloc = (alloc_scores_by_fold.get(_akey)
                       if alloc_scores_by_fold is not None else None)
+
+        # ⛔ WHICH REPRESENTATIONS THE RECIPE KEEPS IS DECIDED ON THIS FOLD'S
+        # TRAINING ROWS. Fixed 2026-09-28. A recipe searched with rep_count=N
+        # keeps the N representations ranked highest. The search ranks them per
+        # fold (find_best_hybrid.py, "Top-N representation restriction").
+        # build_fold_hybrid ranks them by precomputed_alloc_scores when given,
+        # and otherwise by blueprint.rep_scores, which the search measured over
+        # every row of the dataset -- this fold's validation rows included. The
+        # first build of each cell had no fold scores yet, so it took the
+        # whole-dataset ranking, and the reuse cache then carried that choice
+        # into every later build. Scoring every representation here, with the
+        # same function, carve and evaluator create_hybrid uses, makes the
+        # choice on this fold's training rows as the search did.
+        _rc = getattr(blueprint, 'rep_count', None)
+        if (_pre_alloc is None and _rc is not None
+                and int(_rc) < len(train_reps)):
+            _pre_alloc = _fold_rep_scores(
+                train_reps, y_train,
+                (groups[train_idx] if groups is not None else None),
+                blueprint, metric_fn)
+            if alloc_scores_by_fold is not None:
+                alloc_scores_by_fold[_akey] = dict(_pre_alloc)
 
         try:
             # ⛔ budget_override, OR THE ROW IS NOT THE BUDGET IT IS LABELLED.
