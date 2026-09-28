@@ -1194,6 +1194,17 @@ def run_all(dataset_name: str, output_dir: str,
 
         # Build kwargs for experiments that need upstream results dirs
         kwargs = {}
+        # ⛔ c05's SEED COUNT IS A CONDITION, NOT A SAMPLE SIZE. c05 runs one
+        # find_best_hybrid per (sample size x seed) -- 5 sizes x 3 seeds = 15
+        # searches -- and its cost is that count, not the search grid. Every
+        # seed still draws from the WHOLE dataset; fewer seeds means fewer
+        # draws averaged at each point of the curve, not fewer molecules.
+        # Measured 2026-09-24: flab 5641s, herg_ki capped at 7200s with 2.1x
+        # the rows. KIRBY_C05_REPEATS lets the local run trade seeds for wall
+        # time without touching any row count.
+        _c05_reps = os.environ.get('KIRBY_C05_REPEATS')
+        if _c05_reps and exp_id == 'c05':
+            kwargs['n_repeats'] = int(_c05_reps)
         if exp_id == 'c08':
             kwargs['c02_results_dir'] = output_dir
         elif exp_id == 'c09':
@@ -1227,6 +1238,33 @@ def run_all(dataset_name: str, output_dir: str,
             import traceback
             traceback.print_exc()
             results[exp_id] = {'error': str(e)}
+
+        except SystemExit as e:
+            # ⛔ SystemExit IS NOT AN Exception. A third-party library that
+            # calls sys.exit() instead of raising -- AntiFold's loader does
+            # exactly this -- walks straight past the handler above, so the
+            # experiment prints no FAILED line, no traceback, and run_all never
+            # reaches ALL DONE: the whole process dies mid-sentence with the
+            # library's exit code and NOTHING SAYS WHY. That is how c21 died on
+            # flab_thermo_tresanco at 05:10 on 2026-09-25 after 4022s, and it
+            # would take down every remaining experiment in the same run with
+            # it.
+            #
+            # One experiment calling exit() must not end the other nineteen.
+            # Recorded and skipped, exactly like any other failure.
+            print(f"  {exp_id} FAILED: a library called sys.exit({e.code}) "
+                  f"instead of raising. Caught so the remaining experiments "
+                  f"still run.")
+            import traceback
+            traceback.print_exc()
+            results[exp_id] = {
+                'error': f'SystemExit({e.code}) — a library exited the process',
+                'error_kind': 'SystemExit',
+            }
+
+        except KeyboardInterrupt:
+            # Deliberate: Ctrl-C and SIGINT must still stop the run.
+            raise
 
     total = time.time() - t0
     print(f"\n{'=' * 70}")

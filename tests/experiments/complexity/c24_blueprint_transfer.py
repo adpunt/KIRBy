@@ -63,6 +63,123 @@ from experiments._shared import (
 )
 from kirby.find_best_hybrid import find_best_hybrid, _predict_for_metric
 
+# =============================================================================
+# LOCAL CONDITION CUTS
+# =============================================================================
+# c24 runs one find_best_hybrid per outer fold plus one per unordered PAIR of
+# outer folds. At the 3 outer folds env.sh asks for that is 3 + 3 = 6 searches;
+# at the shipped 5 it is 5 + 10 = 15.
+#
+# MEASURED on flab_thermo_tresanco (672 molecules, 5 representations capped to
+# 1000 features each), 2026-09-25, with the laptop carrying eight other
+# experiments: the run reached "Step 1" 129 s in and was still inside fold 0's
+# FIRST search 670 s later, having printed nothing. Six searches at that rate
+# is over an hour before a single hybrid is built or scored. The run never got
+# past fold 0 in 798 s.
+#
+# Each search scores 2 budgets x 2 models x 3 allocation methods = 12
+# configurations over 3 inner folds = 36 fits. The budgets are the only one of
+# those three axes c24 passes itself; the other two come from env.sh and are
+# not this file's to touch.
+#
+# ⛔ NOTHING BELOW CUTS A ROW. Every fold still sees every molecule, and the
+# outer fold count is untouched. What is cut is how many configurations each
+# search scores and how many times the same feature-importance vectors are
+# recomputed.
+#
+# Unset, and with KIRBY_LOCAL_GRID unset, every knob below is the value the
+# cluster has always run, so a server run is unchanged.
+import time as _time
+
+
+def _c24_local_grid():
+    """True when the laptop grid in env.sh is active (KIRBY_LOCAL_GRID)."""
+    return bool(os.environ.get('KIRBY_LOCAL_GRID'))
+
+
+def _c24_env_ints(name, shipped, local=None):
+    """One condition list: explicit environment variable, else the local
+    default when the laptop grid is on, else the shipped value."""
+    raw = os.environ.get(name)
+    if raw:
+        picked = tuple(int(x.strip()) for x in raw.split(',') if x.strip())
+        if picked:
+            return picked, f'{name}={raw}'
+    if local is not None and _c24_local_grid():
+        return tuple(local), 'KIRBY_LOCAL_GRID'
+    return tuple(shipped), 'shipped'
+
+
+# The budgets every c24 search chooses its recipe from. Shipped: whatever
+# FULL_BUDGETS holds, which env.sh has already cut to 100 and 250 for a local
+# run. The local default keeps only the LARGEST of those, which halves all six
+# searches, the dominant cost measured above.
+#
+# WHAT THAT COSTS. The budget stops being a searched axis: every fold's recipe
+# is then chosen at one budget, so the `budget` field of every entry in
+# fold_blueprints is the same number and says nothing. c24's reported
+# quantities -- the transfer matrix, the per-fold deltas and the Nogueira
+# index -- are then measured at that one budget rather than at the better of
+# two. Nothing in this file compares across budgets, so no reported comparison
+# is lost; what is lost is the chance that a fold's best recipe sat at the
+# smaller budget.
+#
+# ⛔ A COMPUTE CUT FOR A LAPTOP, NOT A FINDING. Nothing run under it says
+# anything about which budget wins.
+C24_BUDGETS, C24_BUDGETS_SOURCE = _c24_env_ints(
+    'KIRBY_C24_BUDGETS', FULL_BUDGETS,
+    local=(max(FULL_BUDGETS),) if FULL_BUDGETS else None)
+
+# Reuse each row-set's feature-importance vectors across c24's own hybrid
+# builds. c24 calls build_fold_hybrid 9 times at 3 outer folds: 3 own-fold
+# builds on 3 distinct training row sets, and 6 off-diagonal builds on only 3
+# distinct row sets, because dropping folds {A,B} leaves the same rows whether
+# the cell is A->B or B->A. Importance depends on the row set and the
+# importance method and on nothing else -- not the allocation, not the model --
+# and build_fold_hybrid recomputes it on every call, at 93 s of every 150 s
+# measured on this dataset on 2026-09-24. So the 6 off-diagonal builds pay for
+# 6 importance computations where 3 would do.
+#
+# This changes no number: it hands build_fold_hybrid the same vectors it would
+# have computed, over the same rows create_hybrid ranks features on (the
+# training side of internal_holdout_split). Same pattern and same reasoning as
+# c16's KIRBY_C16_REUSE_FOLD_WORK; f31_internal_evaluator_tuning.py:548 is the
+# existing check that precomputed_importance gives the identical allocation.
+#
+# Default: ON for a local run, OFF everywhere else, so a cluster run recomputes
+# exactly as it did before and is bit-identical.
+_C24_REUSE_FOLD_WORK = os.environ.get(
+    'KIRBY_C24_REUSE_FOLD_WORK',
+    '1' if os.environ.get('KIRBY_LOCAL_GRID') else '0') == '1'
+
+
+def _c24_fold_importance(cache, row_key, reps_subset, y, groups_subset,
+                         blueprint):
+    """Importance vectors for one row set, computed once and kept.
+
+    Returns None when reuse is off or the recipe names no importance method,
+    which leaves build_fold_hybrid computing its own exactly as before.
+    """
+    if cache is None or blueprint is None:
+        return None
+    method = getattr(blueprint, 'importance_method', None)
+    if not method:
+        return None
+    key = (row_key, method)
+    if key not in cache:
+        # ⛔ THE ROWS MATTER. create_hybrid carves an internal holdout out of
+        # the rows it is given and ranks features on the TRAINING side of that
+        # carve. Computing importance over the whole row set would rank
+        # features on rows create_hybrid holds out, which is a different
+        # quantity, not a faster one.
+        from kirby.hybrid import (compute_feature_importance,
+                                  internal_holdout_split)
+        inner_tr, _ = internal_holdout_split(len(y), y, groups_subset)
+        cache[key] = compute_feature_importance(
+            {r: v[inner_tr] for r, v in reps_subset.items()},
+            y[inner_tr], method=method)
+    return cache[key]
+
 
 def nogueira_stability(feature_sets, total_features):
     """Compute the Nogueira et al. (2018) stability index.
@@ -167,6 +284,14 @@ def run(data, config, output_dir, dataset_name):
     print("\n" + "=" * 70)
     print("EXPERIMENT 24: BLUEPRINT TRANSFER TEST")
     print("=" * 70)
+    # Whatever cuts are in force, printed beside the run that used them, so no
+    # result exists without them.
+    print(f"  local condition cuts: search budgets={list(C24_BUDGETS)} "
+          f"({C24_BUDGETS_SOURCE}); reuse_fold_importance={_C24_REUSE_FOLD_WORK}")
+    _t0 = _time.time()
+
+    def _el():
+        return _time.time() - _t0
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     cmp = (lambda a, b: a < b) if lower_is_better else (lambda a, b: a > b)
@@ -215,6 +340,9 @@ def run(data, config, output_dir, dataset_name):
     fold_feature_sets = {}  # fold_idx -> set of (rep, idx) tuples
     fold_feature_infos = {}  # fold_idx -> feature_info from that fold's build
     own_fold_scores = {}  # fold_idx -> score on own test data
+    # (row-set key, importance method) -> importance vectors. Empty and unused
+    # when _C24_REUSE_FOLD_WORK is off.
+    _imp_cache = {} if _C24_REUSE_FOLD_WORK else None
     fold_errors = []  # (fold_idx, stage, error) — surfaced in the result so
     # an 'insufficient_folds' failure is self-diagnosing without the slurm log.
 
@@ -227,9 +355,10 @@ def run(data, config, output_dir, dataset_name):
 
         # Discover blueprint via find_best_hybrid
         try:
+            _ts = _time.time()
             search = find_best_hybrid(
                 train_reps, y_train, groups=groups[train_idx],
-                budgets=FULL_BUDGETS,
+                budgets=list(C24_BUDGETS),
                 augmentations=train_augs,
                 augmentation_strategy='uncapped' if train_augs else 'none',
                 internal_evaluators=INTERNAL_EVALUATORS,
@@ -250,6 +379,8 @@ def run(data, config, output_dir, dataset_name):
                 condition_suffix=f"c24_fold{fold_i}",
                 tier='general',
             )
+            print(f"    [t={_el():.0f}s] fold {fold_i} search done in "
+                  f"{_time.time() - _ts:.0f}s")
             # Pick best across models
             best = None
             best_model = None
@@ -291,7 +422,10 @@ def run(data, config, output_dir, dataset_name):
                 groups=groups[train_idx],
                 model=model_factories[best_model](),
                 metric_fn=metric_fn,
-                lower_is_better=lower_is_better)
+                lower_is_better=lower_is_better,
+                precomputed_importance=_c24_fold_importance(
+                    _imp_cache, ('own', fold_i), train_reps, y_train,
+                    groups[train_idx], bp))
             fold_feature_infos[fold_i] = fi
 
             # Collect selected features for stability analysis
@@ -386,9 +520,10 @@ def run(data, config, output_dir, dataset_name):
                 _pair_reps = {k: v[_pair_idx] for k, v in reps.items()}
                 _pair_augs = ({k: v[_pair_idx] for k, v in augs.items()}
                               if augs else None)
+                _tp = _time.time()
                 _pair_search = find_best_hybrid(
                     _pair_reps, labels[_pair_idx], groups=groups[_pair_idx],
-                    budgets=FULL_BUDGETS,
+                    budgets=list(C24_BUDGETS),
                     augmentations=_pair_augs,
                     augmentation_strategy='uncapped' if _pair_augs else 'none',
                     internal_evaluators=INTERNAL_EVALUATORS,
@@ -412,6 +547,9 @@ def run(data, config, output_dir, dataset_name):
                         "c24_drop%d_%d" % tuple(sorted((src_fold, tgt_fold)))),
                     tier='general',
                 )
+                print(f"    [t={_el():.0f}s] pair search dropping folds "
+                      f"{sorted((src_fold, tgt_fold))} done in "
+                      f"{_time.time() - _tp:.0f}s")
                 # ⛔ TAKE THE RECIPE FOR THE MODEL THAT WILL SCORE IT. This
                 # used to be the best entry across EVERY model, with the
                 # winning model's name thrown away, while the estimator fitted
@@ -477,6 +615,7 @@ def run(data, config, output_dir, dataset_name):
                 # the target fold's held-out rows — build_fold_hybrid does both
                 # halves, so the same columns come off both sides.
                 y_pair = labels[_pair_idx]
+                _pair_key = ('pair', tuple(sorted((src_fold, tgt_fold))))
                 X_train, X_val, fi = build_fold_hybrid(
                     _pair_reps, val_reps_tgt, y_pair, src_bp,
                     augmentations_train=_pair_augs,
@@ -484,7 +623,10 @@ def run(data, config, output_dir, dataset_name):
                     groups=groups[_pair_idx],
                     model=model,
                     metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
+                    lower_is_better=lower_is_better,
+                    precomputed_importance=_c24_fold_importance(
+                        _imp_cache, _pair_key, _pair_reps, y_pair,
+                        groups[_pair_idx], src_bp))
 
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_train)
@@ -494,6 +636,8 @@ def run(data, config, output_dir, dataset_name):
                 score = float(metric_fn(
                     y_val_tgt, _predict_for_metric(model, X_va, metric_fn)))
                 transfer_matrix[(src_fold, tgt_fold)] = score
+                print(f"    [t={_el():.0f}s] cell {src_fold}->{tgt_fold} "
+                      f"{metric_name}={score:.4f}")
             except Exception as exc:
                 # N6: surface the failed cross-fold transfer instead of
                 # silently shrinking the transfer matrix. Without this a thrown
@@ -587,6 +731,14 @@ def run(data, config, output_dir, dataset_name):
         # data. No cell has seen the rows it is scored on.
         'cell_recipe_provenance': cell_recipe_provenance,
         'diagonal_selection_saw': 'every fold except the target',
+        # ⛔ What the search was allowed to choose from, stored beside the
+        # numbers it produced. 'shipped' means no cut.
+        'condition_cuts': {
+            'search_budgets': list(C24_BUDGETS),
+            'search_budgets_source': C24_BUDGETS_SOURCE,
+            'reuse_fold_importance': _C24_REUSE_FOLD_WORK,
+            'n_outer_folds_requested': int(n_folds),
+        },
         'features_transferred': True,
         'delta_meaning': (
             'how much the held-out score moves when the recipe and the '
