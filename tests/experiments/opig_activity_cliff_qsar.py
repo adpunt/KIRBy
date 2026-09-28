@@ -1070,7 +1070,8 @@ def print_analysis(all_results):
               f"{'Delta':>9s} {'Folds':>6s}")
         print(f"  Delta is MAE of the best single representation minus MAE of "
               f"the hybrid, averaged over paired folds; positive means the "
-              f"hybrid has the lower error.")
+              f"hybrid has the lower error. Folds is how many paired folds "
+              f"that mean is over.")
         print(f"  {'-'*10} {'-'*8} {'-'*9} {'-'*11} {'-'*9} {'-'*6}")
         for target in ALL_TARGETS:
             blk = all_results.get(target, {}).get('fold_reselection')
@@ -1092,8 +1093,12 @@ def print_analysis(all_results):
                 b_str = f"{b_v:.4f}" if not np.isnan(b_v) else "—"
                 d_str = f"{d_v:+.4f}" if not np.isnan(d_v) else "—"
                 flag = " (single-fold; NOT honest)" if r['single_fold'] else ""
+                # The folds the Delta was averaged over. n_folds_used is the
+                # larger of the two arms' fold counts, so it overstated the
+                # Delta's fold count whenever one arm lost a fold.
+                n_f = r.get('n_paired_folds', r['n_folds_used'])
                 print(f"  {target:10s} {model_name:8s} {h_str:>9s} {b_str:>11s} "
-                      f"{d_str:>9s} {r['n_folds_used']:>6d}{flag}")
+                      f"{d_str:>9s} {n_f:>6d}{flag}")
 
 
 # =============================================================================
