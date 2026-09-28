@@ -198,6 +198,10 @@ def _fit_oracle(oracle_data, keep, rep_name, seed):
         'heldout_auroc_per_fold': fold_auc,
         'heldout_auroc_mean': float(np.mean(fold_auc)),
         'heldout_auroc_spread': float(np.max(fold_auc) - np.min(fold_auc)),
+        # How many features the oracle was fitted on. _score_with_oracle
+        # refuses a batch whose representation comes back a different width,
+        # the same check kirby_reinvent_score.py makes on the steering side.
+        'n_features_fitted_on': int(X.shape[1]),
     }
 
 
@@ -491,6 +495,17 @@ def _score_with_oracle(smiles, oracle):
             f"{oracle['rep_name']} came back with {X.shape[0]} rows for "
             f"{len(smiles)} molecules, so a score cannot be matched to a "
             f"molecule")
+    # The same width check the steering scorer makes. graph_kernel is one of
+    # herg's ten and can win the second oracle, and it builds its columns from
+    # whatever molecules it is handed, so a batch of generated molecules is a
+    # different column space from the molecules the oracle was fitted on.
+    want = oracle.get('n_features_fitted_on')
+    if want is not None and X.shape[1] != want:
+        raise RuntimeError(
+            f"{oracle['rep_name']} is {X.shape[1]} features wide for these "
+            f"{len(smiles)} molecules and was {want} wide when the oracle was "
+            f"fitted, so its columns do not mean the same features and these "
+            f"molecules cannot be scored")
     ok = np.isfinite(X).all(axis=1) & (np.abs(X).sum(axis=1) > 0)
     p = np.full(len(smiles), np.nan)
     if ok.any():
