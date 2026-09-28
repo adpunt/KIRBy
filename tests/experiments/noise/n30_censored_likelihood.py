@@ -71,6 +71,12 @@ untouched labels. `clipped` is the arm every other one is paired against.
                              (1 - Phi(a)), floored at the limit. See the note
                              below on why this is not the same as
                              per_molecule_lift.
+  truncated_normal_mean_shuffled/seed<k>
+                             the truncated_normal_mean lifts dealt to different
+                             molecules at the limit (2026-09-28). per_molecule_
+                             lift's amount falls as p rises, the reverse of the
+                             model's ranking, so its shuffled twin cannot say
+                             whether a per-molecule amount helps; this one can.
   drop_clipped               the rows at the limit removed.
   winsor_c<c>                every training label moved to
                              p + clip(y - p, -c * s, c * s), where
@@ -247,7 +253,9 @@ def build_arm_names(winsor_c, shuffle_seeds):
     """Every label arm, in the order they are fitted."""
     out = ['clean', 'clipped', 'constant_lift', 'per_molecule_lift']
     out += [f'per_molecule_lift_shuffled/seed{s}' for s in shuffle_seeds]
-    out += ['truncated_normal_mean', 'drop_clipped']
+    out += ['truncated_normal_mean']
+    out += [f'truncated_normal_mean_shuffled/seed{s}' for s in shuffle_seeds]
+    out += ['drop_clipped']
     out += [f'winsor_c{c:g}' for c in winsor_c]
     return out
 
@@ -333,17 +341,45 @@ def lift_columns(y_clipped, p, at, limit, sd, shuffle_seeds, seed_key):
 
     cols = {'constant_lift': const, 'per_molecule_lift': per_mol,
             'truncated_normal_mean': trunc}
+    # DIRTY-LOCAL 2026-09-28. limit + sd * mills(a) FALLS as p rises (its
+    # derivative in p is -mills'(a), and 0 < mills' < 1), so per_molecule_lift
+    # gives the largest lift to the molecule the model predicts furthest below
+    # the limit: the reverse of the model's own ranking. Its shuffled twin is
+    # therefore expected to do at least as well, and says nothing about whether
+    # a per-molecule amount helps. truncated_normal_mean rises with p, so its
+    # own shuffled twin, the same lifts dealt among the same clipped molecules
+    # with the same permutation, is the control that asks that question.
+    t_lift = trunc[at] - limit
     for s in shuffle_seeds:
         perm = np.random.default_rng([int(s)] + list(seed_key)).permutation(
             lift.size)
         sh = y.copy()
         sh[at] = limit + lift[perm]
         cols[f'per_molecule_lift_shuffled/seed{s}'] = sh
+        tsh = y.copy()
+        tsh[at] = limit + t_lift[perm]
+        cols[f'truncated_normal_mean_shuffled/seed{s}'] = tsh
     info = {'mean_lift_label_units': (float(np.mean(lift)) if lift.size
                                       else float('nan')),
             'spread_of_lift_label_units': (float(np.std(lift)) if lift.size
-                                           else float('nan'))}
+                                           else float('nan')),
+            'truncated_normal_mean_mean_lift_label_units': (
+                float(np.mean(t_lift)) if t_lift.size else float('nan')),
+            'truncated_normal_mean_spread_of_lift_label_units': (
+                float(np.std(t_lift)) if t_lift.size else float('nan'))}
     return cols, info
+
+
+def _spearman_or_none(a, b):
+    """Spearman correlation, or None when it is undefined (a constant column
+    or fewer than 3 rows)."""
+    from scipy.stats import spearmanr
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if a.size < 3 or np.ptp(a) == 0 or np.ptp(b) == 0:
+        return None
+    rho = spearmanr(a, b).correlation
+    return float(rho) if np.isfinite(rho) else None
 
 
 def winsorise(y, p, c):
@@ -843,6 +879,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 seed_key=(fold_i, int(round(level * 1000)),
                                           draw))
                             sp_rec.update(linfo)
+                            # Evaluation only, never handed to an arm: does
+                            # each lift rank the clipped molecules the way
+                            # their clean labels do? Spearman over the rows at
+                            # the limit.
+                            sp_rec['lift_vs_true_excess_spearman'] = {
+                                _a: _spearman_or_none(
+                                    lc[_a][at] - limit,
+                                    y_clean_tr[at] - limit)
+                                for _a in ('per_molecule_lift',
+                                           'truncated_normal_mean')}
                             for a, col in lc.items():
                                 cols[a] = (col, None)
                             cols['drop_clipped'] = (y0, ~at)
@@ -907,7 +953,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         for arm in arm_names:
                             if (arm in ('clean', 'clipped') or arm not in cols
                                     or arm.startswith(
-                                        'per_molecule_lift_shuffled')):
+                                        ('per_molecule_lift_shuffled',
+                                         'truncated_normal_mean_shuffled'))):
                                 continue
                             y_use, keep = cols[arm]
                             _cd = (as_cleanup_dict(X_tr_s, y0, keep=keep)
