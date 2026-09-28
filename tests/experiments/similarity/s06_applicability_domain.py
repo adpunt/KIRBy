@@ -1169,8 +1169,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # (Lei et al. 2018; Papadopoulos 2008 for the normalised
                     # score). Fixed 2026-09-28.
                     _n_cal = len(conformity)
-                    _level = min(1.0, np.ceil((_n_cal + 1) * (1 - alpha)) / _n_cal)
-                    q = np.quantile(conformity, _level, method='higher')
+                    _rank = int(np.ceil((_n_cal + 1) * (1 - alpha)))
+                    q = (float(np.sort(conformity)[_rank - 1])
+                         if _rank <= _n_cal else float('inf'))
 
                     # Val: predict + interval
                     y_pred_va = rf.predict(X_va_s)
