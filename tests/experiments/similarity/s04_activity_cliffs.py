@@ -725,9 +725,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # hybrid dropped. This scores each representation the way the search
         # and create_hybrid do: the recipe's internal evaluator, fitted on the
         # internal carve of the fold's training rows, read off with the
-        # dataset's metric. None when nothing is cut, so herg_ki and caco2
-        # build exactly as before. A geometry recipe (the similarity family)
-        # is left on blueprint.rep_scores and says so.
+        # dataset's metric (read-across for the similarity family). None when
+        # nothing is cut, so herg_ki and caco2 build exactly as before.
         _alloc_cache = {}
 
         def _fold_alloc_scores(fold_i, train_reps_h, yt, groups_tr, bp):
@@ -737,9 +736,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             evaluator = getattr(bp, 'internal_evaluator', None)
             objective = getattr(bp, 'objective', None)
             from kirby.find_best_hybrid import (OBJECTIVE_PREDICTIVE,
+                                                OBJECTIVE_SIMILARITY,
                                                 _is_geometry_objective)
+            # The similarity family is scored the way create_hybrid scores it:
+            # read-across on the internal carve, which needs that carve's
+            # scaffold groups. A blend or any other geometry objective is left
+            # on blueprint.rep_scores and says so.
+            _sim = (objective == OBJECTIVE_SIMILARITY)
             if (not isinstance(evaluator, str) or evaluator == 'match'
-                    or (objective is not None
+                    or (_sim and groups_tr is None)
+                    or (objective is not None and not _sim
                         and (isinstance(objective, dict)
                              or _is_geometry_objective(objective)))):
                 print(f"      [s04] fold-local representation ranking not "
@@ -747,7 +753,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"objective={objective!r}); build_fold_hybrid ranks on "
                       f"the whole-dataset rep_scores")
                 return None
-            key = (int(fold_i), evaluator)
+            key = (int(fold_i), evaluator, str(objective))
             if key in _alloc_cache:
                 return _alloc_cache[key]
             from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
@@ -763,6 +769,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     nan=0.0, posinf=1e10, neginf=-1e10)
                 Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
                                     nan=0.0, posinf=1e10, neginf=-1e10)
+                if _sim:
+                    out[name] = float(_score_rep_for_budget(
+                        Xtr, Xva, yt[inner_tr], yt[inner_va],
+                        internal_evaluator=evaluator,
+                        objective=objective, is_clf=is_clf,
+                        groups_val=np.asarray(groups_tr)[inner_va]))
+                    continue
                 out[name] = float(_score_rep_for_budget(
                     Xtr, Xva, yt[inner_tr], yt[inner_va],
                     internal_evaluator=evaluator, metric_fn=metric_fn,
