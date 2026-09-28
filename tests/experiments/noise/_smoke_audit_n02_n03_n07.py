@@ -195,9 +195,11 @@ def test_n02_reliability_clf_vs_reg_differ():
     rel_clf = n02.compute_reliability_scores(X, y, imp, k=5, is_clf=True)
     rel_reg = n02.compute_reliability_scores(X, y.astype(float), imp, k=5,
                                              is_clf=False)
-    _check('n02 reliability clf path returns [0.1,1] array',
-           rel_clf.shape == (n,) and rel_clf.min() >= 0.1 - 1e-9
-           and rel_clf.max() <= 1.0 + 1e-9)
+    # Mean-normalised since 2026-09-28 (dirty local): the clip to [0.1, 1]
+    # still bounds the ratio between rows at 10 to 1.
+    _check('n02 reliability clf path is mean 1 with ratio <= 10',
+           rel_clf.shape == (n,) and abs(rel_clf.mean() - 1.0) < 1e-9
+           and rel_clf.max() / rel_clf.min() <= 10.0 + 1e-9)
     # On >=3 classes the two paths MUST differ (proves is_clf actually branches
     # and isn't a no-op alias of the regression path).
     _check('n02 reliability clf path differs from reg path (3-class)',

@@ -257,7 +257,12 @@ def reliability_from_neighbours(y, neighbor_idx, is_clf=False, strength=None):
         # Already a fraction on [0, 1]; the clip below is the only guard it
         # needs.
         reliability = np.clip(reliability, 0.1, 1.0)
-        return reliability
+        # DIRTY-LOCAL 2026-09-28: divided by its mean, as the regression
+        # branch (weights_from_scores) and the cliff-aware weight already are.
+        # Left on [0.1, 1] the weights averaged below 1, and SVC multiplies C
+        # by each row's weight, so the weighted arm was also a smaller-C fit.
+        # The ratio between rows is unchanged.
+        return reliability / reliability.mean()
 
     # Regression: how far this label sits from its neighbours' mean, in the
     # label's own units. The number handed on is a SUSPICION score, higher
