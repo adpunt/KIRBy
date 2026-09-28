@@ -3264,7 +3264,15 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
 
     X_for_mle = X_scaled
     results['mle_on'] = 'full matrix'
-    if d > 2000:
+    # 2026-09-28: the same rule as the PCA switch above. The 200-component
+    # projection is taken only when rows AND features both exceed 2000. Before
+    # this every representation wider than 2000 features took its neighbours
+    # in a 200-component projection while narrower ones used the full
+    # standardised matrix, so one c01 table mixed two estimators. Under the
+    # manhattan distance a projection is not a rotation-free change either.
+    # Measured on caco2, 2,000 rows: ecfp4 5.78 on the full matrix against
+    # 8.16 on the projection, avalon 4.46 against 7.56.
+    if d > 2000 and n > 2000:
         from sklearn.decomposition import TruncatedSVD
         _mle_comp = min(200, n - 1)
         results['mle_on'] = f'truncated_svd {_mle_comp} components'
