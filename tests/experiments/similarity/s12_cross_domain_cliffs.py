@@ -49,6 +49,10 @@ from experiments._shared import (
 from experiments.similarity.similarity_helpers import (
     calibrated_cliff_rule, cliff_structural_similarity, CLIFF_TARGET_PCT)
 from kirby.find_best_hybrid import nested_cv_outer_folds
+# On a dataset scored by AUC this returns the positive-class probability, the
+# way the pool search scored it. Bare predict() hands AUC hard class labels,
+# which is not AUC. (dirty-local 2026-09-28)
+from kirby.find_best_hybrid import _predict_for_metric
 
 # 2026-09-12, owner's decision: s12 stops calling get_fold_best_search and reads
 # the pool instead, chosen per fold from the other folds' scores. The pool's
@@ -507,7 +511,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     m = mfactory()
                     m.fit(X_tr, labels[train_idx])
-                    y_pred = m.predict(X_va)
+                    y_pred = _predict_for_metric(m, X_va, metric_fn)
                 except Exception as e:
                     print(f"  [warn] per-rep fit/predict ({rep_name}/{mname}): {type(e).__name__}: {str(e)[:100]}")
                     _threw = True
@@ -571,7 +575,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             m = mfactory()
             m.fit(X_tr_s, labels[train_idx])
-            y_pred = m.predict(X_va_s)
+            y_pred = _predict_for_metric(m, X_va_s, metric_fn)
         except Exception as e:
             print(f"  [warn] hybrid fit/predict ({mname}): {type(e).__name__}: {str(e)[:100]}")
             _hyb_threw.append(mname)
