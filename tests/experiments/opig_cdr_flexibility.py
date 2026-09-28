@@ -302,8 +302,15 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
     )
 
     if not reps:
-        print("  No reps available, skipping")
-        return None
+        # ⛔ NOT `return None`. _checkpoint.Checkpoint.put stores anything that
+        # is not a dict carrying 'error', so a None went into the sidecar as a
+        # FINISHED unit: the CDR type was never retried, is_failed_item(None)
+        # is False so the script exited 0, and the saved JSON held nothing for
+        # it. A dict with 'error' is refused by put and counted by
+        # is_failed_item, so the run exits 1 and the next attempt recomputes.
+        print("  No representation could be built, nothing to evaluate")
+        return {'error': f"no representation built for {cdr_types} from "
+                         f"{len(rep_names)} requested: {sorted(rep_names)}"}
 
     # Run the hybrid search. No `kirby_hybrid` matrix is materialised over the
     # full data and re-evaluated under our CV: that path lets every validation
@@ -549,6 +556,15 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         if rep_results:
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
 
+    if not results:
+        # Every (representation, model) pair was skipped or scored nothing.
+        # Same reason as the empty-reps branch above: this is a failure, and a
+        # None or an empty table would be stored as a finished unit and the
+        # script would exit 0 having measured nothing.
+        return {'error': f"no (representation, model) pair scored for "
+                         f"{cdr_types}: {len(reps)} representation(s) x "
+                         f"{len(models)} model(s) all skipped or failed"}
+
     return {
         'n_samples': n,
         'n_flexible': n_flex,
@@ -741,8 +757,14 @@ def main():
                                         pruning_mode=args.pruning_mode)
                 _ck.put(res, cdr_type=cdr_type)
             if is_failed_item(res):
+                # Recorded in the JSON so the file says which CDR type failed
+                # and why, but kept out of print_analysis, which reads
+                # ds['results'] for every entry and would raise KeyError on a
+                # dict that carries only 'error'.
                 _failed.append(cdr_type)
-            if res is not None:
+                all_results[cdr_type] = res
+                print(f"  {cdr_type}: {res['error']}")
+            elif res is not None:
                 all_results[cdr_type] = res
         except Exception as e:
             print(f"  FAILED for {cdr_type}: {e}")
@@ -750,9 +772,12 @@ def main():
             traceback.print_exc()
             _failed.append(cdr_type)
 
-    # Analysis
-    if all_results:
-        print_analysis(all_results)
+    # Analysis. Only the CDR types that produced a table; an entry holding
+    # just 'error' has no 'results' key to print.
+    _scored = {k: v for k, v in all_results.items()
+               if not is_failed_item(v) and v is not None}
+    if _scored:
+        print_analysis(_scored)
 
     # Save results
     p = Path(output_path)
