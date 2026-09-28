@@ -398,8 +398,12 @@ def mode_features(ctx):
     for j in range(k):
         if j in chosen:
             continue
+        # 'solo' is the choosing half's score, the one greedy saw when it left
+        # this feature out; it used to be the reporting half's, beside a
+        # correlation and a delta from the choosing half.
         excluded.append(dict(
-            feature=NAMES[j], solo=float(solo[j]),
+            feature=NAMES[j], solo=float(solo_fit[j]),
+            solo_reporting_half=float(solo[j]),
             max_corr_with_chosen=float(max((R[j, c] for c in chosen), default=0)),
             delta_if_added=float(score_subset(SDf, chosen + [j], tf, hf)
                                  - greedy_fit_v)))
