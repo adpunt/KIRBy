@@ -53,10 +53,25 @@ truth they wouldn't have in a real noisy-label setting; the per-fold re-search
 removes that clean-label oracle so BOTH the blueprint selection (which reps,
 which allocation/importance strategy) AND the feature construction see only
 noisy labels. The clean-label pool blueprint `bp` survives only as a fallback
-if the inner search fails. The inner search uses random forest as a fast proxy
-downstream model — DNN-based search would be more matched but ~10x slower per
-(noise level, fold). Runtime is kept tractable by the trimmed
-NOISY_SEARCH_BUDGETS grid and small inner n_folds.
+if the inner search fails.
+
+⛔ THE INNER SEARCH NOW FITS THE NEURAL NETWORK, CHANGED 2026-09-28. It used to
+fit a random forest while every arm the recipe feeds — the plain baseline and all
+twelve label-noise methods — is a neural network, so the recipe was chosen by one
+learner and scored with another on every fold of every pass.
+
+⛔ AND THIS IS THE COST THE OLD CHOICE WAS PAYING FOR. The line this replaces
+said a neural-network search would be "more matched but ~10x slower per (noise
+level, fold)". That estimate was written here, not measured in this session, and
+it is the honest thing to expect from the change. What was measured, on
+2026-09-21 with the random forest: 677 seconds for one fold of one noise level on
+flab_thermo_tresanco, 448 antibodies trained on, against 3.6 seconds to read the
+stored search back. Runtime is still held down by the trimmed
+NOISY_SEARCH_BUDGETS grid and the small inner fold count.
+
+⛔ EVERY STORED n09 SEARCH IS STALE. The model list is part of what identifies a
+search, so the random-forest files under tier 'n09_noisy_search' no longer match
+and are rebuilt.
 
 Usage:
     python n09_lnl_survey.py --dataset logd --mode intermediary
@@ -287,8 +302,21 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
     sample_X = next(iter(reps.values()))
 
-    # Get hybrid blueprint ONCE via pool helper. Prefer dnn-best blueprint;
-    # fall back to rf if dnn isn't in the pool.
+    # The clean-label recipe, read once. It is the fallback the per-fold recipe
+    # drops to when the inner search on the noisy labels returns nothing.
+    #
+    # ⛔ THE RANDOM-FOREST FALLBACK IS GONE, 2026-09-28. Two things disagreed.
+    # Every arm in this file is a neural network -- the plain baseline and all
+    # twelve label-noise methods -- and this lookup asked for the neural
+    # network's recipe. When that came back empty a second lookup asked for the
+    # random forest's, and that recipe became `bp`, which is both the per-fold
+    # recipe fallback at the `inner_bp` line below and the source of the base
+    # representation ranking. So on any dataset whose stored search holds no
+    # neural-network entry, every number in the file came from features chosen
+    # for a random forest, and nothing said so.
+    #
+    # There is now no second lookup. With no neural-network recipe, `bp` is None,
+    # the per-fold recipe has no fallback and the fold says so.
     search, meta = get_best_search_for_downstream(
         reps, labels, groups,
         downstream_model='dnn', budget=None,
@@ -298,13 +326,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     )
     _dnn_search_found = meta is not None
     if meta is None:
-        search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model='rf', budget=None,
-            augmentations=augmentations,
-            dataset_name=dataset_name, task_type=task_type,
-            data=data,
-        )
+        print("    no stored recipe for the neural network on this dataset -- "
+              "the clean-label fallback recipe is absent, so a fold whose inner "
+              "search returns nothing is not scored. The dataset needs a "
+              "precompute pass that scores dnn.")
     top3 = []
     if search is not None:
         top3 = extract_top3_base_reps(search)
@@ -322,11 +347,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # Per-fold weights computed from feat_info (not global) — see conditions E/F below
 
     # ── The single-representation comparison: the DNN's top 2 ──
-    # Ranked by the DNN's own score in the stored search fetched above. When the
-    # pool held no DNN search and the rf one came back instead, the DNN's score
-    # is read out of that rf search's baselines; `base_reps_search_model` says
-    # which search it was. A `base_reps` kwarg ({model: [reps]}) overrides the
-    # ranking, for a smoke or a direct caller.
+    # Ranked by the DNN's own score in the stored search fetched above, which is
+    # now the only search this function reads -- the sentence that used to sit
+    # here described the random-forest fallback, and that fallback was deleted on
+    # 2026-09-28. With no DNN search stored, `search` is None and this ranking is
+    # empty rather than borrowed. A `base_reps` kwarg ({model: [reps]}) overrides
+    # the ranking, for a smoke or a direct caller.
     _base_override = kwargs.get('base_reps')
     if _base_override is not None:
         base_by_model = ({BASE_RANK_MODEL: list(_base_override[BASE_RANK_MODEL])}
@@ -365,10 +391,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'base_reps_by_model': base_by_model,
         'base_reps_missing': base_missing,
         'base_reps_ranked_by': BASE_RANK_MODEL,
-        # Which downstream model's stored search the ranking was read from:
-        # 'dnn', or 'rf' when the pool held no DNN search.
-        'base_reps_search_model': ('dnn' if _dnn_search_found
-                                   else ('rf' if meta is not None else None)),
+        # Which downstream model's stored search the ranking was read from. Only
+        # ever 'dnn' or nothing, since 2026-09-28: the second lookup that used to
+        # put 'rf' here is gone, and with no DNN search stored the run does not
+        # reach this point.
+        'base_reps_search_model': 'dnn' if _dnn_search_found else None,
         'sigmas': sigmas,
         'noise_condition': noise_condition,
         'noise_provenance': noise_provenance,
@@ -467,7 +494,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # Detection readings for this level, one list per (condition, method).
         # Stays empty unless the condition is one where a corrupted subset exists.
         detection_acc = {}
-        if sigma > 0:
+        # 2026-09-27, owner's decision: the methods run at level 0.0 too. There
+        # nothing is injected, so the plain DNN is fitted on the labels as
+        # recorded (D) and each method on the same labels (D'), and the pair is
+        # the answer on the dataset's own experimental noise. Detection is not
+        # graded at 0: detection_scores returns None when nothing moved.
+        if True:
             for _ck in _lnl_keys:
                 sigma_results[_ck] = {m: [] for m in methods_to_test}
             # Same fold bookkeeping for the method conditions. A method that
@@ -571,9 +603,36 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     train_groups_subset = (groups[train_idx]
                                            if groups is not None else None)
                     inner_n_folds = max(2, min(3, n_folds))
-                    _rf_factory = get_model_factories(
-                        ['rf'], task_type=task_type,
-                        n_samples=len(train_idx))['rf']
+                    # ⛔ THE SEARCH MODEL IS THE DNN, 2026-09-28. Two things used
+                    # to disagree. This search fitted a RandomForest and nothing
+                    # else, so the allocation method, the importance method, the
+                    # budget and the internal evaluator were all chosen by how
+                    # well a RandomForest did on them. Every arm the recipe then
+                    # feeds -- the plain DNN baseline and all twelve
+                    # label-noise methods -- is a DNN. So the recipe was picked
+                    # for one learner and scored with another, on every fold of
+                    # every pass.
+                    #
+                    # build_fold_hybrid below already passes _BaselineDNN as the
+                    # accept-or-reject model, for exactly this reason. That fixed
+                    # the keep-or-drop step and left the recipe search behind.
+                    #
+                    # ⛔ THIS COSTS MORE WALL CLOCK AND THE INCREASE IS NOT
+                    # MEASURED. The stored RandomForest search took 677 seconds
+                    # on flab_thermo_tresanco at level 0.5, fold 1 of 3, 448
+                    # antibodies trained on (measured 2026-09-21). A DNN fit is
+                    # slower per candidate than a RandomForest fit, so the same
+                    # search will take longer; by how much has not been timed.
+                    # The stored file is read back in about 3.6 seconds after the
+                    # first write, so the increase is paid once per (fold, label
+                    # set).
+                    #
+                    # ⛔ EVERY STORED n09 SEARCH IS NOW STALE. The model list is
+                    # part of the search meta, so the RandomForest files under
+                    # tier 'n09_noisy_search' no longer match and will be rebuilt.
+                    _search_model = _BaselineDNN(
+                        random_state=42 + fold_idx, is_clf=is_clf,
+                        classes_=classes_)
                     # THIS SEARCH IS STORED. It used to run with cache=False, so
                     # a second run of the same passes searched again from cold, and
                     # the search is the largest single cost in the file: on
@@ -617,7 +676,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         base_reps={k: v[train_idx] for k, v in reps.items()},
                         labels=y_train,
                         groups=train_groups_subset,
-                        models={'rf': _rf_factory()},
+                        models={'dnn': _search_model},
                         budgets=NOISY_SEARCH_BUDGETS,
                         task_type=task_type,
                         metric=metric_name,
@@ -635,7 +694,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         verbose=False,
                     )
                     # Pick the best blueprint across the reduced budget grid
-                    per_budget = inner_search.best_by_model_budget.get('rf', {})
+                    # 'dnn' since 2026-09-28, and it must match the one name in
+                    # models= above. A name the search did not fit returns {}
+                    # here, every budget is skipped, _best_bp stays None and the
+                    # clean-label recipe is used with _recipe_source recorded as
+                    # 'clean_pool_fallback' -- so a mismatch would silently turn
+                    # every fold into the fallback measurement.
+                    per_budget = inner_search.best_by_model_budget.get('dnn', {})
                     _best_bp = None
                     _best_score = float('inf') if lower_is_better else float('-inf')
                     for _budget, _entry in per_budget.items():
@@ -771,8 +836,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     except Exception as e:
                         print(f"    Condition E failed: {e}")
 
-                # --- Conditions C, D & F: LNL methods (skip at sigma=0) ---
-                if sigma > 0:
+                # --- Conditions C, D & F: LNL methods, at every level incl. 0 ---
+                if True:
                     lnl_kwargs = dict(random_state=42 + fold_idx,
                                       is_clf=is_clf, classes_=classes_)
                     for method_name in methods_to_test:
@@ -837,7 +902,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # results['distance_selection_by_similarity'], and the rows it
                 # kept are D', fitted with RF, SVM and the DNN as rows.
                 _sim_scores = []
-                if (sigma > 0 and 'distance_selection' in methods_to_test
+                if ('distance_selection' in methods_to_test
                         and sim_sink.enabled):
                     _g_tr = (groups[train_idx] if groups is not None
                              else None)
@@ -944,7 +1009,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                  'folds': [], 'fold_draws': [],
                                  'fold_scores': []}
 
-        if sigma > 0:
+        if True:
             for cond_key in _lnl_keys:
                 agg[cond_key] = {}
                 for method_name in methods_to_test:
@@ -982,7 +1047,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
               + (", " if base_keys else "")
               + f"Hybrid DNN: {b_score:.4f}, "
               f"Weighted Hybrid DNN: {e_score:.4f}")
-        if sigma > 0:
+        if True:
             # Best LNL method per condition
             for cond in _lnl_keys:
                 best_name = None
@@ -1087,6 +1152,75 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'ratio*100 when both sides are positive else NaN — a plain ratio, may '
         'exceed 100 when denoising beats the clean baseline}. Prefer delta '
         'for direction-robust comparison.')
+
+    # =========================================================================
+    # THE HEADLINE, 2026-09-27 (owner's decision): each method against the
+    # plain DNN trained on THE SAME LABELS -- same level, fold, noise draw and
+    # feature space. `retention` above reads each method against the DNN on
+    # the CLEAN labels, which mixes the damage the noise did with what the
+    # method got back. This is D (plain DNN on the labels as given) against D'
+    # (the method on those labels). At level 0.0 the labels are the recorded
+    # ones. Both fits already exist; nothing new is fitted.
+    #
+    # gain is sign-normalised: positive means the method beat the plain DNN,
+    # in the dataset's own metric. Passes are paired on (fold, draw); a pass
+    # only one side scored is left out and counted.
+    # =========================================================================
+    def _paired(a, b):
+        """Pairs (plain score, method score) over the passes both scored."""
+        ka = {(f, d): s for f, d, s in zip(a.get('folds', []),
+                                            a.get('fold_draws', []),
+                                            a.get('fold_scores', []))}
+        kb = {(f, d): s for f, d, s in zip(b.get('folds', []),
+                                            b.get('fold_draws', []),
+                                            b.get('fold_scores', []))}
+        shared = sorted(set(ka) & set(kb))
+        return ([(k, ka[k], kb[k]) for k in shared],
+                len(set(ka) ^ set(kb)))
+
+    vs_plain = {}
+    for sigma_key, sigma_data in results['per_sigma'].items():
+        per_cond = {}
+        for cond in _lnl_keys_all:
+            plain = sigma_data.get(cond[:-len('_lnl')] + '_no_lnl', {})
+            per_method = {}
+            for method_name in methods_to_test:
+                meth = sigma_data.get(cond, {}).get(method_name, {})
+                pairs, n_unpaired = _paired(plain, meth)
+                gains = [((p - m) if lower_is_better else (m - p))
+                         for _, p, m in pairs]
+                per_method[method_name] = {
+                    'plain_dnn_mean': (float(np.mean([p for _, p, _ in pairs]))
+                                       if pairs else float('nan')),
+                    'method_mean': (float(np.mean([m for _, _, m in pairs]))
+                                    if pairs else float('nan')),
+                    'gain_mean': (float(np.mean(gains)) if gains
+                                  else float('nan')),
+                    'gain_per_pass': [float(g) for g in gains],
+                    'passes': [list(k) for k, _, _ in pairs],
+                    'passes_won': int(sum(g > 0 for g in gains)),
+                    'n_passes': len(gains),
+                    'n_passes_scored_by_one_side_only': int(n_unpaired),
+                }
+            per_cond[cond] = per_method
+        vs_plain[sigma_key] = per_cond
+    results['vs_plain_dnn_same_labels'] = convert_numpy(vs_plain)
+    results['vs_plain_dnn_same_labels_schema'] = (
+        'Per level, per feature space, per method: the plain DNN and the '
+        'method, both trained on the same labels (recorded at level 0.0, '
+        'injected above it), scored on the same held-out fold, paired on '
+        '(fold, draw). gain > 0 means the method beat the plain DNN, in the '
+        'dataset metric. This is the headline; `retention` compares against '
+        'the clean-label DNN instead.')
+    print("\n  Each method against the plain DNN on the same labels "
+          "(passes won / passes, mean gain):")
+    for sigma_key, per_cond in vs_plain.items():
+        for cond, per_method in per_cond.items():
+            cells = [f"{m} {r['passes_won']}/{r['n_passes']} "
+                     f"{r['gain_mean']:+.4f}"
+                     for m, r in per_method.items() if r['n_passes']]
+            if cells:
+                print(f"    level {sigma_key} {cond}: " + ", ".join(cells))
 
     # =========================================================================
     # SUMMARY

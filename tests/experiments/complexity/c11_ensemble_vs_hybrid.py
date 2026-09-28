@@ -124,6 +124,7 @@ from experiments._shared import (
     # Added 2026-09-18 for the top-2 block at the end of run(). All four read
     # rows the search already stored: 0 new model fits.
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
 )
 from kirby.find_best_hybrid import (
     find_best_hybrid, nested_cv_cache_namespace, DEFAULT_N_FOLDS,
@@ -1417,8 +1418,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # same values they held before this block existed.
     top2_base_reps, top2_hybrids = {}, {}
     hybrid_deltas_by_model, top2_pairs_by_model = {}, []
+    comparison_models, models_dropped, selection_failures = [], [], []
     if last_search is not None:
-        for _m in models:
+        # `models` (line 370) is get_model_factories(config['models']) -- the
+        # model names this run was handed. The models `last_search` scored are
+        # whatever that search was given, which under a fast speed setting is
+        # a shorter list. The two disagree, and the comparison runs over the
+        # models the search scored. A requested model the search never scored
+        # is written into 'models_dropped' with the reason, and no other
+        # model's rows are read in its place.
+        comparison_models, models_dropped = resolve_comparison_models(
+            last_search, list(models))
+        for _name, _why in models_dropped:
+            print(f"    {_name} is not in the top-2 comparison: {_why}")
+        for _m in comparison_models:
             _ctx = f'c11 {dataset_name}/{_m}'
             try:
                 # require_full=False: a downstream model this search never
@@ -1449,14 +1462,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     hybrid_deltas_by_model[_m] = hybrid_deltas(
                         last_search, _m, hybrid=_h['selected'][0], context=_ctx)
             except Exception as _e:
+                selection_failures.append(
+                    {'downstream_model': _m,
+                     'half': 'top-2 base representations, top-2 hybrids or '
+                             'hybrid deltas',
+                     'reason': f'{type(_e).__name__}: {_e}'})
                 print(f"    {_m}: top-2 / hybrid deltas unavailable "
                       f"({type(_e).__name__}: {_e})")
         try:
             _sel = select_model_rep_pairs(
-                last_search, models=list(models), n_base=2, n_hybrids=2,
+                last_search, models=comparison_models, n_base=2, n_hybrids=2,
                 require_full=False, context=f'c11 {dataset_name}')
             top2_pairs_by_model = _sel['pairs']
         except Exception as _e:
+            selection_failures.append(
+                {'downstream_model': None, 'half': 'model_rep_pairs',
+                 'reason': f'{type(_e).__name__}: {_e}'})
             print(f"    top-2 pair grid unavailable "
                   f"({type(_e).__name__}: {_e})")
 
@@ -1484,6 +1505,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # that were given a non-zero number of features, 'delta_vs_best_rep'
         # against the single best base representation for that model.
         'hybrid_deltas_by_model': hybrid_deltas_by_model,
+        # Which downstream models the four keys above cover, which of the
+        # requested ones the search never scored, and which model's selection
+        # raised. A reader who counts fewer models here than in
+        # config['models'] gets the reason from these three keys.
+        'comparison_models': comparison_models,
+        'models_dropped': [{'downstream_model': _n, 'reason': _w}
+                           for _n, _w in models_dropped],
+        'comparison_failures': selection_failures,
         # Which search the four keys above were read from: under
         # recipe_search='per_fold' that is one outer fold's search, not all of
         # them. The same object 'top3_base_reps' is read from.

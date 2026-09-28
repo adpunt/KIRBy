@@ -67,6 +67,7 @@ from experiments._shared import (
     FULL_BUDGETS, INTERNAL_EVALUATORS,
     fold_reselection, hr_direction, hr_exclude_folds,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
 )
 
 # =============================================================================
@@ -299,9 +300,35 @@ def _top2_selection_from_search(search, model_names, context):
     raising and taking the fold loop with it. Every call is wrapped: this file
     ran before these keys existed and has to keep running if they fail.
 
-    Returns None when nothing could be computed.
+    Always returns a block since 2026-09-28: even when every selector below
+    fails, 'top2_models_compared' and 'top2_models_dropped' name the downstream
+    models that were asked for and why each missing one is missing. Before that
+    the whole block came back as None and those reasons existed only in the
+    printed log.
     """
     block = {}
+    # WHICH DOWNSTREAM MODELS THE ROWS BELOW COVER, resolved 2026-09-28.
+    # `model_names` is the dict of factories this file built, which
+    # get_model_factories can already shorten at small antibody counts. Fold 0's
+    # search scored whatever it scored on top of that: svm drops itself above
+    # 10,000 rows, and a dataset's skip policy can drop a name. The two lists
+    # disagree whenever that happened, and the loops below then asked for a model
+    # with no stored rows and wrote nothing down.
+    #
+    # `model_names` stays what this file ASKS for, so the set of models it
+    # reports does not change: it goes in as `requested`, not None. A name the
+    # search never scored is dropped and named, never swapped for another
+    # model's rows.
+    #
+    # Both lists are SAVED, not only printed. Until 2026-09-28 every reason below
+    # went to the terminal alone, so a saved block holding four models read the
+    # same as a run configured for four.
+    cmp_models, cmp_dropped = resolve_comparison_models(
+        search, list(model_names))
+    block['top2_models_compared'] = list(cmp_models)
+    block['top2_models_dropped'] = {n: w for n, w in cmp_dropped}
+    for n, w in cmp_dropped:
+        print(f"    downstream model {n} not compared: {w}")
     try:
         # 'rf' is the downstream model this file pulls its FittedResult from
         # (fold_search.fitted_results.get('rf')) and the model
@@ -311,6 +338,8 @@ def _top2_selection_from_search(search, model_names, context):
             search, 'rf', 2, require_full=False, context=context)
     except Exception as _e:
         print(f"    top2_base_reps not added: {type(_e).__name__}: {_e}")
+        block['top2_base_reps_absent_reason'] = \
+            f"rf: {type(_e).__name__}: {_e}"
     try:
         # budget=None: the best 2 configurations over every budget the search
         # ran, not within one budget in features. The find_best_hybrid call
@@ -320,6 +349,8 @@ def _top2_selection_from_search(search, model_names, context):
             search, 'rf', 2, require_full=False, context=context)
     except Exception as _e:
         print(f"    top2_hybrids not added: {type(_e).__name__}: {_e}")
+        block['top2_hybrids_absent_reason'] = \
+            f"rf: {type(_e).__name__}: {_e}"
     try:
         # models=list(model_names) is the models dict this file actually built
         # factories for, which get_model_factories can shorten at small sample
@@ -330,10 +361,12 @@ def _top2_selection_from_search(search, model_names, context):
         # comprehension drops), so 5 * (2 representations + 2 hybrids) = 20
         # rows when every model survives get_model_factories.
         block['top2_pairs_by_model'] = select_model_rep_pairs(
-            search, models=list(model_names), n_base=2, n_hybrids=2,
+            search, models=cmp_models, n_base=2, n_hybrids=2,
             require_full=False, context=context)
     except Exception as _e:
         print(f"    top2_pairs_by_model not added: {type(_e).__name__}: {_e}")
+        block['top2_pairs_by_model_absent_reason'] = \
+            f"{type(_e).__name__}: {_e}"
 
     # Two reference numbers for the rank-1 hybrid per downstream model, not
     # one:
@@ -356,19 +389,23 @@ def _top2_selection_from_search(search, model_names, context):
     # configuration does not cost the others their entry. The keys are
     # downstream model names; this dict is new and nothing iterates it.
     deltas = {}
-    for m in model_names:
+    for m in cmp_models:
         try:
             top1 = top_hybrids(search, m, 1, require_full=False,
                                context=f'{context}/deltas/{m}')
             if not top1['selected']:
                 print(f"    hybrid_deltas for downstream model {m} not added: "
                       f"{top1['shortfall_reason']}")
+                block['top2_models_dropped'][m] = (
+                    'no hybrid delta: %s' % top1['shortfall_reason'])
                 continue
             deltas[m] = hybrid_deltas(search, m, hybrid=top1['selected'][0],
                                       context=f'{context}/deltas/{m}')
         except Exception as _e:
             print(f"    hybrid_deltas for downstream model {m} not added: "
                   f"{type(_e).__name__}: {_e}")
+            block['top2_models_dropped'][m] = (
+                'no hybrid delta: %s: %s' % (type(_e).__name__, _e))
     if deltas:
         block['hybrid_deltas_by_model'] = deltas
         # delta_vs_best_rep is None when no base representation carries a score
@@ -480,60 +517,87 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
             top2_first_fold = _top2_selection_from_search(
                 fold_search, list(models), f'{prop_name}/fold{fold_idx}')
 
-        fitted = (fold_search.fitted_results.get('rf')
-                  if fold_search is not None else None)
-        if fitted is None:
-            print(f"    fold {fold_idx}: no fitted 'rf' result; skipping")
+        _fitted_all = (getattr(fold_search, 'fitted_results', None) or {}
+                       if fold_search is not None else {})
+        if not _fitted_all:
+            print(f"    fold {fold_idx}: the search stored no recipe for any "
+                  f"downstream model; skipping the fold")
             continue
 
-        # ----- assemble train/val hybrid using this fold's selection -----
-        try:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            train_hybrid = apply_feature_selection(train_reps, fi)
-            val_reps = {r: arr[val_idx] for r, arr in src_reps.items()}
-            val_hybrid = apply_feature_selection(val_reps, fi)
-            if fitted.augmentation_info and has_aug:
-                val_aug = {r: arr[val_idx] for r, arr in aug_dict.items()}
-                train_aug_block = apply_augmentation_selection(
-                    train_aug, fitted.augmentation_info)
-                val_aug_block = apply_augmentation_selection(
-                    val_aug, fitted.augmentation_info)
-                if train_aug_block is not None and val_aug_block is not None:
-                    train_hybrid = np.hstack([train_hybrid, train_aug_block])
-                    val_hybrid = np.hstack([val_hybrid, val_aug_block])
-        except Exception as e:
-            print(f"    fold {fold_idx}: hybrid assembly failed: {e}")
-            continue
-
-        dims.append(train_hybrid.shape[1])
-        train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
-        val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
+        val_reps = {r: arr[val_idx] for r, arr in src_reps.items()}
         y_train = labels[train_idx]
         y_val = labels[val_idx]
 
-        # Same feature cut the baseline arm gets. run_baseline_survey.evaluate_rep
-        # runs _filter_high_dim_per_fold on every baseline representation, so any
-        # representation wider than 500 features is scored on 200 of them there
-        # (a 1280-feature language-model representation loses 1080). Without this
-        # the hybrid keeps every feature it selected, and part of the reported
-        # difference between the two arms is that preprocessing difference rather
-        # than a representation difference. Fit on this fold's training rows only,
-        # before scaling, in the same order evaluate_rep uses. `dims` above keeps
-        # the width the hybrid SELECTED, matching the baseline rows, which record
-        # each representation's own width and not its post-cut width.
-        train_hybrid, val_hybrid, _ = _filter_high_dim_per_fold(
-            train_hybrid, val_hybrid, y_train, 'regression')
-
-        if not _is_binary_hybrid(train_hybrid):
-            scaler = StandardScaler()
-            train_hybrid_s = scaler.fit_transform(train_hybrid)
-            val_hybrid_s = scaler.transform(val_hybrid)
-        else:
-            train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
-
-        # ----- train each downstream model, score held-out fold -----
+        # ----- train each downstream model on ITS OWN selected features -----
+        #
+        # ⛔ What used to be here, changed 2026-09-28: one recipe was read from
+        # `fold_search.fitted_results['rf']`, one set of features was assembled
+        # from it, and every downstream model in `models` was trained on that
+        # set. The search stores one recipe per downstream model it scored --
+        # which representations, how many features from each, how to rank them --
+        # so every row but the random forest's held the random forest's features
+        # under another model's name.
+        #
+        # Now each model uses the recipe stored for it, and a model with no
+        # recipe of its own gets no score on the fold and is named on the line
+        # printed below. Nothing is substituted.
         for model_name, factory in models.items():
+            fitted = _fitted_all.get(model_name)
+            if fitted is None:
+                print(f"    fold {fold_idx} {model_name}: no recipe of its own "
+                      f"-- the search stored recipes for {sorted(_fitted_all)} "
+                      f"on this fold; no score")
+                continue
+
+            # ----- assemble train/val hybrid using this model's selection -----
+            try:
+                fi = {r: {'selected_indices': idx}
+                      for r, idx in fitted.selected_indices.items()}
+                train_hybrid = apply_feature_selection(train_reps, fi)
+                val_hybrid = apply_feature_selection(val_reps, fi)
+                if fitted.augmentation_info and has_aug:
+                    val_aug = {r: arr[val_idx] for r, arr in aug_dict.items()}
+                    train_aug_block = apply_augmentation_selection(
+                        train_aug, fitted.augmentation_info)
+                    val_aug_block = apply_augmentation_selection(
+                        val_aug, fitted.augmentation_info)
+                    if (train_aug_block is not None
+                            and val_aug_block is not None):
+                        train_hybrid = np.hstack([train_hybrid,
+                                                  train_aug_block])
+                        val_hybrid = np.hstack([val_hybrid, val_aug_block])
+            except Exception as e:
+                print(f"    fold {fold_idx} {model_name}: hybrid assembly "
+                      f"failed: {e}")
+                continue
+
+            # One width per (fold, downstream model) now, because each model
+            # selects its own features. The returned dim estimate is the mean
+            # over all of those, where it used to be one width per fold.
+            dims.append(train_hybrid.shape[1])
+            train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
+            val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
+
+            # Same feature cut the baseline arm gets. run_baseline_survey.evaluate_rep
+            # runs _filter_high_dim_per_fold on every baseline representation, so any
+            # representation wider than 500 features is scored on 200 of them there
+            # (a 1280-feature language-model representation loses 1080). Without this
+            # the hybrid keeps every feature it selected, and part of the reported
+            # difference between the two arms is that preprocessing difference rather
+            # than a representation difference. Fit on this fold's training rows only,
+            # before scaling, in the same order evaluate_rep uses. `dims` above keeps
+            # the width the hybrid SELECTED, matching the baseline rows, which record
+            # each representation's own width and not its post-cut width.
+            train_hybrid, val_hybrid, _ = _filter_high_dim_per_fold(
+                train_hybrid, val_hybrid, y_train, 'regression')
+
+            if not _is_binary_hybrid(train_hybrid):
+                scaler = StandardScaler()
+                train_hybrid_s = scaler.fit_transform(train_hybrid)
+                val_hybrid_s = scaler.transform(val_hybrid)
+            else:
+                train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
+
             try:
                 m = clone(factory())
                 m.fit(train_hybrid_s, y_train)

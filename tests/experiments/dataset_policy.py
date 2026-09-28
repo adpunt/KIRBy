@@ -701,6 +701,71 @@ FAST_SPEED_DATASETS = frozenset({
 })
 
 
+# =============================================================================
+# EXTRA-TIER MODELS ON THE SMALL DATASETS
+# =============================================================================
+# DEFAULT_MODELS labels five models 'extra': knn, linear, gp, ngboost and
+# lightgbm_huber. AUTO_SELECTED_TIERS is {'fast', 'full'}, so an 'extra' model
+# is scored ONLY when a caller names it in models=. knn is named today, through
+# DISTANCE_MODELS, which the similarity experiments and the distance-lineage
+# searches read. The other four are named by no experiment on any dataset.
+#
+# gp is added here on the datasets small enough to run it. The case for it: it
+# is the only model in the set that returns a variance with its prediction, and
+# its tuning grid at find_best_hybrid.py:3366 already carries a Tanimoto kernel
+# alongside the RBF and Matern ones. Owner's decision 2026-09-27.
+#
+# ⛔ THE THRESHOLD IS THE ENGINE'S, NOT A COMPUTE CHOICE. gp carries
+# '_max_samples': 1000 and is dropped above it with a printed skip, so 1,000 is
+# where naming it stops doing anything.
+#
+# ⛔ NOT A PRUNE. Nothing is removed from any search by this. It adds one model
+# to the model axis on the datasets that can run it.
+#
+# The other four extras are one name each in SMALL_DATASET_EXTRA_MODELS if they
+# are ever wanted; none has been asked for.
+SMALL_DATASET_EXTRA_MODELS = ('gp',)
+
+# Under this many molecules an extra-tier model is added. Matches
+# DEFAULT_MODELS['gp']['_max_samples'].
+SMALL_DATASET_MAX_SAMPLES = 1000
+
+
+def small_dataset_extra_models(dataset_name: Optional[str]):
+    """Extra-tier model names to add for this dataset, as a list.
+
+    Empty when the dataset is not registered, has no recorded n_samples, is at
+    or above SMALL_DATASET_MAX_SAMPLES, or already skips the model through
+    _DATASET_STRATEGY_SKIPS under any strategy.
+
+    ⛔ tcga_brca_pam50 IS EXCLUDED BY THAT RULE AND MUST STAY EXCLUDED. It
+    holds 900 molecules, under the cap, but the skip table records gp taking 44
+    hours of the 60 that general/uncapped took there. That is a measurement, not
+    a theory.
+
+    ⛔ A DATASET WITH NO RECORDED n_samples GETS NOTHING. 38 of the registered
+    datasets carry a count and 13 of those are under 1,000 molecules. A dataset
+    whose count is absent is not guessed at -- add its n_samples to the table
+    if it should be included.
+    """
+    if not dataset_name:
+        return []
+    from kirby.registry import DATASET_REGISTRY
+    info = DATASET_REGISTRY.get(dataset_name)
+    if info is None or info.n_samples is None:
+        return []
+    if info.n_samples >= SMALL_DATASET_MAX_SAMPLES:
+        return []
+    out = []
+    for name in SMALL_DATASET_EXTRA_MODELS:
+        skipped = any(
+            name in v for k, v in _DATASET_STRATEGY_SKIPS.items()
+            if isinstance(k, tuple) and k[0] == dataset_name)
+        if not skipped:
+            out.append(name)
+    return out
+
+
 def dataset_search_speed(dataset_name: Optional[str]) -> str:
     """'fast' for the twelve above, 'full' for everything else.
 

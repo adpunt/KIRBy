@@ -627,6 +627,17 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     top2_hybrids_by_fold = {}
     top2_pairs_by_model_by_fold = {}
     hybrid_deltas_by_model_by_fold = {}
+    # WHICH DOWNSTREAM MODELS THE FOUR BLOCKS BELOW COVER, and why a name is
+    # missing from one. Added 2026-09-28. Every reason below was printed to the
+    # terminal and saved nowhere, so a result file holding three models read the
+    # same as a run configured for three.
+    #
+    # One dict of {downstream model: reason}, and the fold is named inside each
+    # reason, because the blocks are per fold and a model can come back on one
+    # fold and not another. The last reason written for a model wins; the fold
+    # numbers in the text say how many folds it covers.
+    top2_models_compared = list(search_models)
+    top2_models_dropped = {}
     for fold_i, search in fold_searches.items():
         if search is None:
             continue
@@ -640,6 +651,9 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                 print(f"      [warn] top-2 base representations "
                       f"(fold {fold_i}, {model_name}): "
                       f"{type(e).__name__}: {str(e)[:150]}")
+                top2_models_dropped[model_name] = (
+                    'no top-2 base representations on fold %s: %s: %s'
+                    % (fold_i, type(e).__name__, str(e)[:150]))
             _h = None
             try:
                 _h = top_hybrids(search, model_name, 2, require_full=False,
@@ -649,6 +663,9 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                 print(f"      [warn] top-2 hybrid configurations "
                       f"(fold {fold_i}, {model_name}): "
                       f"{type(e).__name__}: {str(e)[:150]}")
+                top2_models_dropped[model_name] = (
+                    'no top-2 hybrid configurations on fold %s: %s: %s'
+                    % (fold_i, type(e).__name__, str(e)[:150]))
             # The rank-1 hybrid is handed over explicitly. Called with
             # hybrid=None, hybrid_deltas reads _picked['selected'][0]['row']
             # (_shared.py:7424) and top_hybrids builds no 'row' key in its
@@ -664,6 +681,9 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                     print(f"      [warn] hybrid deltas "
                           f"(fold {fold_i}, {model_name}): "
                           f"{type(e).__name__}: {str(e)[:150]}")
+                    top2_models_dropped[model_name] = (
+                        'no hybrid deltas on fold %s: %s: %s'
+                        % (fold_i, type(e).__name__, str(e)[:150]))
         if _base_f:
             top2_base_reps_by_fold[int(fold_i)] = _base_f
         if _hyb_f:
@@ -700,6 +720,10 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         except Exception as e:
             print(f"      [warn] top-2 model-and-representation pairs "
                   f"(fold {fold_i}): {type(e).__name__}: {str(e)[:150]}")
+            for _m in search_models:
+                top2_models_dropped.setdefault(_m, (
+                    'no model-and-representation pairs on fold %s: %s: %s'
+                    % (fold_i, type(e).__name__, str(e)[:150])))
 
     if top2_pairs_by_model_by_fold:
         _n_pairs = sum(r['n_pairs'] for r in top2_pairs_by_model_by_fold.values())
@@ -1080,6 +1104,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         'top2_base_reps_by_fold': convert_numpy(top2_base_reps_by_fold),
         'top2_hybrids_by_fold': convert_numpy(top2_hybrids_by_fold),
         'top2_pairs_by_model_by_fold': convert_numpy(top2_pairs_by_model_by_fold),
+        # The downstream models the four top-2 blocks were asked for, and
+        # {downstream model: why it is missing from one of them, on which fold}.
+        # Added 2026-09-28: these reasons were printed and saved nowhere.
+        'top2_models_compared': top2_models_compared,
+        'top2_models_dropped': top2_models_dropped,
         # delta_vs_source_mean is the rank-1 hybrid against the mean of the base
         # representations that actually fed it, read off the per-fold budget
         # split so a representation given 0 features is out of the mean.

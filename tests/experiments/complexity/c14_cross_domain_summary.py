@@ -39,7 +39,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_config,
     extract_top3_base_reps,
-    top_base_reps, hybrid_deltas,
+    top_base_reps, hybrid_deltas, resolve_comparison_models,
     DOWNSTREAM_MODELS,
     INTERNAL_EVALUATORS,
 )
@@ -355,35 +355,66 @@ def _evaluate_task(task_name, rep_preset, config):
     # All three stay in the file under their own keys.
     #
     # hybrid= is passed explicitly, and it is ncv.best_by_model[m], whose
-    # score_mean is the outer-fold hybrid mean. Left to default, hybrid_deltas
-    # calls top_hybrids, which reads ncv.all_results -- and all_results on a
-    # NestedCVResult is the INNER searches' own CV scores
-    # (find_best_hybrid.py:9752-9761), which are selection-side numbers. Those
-    # against outer-fold baselines would be a delta between two different
-    # things. For the same reason top_hybrids and select_model_rep_pairs are not
-    # called here at all.
+    # score_mean is the outer-fold hybrid mean.
     #
     # Both read stored rows: 0 new model fits, 0 new folds.
     # require_full=False so a downstream model the nested CV never scored
     # returns a short list instead of raising and losing the whole task.
+    #
+    # ⛔ top_hybrids AND select_model_rep_pairs ARE DELIBERATELY NOT CALLED
+    # HERE, AND ADDING THEM WAS TRIED AND REVERTED ON 2026-09-28.
+    #
+    # The two halves would not be scored on the same rows. top_base_reps reads
+    # ncv.baselines: the mean over the outer folds, each representation scored on
+    # rows no search saw. top_hybrids reads ncv.all_results, and on a
+    # NestedCVResult those are the INNER searches' own CV scores
+    # (find_best_hybrid.py:10186-10196), which are selection-side numbers pooled
+    # over the outer folds. A base number from the first against a hybrid number
+    # from the second is a delta between two different things.
+    #
+    # So c14 carries no ranked pair of hybrids on purpose. The held-out hybrid
+    # number per downstream model is ncv.best_by_model[m]['score_mean'], which is
+    # what 'hybrid_deltas_by_model' and 'delta' above are built from, and it is
+    # one configuration per model rather than two.
+    #
+    # WHAT DID CHANGE ON 2026-09-28: the model list. It comes from the nested CV
+    # now, not from DOWNSTREAM_MODELS. A model the nested CV never scored -- its
+    # own skip policy, or a sample-count limit -- used to fall out of this loop
+    # with nothing written down; it is recorded in 'models_dropped', and no
+    # other model's rows stand in for it.
     _ncv_best_by_model = ncv.best_by_model
     top2_base_reps_by_model = {}
     hybrid_deltas_by_model = {}
-    for _m in DOWNSTREAM_MODELS:
+    comparison_failures = []
+    comparison_models, models_dropped = resolve_comparison_models(
+        ncv, list(DOWNSTREAM_MODELS))
+    for _name, _why in models_dropped:
+        print(f"    {_name} is not in the top-2 comparison: {_why}")
+    for _m in comparison_models:
         try:
             top2_base_reps_by_model[_m] = top_base_reps(
                 ncv, _m, 2, require_full=False,
                 context=f'c14 {task_name} outer-fold means')
         except Exception as e:
+            comparison_failures.append(
+                {'downstream_model': _m, 'half': 'base_reps',
+                 'reason': f'{type(e).__name__}: {e}'})
             print(f"    WARNING: top 2 base representations for {_m} failed: {e}")
         _bp_row = _ncv_best_by_model.get(_m)
         if _bp_row is None:
+            comparison_failures.append(
+                {'downstream_model': _m, 'half': 'hybrid_deltas',
+                 'reason': 'the nested CV recorded no hybrid row for this '
+                           'downstream model on best_by_model'})
             continue
         try:
             hybrid_deltas_by_model[_m] = hybrid_deltas(
                 ncv, _m, hybrid=_bp_row,
                 context=f'c14 {task_name} outer-fold means')
         except Exception as e:
+            comparison_failures.append(
+                {'downstream_model': _m, 'half': 'hybrid_deltas',
+                 'reason': f'{type(e).__name__}: {e}'})
             print(f"    WARNING: the two hybrid deltas for {_m} failed: {e}")
 
     print(f"    Hybrid (held out): {hybrid_score:.4f} vs best single "
@@ -479,6 +510,16 @@ def _evaluate_task(task_name, rep_preset, config):
         # ranked on the outer-fold mean. top3_base_reps stays as it was: it is
         # RandomForest only and carries no tie or drop record.
         'top2_base_reps_by_model': top2_base_reps_by_model,
+        'top2_base_reps_score_basis': (
+            'the mean over the outer folds, each representation scored on rows '
+            'no search saw (NestedCVResult.baselines)'),
+        # Which downstream models the three keys above cover, which of
+        # DOWNSTREAM_MODELS the nested CV never scored, and which half of which
+        # model's comparison raised.
+        'comparison_models': comparison_models,
+        'models_dropped': [{'downstream_model': _n, 'reason': _w}
+                           for _n, _w in models_dropped],
+        'comparison_failures': comparison_failures,
         # {downstream model: {'delta_vs_source_mean', 'delta_vs_best_rep', ...}},
         # both positive when the hybrid is ahead. Not the same quantity as
         # 'delta' above, which is delta_mean_of_folds.

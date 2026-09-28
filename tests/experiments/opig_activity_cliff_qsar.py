@@ -83,6 +83,7 @@ from experiments._shared import (
     fold_reselection, build_fold_reselection_input,
     hr_exclude_folds,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
 )
 
 # =============================================================================
@@ -688,6 +689,8 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
                     search, 'rf', 2, require_full=False, context=_sel_ctx)
             except Exception as _e:
                 print(f"  top2_base_reps not added: {type(_e).__name__}: {_e}")
+                top2_block['top2_base_reps_absent_reason'] = \
+                    f"rf: {type(_e).__name__}: {_e}"
             try:
                 # budget=None: the best two configurations across every budget
                 # in the search, not within one budget in features. This file
@@ -697,6 +700,8 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
                     search, 'rf', 2, require_full=False, context=_sel_ctx)
             except Exception as _e:
                 print(f"  top2_hybrids not added: {type(_e).__name__}: {_e}")
+                top2_block['top2_hybrids_absent_reason'] = \
+                    f"rf: {type(_e).__name__}: {_e}"
             try:
                 # 5 downstream models in MODELS_LIST * (2 representations +
                 # 2 hybrids) = 20 rows. models=MODELS_LIST rather than the
@@ -708,6 +713,8 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
             except Exception as _e:
                 print(f"  top2_pairs_by_model not added: "
                       f"{type(_e).__name__}: {_e}")
+                top2_block['top2_pairs_by_model_absent_reason'] = \
+                    f"{type(_e).__name__}: {_e}"
 
             # Two reference numbers for the rank-1 hybrid, per downstream
             # model, not one:
@@ -730,14 +737,36 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
             # One try per downstream model, so a model with no stored hybrid
             # does not cost the other four their entry. Keys are downstream
             # model names; this dict is new and nothing iterates it.
+            #
+            # The names to loop come off the search, not from MODELS_LIST.
+            # MODELS_LIST is a fixed list written in this file; the search scores
+            # whatever list it was given, which can be shorter -- a dataset's
+            # skip policy drops svm, and svm drops itself above 10,000
+            # molecules. A name the search never scored is named here and left
+            # out; no other model's rows are used in its place.
+            #
+            # The models compared and the models left out are now SAVED as well
+            # as printed (2026-09-28). Until now every reason below went to the
+            # terminal only, so a saved block holding four models read the same
+            # as a run configured for four.
             _deltas = {}
-            for _m in MODELS_LIST:
+            _delta_models, _delta_dropped = resolve_comparison_models(
+                search, MODELS_LIST)
+            top2_block['top2_models_compared'] = list(_delta_models)
+            top2_block['top2_models_dropped'] = {}
+            for _name, _why in _delta_dropped:
+                print(f"  hybrid_deltas for downstream model {_name} not "
+                      f"added: {_why}")
+                top2_block['top2_models_dropped'][_name] = _why
+            for _m in _delta_models:
                 try:
                     _top1 = top_hybrids(search, _m, 1, require_full=False,
                                         context=f'{_sel_ctx}/deltas/{_m}')
                     if not _top1['selected']:
                         print(f"  hybrid_deltas for downstream model {_m} not "
                               f"added: {_top1['shortfall_reason']}")
+                        top2_block['top2_models_dropped'][_m] = (
+                            'no hybrid delta: %s' % _top1['shortfall_reason'])
                         continue
                     _deltas[_m] = hybrid_deltas(
                         search, _m, hybrid=_top1['selected'][0],
@@ -745,6 +774,8 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
                 except Exception as _e:
                     print(f"  hybrid_deltas for downstream model {_m} not "
                           f"added: {type(_e).__name__}: {_e}")
+                    top2_block['top2_models_dropped'][_m] = (
+                        'no hybrid delta: %s: %s' % (type(_e).__name__, _e))
             if _deltas:
                 top2_block['hybrid_deltas_by_model'] = _deltas
             if not top2_block:

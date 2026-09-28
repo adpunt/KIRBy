@@ -53,13 +53,12 @@ manhattan; every cell records `convention_matches_metric` so the matched pair
 and the mismatched pair can be read apart. n12 itself is untouched: this
 measures which convention is right, and n12 changes after.
 
-WHAT A LEVEL OF 0.0 WOULD GIVE, AND WHY IT IS NOT IN THE DEFAULT GRID. Under
+LEVEL 0.0 IS IN THE DEFAULT GRID since 2026-09-27 (owner's decision). Under
 every condition above, level 0.0 corrupts no molecule -- measured here, 0 of
-240 under outlier_p10. Average precision is then undefined and
-`detection_scores` returns None, and the clean fit and the corrupted fit are
-the same number so the recovery figure divides by zero. Both readings are
-undefined, which is why it is dropped; `--levels` puts it back. This is n12
-defect 2, which n21 does not repeat.
+240 under outlier_p10. So average precision is not written there
+(`detection_scores` returns None) and the recovery share is NaN. What level 0.0
+does give is the repaired fit against the fit on the labels as recorded, which
+is the question the whole noise suite asks of real data.
 
 THE HYBRID RECIPE IS CHOSEN ON CLEAN LABELS. It comes from the precomputed pool
 and is rebuilt per fold under the corrupted labels through
@@ -127,6 +126,7 @@ from experiments._shared import (
     get_model_factories, DOWNSTREAM_MODELS_NOISE, build_fold_hybrid,
     get_best_search_for_downstream, make_nearest_neighbors,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    searched_models, resolve_comparison_models,
 )
 from kirby.hybrid import compute_feature_importance
 from kirby.utils.noise_estimation import (
@@ -758,7 +758,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'seed': int(kwargs.get('forest_seed', FOREST_SEED)),
     }
 
-    # The level grid, minus the degenerate endpoint. See the module docstring.
+    # The whole level grid, 0.0 included (owner's decision 2026-09-27). At 0.0
+    # nothing is injected: the repair is applied to the labels as recorded and
+    # the repaired fit is scored against the fit on those same labels. Average
+    # precision is not written there (detection_scores returns None when
+    # nothing moved) and the recovery share is NaN with its note, because the
+    # clean-to-corrupted gap is zero.
     levels_dropped = {}
     if kwargs.get('levels'):
         levels = [float(x) for x in kwargs['levels']]
@@ -766,14 +771,6 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         levels = [float(x) for x in
                   dataset_noise_levels(dataset_name, strategy=condition,
                                        detect_grid=True, is_clf=is_clf)]
-        kept = [x for x in levels if x > 0.0]
-        for x in levels:
-            if x <= 0.0:
-                levels_dropped[f'{x:g}'] = (
-                    f'no molecule is corrupted under {condition} at level '
-                    f'{x:g}, so average precision is undefined and the '
-                    f'clean-to-corrupted gap is zero. Pass --levels to run it.')
-        levels = kept
 
     # ⛔ config FIRST, then the kwarg. run_all passes the caller's model list in
     # `config['models']` and never as a `models` kwarg -- the only kwarg it ever
@@ -1222,7 +1219,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         errors[f'{_b}|{fold_key0}|clean|{mn}'] = \
                             f'{type(exc).__name__}: {exc}'
 
-            for seed in seeds:
+            # At 0.0 on regression every draw delivers exactly zero, so the
+            # three draws would be three identical passes; one is kept.
+            for seed in (seeds if (level > 0 or is_clf) else seeds[:1]):
                 pass_key = f'f{fold_i}s{seed}'
                 spec_noise = noise_spec_for(dataset_name, condition, level,
                                             noise_seed=seed, is_clf=is_clf)
@@ -1417,11 +1416,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # over every level, fold, draw, detector and k value, and 'per_level' and
     # 'summary' hold the numbers they held before this block existed.
     #
-    # WHAT THESE ARE A RANKING OF. They read the pool search the hybrid recipe
-    # came from, the same search `base_reps_used` was ranked from. The
-    # importance-weighted spaces, the forest proximity and every repaired fit
-    # are computed on the first downstream model's top 2 of these; the other
-    # models' rows are recorded and not measured in.
+    # WHAT THESE ARE A RANKING OF. Each downstream model's rows are read out of
+    # the stored search the pool returned for that model. The first downstream
+    # model's is the search the hybrid recipe came from and the one
+    # `base_reps_used` was ranked from, so the importance-weighted spaces, the
+    # forest proximity and every repaired fit are computed on its top 2; the
+    # other models' rows are recorded and not measured in.
     #
     # What was absent without them: the file reported no score for any other
     # representation or recipe, so a reader could not tell a comparator ahead
@@ -1432,18 +1432,81 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     top2_base_reps, top2_hybrids = {}, {}
     hybrid_deltas_by_model, top2_pairs_by_model = {}, []
     if pool_search is not None:
+        # ONE SEARCH PER DOWNSTREAM MODEL. `pool_search` came back from a lookup
+        # that named downstream_models[0], and every model's top 2 used to be
+        # read out of it. The pool picks the best stored configuration FOR the
+        # model it is asked about, so two models can win on different members of
+        # the pool. Each model is asked for separately here and read out of its
+        # own answer; nothing falls back to the first model's search, because a
+        # row labelled for one model that holds another model's configuration is
+        # the defect being fixed. The lookups re-read the stored searches the
+        # first lookup already loaded, so they cost 0 model fits.
+        #
+        # What the distances were measured on does not change. base_used above
+        # is still downstream_models[0]'s top 2 by pool_search, which is what
+        # every space in `specs` was built from.
+        _searches = {}
+        _search_lookup_failed = {}
         for _m in downstream_models:
+            if _m == downstream_models[0]:
+                _searches[_m] = pool_search
+                continue
+            try:
+                _s_m, _ = get_best_search_for_downstream(
+                    reps, labels, groups,
+                    downstream_model=_m, budget=None,
+                    augmentations=augmentations, dataset_name=dataset_name,
+                    task_type=task_type, data=data,
+                    pool_subset='predictive_and_similarity')
+            except Exception as _e:
+                _search_lookup_failed[_m] = f'{type(_e).__name__}: {_e}'
+                continue
+            if _s_m is not None:
+                _searches[_m] = _s_m
+
+        # WHICH DOWNSTREAM MODELS THIS TABLE COVERS. Two lists decide it and
+        # they can disagree. `downstream_models` is the list this run fits,
+        # from config['models'] or from DOWNSTREAM_MODELS_NOISE when the runner
+        # named none. The other list is the models a stored search scored, which
+        # searched_models reads off that search. A model in the first and not in
+        # the second has no rows of its own to rank; until now it was stored as
+        # an empty list with nothing said about why. Both kinds of missing model
+        # are written down now, and resolve_comparison_models substitutes
+        # nothing.
+        _requested = list(downstream_models)
+        _compare, _model_dropped = [], {}
+        for _m in _requested:
+            _s_m = _searches.get(_m)
+            if _s_m is None:
+                _model_dropped[_m] = _search_lookup_failed.get(_m) or (
+                    'the pool returned no stored search for this downstream '
+                    'model, so there are no rows of its own to rank')
+                continue
+            _keep, _why = resolve_comparison_models(_s_m, [_m])
+            if not _keep:
+                _model_dropped[_m] = _why[0][1]
+                continue
+            _compare.append(_m)
+        results['top2_models_requested'] = _requested
+        results['top2_models_compared'] = list(_compare)
+        results['top2_models_dropped'] = _model_dropped
+        results['top2_models_scored_by_each_search'] = {
+            _m: searched_models(_s) for _m, _s in _searches.items()}
+        for _m, _why in _model_dropped.items():
+            print(f"    top-2 rows absent for {_m}: {_why}")
+
+        for _m in _compare:
+            search_m = _searches[_m]
             _ctx = f'n21 {dataset_name}/{_m}'
             try:
-                # require_full=False: this search was fetched for
-                # downstream_models[0] only, so a model it never scored comes
+                # require_full=False: a model its own search never scored comes
                 # back as a short list instead of raising at the last line of a
                 # run that has already spent every fit it was going to spend.
-                _b = top_base_reps(pool_search, _m, 2, require_full=False,
+                _b = top_base_reps(search_m, _m, 2, require_full=False,
                                    context=_ctx)
                 top2_base_reps[_m] = [(e['rep'], e['score'])
                                       for e in _b['selected']]
-                _h = top_hybrids(pool_search, _m, 2, require_full=False,
+                _h = top_hybrids(search_m, _m, 2, require_full=False,
                                  context=_ctx)
                 # Scalars only. Each selected row also carries a Blueprint
                 # object, and this dict is written to JSON by
@@ -1463,24 +1526,31 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     # KeyError. The rank-1 entry carries 'score_mean' and
                     # 'blueprint', which is what hybrid_deltas reads.
                     hybrid_deltas_by_model[_m] = hybrid_deltas(
-                        pool_search, _m, hybrid=_h['selected'][0], context=_ctx)
+                        search_m, _m, hybrid=_h['selected'][0], context=_ctx)
             except Exception as _e:
                 print(f"    {_m}: top-2 / hybrid deltas unavailable "
                       f"({type(_e).__name__}: {_e})")
+        # select_model_rep_pairs takes ONE SearchResult and walks every model in
+        # it, so it is given downstream_models[0]'s, named in
+        # 'top2_pairs_search_of_model'. It resolves the model list against that
+        # search itself and reports every name it drops under 'shortfalls'.
+        results['top2_pairs_search_of_model'] = downstream_models[0]
         try:
             _sel = select_model_rep_pairs(
                 pool_search, models=list(downstream_models), n_base=2,
                 n_hybrids=2, require_full=False,
                 context=f'n21 {dataset_name}')
             top2_pairs_by_model = _sel['pairs']
+            results['top2_pairs_shortfalls'] = list(_sel['shortfalls'])
         except Exception as _e:
             print(f"    top-2 pair grid unavailable "
                   f"({type(_e).__name__}: {_e})")
 
-    # New keys, keyed by downstream model name. A downstream model this search
-    # never scored gets an empty list here and no entry in
-    # 'hybrid_deltas_by_model'. Read by nothing else in the repository:
-    # noise_ceiling_analyse._read_n21 reads 'per_level' alone.
+    # New keys, keyed by downstream model name. A downstream model whose own
+    # search never scored it, or whose pool lookup returned no search, is absent
+    # here and named in 'top2_models_dropped' with the reason. Read by nothing
+    # else in the repository: noise_ceiling_analyse._read_n21 reads 'per_level'
+    # alone.
     results['top2_base_reps'] = top2_base_reps
     results['top2_hybrids'] = top2_hybrids
     # One flat row per (downstream model, slot): 5 downstream models x
@@ -1492,9 +1562,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # single best base representation for that model.
     results['hybrid_deltas_by_model'] = convert_numpy(hybrid_deltas_by_model)
     results['top2_read_from'] = (
-        'the pool search that chose the hybrid recipe, fetched once for '
-        f'downstream model {downstream_models[0]}. The distances n21 measured '
-        f'are built on {downstream_models[0]}\'s top 2 by this ranking: '
+        'one stored search per downstream model, each from a pool lookup that '
+        f'asked about that model. {downstream_models[0]}\'s is the search that '
+        'chose the hybrid recipe, and the distances n21 measured are built on '
+        f'{downstream_models[0]}\'s top 2 by that one ranking: '
         + ', '.join(f'{b} {rn}' for b, rn in base_used.items()) + '.'
         if pool_search is not None else
         'no pool search was held: ' + str(hybrid_meta.get('absent_because')

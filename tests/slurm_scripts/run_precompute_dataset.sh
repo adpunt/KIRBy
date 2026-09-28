@@ -182,6 +182,43 @@ fi
 
 cd /data/stat-ecr/scat9264/KIRBy || exit 2
 
+# --- EXTRA-TIER MODELS ON A SMALL DATASET -----------------------------------
+# 'gp' carries tier 'extra' in DEFAULT_MODELS and AUTO_SELECTED_TIERS is
+# {'fast','full'}, so models=None never scores it at either speed. It is added
+# here for the datasets under DEFAULT_MODELS['gp']['_max_samples'] = 1,000
+# molecules, which is where the engine stops dropping it. The list comes from
+# dataset_policy.small_dataset_extra_models so the precompute and every
+# experiment name the same models -- if the two ever disagree, the precomputed
+# search stops matching what the experiment asks for.
+#
+# ⛔ THIS RE-RUNS THE RECIPE SEARCH ON THOSE DATASETS. model_names is recorded
+# in the search meta (find_best_hybrid.py:711), so a dataset that used to send
+# no --models now sends a list and its stored search pickle stops matching. The
+# per-configuration rows are NOT redone: IDENTITY_COLS (result_cache.py:46)
+# carries no model list, so everything already scored is read back and only the
+# gp configurations are new fits.
+#
+# ⛔ NOT FOR THE knn AND ridge PASSES, same reason as the block above: an
+# explicit --models wins over --with-knn and --with-ridge. This only rebuilds
+# MODEL_FLAG, which those passes do not use.
+#
+#   KIRBY_NO_SMALL_EXTRAS=1  send no extras, whatever the size
+if [ "${KIRBY_NO_SMALL_EXTRAS:-}" != "1" ] && [ -z "${KIRBY_MODELS:-}" ]; then
+    SMALL_EXTRAS=$(PYTHONPATH="src:tests:${PYTHONPATH:-}" python3 -c "
+import experiments._shared  # registers the dataset table
+from experiments import dataset_policy
+print(','.join(dataset_policy.small_dataset_extra_models('${DS}')))
+" 2>/dev/null)
+    if [ -n "${SMALL_EXTRAS}" ]; then
+        if [ -z "${MODELS}" ]; then
+            MODELS="rf,lightgbm,dnn,svm,xgboost"
+        fi
+        MODELS="${MODELS},${SMALL_EXTRAS}"
+        MODEL_FLAG="--models ${MODELS}"
+        echo " small-dataset extras added: ${SMALL_EXTRAS}"
+    fi
+fi
+
 # The jobs do NOT git pull. Hundreds of them start over days on one shared
 # checkout; pulling would race, and a mid-flight code change is worse than a
 # known one. Pull once by hand before submitting. The commit is recorded here so

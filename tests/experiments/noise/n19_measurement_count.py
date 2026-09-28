@@ -229,6 +229,7 @@ from experiments._shared import (
     # n11's loop, in one place. See SPACE_FOR_FAMILY below.
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    searched_models, resolve_comparison_models,
     noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
@@ -1134,10 +1135,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'the pool returned no SearchResult, so there are no stored rows to '
             'rank. Every condition number in this file stands.')
     else:
-        for _m in downstream_models:
-            search = _search_of.get(_m)
-            if search is None:
+        # WHICH DOWNSTREAM MODELS THIS TABLE COVERS. Two lists decide it and
+        # they can disagree. `downstream_models` is the list this run fits,
+        # taken from config['models'] or from DOWNSTREAM_MODELS when the runner
+        # named none. The other list is the models a stored search scored,
+        # which searched_models reads off that search. A model in the first and
+        # not in the second has no rows of its own to rank. Both kinds of
+        # missing model are now written to the result file: the model whose
+        # pool lookup returned no search at all, and the model whose own search
+        # scored other models and not it. Neither is read out of another
+        # model's search -- resolve_comparison_models never substitutes one
+        # model for another, and each model below is read out of its own.
+        _requested = list(downstream_models)
+        _compare, _model_dropped = [], {}
+        for _m in _requested:
+            _s_m = _search_of.get(_m)
+            if _s_m is None:
+                _model_dropped[_m] = (
+                    'the pool returned no stored search for this downstream '
+                    'model, so there are no rows of its own to rank')
                 continue
+            _keep, _why = resolve_comparison_models(_s_m, [_m])
+            if not _keep:
+                _model_dropped[_m] = _why[0][1]
+                continue
+            _compare.append(_m)
+        results['top2_models_requested'] = _requested
+        results['top2_models_compared'] = list(_compare)
+        results['top2_models_dropped'] = _model_dropped
+        results['top2_models_scored_by_each_search'] = {
+            _m: searched_models(_s) for _m, _s in _search_of.items()}
+        for _m, _why in _model_dropped.items():
+            print(f"  top-2 rows absent for {_m}: {_why}")
+        for _m in _compare:
+            search = _search_of[_m]
             # require_full=False: a downstream model this search never scored
             # comes back a short list carrying its own shortfall_reason,
             # instead of raising before the first draw has run.

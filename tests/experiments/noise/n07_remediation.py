@@ -20,6 +20,14 @@ synthetic-noise regime — it says which remediation strategy best recovers
 performance when the corruption matches this injected model, and does NOT
 establish behaviour on real label noise of unknown structure.
 
+HOW MANY MOLECULES A CLEANUP FLAGS. remove and knn_smooth (and label_smooth on a
+classification set) flag each share in FLAG_SHARES = 0.05, 0.10, 0.20 of the
+training molecules, filed as '<cleanup>@flag_share<s>'. Until 2026-09-28 they
+flagged `noise_fraction`, which is also the share the injector gives the wide
+error (or flips), so each cleanup was handed the injector's own count. Owner's
+decision 2026-09-28: no method reads what only exists because the noise was
+injected.
+
 Compares 7 remediation strategies after noise detection: remove, downweight,
 label_smooth, knn_smooth, oof_smooth, gp_smooth, quantile_clip. The last three
 were added 2026-09-17 and run on regression datasets only. Two baselines
@@ -213,6 +221,51 @@ SCORE_FREE_CLEANUPS = ('quantile_clip', 'invvar_weight')
 SCORE_DRIVEN_CLEANUPS = tuple(c for c in CLEANUPS
                               if c not in SCORE_FREE_CLEANUPS)
 
+# How many training molecules a thresholding cleanup flags: each share here,
+# swept, the same at every condition and level. n24's FLAG_RATES.
+#
+# ⛔ Until 2026-09-28 the flag share was `noise_fraction`, the SAME number
+# _noise_spec writes into the outlier condition's p. So remove, knn_smooth and
+# prox_smooth flagged exactly the share the injector gave the wide error, and
+# on classification exactly the share it flipped. A real user knows neither.
+# Owner's decision 2026-09-28: no method may read what only exists because the
+# noise was injected. noise_fraction now reaches the injector only.
+FLAG_SHARES = (0.05, 0.10, 0.20)
+
+# The cleanups whose cleaned set depends on the flag share: the three that
+# threshold the suspicion score (n25.THRESHOLDING_CLEANUPS), and label_smooth
+# on a classification set, which thresholds there and nowhere else. Every
+# other cleanup reads no quantile, so a flag share would sweep nothing.
+FLAG_SHARE_CLEANUPS = ('remove', 'knn_smooth', 'prox_smooth')
+
+
+def reads_flag_share(cleanup, is_clf):
+    """Does this cleanup's cleaned training set depend on the flag share?"""
+    return (cleanup in FLAG_SHARE_CLEANUPS
+            or (bool(is_clf) and cleanup == 'label_smooth'))
+
+
+def flag_share_label(cleanup, share):
+    """The strategy name one (cleanup, flag share) is filed under."""
+    return f'{cleanup}@flag_share{float(share):g}'
+
+
+def split_strategy(label):
+    """(cleanup, flag share or None) from a strategy name."""
+    head, sep, tail = str(label).partition('@flag_share')
+    return (head, float(tail)) if sep else (head, None)
+
+
+def expand_flag_shares(strategies, is_clf, shares=FLAG_SHARES):
+    """Each cleanup that reads the flag share once per share, in place."""
+    out = []
+    for st in strategies:
+        if reads_flag_share(st, is_clf):
+            out += [flag_share_label(st, sh) for sh in shares]
+        else:
+            out.append(st)
+    return out
+
 # Which cleanups read a target that `correction_targets` can hoist, and which
 # target each reads. ⛔ DECLARE A NEW CLEANUP HERE. Callers used to write this
 # mapping out by hand -- n18 carried its own three-pair list -- so js_shrink,
@@ -310,6 +363,26 @@ GAP_MIN_FRAC = 0.02
 # sweep in run() below is what makes the others reachable.
 DEFAULT_CONDITION = 'outlier_p05'
 
+# 2026-09-27, owner's decision: n07 also runs on the labels as recorded. Under
+# this condition name nothing is injected at all -- not a zero-level draw, which
+# on classification still flips a few labels (calibrate_flip_probability has a
+# floor). The 'noisy' training labels ARE the recorded ones, so every cleanup's
+# D-versus-D' row answers: does it help on the dataset's own experimental
+# noise. 'no_noise' and 'noisy_baseline' are then the same fit, and every
+# recovery percentage is NaN by the GAP_MIN_FRAC floor.
+AS_THEY_COME = 'as_they_come'
+
+
+def _inject_or_recorded(y_all, spec, *, train_idx, is_clf, dataset_name):
+    """inject_train_labels, or the recorded labels when spec is None
+    (AS_THEY_COME). Same return shape: (y_train, moved_mask, provenance)."""
+    if spec is None:
+        y_tr = np.asarray(y_all)[np.asarray(train_idx)].copy()
+        return (y_tr, np.zeros(len(y_tr), dtype=bool),
+                {'condition': AS_THEY_COME, 'injected': False})
+    return inject_train_labels(y_all, spec, train_idx=train_idx,
+                               is_clf=is_clf, dataset_name=dataset_name)
+
 
 def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False,
                 condition=DEFAULT_CONDITION):
@@ -348,6 +421,8 @@ def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False,
     noise_helpers.noise_spec_for.
     """
     from dataclasses import replace
+    if condition == AS_THEY_COME:
+        return None
     if is_clf:
         return noise_spec_for(dataset_name, 'uniform', noise_fraction,
                               noise_seed=noise_seed, is_clf=True)
@@ -1303,8 +1378,17 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     per (fold, noise_seed) and pass them in. This is the recommended path;
     the no-cache path is kept for callers that haven't migrated.
 
+    strategy: a cleanup name, or flag_share_label(cleanup, share). With a
+    share in the name, the cleanup flags that share and noise_fraction reaches
+    only the injector: n07's own run names every thresholding cleanup this way
+    (2026-09-28), because there noise_fraction is also the injector's share.
+    With a bare name, noise_fraction is the flag share, as before -- n18 and
+    n25 call this with their own swept rate and precomputed labels, so the
+    number reaches no injector.
+
     Returns the fold score (float) or None if the fold failed.
     """
+    cleanup, flag_share = split_strategy(strategy)
     # Inject noise (except for clean baseline) — if caller didn't precompute.
     if strategy == 'no_noise':
         y_tr = y_train.copy()
@@ -1321,13 +1405,13 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
         _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
                             noise_seed=noise_seed, is_clf=is_clf,
                             condition=condition)
-        y_tr, _noise_mask, _ = inject_train_labels(
+        y_tr, _noise_mask, _ = _inject_or_recorded(
             y_all, _spec, train_idx=train_idx, is_clf=is_clf,
             dataset_name=dataset_name)
 
     # If caller supplied noise_scores, use them; otherwise compute. Returns
     # None when the strategy needs scores and they're unavailable (loud).
-    if strategy in SCORE_DRIVEN_CLEANUPS:
+    if cleanup in SCORE_DRIVEN_CLEANUPS:
         if noise_scores is None:
             # train_groups, for the same reason every other call in this file
             # now passes this fold's scaffold groups: without them a molecule's
@@ -1340,8 +1424,10 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     # How many training rows the four cleanups touch. It was fixed at the 80th
     # percentile of the noise scores, so a fifth of the rows were flagged while
     # noise_fraction moved a tenth — every cleanup was handed twice as many rows
-    # as carried the WIDE error. The flag rate is now noise_fraction itself:
-    # 0.1 flags the top tenth, at the 90th percentile.
+    # as carried the WIDE error. The flag rate was then noise_fraction itself:
+    # 0.1 flags the top tenth, at the 90th percentile. ⛔ SINCE 2026-09-28 IT IS
+    # NOT: that handed each cleanup the injector's own share. The share is now
+    # swept over FLAG_SHARES and read from the strategy name (see FLAG_SHARES).
     #
     # ⛔ THAT IS NOT "THE CORRUPTED FRACTION", WHICH IS ONE. This comment used to
     # call noise_fraction the corrupted fraction and say the flag rate now
@@ -1389,9 +1475,13 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
         if strategy in ('no_noise', 'noisy_baseline'):
             return _fit_score(X_tr_s, y_tr)
 
-        elif strategy in CLEANUPS:
-            cleaned = cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores,
-                                           noise_fraction, is_clf=is_clf,
+        elif cleanup in CLEANUPS:
+            # A cleanup that reads no flag share is handed noise_fraction only
+            # because the argument is positional; it computes a percentile
+            # from it and never uses it.
+            cleaned = cleaned_training_set(cleanup, X_tr_s, y_tr, noise_scores,
+                                           (noise_fraction if flag_share is None
+                                            else flag_share), is_clf=is_clf,
                                            groups=train_groups,
                                            strength=strength,
                                            targets=targets,
@@ -1995,16 +2085,23 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
                     and bool(grade))
     active = [st for st in strategies
               if st not in ('no_noise', 'noisy_baseline')]
-    reads_nbrs = [st for st in active if st in NEIGHBOUR_CLEANUPS]
-    fixed = [st for st in active if st not in NEIGHBOUR_CLEANUPS
-             and not (det_reads and st in SCORE_DRIVEN_CLEANUPS)]
-    swept_scored = [st for st in active if st not in NEIGHBOUR_CLEANUPS
-                    and det_reads and st in SCORE_DRIVEN_CLEANUPS]
+    _base = lambda st: split_strategy(st)[0]  # noqa: E731
+    reads_nbrs = [st for st in active if _base(st) in NEIGHBOUR_CLEANUPS]
+    fixed = [st for st in active if _base(st) not in NEIGHBOUR_CLEANUPS
+             and not (det_reads and _base(st) in SCORE_DRIVEN_CLEANUPS)]
+    swept_scored = [st for st in active if _base(st) not in NEIGHBOUR_CLEANUPS
+                    and det_reads and _base(st) in SCORE_DRIVEN_CLEANUPS]
 
     def _clean(st, scores, **sim):
+        # The flag share comes from the strategy name (FLAG_SHARES), never
+        # from ctx['noise_fraction'], the injector's share (2026-09-28). A
+        # cleanup that reads none is handed noise_fraction only because the
+        # argument is positional.
+        cl, sh = split_strategy(st)
         try:
             return cleaned_training_set(
-                st, X_tr, y_tr_noisy, scores, ctx['noise_fraction'],
+                cl, X_tr, y_tr_noisy, scores,
+                ctx['noise_fraction'] if sh is None else sh,
                 is_clf=is_clf, groups=groups_tr, dataset_name=ds, **sim)
         except Exception as exc:
             _sn = (sim.get('similarity_neighbours') or {}).get('setting_name')
@@ -2016,16 +2113,22 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
     def _row(st, cleaned, similarity_setting, method_setting):
         if sink is None or not sink.enabled:
             return
+        # The flag share goes into method_setting, the cleanup into method.
+        cl, sh = split_strategy(st)
+        if sh is not None:
+            _fs = f'flag_share={sh:g}'
+            method_setting = (_fs if method_setting is None
+                              else f'{method_setting}|{_fs}')
         dprime_rows(sink, dataset_name=ds, cleaned=cleaned, X_tr=X_tr,
                     y_D=y_tr_noisy, X_va=X_va, y_va=y_val,
                     metric=ctx['metric'], task_type=ctx['task_type'],
                     y_clean=y_tr_clean, models=models, is_clf=is_clf,
                     identity=row_identity(
-                        method=st, method_setting=method_setting,
+                        method=cl, method_setting=method_setting,
                         similarity_setting=similarity_setting, **base_id))
 
     for st in fixed:
-        needs = st in SCORE_DRIVEN_CLEANUPS
+        needs = _base(st) in SCORE_DRIVEN_CLEANUPS
         if needs and noise_scores is None:
             continue
         _row(st, _clean(st, noise_scores if needs else None), NO_NEIGHBOURS,
@@ -2092,7 +2195,7 @@ def _n07_sweep_pass(ctx, *, model_name, model_input, X_tr, X_va, y_tr_noisy,
             if sc_for_nb is None:
                 continue
             for st in reads_nbrs:
-                if st == 'prox_smooth' and s.space != 'forest_proximity':
+                if _base(st) == 'prox_smooth' and s.space != 'forest_proximity':
                     continue
                 _row(st, _clean(st, sc_for_nb, similarity_neighbours=L,
                                 similarity_k=k), s.name, f'k={k}')
@@ -2266,8 +2369,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return sweep_conditions(
         _run_one_condition, 'n07_remediation',
         data, config, output_dir, dataset_name,
-        default_conditions=conditions_for_task(data), kwargs=kwargs,
-        groups_needed=GROUPED_STRATEGIES)
+        default_conditions=[AS_THEY_COME] + list(conditions_for_task(data)),
+        kwargs=kwargs, groups_needed=GROUPED_STRATEGIES)
 
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
@@ -2310,6 +2413,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # (Kramer et al. 2012), 0.35 on caco2 (Bentz et al. 2013 Table 6), half the label
     # SD where nothing is published.
     noise_level = kwargs.get('noise_level', reference_noise_level(dataset_name))
+    # Nothing injected under AS_THEY_COME: the level is 0 and the three draws
+    # would be three identical passes, so one is kept.
+    if condition == AS_THEY_COME:
+        noise_level = 0.0
+    _seeds_here = NOISE_SEEDS[:1] if condition == AS_THEY_COME else NOISE_SEEDS
     noise_provenance = {}
     # How well the detector found the corrupted molecules, before any cleanup.
     # One reading per (fold, draw) per feature space. Owner's decision 2026-09-12.
@@ -2601,6 +2709,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # from an absent row.
     if not is_clf:
         strategies.extend(REGRESSION_ONLY_CLEANUPS)
+    # Each cleanup that flags a share of the training molecules runs once per
+    # share in FLAG_SHARES, filed as '<cleanup>@flag_share<s>' (2026-09-28).
+    flag_shares = [float(x) for x in (kwargs.get('flag_shares') or FLAG_SHARES)]
+    strategies = expand_flag_shares(strategies, is_clf, flag_shares)
     # robust_loss removed (2026-05-26 audit decision): the strategy swapped
     # the iteration's downstream model for HuberRegressor, conflating "data
     # cleanup" with "different model entirely" — its recovery numbers were
@@ -2729,8 +2841,18 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'chose the two and how many features each representation has.'),
         'lower_is_better': lower_is_better,
         'noise_fraction': noise_fraction,
+        'flag_shares': flag_shares,
+        'flag_share_note': (
+            'noise_fraction is the injector\'s share only (the outlier '
+            'condition\'s p; the flip rate on classification). A cleanup that '
+            'flags a share of the training molecules runs at each share in '
+            'flag_shares, filed as <cleanup>@flag_share<s>; the same shares at '
+            'every condition and level (owner\'s decision 2026-09-28). Until '
+            'then remove, knn_smooth and prox_smooth flagged noise_fraction, '
+            'the share the injector moved.'),
         'noise_level': noise_level,
-        'noise_condition': 'outlier',
+        # Was the literal 'outlier' whatever condition ran; 2026-09-27.
+        'noise_condition': condition,
         'dose_units': noise_dose_units(dataset_name),
         'noise_provenance': noise_provenance,
         # Detection, graded before any cleanup ran. Two feature spaces: the one
@@ -2765,14 +2887,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # labels stay clean). No real/"fiction"-scored noise detector is
         # used, so the remediation claim is confined to the synthetic-noise
         # regime.
-        'noise_regime': 'synthetic',
+        'noise_regime': ('recorded labels, nothing injected'
+                         if condition == AS_THEY_COME else 'synthetic'),
         # This said 'gaussian_label_noise_train_only' on the regression path
         # while _noise_spec built the outlier condition, contradicting
         # 'noise_condition' three lines up. The regression path gives a
         # randomly chosen noise_fraction of rows a much wider error; it is
         # not a gaussian spread over every row.
         'noise_injection': (
-            'outlier_label_noise_train_only' if not is_clf
+            'none: the recorded labels' if condition == AS_THEY_COME
+            else 'outlier_label_noise_train_only' if not is_clf
             else 'class_flip_label_noise_train_only'),
         'claim_scope': (
             'Remediation ranking holds only under synthetically injected '
@@ -3023,6 +3147,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['top2_base_reps'] = {}
     results['top2_hybrids'] = {}
     results['hybrid_deltas_by_model'] = {}
+    # WHICH DOWNSTREAM MODELS THE THREE BLOCKS BELOW COVER, and why a name is
+    # missing. Added 2026-09-28. Every reason below used to be printed to the
+    # terminal and written nowhere, so a saved result with four models in it
+    # read the same as one configured for four.
+    #
+    # Two lists can disagree. `models_requested` is what this run asked for.
+    # `search_by_model` holds the models the pool returned a search for, and a
+    # name is absent from it when get_best_search_for_downstream returned no
+    # metadata or raised -- 'blueprint_status' above carries that reason. On top
+    # of that a search can be missing a model's rows, and then the selector
+    # below raises for it. Both kinds land in 'top2_models_dropped'.
+    results['top2_models_compared'] = list(search_by_model.keys())
+    results['top2_models_dropped'] = {
+        _m: 'the pool returned no SearchResult for it: %s'
+            % blueprint_status.get(_m, 'unknown')
+        for _m in models_requested if _m not in search_by_model}
     for _m, _s in search_by_model.items():
         _ctx = f'n07/{dataset_name}/{_m}'
         try:
@@ -3032,6 +3172,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             print(f"  WARNING: top-2 base representations failed for {_m} "
                   f"({type(_exc).__name__}: {_exc}); "
                   f"results['top2_base_reps'] carries no entry for it.")
+            results['top2_models_dropped'][_m] = (
+                'no top-2 base representations: %s: %s'
+                % (type(_exc).__name__, _exc))
         _top2_hyb = None
         try:
             _top2_hyb = top_hybrids(_s, _m, n=2, require_full=False,
@@ -3041,6 +3184,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             print(f"  WARNING: top-2 hybrids failed for {_m} "
                   f"({type(_exc).__name__}: {_exc}); "
                   f"results['top2_hybrids'] carries no entry for it.")
+            results['top2_models_dropped'][_m] = (
+                'no top-2 hybrid configurations: %s: %s'
+                % (type(_exc).__name__, _exc))
         # The hybrid is passed in by hand. Called with hybrid=None,
         # hybrid_deltas reads _picked['selected'][0]['row'] (_shared.py:7432),
         # and the entry top_hybrids builds (_shared.py:7043) has no 'row' key,
@@ -3055,6 +3201,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             print(f"  WARNING: hybrid deltas failed for {_m} "
                   f"({type(_exc).__name__}: {_exc}); "
                   f"results['hybrid_deltas_by_model'] carries no entry for it.")
+            results['top2_models_dropped'][_m] = (
+                'no hybrid deltas: %s: %s' % (type(_exc).__name__, _exc))
     # delta_vs_source_mean is the hybrid against the mean of the base
     # representations that actually fed it, read off
     # Blueprint.allocation_per_fold so a representation given 0 features is
@@ -3213,7 +3361,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 per_strategy_scores_oracle['no_noise'].append(no_noise_score)
 
             # Noise-dependent strategies: average across NOISE_SEEDS
-            for noise_seed in NOISE_SEEDS:
+            for noise_seed in _seeds_here:
                 actual_seed = 42 + fold_i * 1000 + noise_seed
                 # Compute the noisy y and noise_scores ONCE per (fold, seed);
                 # all 6 noise-dependent strategies reuse them.
@@ -3224,10 +3372,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # call (and the two like it below) passes no scaffold groups,
                 # so grouped_shifted and grouped_wider raise here
                 # (noise_spec.py:407-412). Not changed in this wiring pass.
-                y_tr_noisy, _cmask, _prov = inject_train_labels(
+                y_tr_noisy, _cmask, _prov = _inject_or_recorded(
                     labels, _spec, train_idx=train_idx, is_clf=is_clf,
                     dataset_name=dataset_name)
-                noise_provenance.setdefault(_spec.spec_id, _prov)
+                noise_provenance.setdefault(
+                    _spec.spec_id if _spec else AS_THEY_COME, _prov)
 
                 # The feature space every noisy condition is measured in, built
                 # from THIS draw's noisy training labels. One build per (fold,
@@ -3300,7 +3449,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     if _alt is None:
                         detection_tally['detector_returned_none'] += 1
                         continue
-                    _d = detection_scores(_cmask, _alt, _spec.strategy)
+                    _d = detection_scores(_cmask, _alt, (_spec.strategy if _spec else AS_THEY_COME))
                     if _d is None:
                         detection_tally['scores_declined'] += 1
                         continue
@@ -3311,14 +3460,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                              ('clean_space', noise_scores_clean_space)):
                     if _ns_arr is None:
                         continue
-                    _det = detection_scores(_cmask, _ns_arr, _spec.strategy)
+                    _det = detection_scores(_cmask, _ns_arr, (_spec.strategy if _spec else AS_THEY_COME))
                     if _det is not None:
                         detection_acc.setdefault(_space_name, []).append(_det)
 
                 for strategy in model_strategies:
                     if strategy == 'no_noise':
                         continue
-                    needs_scores = strategy in SCORE_DRIVEN_CLEANUPS
+                    needs_scores = (split_strategy(strategy)[0]
+                                    in SCORE_DRIVEN_CLEANUPS)
                     for _acc, _Xtr, _Xva, _ns in (
                             (per_strategy_scores, X_tr_n, X_va_n,
                              noise_scores_noisy),
@@ -3366,7 +3516,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         groups_tr=_groups_tr, fold=fold_i, draw=noise_seed,
                         recipes=recipes_for_model.get(model_name, {}),
                         base_reps=sim_base_by_model.get(model_name, []),
-                        corrupted_mask=_cmask, noise_strategy=_spec.strategy,
+                        corrupted_mask=_cmask, noise_strategy=(_spec.strategy if _spec else AS_THEY_COME),
                         detection_acc=sim_detection,
                         grade_detectors=_grade)
 
@@ -3545,15 +3695,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             if no_noise_score is not None:
                 per_strategy_scores_rep['no_noise'].append(no_noise_score)
 
-            for noise_seed in NOISE_SEEDS:
+            for noise_seed in _seeds_here:
                 actual_seed = 42 + fold_i * 1000 + noise_seed
                 _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
                                     noise_seed=noise_seed,
                                     is_clf=is_clf, condition=condition)
-                y_tr_noisy, _, _prov = inject_train_labels(
+                y_tr_noisy, _, _prov = _inject_or_recorded(
                     labels, _spec, train_idx=train_idx, is_clf=is_clf,
                     dataset_name=dataset_name)
-                noise_provenance.setdefault(_spec.spec_id, _prov)
+                noise_provenance.setdefault(
+                    _spec.spec_id if _spec else AS_THEY_COME, _prov)
                 noise_scores_cache = _compute_noise_scores(
                     X_tr_s, y_tr_noisy, is_clf=is_clf, groups=_g_tr_rep,
                     cache_dataset=dataset_name)
@@ -3561,7 +3712,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 for strategy in rep_strategies:
                     if strategy == 'no_noise':
                         continue
-                    needs_scores = strategy in SCORE_DRIVEN_CLEANUPS
+                    needs_scores = (split_strategy(strategy)[0]
+                                    in SCORE_DRIVEN_CLEANUPS)
                     fold_score = _evaluate_fold(
                         X_tr_s, X_va_s, y_train_clean, y_val, strategy,
                         noise_fraction, rep_model_factory, metric_fn,
@@ -3662,15 +3814,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 if nn_score is not None:
                     acc['no_noise'].append(nn_score)
 
-                for noise_seed in NOISE_SEEDS:
+                for noise_seed in _seeds_here:
                     actual_seed = 42 + fold_i * 1000 + noise_seed
                     _spec = _noise_spec(dataset_name, noise_fraction,
                                         noise_level, noise_seed=noise_seed,
                                         is_clf=is_clf, condition=condition)
-                    y_tr_noisy, _cm, _prov = inject_train_labels(
+                    y_tr_noisy, _cm, _prov = _inject_or_recorded(
                         labels, _spec, train_idx=train_idx, is_clf=is_clf,
                         dataset_name=dataset_name)
-                    noise_provenance.setdefault(_spec.spec_id, _prov)
+                    noise_provenance.setdefault(
+                        _spec.spec_id if _spec else AS_THEY_COME, _prov)
                     ns_cache = _compute_noise_scores(X_tr_s, y_tr_noisy,
                                                      is_clf=is_clf,
                                                      groups=g_tr,
@@ -3679,7 +3832,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     for strategy in strategies:
                         if strategy == 'no_noise':
                             continue
-                        needs = strategy in SCORE_DRIVEN_CLEANUPS
+                        needs = (split_strategy(strategy)[0]
+                                 in SCORE_DRIVEN_CLEANUPS)
                         fs = _evaluate_fold(
                             X_tr_s, X_va_s, y_train_clean, y_val, strategy,
                             noise_fraction, model_factory, metric_fn,

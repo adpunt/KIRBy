@@ -23,6 +23,7 @@ from experiments._shared import (
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
     INTERNAL_EVALUATORS,
     get_best_search_for_downstream, build_fold_hybrid, cv_split,
     build_fold_reselection_input, fold_reselection,
@@ -65,7 +66,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  [size-gate] n={n_total} > {LARGE_DATASET_N}: learning curve "
               f"capped at {LARGE_SUBSAMPLE_K} rows ({sample_sizes})")
     else:
-        fractions = [0.10, 0.25, 0.50, 0.75, 1.0]
+        # ⛔ CURVE POINTS, NOT ROWS. Every point still draws from the whole
+        # dataset and the last point is every row of it; what falls is how many
+        # points the curve has.
+        #
+        # Shipped: five points at 0.10, 0.25, 0.50, 0.75 and 1.0 of the rows.
+        # Under KIRBY_LOCAL_GRID: three, at 0.10, 0.50 and 1.0. Three is the
+        # floor — fit_learning_curve is only called where at least three points
+        # scored, and below that this experiment has no curve to fit.
+        #
+        # Measured 2026-09-25 on flab_thermo_tresanco, all 672 antibodies, on a
+        # laptop running about 20 other experiment processes (load average 800,
+        # this process getting a quarter of one core): 26 s for the
+        # 67-antibody point and 414 s for the 168-antibody point, both over two
+        # seeds, against a 2400 s cap for the whole experiment. The 168- and
+        # 504-antibody points are the two dropped, and 504 is the most
+        # expensive point below the full-data one: it is the first size whose
+        # training partition (336 rows) admits both swept budgets, so its
+        # search is 12 configurations where 168's is 6.
+        #
+        # KIRBY_C05_FRACTIONS overrides both, e.g. 0.10,0.25,0.50,0.75,1.0 to
+        # put the five back. Unset on the cluster, nothing changes.
+        _fr = os.environ.get('KIRBY_C05_FRACTIONS')
+        if _fr:
+            fractions = [float(x) for x in _fr.split(',') if x.strip()]
+        elif os.environ.get('KIRBY_LOCAL_GRID'):
+            fractions = [0.10, 0.50, 1.0]
+        else:
+            fractions = [0.10, 0.25, 0.50, 0.75, 1.0]
         sample_sizes = [max(50, int(n_total * f)) for f in fractions]
     # Deduplicate and cap at total
     sample_sizes = sorted(set(min(s, n_total) for s in sample_sizes))
@@ -77,6 +105,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Search ")
 
     last_search = None
+    # The number of molecules subsampled, and the seed, of the search that
+    # `last_search` ends up holding. Tracked because `last_search` is reset to
+    # None at the top of every sample size, so which sample size and seed it
+    # came from is not readable from the key names alone.
+    last_search_n = None
+    last_search_seed = None
     search_failures = []
     results = {'sample_sizes': sample_sizes, 'budgets': sweep_budgets,
                 'models': {},
@@ -122,6 +156,51 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'all_rows_bp_meta': [],
         }
 
+    # ⛔ AUGMENTATION CONDITION, NOT ROWS. Every row of the dataset is still
+    # used; what is dropped here is one CONDITION of the search.
+    #
+    # c05 hardcoded augmentation_strategy='capped' and passed the augmentation
+    # representations into every one of its find_best_hybrid calls, so
+    # KIRBY_LOCAL_AUG_CONDITIONS -- which the local run sets to 'none' and which
+    # cuts the augmented conditions out of the shared precompute -- never
+    # reached c05. _shared._local_aug_conditions states the cost: a 'capped' or
+    # 'uncapped' configuration-fold is about eight model fits where 'none' is
+    # one, because the extra feature block is offered at several widths and each
+    # one is fitted and scored on the internal split.
+    #
+    # Measured here 2026-09-25 on flab_thermo_tresanco, all 672 antibodies, on a
+    # laptop already running 18 other experiment processes (load average 700,
+    # this process getting about a quarter of one core): with 'capped' the
+    # 67-antibody point alone took 333 s for its two seeds and the run had not
+    # finished the 168-antibody point after 615 s, against a 2400 s cap for the
+    # whole experiment. Five curve points x 2 seeds at that rate is hours.
+    #
+    # This is the same fault c02 had and the same remedy: c02 ran four searches
+    # and took 33,174 s on caco2 for exactly this reason
+    # (c02_complexity_grid.py:73).
+    #
+    # With this cut and the two below, the same command finished on the same
+    # machine in 1884 s end to end (c05 itself 1645 s), all 672 antibodies, zero
+    # refused searches, result_status ok.
+    #
+    # WHAT IT COSTS: the augmentation question has no answer in a run with
+    # KIRBY_LOCAL_AUG_CONDITIONS set. 'hybrid', 'best_single', the
+    # leave-one-fold-out arrays and the all-rows-blueprint column are then all
+    # measured on the base representations alone. Unset -- the cluster -- this
+    # block does nothing and every search still runs 'capped' with the
+    # augmentations, so no server run changes.
+    from experiments._shared import _local_aug_conditions
+    _aug_conditions_kept = _local_aug_conditions(['none', 'uncapped', 'capped'])
+    _drop_augs = bool(data.get('augmentations')) and 'capped' not in _aug_conditions_kept
+    if _drop_augs:
+        print("  [local] KIRBY_LOCAL_AUG_CONDITIONS keeps "
+              f"{_aug_conditions_kept} and c05 asked for 'capped', so the "
+              "augmentation representations are dropped from every search "
+              "here. Every antibody is still used; the augmentation question "
+              "has no answer in this run.")
+    results['augmentation_conditions_kept'] = list(_aug_conditions_kept)
+    results['augmentations_dropped_by_local_grid'] = bool(_drop_augs)
+
     # The allocation method, importance method, internal evaluator and budget
     # below are chosen once by scoring every row of the dataset, so every label
     # a subsample later holds out was used to pick them. At each subsample only
@@ -136,8 +215,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # hybrid_all_rows_bp is indistinguishable from a point that was attempted
     # and failed.
     all_rows_bp_skips = {}
-    full_augs_top = data.get('augmentations')
-    for model_name in model_names:
+    # ⛔ A SECOND SCORE PER POINT, NOT ROWS. Switching this off empties the
+    # 'hybrid_all_rows_bp' column and changes nothing else: 'hybrid',
+    # 'best_single' and the leave-one-fold-out arrays are untouched, and every
+    # antibody is still used at every point.
+    #
+    # What it costs: the column that answers "how does a recipe picked with all
+    # the labels do at size n". It is not a held-out score — the paragraph above
+    # says so — and on this dataset it was already nan at every point for rf,
+    # whose all-rows recipe asks for 250 features while the largest training
+    # partition here is 448 only at the full-data point.
+    #
+    # What it saves, measured 2026-09-25 on flab_thermo_tresanco: the
+    # 67-antibody point, where neither model's recipe fits the 44 training rows
+    # so this pass never ran, took 26 s over two seeds. The 168-antibody point,
+    # where svm's 100-feature recipe does fit the 112 training rows and the pass
+    # therefore rebuilt and refitted it over 3 folds per seed, took 414 s. The
+    # search grew by no configurations between those two points — both are 6 —
+    # but the rows grew 2.5x as well, so that gap is this pass and the larger
+    # fits together and I did not separate them.
+    #
+    # KIRBY_C05_ALL_ROWS_BP=1 puts it back. Unset on the cluster, it runs.
+    _bp_env = os.environ.get('KIRBY_C05_ALL_ROWS_BP')
+    _all_rows_bp = (_bp_env not in ('0', 'false', 'no') if _bp_env
+                    else not os.environ.get('KIRBY_LOCAL_GRID'))
+    results['all_rows_bp_second_pass_ran'] = bool(_all_rows_bp)
+    if not _all_rows_bp:
+        print("  [local] the all-rows-blueprint second pass is off under "
+              "KIRBY_LOCAL_GRID, so hybrid_all_rows_bp is nan at every sample "
+              "size. Set KIRBY_C05_ALL_ROWS_BP=1 to run it.")
+    full_augs_top = None if _drop_augs else data.get('augmentations')
+    for model_name in (model_names if _all_rows_bp else []):
         try:
             _s_fd, _m_fd = get_best_search_for_downstream(
                 reps, labels, groups,
@@ -183,7 +291,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reselection_blocks_this_n = []
 
         last_search = None
-        full_augs = data.get('augmentations')
+        full_augs = None if _drop_augs else data.get('augmentations')
         # Pre-compute group-level pool so subsampling preserves scaffold
         # integrity (subsampling individual rows shatters scaffold groups
         # across train/val of the same fold).
@@ -242,12 +350,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"in the sweep")
             # Subsample-specific cache key — won't collide with main precompute
             # cache. Capped strategy is fine for small subsamples but projects
-            # The 250-row gate was removed 2026-08-27. Always capped;
-            # uncapped when the subsample is over the threshold.
-            # Always capped. The 250-row gate was removed 2026-08-27; the
-            # rebuilt capped costs about a tenth of the version it was
-            # written for.
-            sub_aug_strategy = 'capped'
+            # 'capped' at every subsample size. The 250-row gate was removed
+            # 2026-08-27; the rebuilt capped costs about a tenth of the version
+            # it was written for.
+            #
+            # 'none' instead when the block near the top of run() dropped the
+            # augmentation representations. find_best_hybrid normalises the
+            # strategy to 'none' itself when it is handed no augmentations, but
+            # it does that with a warning, and the strategy rides in the search
+            # metadata and the cache key, so it is set here rather than left to
+            # be corrected.
+            sub_aug_strategy = 'none' if sub_augs is None else 'capped'
             search = None
             try:
                 search = find_best_hybrid(
@@ -266,6 +379,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     tier='general',
                 )
                 last_search = search
+                last_search_n, last_search_seed = n_sub, seed
                 # Per-fold scores for BOTH arms (hybrid candidates +
                 # per-rep baselines) in the CONTRACT shape. Derives models
                 # only from what the search actually evaluated, so model
@@ -628,18 +742,53 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['hybrid_deltas_by_model'] = {}
     results['top2_pairs_by_model'] = {}
     if last_search is not None:
-        for _m in model_names:
+        # WHICH SEARCH THE FOUR BLOCKS BELOW ARE READ OUT OF, recorded
+        # 2026-09-28. `last_search` is reset to None at the top of every sample
+        # size, so it is the search of the LAST size in `sample_sizes`, at the
+        # last seed there that did not raise. The saved result named neither
+        # that number of molecules nor that seed, so a reader could not tell how
+        # many molecules these rankings were ranked on.
+        #
+        # One find_best_hybrid call, given models=model_names, scored every
+        # downstream model in it, so this search was not fetched for one model
+        # the way n13's and n17's per-model searches are. The list is written
+        # under the same key name those files use.
+        results['top2_pairs_search_of_model'] = list(model_names)
+        results['top2_search_n_molecules_subsampled'] = last_search_n
+        results['top2_search_seed'] = last_search_seed
+        # WHICH DOWNSTREAM MODELS THESE ROWS COVER, resolved 2026-09-28.
+        # `model_names` is what run() was configured with. The search scored
+        # whatever it scored -- svm drops itself above 10,000 molecules, and a
+        # dataset's skip policy can drop a name -- and the two disagree whenever
+        # that happened. The configured list stays what this file asks for, so
+        # it goes in as `requested`: a name the search never scored is dropped
+        # and named, never swapped for another model's rows.
+        _cmp_models, _cmp_dropped = resolve_comparison_models(
+            last_search, model_names)
+        results['top2_models_compared'] = list(_cmp_models)
+        # {downstream model: why it is not in the rows below}. Until now every
+        # one of these reasons was printed to the terminal only.
+        results['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
+        for _n, _w in _cmp_dropped:
+            print(f"  top-2 rows for {_n} unavailable: {_w}")
+        for _m in _cmp_models:
             try:
                 results['top2_base_reps'][_m] = top_base_reps(
                     last_search, _m, 2, require_full=False)
             except Exception as _e:
                 print(f"  top-2 base representations for {_m} unavailable: {_e}")
+                results['top2_models_dropped'][_m] = (
+                    'no top-2 base representations: %s: %s'
+                    % (type(_e).__name__, _e))
             _th = None
             try:
                 _th = top_hybrids(last_search, _m, 2, require_full=False)
                 results['top2_hybrids'][_m] = _no_blueprint(_th)
             except Exception as _e:
                 print(f"  top-2 hybrid configurations for {_m} unavailable: {_e}")
+                results['top2_models_dropped'][_m] = (
+                    'no top-2 hybrid configurations: %s: %s'
+                    % (type(_e).__name__, _e))
             # The rank-1 hybrid is handed to hybrid_deltas explicitly. Called
             # without one it picks its own and reads it as
             # _picked['selected'][0]['row'] (_shared.py:7432), and a selected
@@ -654,16 +803,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         last_search, _m, hybrid=_th['selected'][0])
                 except Exception as _e:
                     print(f"  hybrid deltas for {_m} unavailable: {_e}")
+                    results['top2_models_dropped'][_m] = (
+                        'no hybrid deltas: %s: %s' % (type(_e).__name__, _e))
         try:
             results['top2_pairs_by_model'] = _no_blueprint(
-                select_model_rep_pairs(last_search, models=list(model_names),
+                select_model_rep_pairs(last_search, models=list(_cmp_models),
                                        n_base=2, n_hybrids=2,
                                        require_full=False))
         except Exception as _e:
             print(f"  top-2 model-and-representation grid unavailable: {_e}")
+            results['top2_pairs_by_model_absent_reason'] = \
+                f"{type(_e).__name__}: {_e}"
     else:
         print("  top-2 rows and hybrid deltas skipped: every find_best_hybrid "
               "call raised, so no SearchResult was kept")
+        results['top2_extra_absent_reason'] = (
+            'every find_best_hybrid call at the last sample size raised, so no '
+            'SearchResult was kept and there are no stored rows to rank')
+        results['top2_models_compared'] = []
+        results['top2_models_dropped'] = {}
 
     # Printed because the two deltas answer different questions and a reader
     # given one number cannot tell which was asked. The first is the hybrid

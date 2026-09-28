@@ -68,6 +68,7 @@ from experiments._shared import (
     extract_top3_base_reps, FULL_BUDGETS,
     fold_reselection, build_fold_reselection_input, hr_exclude_folds,
     select_model_rep_pairs, top_hybrids, hybrid_deltas,
+    resolve_comparison_models,
 )
 
 # =============================================================================
@@ -369,7 +370,8 @@ def _evaluate_hybrid_enrichment_per_fold(
     from experiments._shared import resolve_pruning_kwargs
 
     labels = np.asarray(labels, dtype=np.int64)
-    per_model = {m: {'enrich': [], 'auroc': [], 'acc': []} for m in models}
+    per_model = {m: {'enrich': [], 'auroc': [], 'acc': [], 'no_recipe': []}
+                 for m in models}
     dims = []
     top3_first_fold = None
 
@@ -440,11 +442,29 @@ def _evaluate_hybrid_enrichment_per_fold(
         fold_dim_recorded = False
 
         for model_name in models:
-            # Each downstream model uses the recipe the search picked for it.
-            # A model the search did not score falls back to rf's recipe, and
-            # to whatever single recipe exists if rf is not among them.
-            fitted = (fitted_all.get(model_name) or fitted_all.get('rf')
-                      or fitted_all[sorted(fitted_all)[0]])
+            # Each downstream model uses the recipe the search picked for IT.
+            #
+            # ⛔ What used to be here: `fitted_all.get(model_name) or
+            # fitted_all.get('rf') or fitted_all[sorted(fitted_all)[0]]`. The
+            # search stores one recipe per downstream model it scored -- which
+            # representations, how many features from each, how to rank them.
+            # The random forest's recipe was then scored under the name of
+            # whichever model had none, so the row said 'svm' and held the
+            # random forest's features. That is one model's recipe wearing
+            # another model's name, and the enrichment number under that name
+            # could not be read.
+            #
+            # Now: a model with no recipe of its own gets a missing held-out
+            # score on this fold, named, and nothing substituted.
+            fitted = fitted_all.get(model_name)
+            if fitted is None:
+                _why = (f'the search scored {sorted(fitted_all)} on this fold '
+                        f'and stored no recipe for {model_name!r}')
+                print(f"    fold {fold_idx} {model_name}: no hybrid recipe -- "
+                      f"{_why}")
+                per_model[model_name]['no_recipe'].append(fold_idx)
+                per_model[model_name]['enrich'].append(None)
+                continue
             try:
                 fi = {r: {'selected_indices': idx}
                       for r, idx in fitted.selected_indices.items()}
@@ -495,10 +515,18 @@ def _evaluate_hybrid_enrichment_per_fold(
     for model_name, s in per_model.items():
         folds = s['enrich']
         if not any(fe is not None for fe in folds):
+            if s['no_recipe']:
+                print(f"    {model_name}: no enrichment row -- the search "
+                      f"stored no recipe for it on any of "
+                      f"{len(fold_splits)} folds")
             continue
         res = {
             'n_folds_completed': int(sum(fe is not None for fe in folds)),
             'n_folds_attempted': int(len(fold_splits)),
+            # Which folds this model has no recipe of its own on. Those folds
+            # contribute no score rather than the random forest's features
+            # scored under this model's name.
+            'folds_without_a_recipe_for_this_model': list(s['no_recipe']),
         }
         if s['acc']:
             res['accuracy'] = {'mean': np.mean(s['acc']),
@@ -667,6 +695,12 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # MODELS_LIST, so 4 of the 5 models had no ranking recorded at all.
     top2_pairs_by_model = None
     hybrid_deltas_by_model = None
+    # The downstream models the two blocks below were compared over, and
+    # {downstream model: why it is missing from one of them}. Added 2026-09-28:
+    # every reason was printed to the terminal and written into no saved key, so
+    # a result holding three models read the same as a run configured for three.
+    top2_models_compared = []
+    top2_models_dropped = {}
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -749,6 +783,10 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
                       f"{_pairs['n_distinct_units']} distinct things to build")
             except Exception as e:
                 print(f"  top-2 grid failed: {e}")
+                for _mn in MODELS_LIST:
+                    top2_models_dropped.setdefault(
+                        _mn, 'no model-and-representation pairs: %s: %s'
+                             % (type(e).__name__, e))
 
             # Each model's best hybrid against TWO reference numbers rather
             # than one: the mean AUC of the base representations the budget
@@ -765,17 +803,36 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             # entry (_shared.py:7048-7066) — run here 2026-09-18 against a stub
             # search, it raised KeyError: 'row'. The entry itself carries the
             # score_mean and blueprint the function reads.
+            #
+            # MODELS_LIST is the five names written down at
+            # opig_trastuzumab_enrichment.py:104. This search ran with
+            # downstream_model='rf' and can hold scores for a shorter list, so
+            # the names to loop are read off the search. Nothing is substituted:
+            # a model the search never scored is named and left out.
             _deltas = {}
-            for _mn in MODELS_LIST:
+            _delta_models, _delta_dropped = resolve_comparison_models(
+                search, MODELS_LIST)
+            top2_models_compared = list(_delta_models)
+            for _name, _why in _delta_dropped:
+                print(f"  hybrid deltas ({_name}): not computed -- {_why}")
+                top2_models_dropped[_name] = _why
+            for _mn in _delta_models:
                 try:
                     _top1 = top_hybrids(search, _mn, 1, require_full=False,
                                         context=_ctx)
                     if not _top1['selected']:
+                        _why = (_top1.get('shortfall_reason')
+                                or 'the search stored no hybrid configuration '
+                                   'for this downstream model')
+                        print(f"  hybrid deltas ({_mn}): not computed -- {_why}")
+                        top2_models_dropped[_mn] = 'no hybrid delta: %s' % _why
                         continue
                     _deltas[_mn] = hybrid_deltas(
                         search, _mn, hybrid=_top1['selected'][0], context=_ctx)
                 except Exception as e:
                     print(f"  hybrid deltas ({_mn}) failed: {e}")
+                    top2_models_dropped[_mn] = (
+                        'no hybrid delta: %s: %s' % (type(e).__name__, e))
             if _deltas:
                 hybrid_deltas_by_model = _deltas
                 for _mn, _d in sorted(_deltas.items()):
@@ -938,6 +995,11 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         # note or count key is mixed in, so anything that loops this dict loops
         # models.
         'hybrid_deltas_by_model': hybrid_deltas_by_model,
+        # The downstream models the two keys above were compared over, and
+        # {downstream model: why it is missing from one of them}. Both new
+        # 2026-09-28; nothing above changes value.
+        'top2_models_compared': top2_models_compared,
+        'top2_models_dropped': top2_models_dropped,
     }
 
 

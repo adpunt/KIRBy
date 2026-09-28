@@ -90,6 +90,11 @@ from experiments._shared import (
     # The top-2 selectors and the two hybrid deltas, added 2026-09-18. All four
     # read rows the search already stored and fit nothing.
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    searched_models, resolve_comparison_models,
+    # Ranks every model's stored hybrid configurations together and returns the
+    # best. Added 2026-09-28 to replace the places that handed a model with no
+    # stored search of its own the random forest's recipe.
+    top_hybrids_across_models,
 )
 from kirby.find_best_hybrid import OBJECTIVE_SIMILARITY
 # 2026-09-12 decision: n13's pool subset includes similarity hybrids, and the
@@ -245,7 +250,10 @@ def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
         y_train: Training labels for this fold.
         augmentations_train: {aug_name: X_train} already sliced, or None.
         augmentations_val: {aug_name: X_val} already sliced, or None.
-        bp: Blueprint from get_precomputed_search.
+        bp: Blueprint from get_precomputed_search, for the model that scores
+            the hybrid space. None when the pool holds no recipe for that
+            model; the returned `spaces` then carries the single
+            representations only and no 'hybrid' key.
         base_spaces: {space name: representation} -- the single
             representations noise is detected in, each scaled on this fold's
             training rows.
@@ -266,6 +274,11 @@ def _build_spaces(train_reps, val_reps, y_train, augmentations_train,
     for _sp, _rn in base_spaces.items():
         sc = StandardScaler()
         spaces[_sp] = sc.fit_transform(train_reps[_rn])
+
+    # No recipe for the model that scores the hybrid space, so there is no
+    # hybrid space. Another model's recipe is not substituted.
+    if bp is None:
+        return spaces, None
 
     # The pool subset offers both search families, so read which one this
     # recipe came from before deciding what may be passed. build_fold_hybrid
@@ -309,9 +322,22 @@ def _mean_detection(rows):
     return out
 
 
-def _top2_and_deltas(search, models, where):
+def _top2_and_deltas(search, models, where, search_by_model=None):
     """The top 2 base representations, the top 2 hybrids and the two hybrid
     deltas, per downstream model. 0 new model fits.
+
+    `search_by_model` names the SearchResult the pool returned for each model.
+    Each model's rows are read out of its own. A model absent from it is
+    recorded and skipped, never read out of another model's search. `search` is
+    then only the one handed to select_model_rep_pairs, which takes a single
+    SearchResult and walks every model in it; which model's it is goes on the
+    result file as 'top2_pairs_search_of_model'.
+
+    `models` is what the caller asks for -- n13's own roster, from
+    config['models'] or DOWNSTREAM_MODELS_NOISE. Two lists can disagree with it:
+    the models a stored search scored, which resolve_comparison_models reads off
+    the search, and the models the pool returned a search for at all. A name
+    dropped by either is written to 'top2_extra_failures' with the reason.
 
     Added 2026-09-18 on the owner's instruction: the top 2 go in beside what
     this file already reports, and nothing already reported moves. The six keys
@@ -355,10 +381,40 @@ def _top2_and_deltas(search, models, where):
         'top2_extra_failures': {},
     }
 
-    for m in models:
+    _requested = list(models)
+    _compare = []
+    for m in _requested:
+        # NO FALLBACK TO `search`. Until now one search was fetched for rf and
+        # all five models were read out of it, so four models' top-2
+        # representations, top-2 hybrid configurations and hybrid deltas were
+        # ranked on rows the pool chose FOR rf and written under their own
+        # names. The pool returns the best stored configuration for the model it
+        # is asked about, so the answer for lightgbm can be a different member
+        # of the pool. A model the caller passed no search for is recorded below
+        # and skipped.
+        _s_m = (search_by_model or {}).get(m)
+        if _s_m is None:
+            block['top2_extra_failures']['no_search/%s' % m] = (
+                'the pool returned no stored search for this downstream '
+                'model, so there are no rows of its own to rank')
+            continue
+        _keep, _dropped = resolve_comparison_models(_s_m, [m])
+        if not _keep:
+            block['top2_extra_failures']['not_scored/%s' % m] = _dropped[0][1]
+            continue
+        _compare.append(m)
+    block['top2_models_requested'] = _requested
+    block['top2_models_compared'] = list(_compare)
+    block['top2_models_scored_by_each_search'] = {
+        _m: searched_models(_s) for _m, _s in (search_by_model or {}).items()}
+    for _k, _why in block['top2_extra_failures'].items():
+        print(f"    top-2 rows absent, {_k}: {_why}")
+
+    for m in _compare:
+        _s_m = search_by_model[m]
         ctx = '{}/{}'.format(where, m)
         try:
-            _b = top_base_reps(search, m, n=2, require_full=False, context=ctx)
+            _b = top_base_reps(_s_m, m, n=2, require_full=False, context=ctx)
             block['top2_base_reps'][m] = {
                 'selected': _no_blueprint(_b['selected']),
                 'n_returned': _b['n_returned'],
@@ -376,7 +432,7 @@ def _top2_and_deltas(search, models, where):
 
         _h = None
         try:
-            _h = top_hybrids(search, m, n=2, require_full=False, context=ctx)
+            _h = top_hybrids(_s_m, m, n=2, require_full=False, context=ctx)
             block['top2_hybrids'][m] = {
                 'selected': _no_blueprint(_h['selected']),
                 'n_returned': _h['n_returned'],
@@ -402,7 +458,7 @@ def _top2_and_deltas(search, models, where):
         try:
             if _h is not None and _h['selected']:
                 block['hybrid_deltas_by_model'][m] = hybrid_deltas(
-                    search, m, hybrid=_h['selected'][0], context=ctx)
+                    _s_m, m, hybrid=_h['selected'][0], context=ctx)
         except Exception as exc:
             block['top2_extra_failures']['hybrid_deltas/%s' % m] = \
                 '%s: %s' % (type(exc).__name__, exc)
@@ -610,34 +666,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "tests/precompute_hybrids.py <dataset> --with-similarity)")
 
     # Align the blueprint's stored aug_strategy with the pool slot it actually
-    # came from (cache-collision guard, see project_cache_collision_fix). Gate
-    # the augmentations passed downstream so 'none' really means no aug cols.
+    # came from (cache-collision guard, see project_cache_collision_fix).
     aug_condition = meta.get('aug_condition', 'uncapped') if meta else 'uncapped'
     if getattr(bp, 'augmentation_strategy', None) != aug_condition:
         try:
             bp.augmentation_strategy = aug_condition
         except Exception:
             pass
-    use_augmentations = augmentations if aug_condition != 'none' else None
+    # The augmentations the 'hybrid' space may draw on are gated by the
+    # aug condition of the recipe that space is built from, which is
+    # TRACK_A_MODEL's and is resolved after the per-model lookups below.
 
-    # The estimator the 'hybrid' space's accept-or-reject step is scored with.
-    # `bp` was fetched with downstream_model='rf', so the rebuild is scored by
-    # fitting the same model the search fitted and calling the dataset's own
-    # metric. None when this dataset's gating dropped rf, and then
-    # build_fold_hybrid falls back to the internal evaluator the way the old
-    # bare create_hybrid call always did.
-    bp_objective = meta.get('objective') if meta else None
-    hybrid_model_factory = model_factories.get('rf')
-
-    # ── Per-model MATCHED blueprints for the honest hybrid-vs-baseline arm ──
-    # The single RF clean-label blueprint above (`bp`) still drives Track A
-    # (DNN-only) and the Track-B estimator geometry, UNCHANGED. The audit note
-    # is that every model reused that one RF-selected blueprint. For the new
-    # honest per-fold re-score arm below we additionally fetch a MATCHED-
-    # evaluator blueprint per downstream model (n07 pattern; each pool call is
-    # cached), so each model's hybrid space is built with a recipe tuned for
-    # that model rather than reusing RF's. Distinct blueprints are de-duplicated
-    # per fold (via _bp_sig) before the create_hybrid call to bound cost.
+    # ── Per-model MATCHED blueprints, one recipe per downstream model ──
+    # Each model's hybrid space is built from a recipe the pool stored for
+    # THAT model. Distinct recipes are de-duplicated per fold (via _bp_sig)
+    # before the create_hybrid call to bound cost.
+    #
+    # TRACK_A_MODEL is looked up here too, whether or not it is in the roster,
+    # because the 'hybrid' space every Track A method trains on is built from
+    # its recipe.
     #
     # 2026-09-12 decision: this resolution takes the widened pool subset too —
     # every place n13 picks a hybrid out of the pool offers the
@@ -665,7 +712,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
         if _s_m is not None:
             search_by_model[_mname] = _s_m
-        if _m_m is None or _mname not in model_factories:
+        if _m_m is None:
             continue
         _bp_m = _m_m['best_config']['blueprint']
         objective_by_model[_mname] = _m_m.get('objective')
@@ -677,20 +724,167 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 pass
         bp_by_model[_mname] = _bp_m
         aug_by_model[_mname] = _augc_m
-    # Fall back to the RF blueprint for any gated model the pool lacked, so
-    # every evaluated model still contributes an honest arm.
-    for _mname in model_factories:
-        if _mname not in bp_by_model and bp is not None:
-            bp_by_model[_mname] = bp
-            aug_by_model[_mname] = aug_condition
-            objective_by_model[_mname] = (meta.get('objective') if meta
-                                          else None)
+    # Every model with its own recipe is marked so before the fill below.
+    hybrid_recipe_source_by_model = {m: 'own_search' for m in bp_by_model}
+    hybrid_recipe_chosen_by_model = {}
+
+    # ── A model the pool holds no recipe of its own for ──
+    # Until 2026-09-28 the loop that stood here copied `bp` -- the recipe the
+    # pool returned when it was asked for a random forest -- into every such
+    # model, and the per-fold hybrid space below then trained that model on features a
+    # random forest's search had chosen while the row was written under the
+    # model's own name. Those two disagree about which model the features were
+    # chosen for, so the number could not be read as that model's hybrid score.
+    #
+    # Owner's decision 2026-09-28: rank every model's stored configurations
+    # together and take the best one, rather than one named model's. This is
+    # still not the model's own recipe, so the name of the model whose score put
+    # that configuration on top is recorded per model in
+    # results['hybrid_recipe_chosen_by_model'], and
+    # results['hybrid_recipe_source_by_model'] says of each model whether its
+    # recipe came from its own stored search or from this ranking.
+    #
+    # The rows being ranked all come from `search`, the one search the pool
+    # returned above, so they are one search family. POOL_SUBSETS names the
+    # prediction family first and the pool returns the first family it finds, so
+    # that family is 'predictive' on every dataset that has a prediction search
+    # on disk.
+    cross_bp = None
+    cross_aug = aug_condition
+    cross_objective = meta.get('objective') if meta else None
+    cross_chosen_by = None
+    cross_block = None
+    cross_absent_reason = None
+    try:
+        _xm = top_hybrids_across_models(search, n=2)
+    except Exception as _exc:
+        _xm = None
+        cross_absent_reason = (f'ranking the stored configurations over every '
+                               f'model raised {type(_exc).__name__}: {_exc}')
+        print(f"  ranking hybrid configurations over every model failed "
+              f"({type(_exc).__name__}: {_exc})")
+    if _xm is not None:
+        _cand = next((e for e in _xm.get('selected') or []
+                      if e.get('blueprint') is not None), None)
+        if _cand is None:
+            cross_absent_reason = (
+                _xm.get('shortfall_reason')
+                or 'none of the stored configurations carries a blueprint, so '
+                   'no feature set can be rebuilt from them')
+        else:
+            cross_bp = _cand['blueprint']
+            cross_chosen_by = _cand.get('recipe_chosen_by')
+            if getattr(cross_bp, 'augmentation_strategy', None) != cross_aug:
+                try:
+                    cross_bp.augmentation_strategy = cross_aug
+                except Exception:
+                    pass
+            cross_block = {
+                'recipe_chosen_by': cross_chosen_by,
+                'models_ranked_over': list(_xm.get('models_ranked_over') or []),
+                'n_models_ranked_over': (_xm.get('ranked_over') or {}).get(
+                    'n_models'),
+                'n_configurations_pooled': (_xm.get('ranked_over') or {}).get(
+                    'n_configurations_pooled'),
+                'score_mean': _cand.get('score_mean'),
+                'score_is_in': ('the metric the search stored, '
+                                f"{getattr(search, 'metric_name', None)}, "
+                                f"produced by {cross_chosen_by} and not by the "
+                                f"model it is handed to"),
+                'allocation_method': _cand.get('allocation_method'),
+                'importance_method': _cand.get('importance_method'),
+                'budget': _cand.get('budget'),
+                'internal_evaluator': _cand.get('internal_evaluator'),
+                'objective': cross_objective,
+                'aug_condition': cross_aug,
+            }
+            print(f"  best hybrid configuration over every model the search "
+                  f"scored: allocation {_cand.get('allocation_method')}, budget "
+                  f"{_cand.get('budget')} features, importance "
+                  f"{_cand.get('importance_method')}, internal evaluator "
+                  f"{_cand.get('internal_evaluator')} — chosen by "
+                  f"{cross_chosen_by}'s score "
+                  f"({getattr(search, 'metric_name', None)}="
+                  f"{_cand.get('score_mean')})")
+
+    # TRACK_A_MODEL is filled too, whether or not this dataset's gating put it
+    # in the roster: the 'hybrid' space every Track A method trains on is built
+    # from its recipe.
+    for _mname in sorted(set(model_factories) | {TRACK_A_MODEL}):
+        if _mname in bp_by_model:
+            continue
+        if cross_bp is None:
+            continue
+        bp_by_model[_mname] = cross_bp
+        aug_by_model[_mname] = cross_aug
+        objective_by_model[_mname] = cross_objective
+        hybrid_recipe_source_by_model[_mname] = 'across_models'
+        hybrid_recipe_chosen_by_model[_mname] = cross_chosen_by
+        print(f"  {_mname}: the pool holds no recipe searched for {_mname}, so "
+              f"its hybrid space is built from the best configuration over "
+              f"every model the search scored, which {cross_chosen_by}'s score "
+              f"chose")
+
+    # Still nothing after the fill: no configuration over any model could be
+    # rebuilt. These models have no hybrid rows at all rather than rows holding
+    # a number produced on features chosen for a different model.
+    hybrid_unscored_models = sorted(m for m in model_factories
+                                    if m not in bp_by_model)
+    for _mname in hybrid_unscored_models:
+        print(f"  {_mname}: no hybrid space at all -- {cross_absent_reason}")
+
+    # ── The 'hybrid' space Track A trains on, and Track B estimates noise in ──
+    # Every Track A method trains a neural network
+    # (_standard_dnn_train_predict and the label-noise methods' own networks),
+    # so this space is built from TRACK_A_MODEL's own recipe. Until 2026-09-28
+    # it was built from `bp`, the random forest's recipe, while the network that
+    # scored it was a different model: the features were chosen for one model
+    # and every Track A number was produced by another.
+    #
+    # When the pool holds no recipe searched for TRACK_A_MODEL, the fill above
+    # has put the best configuration over every model the search scored here
+    # instead, and results['hybrid_recipe_chosen_by_model'] names the model whose
+    # score chose it. None only when no configuration over any model could be
+    # rebuilt; the 'hybrid' space is then absent from Track A and from Track B's
+    # detection spaces.
+    bp_track_a = bp_by_model.get(TRACK_A_MODEL)
+    aug_condition_track_a = aug_by_model.get(TRACK_A_MODEL, 'uncapped')
+    bp_objective = objective_by_model.get(TRACK_A_MODEL)
+    # The estimator the 'hybrid' space's accept-or-reject step is scored with:
+    # the same model the search that produced this recipe fitted. None when
+    # this dataset's gating dropped TRACK_A_MODEL from the roster, and
+    # build_fold_hybrid then falls back on the internal evaluator.
+    hybrid_model_factory = model_factories.get(TRACK_A_MODEL)
+    if bp_track_a is None:
+        print(f"  'hybrid' space OFF: the pool holds no recipe searched for "
+              f"{TRACK_A_MODEL}, which is the model every Track A method "
+              f"trains, and no configuration over the other models could be "
+              f"rebuilt either -- {cross_absent_reason}")
+    elif hybrid_recipe_source_by_model.get(TRACK_A_MODEL) == 'across_models':
+        print(f"  'hybrid' space built from the best configuration over every "
+              f"model the search scored, which {cross_chosen_by}'s score chose; "
+              f"the pool holds none searched for {TRACK_A_MODEL}")
+    # Gate the augmentations so a 'none' pool slot really propagates no
+    # augmentation features into the 'hybrid' space.
+    use_augmentations = (augmentations if aug_condition_track_a != 'none'
+                         else None)
 
     # ── Each model's top-2 single representations ──
-    # Ranked by that model's own score in its own stored search, or in the rf
-    # one when the pool held none for it. Track A trains the DNN, so the DNN is
-    # ranked too whether or not it is in the roster. A `base_reps` kwarg
-    # ({model: [reps]}) overrides the ranking, for a smoke or a direct caller.
+    # Ranked by that model's own score in its own stored search. Track A trains
+    # the DNN, so the DNN is ranked too whether or not it is in the roster. A
+    # `base_reps` kwarg ({model: [reps]}) overrides the ranking, for a smoke or a
+    # direct caller.
+    #
+    # ⛔ A MODEL WITH NO STORED SEARCH OF ITS OWN IS LEFT UNRANKED HERE, and the
+    # reason is written per model to results['base_reps_missing']. Until
+    # 2026-09-28 this line read `search_by_model.get(m) or search`, so such a
+    # model was ranked in the search the pool returned when it was asked for a
+    # random forest, and results['base_reps_search_model'] recorded 'rf' for it.
+    # These are single representations, not hybrid features: the cross-model
+    # ranking that fills a missing hybrid recipe above ranks stored hybrid
+    # configurations, and there is no equivalent of it for a base-representation
+    # ranking, so nothing is substituted. A model left out here has no single
+    # representation to be fitted on and so no evaluation unit at all.
     _rank_models = list(model_factories) + (
         [TRACK_A_MODEL] if TRACK_A_MODEL not in model_factories else [])
     _base_override = kwargs.get('base_reps')
@@ -701,7 +895,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         if m not in base_by_model}
     else:
         base_by_model, base_missing = noise_base_reps_by_model(
-            {m: search_by_model.get(m) or search for m in _rank_models},
+            {m: search_by_model.get(m) for m in _rank_models},
             _rank_models, reps=reps, dataset_name=dataset_name)
     eval_models = [m for m in model_factories if m in base_by_model]
     # Evaluation units for Track B and the reference scores: one per (model,
@@ -773,8 +967,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # stored search. See the module docstring.
         'base_reps_by_model': base_by_model,
         'base_reps_missing': base_missing,
-        'base_reps_search_model': {
-            m: (m if m in search_by_model else 'rf') for m in base_by_model},
+        # Every model here was ranked in its OWN stored search. A model with no
+        # stored search of its own is absent from 'base_reps_by_model' and its
+        # reason is in 'base_reps_missing'; nothing is ranked in another model's
+        # search, which is what this key used to record as 'rf'.
+        'base_reps_search_model': {m: m for m in base_by_model},
+        'base_reps_unranked_models': sorted(base_missing),
+        'base_reps_no_substitution': (
+            'a model with no stored search of its own is left unranked; its '
+            'single representations are not taken from another model\'s search'),
         'track_a_base_reps_ranked_by': TRACK_A_MODEL,
         'evaluation_units': {u: {'model': m, 'rank': k, 'representation': rn}
                              for u, (m, k, rn) in eval_units.items()},
@@ -811,8 +1012,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                  'lower_is_better': _d.get('lower_is_better')}
             for _o, _d in _by_objective.items()}),
         # Family of the per-model matched recipe used by the honest per-fold
-        # arm below, one entry per downstream model.
+        # hybrid space below, one entry per downstream model the pool held a
+        # recipe for.
         'reselected_hybrid_objective_by_model': dict(objective_by_model),
+        # Where each model's hybrid recipe came from. 'own_search' means the
+        # stored search the pool returned when it was asked for that model.
+        # 'across_models' means the pool held none for it, so the recipe is the
+        # best configuration over every model the search scored, and
+        # 'hybrid_recipe_chosen_by_model' names the model whose score put that
+        # configuration on top. Nothing is taken from one named model and written
+        # under another's name without one of these two entries saying so.
+        'hybrid_recipe_source_by_model': dict(hybrid_recipe_source_by_model),
+        'hybrid_recipe_chosen_by_model': dict(hybrid_recipe_chosen_by_model),
+        # The one configuration that fill uses, and how many models' stored rows
+        # were ranked together to find it. None when nothing could be ranked, and
+        # 'hybrid_recipe_across_models_absent_reason' then says why.
+        'hybrid_recipe_across_models': convert_numpy(cross_block),
+        'hybrid_recipe_across_models_absent_reason': cross_absent_reason,
+        # Downstream models with no hybrid space at all: the pool holds no recipe
+        # searched for them AND no configuration over the other models could be
+        # rebuilt. Their hybrid rows are absent rather than holding a number
+        # produced on features chosen for a different model.
+        'hybrid_unscored_models': hybrid_unscored_models,
+        # The model whose recipe builds the 'hybrid' space that Track A trains on
+        # and Track B estimates noise in, whether a recipe was found, and where
+        # it came from. With no recipe there is no 'hybrid' space in either track.
+        'track_a_hybrid_recipe_model': TRACK_A_MODEL,
+        'track_a_hybrid_recipe_present': bp_track_a is not None,
+        'track_a_hybrid_recipe_source': hybrid_recipe_source_by_model.get(
+            TRACK_A_MODEL),
+        'track_a_hybrid_recipe_chosen_by': hybrid_recipe_chosen_by_model.get(
+            TRACK_A_MODEL),
         'per_noise_type': {},
     }
 
@@ -822,17 +1052,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # holds the three names extract_top3_base_reps ranked on the rf baseline;
     # these keys sit next to it.
     #
-    # One search answers for every downstream model. It was fetched with
-    # downstream_model='rf', but search.baselines and search.all_results carry
-    # a score under every downstream model the search scored, so the selectors
-    # read the other four out of the same object. 0 new model fits.
-    if search is not None:
+    # ONE SEARCH PER DOWNSTREAM MODEL. `search` was fetched with
+    # downstream_model='rf' and all five models' rows used to be read out of it,
+    # so four models' top-2 representations, top-2 hybrid configurations and
+    # hybrid deltas came from rows the pool chose for a random forest and were
+    # written under their own names. `search_by_model` above already holds the
+    # search the pool returned for each model, from the per-model lookups that
+    # fetched their matched recipes, and each model is read out of its own here.
+    # No model falls back to rf's. 0 new model fits: every helper reads rows the
+    # search already stored.
+    #
+    # select_model_rep_pairs takes ONE SearchResult and walks every model in it,
+    # so it is given the search of the model named in
+    # 'top2_pairs_search_of_model'.
+    if search_by_model:
+        _grid_model = next(
+            (m for m in model_factories if m in search_by_model),
+            next(iter(search_by_model)))
+        results['top2_pairs_search_of_model'] = _grid_model
         results.update(_top2_and_deltas(
-            search, list(model_factories.keys()), f'n13/{dataset_name}'))
+            search_by_model[_grid_model], list(model_factories.keys()),
+            f'n13/{dataset_name}', search_by_model=search_by_model))
     else:
         results['top2_extra_absent_reason'] = (
-            'the pool returned a recipe but no SearchResult, so there are no '
-            'stored rows to rank and no baseline scores to difference against')
+            'the pool returned a recipe but no SearchResult for any downstream '
+            'model, so there are no stored rows to rank and no baseline scores '
+            'to difference against')
 
     # ── Cache fold splits and label-independent eval features ──
     clean_scores_by_model = {}
@@ -978,14 +1223,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         **model_factories)
 
     def _sim_recipes_for(mname):
-        """The hybrid spaces a model's similarity settings read: its own
-        matched recipe where it came from the predictive family, else the rf
-        one; the similarity-objective recipe when that family is on disk."""
-        rec = {'hybrid': (bp, aug_condition)}
-        if (objective_by_model.get(mname) == 'predictive'
-                and mname in bp_by_model):
-            rec['hybrid'] = (bp_by_model[mname],
-                             aug_by_model.get(mname, aug_condition))
+        """The two hybrid spaces this model's similarity settings read.
+
+        'hybrid' is the prediction-objective recipe. It is the model's own where
+        the pool held one, and otherwise the best configuration over every model
+        the search scored, which the fill above already put in bp_by_model.
+        results['hybrid_recipe_source_by_model'] says which of the two it was per
+        model and results['hybrid_recipe_chosen_by_model'] names the model whose
+        score chose a cross-model one.
+
+        Until 2026-09-28 this opened with the recipe the pool returned when it
+        was asked for a random forest, and kept it for every model whose own
+        recipe came from the nearest-neighbour family or was missing. A random
+        forest's recipe is no longer put in another model's place.
+
+        'hybrid_similarity' is the nearest-neighbour-objective recipe, one per
+        dataset, present when that search family is on disk for this dataset.
+
+        A recipe from the nearest-neighbour family never fills the 'hybrid' slot:
+        the two are different feature spaces and comparing them is the point of
+        having both. POOL_SUBSET names the prediction family first and the pool
+        returns the first family it finds, so a model whose recipe came from the
+        nearest-neighbour family means this dataset has no prediction search on
+        disk at all, and its 'hybrid' slot is reported unavailable by
+        fold_similarity_spaces rather than filled.
+        """
+        rec = {}
+        _bp_m = bp_by_model.get(mname)
+        if (_bp_m is not None
+                and objective_by_model.get(mname) != OBJECTIVE_SIMILARITY):
+            rec['hybrid'] = (_bp_m, aug_by_model.get(mname, aug_condition))
         if bp_sim is not None:
             rec['hybrid_similarity'] = (bp_sim, sim_aug_condition)
         return rec
@@ -1054,6 +1321,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             noisy_baseline_by_model = {u: [] for u in eval_units}
             # {space: {method: [scores]}} for track A
             track_a_acc = {}
+            # {space: {method: [(plain DNN score, method score)]}}, one pair
+            # per (fold, draw) where both fits succeeded. 2026-09-27.
+            track_a_pairs = {}
             # {space: {estimator: {model: [scores]}}} for track B
             track_b_acc = {}
             # {space: {estimator: [detection reading per (fold, draw)]}}. Stays
@@ -1112,11 +1382,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         except Exception:
                             pass
 
-                    # Build spaces from NOISY labels (realistic — no oracle leak)
+                    # Build spaces from NOISY labels (realistic — no oracle
+                    # leak). The 'hybrid' space is built from TRACK_A_MODEL's
+                    # own recipe, because every method scored on it trains that
+                    # model. bp_track_a is None when the pool holds no recipe
+                    # for it, and _build_spaces then returns the single
+                    # representations only.
                     spaces, hybrid_val_s = _build_spaces(
                         fd['train_reps_fold'], fd['val_reps_fold'], y_noisy,
                         fd['train_augs'], fd['val_augs'],
-                        bp, base_spaces,
+                        bp_track_a, base_spaces,
                         groups=(groups[fd['train_idx']]
                                 if groups is not None else None),
                         model=(hybrid_model_factory()
@@ -1254,6 +1529,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         if space_name not in track_a_acc:
                             track_a_acc[space_name] = {}
 
+                        # D: the plain DNN on the SAME labels the methods get
+                        # (recorded at level 0.0, injected above), same space
+                        # and seed. Owner's decision 2026-09-27: every method
+                        # is read against this, not against the clean-label
+                        # DNN, which mixes the noise damage into the number.
+                        try:
+                            _plain_pred = _standard_dnn_train_predict(
+                                X_train_s, y_noisy, X_val_s,
+                                epochs=LNL_EPOCHS, patience=10,
+                                random_state=_seed_combined)
+                            _plain_score = float(metric_fn(fd['y_val'],
+                                                           _plain_pred))
+                        except Exception:
+                            _plain_score = None
+
                         for method_name in lnl_methods:
                             if method_name not in track_a_acc[space_name]:
                                 track_a_acc[space_name][method_name] = []
@@ -1267,6 +1557,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                           X_val_s, fd['y_val'])
                                 score = float(metric_fn(fd['y_val'], res['y_pred']))
                                 track_a_acc[space_name][method_name].append(score)
+                                if _plain_score is not None:
+                                    (track_a_pairs.setdefault(space_name, {})
+                                     .setdefault(method_name, [])
+                                     .append((_plain_score, score)))
                             except Exception:
                                 pass
 
@@ -1535,6 +1829,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         space_a[method_name] = _row
                 strength_result['track_a'][space_name] = space_a
             strength_result['clean_score_dnn'] = clean_mean_dnn
+
+            # THE TRACK A HEADLINE, 2026-09-27: each method against the plain
+            # DNN on the same labels, same space, same (fold, draw). gain > 0
+            # means the method won, in the dataset metric.
+            _vs_plain = {}
+            for space_name, by_m in track_a_pairs.items():
+                _vs_plain[space_name] = {}
+                for method_name, prs in by_m.items():
+                    gains = [((p - m) if lower_is_better else (m - p))
+                             for p, m in prs]
+                    _vs_plain[space_name][method_name] = {
+                        'plain_dnn_mean': float(np.mean([p for p, _ in prs])),
+                        'method_mean': float(np.mean([m for _, m in prs])),
+                        'gain_mean': float(np.mean(gains)),
+                        'gain_per_pass': [float(g) for g in gains],
+                        'passes_won': int(sum(g > 0 for g in gains)),
+                        'n_passes': len(gains),
+                    }
+            strength_result['track_a_vs_plain_dnn_same_labels'] = _vs_plain
 
             # Track B aggregation (per estimator × per model)
             for space_name, est_dict in track_b_acc.items():

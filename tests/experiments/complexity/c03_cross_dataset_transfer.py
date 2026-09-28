@@ -50,7 +50,7 @@ from experiments._shared import (
     find_best_hybrid, create_hybrid, apply_feature_selection,
     get_best_for_downstream, get_best_search_for_downstream,
     build_fold_reselection_input, fold_reselection, hr_exclude_folds,
-    top_base_reps, top_hybrids,
+    top_base_reps, top_hybrids, resolve_comparison_models,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
 )
 from kirby.hybrid import apply_augmentation_selection
@@ -151,6 +151,11 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
             # model, budget=None so each model's own best budget is returned.
             per_model = {}
             searches_by_model = {}
+            # A downstream model this dataset has no pool search for, and any
+            # model whose top-2 selection raised, are written into the result
+            # below instead of only being printed.
+            no_pool_search = []
+            selection_failures = []
             for model_name in DOWNSTREAM_MODELS:
                 search_m, meta_m = get_best_search_for_downstream(
                     data['reps'], data['labels'], data['groups'],
@@ -161,6 +166,11 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                     distance=True,
                 )
                 if meta_m is None:
+                    no_pool_search.append(
+                        {'downstream_model': model_name,
+                         'reason': f'no pool search on {ds_name} for this '
+                                   f'downstream model, so it has no row in '
+                                   f'best_by_model and no top-2 comparison'})
                     print(f"    {model_name}: no pool search on {ds_name}")
                     continue
                 cfg_m = meta_m['best_config']
@@ -194,22 +204,70 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 # 'budget', 'score' and 'dim' above are untouched, so the
                 # correlation at c03:472 keeps reading the same rank-1 row it
                 # reads today. Nothing already in a c03 result file moves.
-                try:
-                    _base = top_base_reps(
-                        search_m, model_name, 2, require_full=False,
-                        context=f'c03 {ds_name}/{model_name}')
-                    _hyb = top_hybrids(
-                        search_m, model_name, 2, require_full=False,
-                        context=f'c03 {ds_name}/{model_name}')
-                    per_model[model_name]['top2_base_reps'] = [
-                        (e['rep'], e['score']) for e in _base['selected']]
-                    per_model[model_name]['top2_hybrids'] = [
-                        {'label': e['label'], 'score_mean': e['score_mean'],
-                         'budget': e['budget'], 'n_features': e['n_features']}
-                        for e in _hyb['selected']]
-                except Exception as _e:
-                    print(f"    {model_name}: top-2 selection unavailable "
-                          f"({type(_e).__name__}: {_e})")
+                # Two changes, 2026-09-28.
+                #
+                # First: the models compared. The loop above asks for the five
+                # names in DOWNSTREAM_MODELS. The pool read passes
+                # distance=True, so the search it returns scored six downstream
+                # models -- the five plus k-nearest-neighbours. The comparison
+                # is now built from the models the search scored, so
+                # k-nearest-neighbours gets its top 2 base representations and
+                # its top 2 hybrids like every other model. No model's rows are
+                # ever read under another model's name.
+                #
+                # Second: the two halves were in ONE try block, so an exception
+                # raised while ranking the base representations threw away the
+                # hybrid ranking as well, and the result file then held neither
+                # half. Each half has its own try now, and whichever one fails
+                # is written into 'top2_selection_failures' with its reason.
+                _searched, _ = resolve_comparison_models(search_m, None)
+                _top2_by_model = {}
+                for _cm in _searched:
+                    _entry = {}
+                    try:
+                        _base = top_base_reps(
+                            search_m, _cm, 2, require_full=False,
+                            context=f'c03 {ds_name}/{_cm}')
+                        _entry['base_reps'] = [
+                            (e['rep'], e['score']) for e in _base['selected']]
+                    except Exception as _e:
+                        selection_failures.append(
+                            {'pool_read_for': model_name,
+                             'downstream_model': _cm, 'half': 'base_reps',
+                             'reason': f'{type(_e).__name__}: {_e}'})
+                        print(f"    {_cm}: top-2 base representations "
+                              f"unavailable ({type(_e).__name__}: {_e})")
+                    try:
+                        _hyb = top_hybrids(
+                            search_m, _cm, 2, require_full=False,
+                            context=f'c03 {ds_name}/{_cm}')
+                        _entry['hybrids'] = [
+                            {'label': e['label'], 'score_mean': e['score_mean'],
+                             'budget': e['budget'],
+                             'n_features': e['n_features']}
+                            for e in _hyb['selected']]
+                    except Exception as _e:
+                        selection_failures.append(
+                            {'pool_read_for': model_name,
+                             'downstream_model': _cm, 'half': 'hybrids',
+                             'reason': f'{type(_e).__name__}: {_e}'})
+                        print(f"    {_cm}: top-2 hybrid configurations "
+                              f"unavailable ({type(_e).__name__}: {_e})")
+                    _top2_by_model[_cm] = _entry
+                per_model[model_name]['top2_by_searched_model'] = _top2_by_model
+                # The two keys readers already fetch keep holding this
+                # downstream model's own halves.
+                _own = _top2_by_model.get(model_name) or {}
+                if 'base_reps' in _own:
+                    per_model[model_name]['top2_base_reps'] = _own['base_reps']
+                if 'hybrids' in _own:
+                    per_model[model_name]['top2_hybrids'] = _own['hybrids']
+                if model_name not in _searched:
+                    selection_failures.append(
+                        {'pool_read_for': model_name,
+                         'downstream_model': model_name, 'half': 'both',
+                         'reason': f'the search returned for {model_name} '
+                                   f'scored {_searched} and not {model_name!r}'})
                 _pm = per_model[model_name]
                 print(f"    {model_name:<10} budget={_pm['budget']} "
                       f"{metric_name_ds}={_pm['score']:.4f} "
@@ -397,6 +455,12 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 # whose best feature set scored highest for that model. This is
                 # what both the correlation and the model-by-dataset table read.
                 'best_by_model': per_model,
+                # A downstream model with no pool search on this dataset, so no
+                # row in 'best_by_model' at all.
+                'models_dropped': no_pool_search,
+                # A (pool read, downstream model, half) whose top-2 ranking
+                # raised, with the exception text.
+                'top2_selection_failures': selection_failures,
                 # Hybrid minus best single representation with the recipe and
                 # the representation both re-picked on the other folds, one
                 # entry per downstream model. Read 'delta_mean_of_folds'.

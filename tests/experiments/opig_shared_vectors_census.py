@@ -398,6 +398,17 @@ def freshness_check(data, rep_names, n_rows=200, tol=1e-4):
 def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True):
     """How many molecules the TOP HYBRIDS give one identical row.
 
+    ⛔ top_base_reps IS DELIBERATELY NOT CALLED IN THIS FILE, AND A 2026-09-28
+    AUDIT FLAGGED ITS ABSENCE AS A GAP. It is not one. Everywhere else the
+    comparison is each downstream model's best two representations against its
+    best two hybrids, both ranked by a score. This file ranks nothing by a
+    score: it counts, for every representation, how many molecules get one
+    identical row. The base side is therefore the whole per-representation table
+    under 'per_representation', which covers every representation rather than a
+    best two, and top_hybrids is used here only to choose WHICH hybrids to count
+    ties for. Adding a top-two-by-score ranking would be adding a different
+    measurement to a file that scores nothing.
+
     Same question the per-representation table answers, asked of a hybrid. A
     hybrid picks features out of the representations in its pool, so it can only
     tell two molecules apart when at least one representation in that pool
@@ -444,8 +455,24 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
                       flush=True)
             return out
 
-        from kirby.find_best_hybrid import DOWNSTREAM_MODELS as _DM
-    except Exception:
+        # The downstream models to loop are the ones this stored search
+        # actually scored, read off the search itself. requested=None asks for
+        # all of them. The search above was fetched for 'rf', which decides
+        # which stored search is read and not which models it holds scores for.
+        #
+        # ⛔ What used to be here: `from kirby.find_best_hybrid import
+        # DOWNSTREAM_MODELS`. That name is not defined anywhere under src/kirby/
+        # -- checked 2026-09-28, zero occurrences -- so the import raised
+        # ImportError, the bare `except Exception: return out` below caught it,
+        # and this function returned an empty list on every dataset with nothing
+        # printed. No hybrid row has ever reached the table.
+        from experiments._shared import resolve_comparison_models
+        _DM, _dropped_models = resolve_comparison_models(search, None)
+    except Exception as exc:
+        if verbose:
+            print(f'  hybrid rows skipped: could not read which downstream '
+                  f'models the stored search scored '
+                  f'({type(exc).__name__}: {exc})', flush=True)
         return out
     finally:
         if _prev is None:
@@ -453,14 +480,29 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
         else:
             os.environ['KIRBY_NO_COLD_SEARCH'] = _prev
 
+    if not _DM and verbose:
+        print(f'  no downstream model has a score on the stored search for '
+              f'{dataset_name} -- no hybrid rows', flush=True)
+    for _name, _why in _dropped_models:
+        if verbose:
+            print(f'  hybrid rows for {_name}: none -- {_why}', flush=True)
+
     n = int(np.asarray(labels).size)
     for model_name in _DM:
         try:
             picked = top_hybrids(search, model_name, n_per_model,
                                  require_full=False,
                                  context=f'census/{dataset_name}/{model_name}')
-        except Exception:
+        except Exception as exc:
+            # Say which downstream model has no hybrid row and why. Dropping it
+            # silently made a table of three models look like a table of five.
+            if verbose:
+                print(f'  hybrid rows for {model_name}: none -- top_hybrids '
+                      f'raised {type(exc).__name__}: {exc}', flush=True)
             continue
+        if picked.get('shortfall_reason') and verbose:
+            print(f'  hybrid rows for {model_name}: '
+                  f'{picked["shortfall_reason"]}', flush=True)
         for rank, entry in enumerate(picked.get('selected') or [], start=1):
             bp = entry.get('blueprint')
             if bp is None:
@@ -503,7 +545,7 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
 
 
 def census_one(dataset_name, rep_names, build_missing=False, verbose=True,
-               check_freshness=0, with_hybrids=0):
+               check_freshness=0, with_hybrids=2):
     """Every count for one dataset. Returns (rows, pairwise, pool_row, meta)."""
     from experiments._shared import load_data, _resolve_dataset_metric
 
@@ -764,13 +806,17 @@ def main():
                          'builder and report every representation whose cached '
                          'matrix no longer matches. Only the builders that run '
                          'on a laptop are checked. Default off.')
-    ap.add_argument('--with-hybrids', type=int, default=0, nargs='?',
+    # Default 2, not 0. The hybrid half of the comparison is part of what this
+    # file measures, so it runs without a flag; passing --with-hybrids 0 turns
+    # it off and any other number overrides how many hybrids per downstream
+    # model are counted.
+    ap.add_argument('--with-hybrids', type=int, default=2, nargs='?',
                     const=2, dest='with_hybrids',
-                    help='also count ties for the top N hybrids per '
+                    help='count ties for the top N hybrids per '
                          'downstream model, read from the search the '
-                         'precompute stored (default 2 when the flag is '
-                         'given bare, 0 = off). Applies each stored '
-                         'recipe over every molecule; it never searches.')
+                         'precompute stored (default 2, 0 = off). Applies each '
+                         'stored recipe over every molecule; it never '
+                         'searches.')
     ap.add_argument('--output-dir', default=DEFAULT_OUTPUT)
     ap.add_argument('--force-rerun', action='store_true',
                     help='Recompute what an earlier attempt finished '

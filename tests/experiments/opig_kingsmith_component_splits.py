@@ -405,13 +405,17 @@ def _evaluate_hybrid_per_fold(
     """Build the KIRBy hybrid PER FOLD and evaluate downstream models.
 
     Each fold:
-      1. Runs find_best_hybrid on train indices only (no peeking at val).
-      2. Pulls FittedResult (selected_indices + augmentation_info) for 'rf'.
+      1. Runs find_best_hybrid on train indices only (no peeking at val), over
+         the same downstream models this function trains.
+      2. Per downstream model, pulls the FittedResult stored FOR THAT MODEL
+         (selected_indices + augmentation_info). A model the search stored no
+         recipe for gets no score on the fold and is named; no other model's
+         recipe is used in its place.
       3. Applies apply_feature_selection on train_reps -> train_hybrid.
          Applies it on val_reps -> val_hybrid.
       4. If augmentation_info present, applies apply_augmentation_selection on
          train/val augs and hstack-s to the hybrid blocks.
-      5. Trains each downstream model on (scaled) train_hybrid, predicts on
+      5. Trains that downstream model on (scaled) train_hybrid, predicts on
          val_hybrid, accumulates R2/RMSE/Spearman.
 
     Returns:
@@ -516,12 +520,28 @@ def _evaluate_hybrid_per_fold(
                 # pairs = 8,160 configurations. Fast is 3 x 1 x 2 x 8 x 9 = 432,
                 # so about 44 million model fits becomes about 2.3 million.
                 #
-                # ⛔ THE FULL 19x APPLIES HERE, unlike c13. This call passes no
-                # models= argument, and the filter that drops xgboost and svm
-                # under fast runs only when models is None
-                # (find_best_hybrid.py:8221-8232). c13 hands its search an
-                # explicit list, so fast leaves its model axis alone and it gets
-                # 9x; this one gets the whole cut.
+                # ⛔ THE MODEL AXIS IS NO LONGER PART OF THE CUT, CHANGED
+                # 2026-09-28. This call used to pass no models= argument. With
+                # models=None and speed='fast', find_best_hybrid keeps only the
+                # models on its 'fast' tier (find_best_hybrid.py:8639-8646), so
+                # the search scored rf, lightgbm and dnn. The loop below then
+                # trained all five names in MODELS_LIST
+                # (opig_kingsmith_component_splits.py:128) on those features. Two
+                # of the five downstream models the table reports were never
+                # scored by the search at all, and nothing said so.
+                #
+                # models= is now the same five names the loop below trains. With
+                # a list given, the fast filter on the model axis does not run
+                # (find_best_hybrid.py:8650-8660), so fast now cuts only the
+                # allocation methods, the importance methods and the
+                # representation counts.
+                #
+                # Cost, from the axis counts written above: 3 allocation methods
+                # x 1 importance method x 2 representation counts x 8 budgets x
+                # 17 (model, evaluator) pairs = 816 configurations per fold,
+                # where the model-axis cut made it 432. So roughly double the
+                # fits per fold, over the same 45 folds per dataset.
+                models=list(models.keys()),
                 #
                 # ⛔ internal_evaluators=_eval_list above is explicit, so fast
                 # does not shorten THAT axis. The cut comes from the allocation
@@ -559,10 +579,35 @@ def _evaluate_hybrid_per_fold(
                 try:
                     from experiments._shared import (select_model_rep_pairs,
                                                       top_hybrids,
-                                                      hybrid_deltas)
+                                                      hybrid_deltas,
+                                                      resolve_comparison_models)
                     _ctx = f'{dataset_name}/loo_{split_key}/fold0'
+                    # WHICH DOWNSTREAM MODELS THE TWO KEYS BELOW COVER, resolved
+                    # 2026-09-28. `models` is the factory dict this fold built.
+                    # Fold 0's search scored whatever it scored on top of that:
+                    # svm drops itself above 10,000 rows, and a dataset's skip
+                    # policy can drop a name. The two disagree whenever that
+                    # happened, and the loop below then asked for a model with no
+                    # stored rows.
+                    #
+                    # `models` stays what this fold ASKS for, so the set of models
+                    # reported does not change: it goes in as `requested`, not
+                    # None. A name the search never scored is dropped and named,
+                    # never swapped for another model's rows.
+                    #
+                    # Both lists are SAVED, not only printed. Until now every
+                    # reason below went to the terminal alone.
+                    _cmp_models, _cmp_dropped = resolve_comparison_models(
+                        fold_search, list(models.keys()))
+                    selection_out['top2_models_compared'] = \
+                        list(_cmp_models)
+                    selection_out['top2_models_dropped'] = {
+                        _n: _w for _n, _w in _cmp_dropped}
+                    for _n, _w in _cmp_dropped:
+                        print(f"    fold 0: downstream model {_n} not "
+                              f"compared: {_w}")
                     _pairs = select_model_rep_pairs(
-                        fold_search, models=list(models.keys()),
+                        fold_search, models=_cmp_models,
                         n_base=2, n_hybrids=2,
                         # require_full=False: a downstream model this search
                         # never scored yields a short list and a line in
@@ -575,7 +620,7 @@ def _evaluate_hybrid_per_fold(
                     # fed it, and the best single base representation. A hybrid
                     # can beat the first and lose to the second.
                     _deltas = {}
-                    for _m in models:
+                    for _m in _cmp_models:
                         try:
                             # hybrid= is passed by hand. hybrid_deltas(search,
                             # m) with no hybrid reads
@@ -590,12 +635,19 @@ def _evaluate_hybrid_per_fold(
                             if not _t1['selected']:
                                 print(f"    fold 0: no hybrid configuration "
                                       f"stored for downstream model {_m}")
+                                selection_out[
+                                    'top2_models_dropped'][_m] = (
+                                    'no hybrid delta: %s'
+                                    % _t1['shortfall_reason'])
                                 continue
                             _deltas[_m] = hybrid_deltas(
                                 fold_search, _m, hybrid=_t1['selected'][0],
                                 context=_ctx)
                         except Exception as _e:
                             print(f"    fold 0: hybrid_deltas[{_m}] failed: {_e}")
+                            selection_out['top2_models_dropped'][_m] = (
+                                'no hybrid delta: %s: %s'
+                                % (type(_e).__name__, _e))
 
                     # The Blueprint object off each selected hybrid: it is a
                     # recipe object, not JSON, and every field of it reported
@@ -616,53 +668,87 @@ def _evaluate_hybrid_per_fold(
                     # dict. Every number this file reported before stays where
                     # it was, and the fold continues.
                     print(f"    fold 0: top-2 selection failed: {_e}")
+                    selection_out['top2_pairs_by_model_fold0_absent_reason'] = \
+                        f"{type(_e).__name__}: {_e}"
 
-        fitted = (fold_search.fitted_results.get('rf')
-                  if fold_search is not None else None)
-        if fitted is None:
-            print(f"    fold {fold_idx}: no fitted 'rf' result; skipping")
+        _fitted_all = (getattr(fold_search, 'fitted_results', None) or {}
+                       if fold_search is not None else {})
+        if not _fitted_all:
+            print(f"    fold {fold_idx}: the search stored no recipe for any "
+                  f"downstream model; skipping the fold")
             _pad_fold()
             continue
 
-        # ----- assemble train/val hybrid using the fold's selection -----
-        try:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            train_hybrid = apply_feature_selection(train_reps, fi)
-            val_reps = {r: arr[val_idx] for r, arr in src_reps.items()}
-            val_hybrid = apply_feature_selection(val_reps, fi)
-
-            if fitted.augmentation_info and has_aug:
-                val_aug = {r: arr[val_idx] for r, arr in aug_dict.items()}
-                train_aug_block = apply_augmentation_selection(
-                    train_aug, fitted.augmentation_info)
-                val_aug_block = apply_augmentation_selection(
-                    val_aug, fitted.augmentation_info)
-                if train_aug_block is not None and val_aug_block is not None:
-                    train_hybrid = np.hstack([train_hybrid, train_aug_block])
-                    val_hybrid = np.hstack([val_hybrid, val_aug_block])
-        except Exception as e:
-            print(f"    fold {fold_idx}: hybrid assembly failed: {e}")
-            _pad_fold()
-            continue
-
-        dims.append(train_hybrid.shape[1])
-
-        train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
-        val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
+        val_reps = {r: arr[val_idx] for r, arr in src_reps.items()}
         y_train = labels[train_idx]
         y_val = labels[val_idx]
 
-        # Scale unless binary
-        if not _is_binary_rep(train_hybrid):
-            scaler = StandardScaler()
-            train_hybrid_s = scaler.fit_transform(train_hybrid)
-            val_hybrid_s = scaler.transform(val_hybrid)
-        else:
-            train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
-
-        # ----- train each downstream model -----
+        # ----- train each downstream model on ITS OWN selected features -----
+        #
+        # ⛔ What used to be here, changed 2026-09-28: one recipe was read from
+        # `fold_search.fitted_results['rf']`, one set of features was assembled
+        # from it, and all five downstream models were trained on that set. The
+        # search stores one recipe per downstream model it scored -- which
+        # representations, how many features from each, how to rank them -- and
+        # four of the five rows in the table were the random forest's recipe
+        # scored under another model's name. So a row differed from the random
+        # forest's row in one way only, the model, while the name said the
+        # comparison was over both the model and its own selected features.
+        #
+        # Now each downstream model uses the recipe stored for it. A model with
+        # no recipe of its own gets a missing held-out score on this fold, named
+        # on the line printed below, and nothing is substituted for it.
         for model_name, factory in models.items():
+            fitted = _fitted_all.get(model_name)
+            if fitted is None:
+                print(f"    fold {fold_idx} {model_name}: no recipe of its own "
+                      f"-- the search stored recipes for "
+                      f"{sorted(_fitted_all)} on this fold; no score")
+                per_model_scores[model_name]['r2'].append(np.nan)
+                per_model_scores[model_name]['rmse'].append(np.nan)
+                per_model_scores[model_name]['spearman'].append(np.nan)
+                continue
+
+            try:
+                fi = {r: {'selected_indices': idx}
+                      for r, idx in fitted.selected_indices.items()}
+                train_hybrid = apply_feature_selection(train_reps, fi)
+                val_hybrid = apply_feature_selection(val_reps, fi)
+
+                if fitted.augmentation_info and has_aug:
+                    val_aug = {r: arr[val_idx] for r, arr in aug_dict.items()}
+                    train_aug_block = apply_augmentation_selection(
+                        train_aug, fitted.augmentation_info)
+                    val_aug_block = apply_augmentation_selection(
+                        val_aug, fitted.augmentation_info)
+                    if (train_aug_block is not None
+                            and val_aug_block is not None):
+                        train_hybrid = np.hstack([train_hybrid,
+                                                  train_aug_block])
+                        val_hybrid = np.hstack([val_hybrid, val_aug_block])
+            except Exception as e:
+                print(f"    fold {fold_idx} {model_name}: hybrid assembly "
+                      f"failed: {e}")
+                per_model_scores[model_name]['r2'].append(np.nan)
+                per_model_scores[model_name]['rmse'].append(np.nan)
+                per_model_scores[model_name]['spearman'].append(np.nan)
+                continue
+
+            train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
+            val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
+            # One width per (fold, downstream model) now, because each model
+            # selects its own features. The returned dim estimate is the mean
+            # over all of those, where it used to be one width per fold.
+            dims.append(train_hybrid.shape[1])
+
+            # Scale unless binary
+            if not _is_binary_rep(train_hybrid):
+                scaler = StandardScaler()
+                train_hybrid_s = scaler.fit_transform(train_hybrid)
+                val_hybrid_s = scaler.transform(val_hybrid)
+            else:
+                train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
+
             try:
                 m = clone(factory())
                 m.fit(train_hybrid_s, y_train)

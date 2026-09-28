@@ -439,7 +439,14 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             if _h['selected']:
                 _cell['hybrid_deltas'] = {
                     k: v for k, v in hybrid_deltas(
-                        _s, 'rf', hybrid=_h['selected'][0]['row'],
+                        # ⛔ WAS ['row'], FIXED 2026-09-28. top_hybrids returns
+                        # each entry as a flat dict and never nests the row under
+                        # a 'row' key, so this raised KeyError, the except below
+                        # caught it, and every cell in top2_by_cell carried an
+                        # error string instead of its two deltas. hybrid_deltas
+                        # reads score_mean and blueprint off what it is given and
+                        # the entry carries both.
+                        _s, 'rf', hybrid=_h['selected'][0],
                         context=f'c10 {dataset_name} {_key}').items()
                     if k != 'notes' or v}
         except Exception as _e:

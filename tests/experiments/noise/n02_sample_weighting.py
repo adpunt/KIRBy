@@ -95,6 +95,7 @@ from experiments._shared import (
     # n11's loop, in one place. See SPACE_FOR_FAMILY below.
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
     extract_top3_base_reps,
+    searched_models, resolve_comparison_models,
 )
 
 # 2026-09-18, owner's instruction: the top 2 rows go in everywhere as an extra,
@@ -412,6 +413,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _sim_info_memo[mname] = (base, rec)
         return base, rec
 
+    # ── Which single representations each model is fitted on ──
+    # 2026-09-27, owner's decision: each model's own top 2, ranked by that
+    # model's score in its stored search (_shared.noise_base_reps_by_model),
+    # the same pair every other noise experiment uses. n02 used to fit every
+    # loaded representation and then pick a "top 3" by the held-out score it
+    # was reporting, so the comparison was chosen by its own result.
+    _top2_memo = {}
+
+    def _top2_for(mname):
+        if mname in _top2_memo:
+            return _top2_memo[mname]
+        from experiments._shared import noise_base_reps_by_model
+        try:
+            _s, _ = get_best_search_for_downstream(
+                reps, labels, groups, downstream_model=mname, budget=None,
+                augmentations=augmentations, dataset_name=dataset_name,
+                task_type=task_type, data=data, pool_subset=POOL_SUBSET)
+            _b, _miss = noise_base_reps_by_model({mname: _s}, [mname],
+                                                 reps=reps,
+                                                 dataset_name=dataset_name,
+                                                 verbose=False)
+            _top2_memo[mname] = list(_b.get(mname, []))
+            if not _top2_memo[mname]:
+                print(f"    {mname}: no single representation ranked: "
+                      f"{_miss.get(mname)}")
+        except Exception as _exc:
+            print(f"    {mname}: no stored search, so no single "
+                  f"representation: {type(_exc).__name__}: {_exc}")
+            _top2_memo[mname] = []
+        return _top2_memo[mname]
+
     def _n02_sweep(*, model_name, model_input, X_tr, X_va, y_tr, y_va,
                    train_idx, val_idx, fold):
         if not sink.enabled:
@@ -457,6 +489,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         rep_results = {}
         for model_name, model_factory in model_factories.items():
+            if rep_name not in _top2_for(model_name):
+                continue
             # One unweighted list, and one weighted list per importance
             # scorer. A fold only enters any of them if every fit on it
             # succeeded, so all the means below cover the same folds and a
@@ -671,6 +705,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Each model's own pool metadata, kept so the per-family loop below can read
     # every family's best for that model and not only the one the pool returned.
     meta_by_model = {}
+    # {downstream model: why it has no recipe of its own}. A model in here is
+    # scored on its single representations only; conditions 3, 4 and 5 write no
+    # row for it, because the only recipe on offer belonged to another model.
+    hybrid_recipe_missing = {}
     for _mname in model_factories:
         try:
             _search, _meta = get_best_search_for_downstream(
@@ -721,49 +759,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"({_meta.get('objective_choice')}), search metric "
                       f"{_meta.get('metric_name')!r}")
             else:
-                # Fall back to the RF blueprint so the model still gets a
-                # hybrid (better than dropping it from the comparison).
-                bp_by_model[_mname] = bp
-                aug_by_model[_mname] = meta.get('aug_condition', 'uncapped')
-                meta_by_model[_mname] = meta
-                # 2026-09-12: the fallback inherits RF's family, not its own.
-                family_by_model[_mname] = {
-                    'objective': pool_family,
-                    'objective_choice': pool_family_choice,
-                    'pool_subset': meta.get('pool_subset'),
-                    'search_metric_name': pool_metric_name,
-                    'search_lower_is_better': meta.get('lower_is_better'),
-                    'search_score_mean': meta.get('score_mean'),
-                    'tier': meta.get('tier'),
-                    'aug_condition': meta.get('aug_condition', 'uncapped'),
-                    'by_objective': {
-                        _o: {'tier': _d.get('tier'),
-                             'aug_condition': _d.get('aug_condition'),
-                             'score_mean': _d.get('score_mean'),
-                             'metric_name': _d.get('metric_name'),
-                             'lower_is_better': _d.get('lower_is_better')}
-                        for _o, _d in (meta.get('by_objective') or {}).items()
-                    },
-                    'blueprint_source': 'rf_fallback_no_pool_entry',
-                }
+                # ⛔ NO SUBSTITUTE RECIPE. Until 2026-09-28 the two branches
+                # here copied `bp` -- the recipe the pool returned for the
+                # random forest -- into this model, tagged
+                # 'rf_fallback_no_pool_entry' or 'rf_fallback_fetch_failed'.
+                # Conditions 3, 4 and 5 then trained this model on features a
+                # random forest's search had chosen, and the row went into the
+                # result file under this model's own name. The features were
+                # chosen for one model and the score was produced by another,
+                # so the number did not measure what its name said. It is now
+                # recorded as unscored: no recipe, no hybrid space, no row.
+                # The reason lands in results['hybrid_recipe_missing'] and in
+                # results['hybrid_spaces_unavailable'].
+                hybrid_recipe_missing[_mname] = (
+                    'the precomputed pool holds no search for this downstream '
+                    'model, so it has no recipe of its own; no other model\'s '
+                    'recipe is put in its place')
+                print(f"    {_mname}: no hybrid arm -- the pool holds no "
+                      f"search for {_mname}, and the random forest's recipe "
+                      f"is not substituted")
         except Exception as _exc:
+            hybrid_recipe_missing[_mname] = (
+                f'the pool lookup for this downstream model raised '
+                f'{type(_exc).__name__}: {_exc}; it has no recipe of its own '
+                f'and no other model\'s recipe is put in its place')
             print(f"  WARNING: blueprint fetch failed for {_mname} "
-                  f"({_exc}); using RF blueprint as fallback.")
-            bp_by_model[_mname] = bp
-            aug_by_model[_mname] = meta.get('aug_condition', 'uncapped')
-            meta_by_model[_mname] = meta
-            family_by_model[_mname] = {
-                'objective': pool_family,
-                'objective_choice': pool_family_choice,
-                'pool_subset': meta.get('pool_subset'),
-                'search_metric_name': pool_metric_name,
-                'search_lower_is_better': meta.get('lower_is_better'),
-                'search_score_mean': meta.get('score_mean'),
-                'tier': meta.get('tier'),
-                'aug_condition': meta.get('aug_condition', 'uncapped'),
-                'by_objective': {},
-                'blueprint_source': f'rf_fallback_fetch_failed: {_exc}',
-            }
+                  f"({_exc}); {_mname} is recorded as unscored on hybrid "
+                  f"features, not given the random forest's recipe.")
 
     # ── One recipe per (model, family), not one per model ─────────────────
     # ⛔ Added 2026-09-19. POOL_SUBSETS names the two families in PREFERENCE
@@ -806,6 +828,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if _unavail:
             hybrid_spaces_unavailable[_mname] = _unavail
     results['hybrid_spaces_unavailable'] = hybrid_spaces_unavailable
+    results['hybrid_recipe_missing'] = dict(hybrid_recipe_missing)
     results['hybrid_space_objective'] = dict(space_objective)
     results['hybrid_spaces_note'] = (
         'One hybrid space per family of stored search, per model. A predictive '
@@ -1096,23 +1119,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_hybrid_improved = int(sum(1 for d in hybrid_deltas if (d < 0 if lower_is_better else d > 0)))
     print(f"  Hybrid weighting: {n_hybrid_improved}/{len(hybrid_deltas)} models improved")
 
-    # Per-model comparison: top-3 base reps vs hybrid
-    print(f"\n  PER-MODEL COMPARISON (top-3 base reps vs hybrid):")
-    results['per_model_top3'] = {}
+    # Per-model comparison: the model's own top-2 single representations vs
+    # the hybrid. The two are taken in the order the model's STORED SEARCH
+    # ranked them (_top2_for), never re-sorted by the held-out score reported
+    # here, so the comparison is not chosen by its own result.
+    print(f"\n  PER-MODEL COMPARISON (each model's top-2 single "
+          f"representations vs hybrid):")
+    results['per_model_top2'] = {}
     for model_name in model_factories:
-        # Collect (rep_name, unweighted_score) for this model
-        rep_scores = []
-        for rep_name, rep_results in results['per_rep'].items():
-            if model_name in rep_results:
-                uw = rep_results[model_name].get('unweighted_mean', float('nan'))
-                w = rep_results[model_name].get('weighted_mean', float('nan'))
-                d = rep_results[model_name].get('delta', float('nan'))
-                if not np.isnan(uw):
-                    rep_scores.append((rep_name, uw, w, d))
-
-        # Sort by unweighted score (best first)
-        rep_scores.sort(key=lambda x: x[1], reverse=not lower_is_better)
-        top3 = rep_scores[:3]
+        top2 = []
+        for rep_name in _top2_for(model_name):
+            _rr = results['per_rep'].get(rep_name, {}).get(model_name)
+            if not _rr:
+                continue
+            uw = _rr.get('unweighted_mean', float('nan'))
+            if not np.isnan(uw):
+                top2.append((rep_name, uw,
+                             _rr.get('weighted_mean', float('nan')),
+                             _rr.get('delta', float('nan'))))
 
         model_hybrid_uw = float('nan')
         model_hybrid_w = float('nan')
@@ -1134,8 +1158,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 return float('nan')
             return -float(delta) if lower_is_better else float(delta)
 
-        _best_rep_name = top3[0][0] if top3 else None
-        _best_rep_gain = _gain(top3[0][3]) if top3 else float('nan')
+        # "Best" = rank 1 in the model's stored search.
+        _best_rep_name = top2[0][0] if top2 else None
+        _best_rep_gain = _gain(top2[0][3]) if top2 else float('nan')
         _hybrid_gain = _gain(model_hybrid_delta)
         # Question 2 of this file: does the improvement differ between an
         # individual representation and the hybrid? Positive means the weights
@@ -1158,8 +1183,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                        or np.isnan(_hybrid_gain))
                                else float('nan'))
 
-        results['per_model_top3'][model_name] = {
-            'top3': [(n, uw, w, d) for n, uw, w, d in top3],
+        results['per_model_top2'][model_name] = {
+            'top2': [(n, uw, w, d) for n, uw, w, d in top2],
             'hybrid_unweighted': model_hybrid_uw,
             'hybrid_weighted': model_hybrid_w,
             'hybrid_delta': model_hybrid_delta,
@@ -1174,15 +1199,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'A gain is how much the metric improved when the weights were '
                 'applied, sign-normalised so positive always means they '
                 'helped. hybrid_gain_minus_best_base_gain is the hybrid\'s '
-                'gain minus the gain on the best-scoring single '
-                'representation for this model. '
+                'gain minus the gain on the rank-1 single representation '
+                'in this model\'s stored search. '
                 'cliff_aware_minus_neighbour_agreement is the cliff-aware '
                 'arm\'s gain minus the neighbour-agreement arm\'s, both on '
                 'the hybrid.'),
         }
 
         print(f"\n  {model_name}:")
-        for rn, uw, w, d in top3:
+        for rn, uw, w, d in top2:
             print(f"    {rn:<20} uw={uw:.4f}, w={w:.4f} (delta={d:+.4f})")
         print(f"    {'HYBRID':<20} uw={model_hybrid_uw:.4f}, w={model_hybrid_w:.4f} "
               f"(delta={model_hybrid_delta:+.4f})")
@@ -1193,12 +1218,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    cliff-aware weights minus neighbour-agreement weights, on "
               f"the hybrid: {_ca_minus_neighbour:+.4f} {metric_name}")
 
-    # `top3` inside the loop above held whichever model iterated last (ridge,
-    # since model_factories is insertion-ordered ['rf','xgboost','lightgbm',
-    # 'ridge']). Save the canonical RF-baseline ranking from the search pool
-    # — it's what was already printed at the top of the run and is consistent
-    # with the rest of the suite. Per-model rankings remain in
-    # results['per_model_top3'].
+    # The RF-baseline ranking read straight from the search pool, as printed
+    # at the top of the run. Each model's own pair is in
+    # results['per_model_top2'].
     search_top3 = []
     if search is not None:
         try:
@@ -1219,8 +1241,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #   held-out rows of its own folds. Every one of those numbers is in the
     #   dataset's own metric whichever family chose the hybrid's recipe, so
     #   'delta' (weighted minus unweighted) has the same feature space and the
-    #   same metric top and bottom, and so does per_model_top3 (top-3 base
-    #   representations beside the hybrid).
+    #   same metric top and bottom, and so does per_model_top2 (each model's
+    #   top-2 single representations beside the hybrid).
     #
     #   'top3_base_reps' is the one field that does not: it is read straight
     #   out of the stored search. Under objective='predictive' those are RF
@@ -1241,7 +1263,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'by_model': family_by_model,
         'dataset_metric': metric_name,
         'scores_in_dataset_metric': [
-            'per_rep', 'hybrid', 'hybrid_cliff_aware', 'per_model_top3'],
+            'per_rep', 'hybrid', 'hybrid_cliff_aware', 'per_model_top2'],
         'scores_read_from_the_search': ['top3_base_reps'],
     }
     results['top3_base_reps_metric'] = pool_metric_name
@@ -1278,12 +1300,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # =========================================================================
     # 2026-09-18, owner's instruction: the top 2 rows as an extra, and the two
-    # hybrid deltas. Added beside the existing keys. Nothing above is
-    # recomputed and no representation is dropped from anything above: the
-    # per_rep loop still scores every representation the run was given.
+    # hybrid deltas. Added beside the existing keys. Since 2026-09-27 the
+    # per_rep loop fits each model on its own top 2 only (_top2_for).
     # =========================================================================
-    # What was absent. results['per_model_top3'] ranks representations by n02's
-    # OWN unweighted score over n02's folds, and results['hybrid'] carries one
+    # What was absent. results['per_model_top2'] holds only n02's own scores
+    # on each model's top 2, and results['hybrid'] carries one
     # hybrid per downstream model whose only companion number is its own
     # weighted-minus-unweighted delta. Neither says how that hybrid stands
     # against the representations that fed it. A reader wanting that had to
@@ -1301,10 +1322,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['top2_base_reps'] = {}
     results['top2_hybrids'] = {}
     results['hybrid_deltas_by_model'] = {}
-    for _mname in model_factories:
-        _msearch = search_by_model.get(_mname)
-        if _msearch is None:
+    # WHICH DOWNSTREAM MODELS THIS TABLE COVERS. Two lists decide it and they
+    # can disagree. model_factories is built from WEIGHTED_MODELS (:137), the
+    # five models whose fit() takes a per-row weight. The other list is the
+    # models a stored search scored, which searched_models reads off that
+    # search. A model in the first and not in the second has no rows of its own
+    # to rank. Until now such a model left this loop on a bare `continue` and
+    # the result file said nothing about it, so a table of five models could be
+    # a table of three and read as five. Both kinds of missing model are
+    # written down now: the model whose pool lookup returned no search, and the
+    # model whose own search scored other models and not it. Neither is read
+    # out of another model's search -- resolve_comparison_models never
+    # substitutes one model for another, and each model below keeps reading its
+    # own search, which is what it did before.
+    _requested = list(model_factories)
+    _compare, _model_dropped = [], {}
+    for _mname in _requested:
+        _s_m = search_by_model.get(_mname)
+        if _s_m is None:
+            _model_dropped[_mname] = (
+                'the pool returned no stored search for this downstream '
+                'model, so there are no rows of its own to rank')
             continue
+        _keep, _why = resolve_comparison_models(_s_m, [_mname])
+        if not _keep:
+            _model_dropped[_mname] = _why[0][1]
+            continue
+        _compare.append(_mname)
+    results['top2_models_requested'] = _requested
+    results['top2_models_compared'] = list(_compare)
+    results['top2_models_dropped'] = _model_dropped
+    results['top2_models_scored_by_each_search'] = {
+        _m: searched_models(_s) for _m, _s in search_by_model.items()}
+    for _mname, _why in _model_dropped.items():
+        print(f"  top-2 rows absent for {_mname}: {_why}")
+    for _mname in _compare:
+        _msearch = search_by_model[_mname]
         try:
             results['top2_base_reps'][_mname] = shared_top_base_reps(
                 _msearch, _mname, n=2, require_full=False,

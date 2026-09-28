@@ -141,6 +141,7 @@ from experiments._shared import (
     get_domain_metric, get_model_factories,
     build_fold_hybrid, extract_top3_base_reps, fold_reselection,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
     # The families a pool subset names, and one sentence saying what each one
     # chose its features for. Added 2026-09-19 with the per-family cells.
@@ -436,7 +437,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         d_hybrid_sampled = D_weighted[triu_i_s, triu_j_s]
         dist_corr, _ = spearmanr(d_full_sampled, d_hybrid_sampled)
 
-        # Prediction quality: per-model CV -- use search blueprint's method
+        # The k-nearest-neighbours recipe. It carries the SIMILARITY side of
+        # this budget row -- the held-out neighbour correlation and its
+        # unweighted twin below -- because knn is the distance evaluator this
+        # lineage searched and X_hybrid above was fetched for it.
         bp = search.best_by_model['knn']['blueprint'] if search.best_by_model.get('knn') else None
         if bp is None:
             print(f"    No blueprint at budget={budget}, skipping prediction")
@@ -448,14 +452,80 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         aug_cond = _meta.get('aug_condition', 'uncapped') if _meta else 'uncapped'
         bp.augmentation_strategy = aug_cond
 
+        # ── ONE RECIPE PER DOWNSTREAM MODEL FOR THE PREDICTION ARM ──
+        #
+        # ⛔ WHAT THIS REPLACED, 2026-09-28. Until today every one of the six
+        # models in DISTANCE_MODELS was refit, at every budget, on features
+        # rebuilt from `bp` above -- the recipe the search stored for knn. The
+        # two things that disagree: that recipe's allocation method, importance
+        # method and internal evaluator were chosen by fitting k-nearest
+        # neighbours and scoring it, and the five other models are not k-nearest
+        # neighbours. So a row labelled rf, xgboost, svm, dnn or lightgbm held a
+        # score produced on features chosen for a different model, at every
+        # budget in the sweep. That is one disagreement per model per budget,
+        # not one for the file.
+        #
+        # This search scored all six models (distance=True fits DISTANCE_MODELS),
+        # so every model's own recipe is already in search.best_by_model and no
+        # extra pool call is needed. A model the search stored no recipe for is
+        # recorded in results['prediction_recipe_missing'] and scored nowhere:
+        # another model's recipe is not put in its place.
+        #
+        # Identical recipes share one build per fold (keyed by the recipe's own
+        # fields), so this costs one extra build per fold only where the recipes
+        # genuinely differ.
+        bp_by_model = {}
+        prediction_recipe_missing = {}
+        for mname in model_factories:
+            _e = search.best_by_model.get(mname) or {}
+            _bp_m = _e.get('blueprint')
+            if _bp_m is None:
+                prediction_recipe_missing[mname] = (
+                    'the search stored no recipe for this downstream model, so '
+                    "it has no features of its own; no other model's recipe is "
+                    'put in its place')
+                continue
+            _bp_m.augmentation_strategy = aug_cond
+            bp_by_model[mname] = _bp_m
+        for mname, _why in prediction_recipe_missing.items():
+            print(f"    {mname} not scored at budget={budget}: {_why}")
+        # Both go on this budget's own row below, so a resumed run restores
+        # them with the cell.
+        _recipe_by_model_row = {
+            mname: {'allocation_method': getattr(_b, 'allocation_method', None),
+                    'importance_method': getattr(_b, 'importance_method', None),
+                    'internal_evaluator': getattr(_b, 'internal_evaluator', None),
+                    'searched_at_n_features': int(getattr(_b, 'budget', 0) or 0)}
+            for mname, _b in bp_by_model.items()}
+
         # Every model is fitted here, at THIS loop's budget. The cache shortcut
         # that used to sit here copied search.best_by_model[model]['fold_scores']
         # in whenever that entry's budget matched, and those scores came from the
         # search's own winning configuration, not from a rebuild at this budget.
         # With the shortcut in place five of six budgets scored identically and
         # the sixth was the search's own number, so the sweep measured nothing.
-        model_scores = {mname: [] for mname in model_factories}
-        refit_models = dict(model_factories)
+        model_scores = {mname: [] for mname in bp_by_model}
+        refit_models = {mname: f for mname, f in model_factories.items()
+                        if mname in bp_by_model}
+
+        def _recipe_key(_b):
+            """Every field of the recipe except the number of features, so two
+            models that landed on the same recipe share one build per fold.
+
+            The number of features is left out because budget_override below
+            replaces it with this loop's budget, so two recipes that differ
+            only there build the same thing here. Every other field is in, read
+            off Blueprint.to_dict(): which representations, allocation method,
+            importance method, internal evaluator, step size, and all seven
+            augmentation fields. A field left out of this key would silently
+            merge two different builds into one.
+            """
+            try:
+                _d = _b.to_dict()
+            except Exception:
+                return id(_b)
+            return tuple(sorted((k, repr(v)) for k, v in _d.items()
+                                if k != 'budget'))
 
         # ── Honest-SAC redesign: the fold loop rebuilds a hybrid on each
         # TRAIN fold, and both the held-out SAC and every model's prediction
@@ -520,19 +590,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception:
                 pass
 
-            # Prediction arm (unchanged): only fit models missing from cache.
-            if refit_models:
-                scaler = StandardScaler()
-                X_tr_s = scaler.fit_transform(X_tr_h)
-                X_va_s = scaler.transform(X_va_h)
-                for mname, mfactory in refit_models.items():
+            # Prediction arm: each model on the features ITS OWN recipe
+            # selected from this fold's training rows, at THIS loop's budget.
+            # One build per distinct recipe, shared by the models that landed
+            # on it.
+            _space_by_recipe = {}
+            for mname, mfactory in refit_models.items():
+                _bp_m = bp_by_model[mname]
+                _key = _recipe_key(_bp_m)
+                if _key not in _space_by_recipe:
                     try:
-                        m = mfactory()
-                        m.fit(X_tr_s, y_train)
-                        model_scores[mname].append(metric_fn(y_val, m.predict(X_va_s)))
+                        if _key == _recipe_key(bp):
+                            # The same recipe the similarity side above built.
+                            _Xtr_m, _Xva_m = X_tr_h, X_va_h
+                        else:
+                            _Xtr_m, _Xva_m, _ = build_fold_hybrid(
+                                train_reps_fold, val_reps_fold, y_train, _bp_m,
+                                augmentations_train=aug_tr,
+                                augmentations_val=aug_va,
+                                groups=(groups[train_idx]
+                                        if groups is not None else None),
+                                # The swept axis, as above.
+                                budget_override=budget)
+                        _sc_m = StandardScaler()
+                        _space_by_recipe[_key] = (
+                            _sc_m.fit_transform(_Xtr_m),
+                            _sc_m.transform(_Xva_m))
                     except Exception:
-                        pass
+                        _space_by_recipe[_key] = None
+                _built = _space_by_recipe[_key]
+                if _built is None:
+                    continue
+                X_tr_s, X_va_s = _built
+                try:
+                    m = mfactory()
+                    m.fit(X_tr_s, y_train)
+                    model_scores[mname].append(metric_fn(y_val, m.predict(X_va_s)))
+                except Exception:
+                    pass
 
+        # A model the search stored no recipe for has no entry at all here,
+        # rather than a number produced on another model's features.
         model_means = {mname: float(np.mean(s)) if s else float('nan')
                        for mname, s in model_scores.items()}
 
@@ -555,14 +653,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # back as a short list carrying its own shortfall_reason, instead of
         # raising and losing a budget row after every model fit above has been
         # paid for.
+        #
+        # WHICH OF THE SIX THIS BUDGET'S SEARCH ACTUALLY SCORED, resolved
+        # 2026-09-28. DISTANCE_MODELS is a fixed list of six names. The search
+        # on disk scored whatever it scored: svm drops itself above 10,000
+        # molecules, and a dataset's skip policy can drop a name. The two
+        # disagree whenever that happened, and the loops below then asked for a
+        # model with no stored rows and wrote nothing down.
+        #
+        # The six names stay what this file ASKS for, so the set of models it
+        # reports does not change: DISTANCE_MODELS goes in as `requested`, not
+        # None. A name the search never scored is dropped and named, never
+        # swapped for another model's rows.
+        _cmp_models, _cmp_dropped = resolve_comparison_models(
+            search, DISTANCE_MODELS)
+        # {downstream model: why it is not in the rows below}. These reasons used
+        # to be printed to the terminal only.
+        _models_dropped = {_n: _w for _n, _w in _cmp_dropped}
+        for _n, _w in _cmp_dropped:
+            print(f"    downstream model {_n} not compared: {_w}")
         _top2_base, _top2_hyb, _hyb_deltas = {}, {}, {}
-        for _m in DISTANCE_MODELS:
+        for _m in _cmp_models:
             try:
                 _top2_base[_m] = top_base_reps(search, _m, 2,
                                                require_full=False)
             except Exception as _e:
                 print(f"    top-2 base representations for {_m} "
                       f"unavailable: {_e}")
+                _models_dropped[_m] = (
+                    'no top-2 base representations: %s: %s'
+                    % (type(_e).__name__, _e))
             _th = None
             try:
                 # No budget= filter. The pool substitutes a recipe searched at
@@ -578,6 +698,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception as _e:
                 print(f"    top-2 hybrid configurations for {_m} "
                       f"unavailable: {_e}")
+                _models_dropped[_m] = (
+                    'no top-2 hybrid configurations: %s: %s'
+                    % (type(_e).__name__, _e))
             # The rank-1 hybrid is handed to hybrid_deltas explicitly. Left to
             # pick its own it reads _picked['selected'][0]['row']
             # (_shared.py:7432), and a top_hybrids entry has no 'row' key, so
@@ -590,18 +713,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         search, _m, hybrid=_th['selected'][0])
                 except Exception as _e:
                     print(f"    hybrid deltas for {_m} unavailable: {_e}")
+                    _models_dropped[_m] = (
+                        'no hybrid deltas: %s: %s' % (type(_e).__name__, _e))
         _top2_pairs = {}
+        _top2_pairs_absent_reason = None
         try:
             # The same two-by-two grid in one block: per downstream model the 2
             # base representations and the 2 hybrids, plus 'n_distinct_units' --
             # how many separate things would have to be BUILT once one
             # representation picked by three downstream models counts once.
             _top2_pairs = _drop_blueprint(
-                select_model_rep_pairs(search, models=list(DISTANCE_MODELS),
+                select_model_rep_pairs(search, models=list(_cmp_models),
                                        n_base=2, n_hybrids=2,
                                        require_full=False))
         except Exception as _e:
             print(f"    top-2 model-and-representation grid unavailable: {_e}")
+            _top2_pairs_absent_reason = f"{type(_e).__name__}: {_e}"
 
         # Printed because the two deltas answer different questions and a reader
         # given one number cannot tell which was asked. The first is the hybrid
@@ -610,7 +737,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # representation given 0 features is not in that mean. The second is the
         # hybrid against the single best base representation for the same
         # downstream model. A hybrid can win the first and lose the second.
-        for _m in DISTANCE_MODELS:
+        for _m in _cmp_models:
             _hd = _hyb_deltas.get(_m)
             if not _hd:
                 continue
@@ -662,6 +789,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         budget_result['top2_hybrids'] = _top2_hyb
         budget_result['top2_pairs_by_model'] = _top2_pairs
         budget_result['hybrid_deltas_by_model'] = _hyb_deltas
+        # The downstream models the four keys above cover, and {downstream
+        # model: why it is missing from one of them}. Added 2026-09-28: every
+        # one of these reasons was printed to the terminal and saved nowhere.
+        budget_result['top2_models_compared'] = list(_cmp_models)
+        budget_result['top2_models_dropped'] = _models_dropped
+        if _top2_pairs_absent_reason:
+            budget_result['top2_pairs_by_model_absent_reason'] = \
+                _top2_pairs_absent_reason
+        # The recipe each model's prediction score was measured on, and the
+        # models the search stored no recipe for. Added 2026-09-28 with the
+        # per-model builds: 'model_scores' above carries no entry for a model
+        # in 'prediction_recipe_missing', rather than a number produced on
+        # another model's features.
+        budget_result['prediction_recipe_by_model'] = _recipe_by_model_row
+        budget_result['prediction_recipe_missing'] = prediction_recipe_missing
+        # The similarity numbers on this row -- 'sac_rho', both sac_fold_scores
+        # lists, 'violation_rate' and 'dist_corr_with_full' -- are measured on
+        # the k-nearest-neighbours recipe's features, which is the distance
+        # evaluator this lineage searched. They are unchanged.
+        budget_result['similarity_recipe_model'] = 'knn'
         # Which family this cell was built from, beside the family the pool
         # would have returned on its own.
         budget_result['requested_family'] = family
