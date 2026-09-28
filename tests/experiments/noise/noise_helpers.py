@@ -727,7 +727,11 @@ def gamma_test(D, y, k_max=10):
     distance to their k nearest neighbours, gamma_k = mean of half the squared
     label difference to the same neighbours. A straight line gamma = A + B*delta
     through the k_max points; the intercept A estimates the label-noise variance.
-    It also holds variation the features cannot resolve, so it is an upper bound.
+    It is NOT an upper bound (corrected 2026-09-28, n37): it is a straight line
+    carried from the smallest neighbour distance to zero, and with hundreds of
+    features it lands on either side of the noise variance, negative included.
+    gamma[0], the k = 1 value, is an upper bound when the distance reads no
+    label and a molecule's error is independent of its nearest neighbour's.
 
     Differs from n35's close_pairs estimate: per-molecule neighbours rather than
     the closest share of all pairs, squared distance, and k_max points.

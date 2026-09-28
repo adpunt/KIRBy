@@ -23,8 +23,12 @@ WHAT IS COMPUTED, per fold, on the fold's training molecules as recorded:
      zero, and the intercept lands on either side of the true noise. Measured
      on synthetic labels with noise variance 0.1: 0.021 at 100 features, 0.422
      at 500. gamma_1, half the mean squared label difference to the nearest
-     neighbour, IS an upper bound when the distance reads no label: it is the
-     noise variance plus a non-negative term. Both are written; gamma_1 is
+     neighbour, IS an upper bound when the distance reads no label AND a
+     molecule's measurement error is independent of its nearest neighbour's:
+     it is then the noise variance plus a non-negative term. Close analogues
+     often come from one paper or one assay and share an error; a share rho of
+     the variance held in common lowers gamma_1 by rho times the noise
+     variance, and it can then fall below it. Both are written; gamma_1 is
      gamma[0] of each record, and its share of the MSE sits beside the
      intercept's. In these distance spaces, as n35:
        base_1, base_2    each downstream model's rank-1 and rank-2 single
@@ -374,7 +378,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             'label units squared. NOT an upper bound: it is a straight line '
             'carried to zero distance and can fall either side of the noise '
             'variance when the features are many. gamma[0], the k = 1 value, '
-            'is an upper bound when the distance reads no label; '
+            'is an upper bound when the distance reads no label and a '
+            'molecule\'s measurement error is independent of its nearest '
+            'neighbour\'s (errors shared by one paper or assay lower it); '
             'gamma_reference_k1_over_mse is its share of the MSE.'),
         'simex_note': (
             'extra noise at lambda * the fold reference Gamma intercept '
@@ -620,7 +626,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                 del _D
         g_base = frec['gamma'].get(ref_key) if ref_key else None
         s2_base = (g_base or {}).get('intercept', float('nan'))
-        # gamma_1: the upper bound (module docstring, 1).
+        # gamma_1: the upper bound under independent errors (module docstring, 1).
         s2_k1 = float(((g_base or {}).get('gamma') or [float('nan')])[0])
 
         # The check: the reference neighbours are fixed, so the intercept
