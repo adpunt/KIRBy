@@ -1220,10 +1220,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"(delta={model_hybrid_delta:+.4f})")
         print(f"    weighting helped the hybrid by {_hybrid_gain:+.4f} "
               f"{metric_name} and {_best_rep_name} by {_best_rep_gain:+.4f}; "
-              f"hybrid minus best single representation "
-              f"{_hyb_minus_base:+.4f}")
-        print(f"    cliff-aware weights minus neighbour-agreement weights, on "
-              f"the hybrid: {_ca_minus_neighbour:+.4f} {metric_name}")
+              f"gain on the hybrid minus gain on {_best_rep_name} "
+              f"{_hyb_minus_base:+.4f} (gains: positive = the weights "
+              f"helped)")
+        print(f"    gain from cliff-aware weights minus gain from "
+              f"neighbour-agreement weights, on the hybrid: "
+              f"{_ca_minus_neighbour:+.4f} {metric_name}")
 
     # The RF-baseline ranking read straight from the search pool, as printed
     # at the top of the run. Each model's own pair is in
