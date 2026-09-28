@@ -706,6 +706,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         train_idx=train_idx, val_idx=val_idx,
                         **_cache_kw).items()
                     if sp not in BASE_SPACES})
+            # A hybrid that could not be rebuilt on the noisy labels used to
+            # drop out of this pass with nothing recorded.
+            for sp in spaces:
+                if sp not in noisy_spaces:
+                    errors[f'{sp}|{pkey}|build'] = (
+                        'no feature matrix could be built for this space on '
+                        'the injected labels of this pass')
             for space, cells in noisy_spaces.items():
                 for X_tr_s, X_va_s, cell_models in cells:
                     for mname in cell_models:
