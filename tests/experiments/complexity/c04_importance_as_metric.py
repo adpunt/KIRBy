@@ -280,7 +280,7 @@ def _evaluate_single_rep_retrieval(reps, labels, folds, k_neighbors=10):
     Predicts each molecule's label from the inverse-distance-weighted average
     of its 10 nearest training molecules, on one representation's own matrix,
     with no importance weighting. Every other arm in this file works inside the
-    concatenation of all ten representations, so its numbers have nothing to be
+    concatenation of every representation loaded, so its numbers have nothing to be
     read against; this is that comparator. Predictions from all folds are
     pooled into one vector and one R-squared is computed over the pool, which
     is how the concatenation arms aggregate.
@@ -391,14 +391,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if len(method_names) >= 2:
         for select_method in method_names[:4]:
             for weight_method in method_names[:4]:
+                key = f"{select_method}__x__{weight_method}"
                 try:
                     w_r2 = _evaluate_cross_test(
                         X_concat, labels, folds, imp_by_fold,
                         select_method, weight_method, budget)
-                    key = f"{select_method}__x__{weight_method}"
                     results['cross_test'][key] = w_r2
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Was a bare `pass`: a failed pair vanished from the matrix
+                    # with nothing in the log or the file to say it was tried.
+                    print(f"    {key}: FAILED - {e}")
+                    results.setdefault('cross_test_failed', {})[key] = str(e)
+    else:
+        # With one importance method there is no second method to select or
+        # weight by, so the matrix is empty by construction, not by failure.
+        # Written down so an empty dict is not read as a result.
+        results['cross_test_status'] = (
+            f"not run: needs two importance methods, "
+            f"{len(method_names)} succeeded ({method_names})")
+        print(f"    {results['cross_test_status']}")
 
     # Low-dim: budget=25 selected features + importance weighting
     print(f"\n  Low-dim (budget={budget}) selected + weighted...")
@@ -414,8 +425,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Single-representation comparator: the same retrieval from the 10 nearest
     # training molecules, on each representation's own matrix, unweighted, over
-    # the same folds. Everything above lives inside the concatenation of all
-    # ten, so without these rows the weighted-concatenation R-squared has
+    # the same folds. Everything above lives inside the concatenation of every
+    # representation loaded, so without these rows the weighted-concatenation R-squared has
     # nothing to be read against.
     print("\n  Single-representation retrieval (unweighted, own matrix)...")
     single_rep = _evaluate_single_rep_retrieval(reps, labels, folds)
