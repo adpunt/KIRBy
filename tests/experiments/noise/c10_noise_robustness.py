@@ -360,9 +360,12 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         for r in (getattr(search, 'all_results', None) or []):
             if r.get('model') != 'rf' or not r.get('fold_scores'):
                 continue
-            name = "{}|{}|{}|s{}".format(
+            # rep_count added 2026-09-28: two recipes that differ only in how
+            # many representations they draw from had one name.
+            name = "{}|{}|{}|s{}|n{}".format(
                 r.get('allocation_method'), r.get('importance_method'),
-                r.get('internal_evaluator'), r.get('step_size'))
+                r.get('internal_evaluator'), r.get('step_size'),
+                r.get('rep_count'))
             cands_by_budget.setdefault(r.get('budget'), []).append(
                 {'name': name, 'fold_scores': list(r['fold_scores'])})
 
@@ -388,8 +391,11 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             'best_single': per_budget[budgets[0]]['best_single_reselected'],
             'excluded_folds': excluded,
             'recipes': {
+                # rep_count added 2026-09-28, or phase 2a could not see a
+                # recipe that changed only its number of representations.
                 budget: [bp.allocation_method, bp.importance_method,
-                         bp.internal_evaluator]
+                         bp.internal_evaluator,
+                         getattr(bp, 'rep_count', None)]
                 for budget, bp in (
                     (b, (search.best_by_model_budget.get('rf', {}).get(b) or {})
                         .get('blueprint'))
@@ -420,6 +426,10 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     # mean of the base representations that fed it, and against the best base
     # representation for rf.
     results['top2_by_cell'] = {}
+    results['top2_by_cell_scores_are'] = (
+        "in-sample: each representation and hybrid is ranked and scored on the "
+        "same search folds (score_mean). Unlike individual_reps, best_single "
+        "and hybrids, nothing here is read on a fold that did not pick it.")
     for _key, _s in _searches.items():
         if _s is None:
             continue
