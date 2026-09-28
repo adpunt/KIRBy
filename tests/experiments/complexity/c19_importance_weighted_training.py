@@ -3,7 +3,8 @@
 
 Paper: Complexity
 Core question: How should hybrid importance scores enter the training process?
-    Tests 5 weighting strategies across models on the HYBRID feature space.
+    Tests 4 weighting strategies against an unweighted fit, across models, on
+    the HYBRID feature space.
 
     NOTE (design): an earlier version also evaluated a raw full-concat space to
     ask whether weighting helps more on raw vs hybrid features. The raw-concat
@@ -18,7 +19,12 @@ Conditions:
   1. feature_weighted: X * sqrt(importance) — rescale features
   2. sample_weighted: reliability scores as sample_weight in fit
   3. combined: feature_weighted + sample_weighted
-  4. importance_pruned: zero out features with importance < median
+  4. importance_pruned: REMOVE the features whose weight is not strictly
+     above the median weight. Removing is not the same fit as zeroing for rf:
+     max_features='sqrt' counts constant columns, so the forest differs
+     (synthetic check: max prediction difference 1.07). For lightgbm and svm
+     the two are identical.
+  Feature weights are sqrt(importance) scaled to average 1.
 
 Usage:
     python c19_importance_weighted_training.py --dataset logd --mode intermediary
