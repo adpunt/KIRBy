@@ -24,8 +24,9 @@ WHAT IS COMPUTED, per (level, fold), on the TRAINING molecules only:
                          otherwise Euclidean on the fold-standardised matrix.
        <hybrid space>    Euclidean on each standardised hybrid matrix the fold
                          builds, one per group of models sharing a recipe.
-       forest_proximity  one minus the share of 200 trees that put the two
-                         molecules in one leaf (kirby.utils.noise_estimation).
+       forest_proximity  one minus the share of FOREST_TREES trees (100,
+                         kirby.utils.noise_estimation) that put the two
+                         molecules in one leaf, so distances are steps of 0.01.
                          One forest PER FEATURE MATRIX above, fitted on that
                          standardised matrix and the labels AS SEEN, and its
                          weights used only in that space -- the way n18
