@@ -208,6 +208,8 @@ from experiments.noise.n23_uncertainty_cleaning import (
 DELETE_CLEANUP = 'remove'
 REWRITE_CLEANUPS = ('label_smooth', 'knn_smooth', 'oof_smooth')
 REWEIGHT_CLEANUPS = ('downweight', 'huber_weight')
+# {cleanup: the cleanup it duplicates} on a CLASS label only. See cleanups_for.
+CLF_DUPLICATE_CLEANUPS = {'label_smooth': 'knn_smooth'}
 
 # What each arm actually touches, written onto the result file. See the
 # docstring: only two of the seven cleanups touch the flagged molecules alone.
@@ -317,8 +319,18 @@ def cleanups_for(is_clf):
     writing rows of NaN; `cleaned_training_set` raises on them there and n07 and
     n18 gate them the same way.
     """
+    # dirty-local 2026-09-28: on a class label label_smooth IS knn_smooth.
+    # Both flag the molecules at or above the (1 - rate) quantile of the score,
+    # both take the same min(10, n-1) nearest rows and drop the first, and both
+    # overwrite the flagged labels with the neighbours' mode
+    # (n07_remediation.py, the is_clf branches of label_smooth and knn_smooth).
+    # Checked on 200 synthetic molecules at rates 0.05, 0.10 and 0.20: the two
+    # cleaned label columns are equal element for element. Scored as two arms
+    # it is one result counted twice in the headline, so it is run once, as
+    # knn_smooth, and the result file says why (arms_identical_on_a_class_label).
     rewrite = tuple(c for c in REWRITE_CLEANUPS
-                    if not (is_clf and c in REGRESSION_ONLY_CLEANUPS))
+                    if not (is_clf and c in REGRESSION_ONLY_CLEANUPS)
+                    and not (is_clf and c in CLF_DUPLICATE_CLEANUPS))
     reweight = tuple(c for c in REWEIGHT_CLEANUPS
                      if not (is_clf and c in REGRESSION_ONLY_CLEANUPS))
     return DELETE_CLEANUP, rewrite, reweight
@@ -844,6 +856,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             dataset_name, condition, 0.1, is_clf=is_clf).strategy,
         'condition_moves_every_other_label': bool(
             condition in OUTLIER_STRATEGIES and not is_clf),
+        # dirty-local 2026-09-28: see cleanups_for.
+        'arms_identical_on_a_class_label': (
+            {c: (f'not run: on a class label it produces the same cleaned '
+                 f'training set as {d}, which is run')
+             for c, d in CLF_DUPLICATE_CLEANUPS.items()} if is_clf else {}),
         'features_are_fixed_note': (
             "Each feature matrix is built once per (draw, fold) from that "
             "pass's training molecules at their CORRUPTED labels, and every "
