@@ -999,8 +999,17 @@ def _estimator_kwargs(source, groups_train, is_clf, n_folds, k):
     # under both names now, as n07 does. THIS CHANGES n23's
     # activity_cliff_aware numbers from before 2026-09-25 on every dataset
     # with fold groups.
+    # dirty-local 2026-09-28: normalize=False. gaussian_process and
+    # heteroscedastic_nn default to dividing their scores by the scores' own
+    # standard deviation, while ngboost and hetero_gp return label units. The
+    # 'confidence' move rule is documented above as reading the spread in the
+    # label's own units, so it read label units for two sources and a unitless
+    # number for two others. A positive rescaling changes nothing else here:
+    # the drop cut is a percentile, 'proportional' rescales to 0-1, and
+    # average precision is rank-based.
     want = {'n_folds': n_folds, 'groups': groups_train, 'k': k,
-            'metric': None, 'exclude_groups': groups_train}
+            'metric': None, 'exclude_groups': groups_train,
+            'normalize': False}
     if is_clf:
         want['is_clf'] = True
     return {p: v for p, v in want.items() if p in accepted}
@@ -1038,7 +1047,7 @@ def _uncertainty_cached(dataset_name, source, X_tr_s, y_tr, groups_train,
     key = {'source': str(source), 'X': nc.array_hash(X_tr_s),
            'y': nc.array_hash(y_tr), 'groups': nc.array_hash(groups_train),
            'is_clf': bool(is_clf), 'n_folds': int(n_folds),
-           'k': int(neighbour_k)}
+           'k': int(neighbour_k), 'score_units': 'label'}
     return tuple(nc.cached(dataset_name, 'n23_uncertainty', key, _compute,
                            store_if=lambda v: v[0] is not None))
 
