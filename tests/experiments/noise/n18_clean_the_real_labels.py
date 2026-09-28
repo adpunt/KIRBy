@@ -47,9 +47,11 @@ is finding something other than measurement error -- most likely it is throwing
 away the molecules the model finds hard. Run it there on purpose and read it that
 way.
 
-WHERE EVERY CLEANUP IS MEASURED. In two feature spaces: one base representation,
-and a hybrid whose recipe comes from the precomputed pool and whose features are
-rebuilt per fold. That is n19's two-space treatment, added here on 2026-09-17.
+WHERE EVERY CLEANUP IS MEASURED. In up to four feature spaces: each model's
+rank-1 and rank-2 base representation (base_1, base_2), the predictive hybrid
+('hybrid') and the similarity-objective hybrid ('hybrid_similarity'). Both
+hybrids take their recipe from the precomputed pool and rebuild the features
+per fold. `spaces_run` on the result file says which ran.
 The recipe is fetched PER DOWNSTREAM MODEL since 2026-09-23: rf is scored in the
 features rf's recipe chose, svm in svm's. Before that one recipe was fetched for
 the first model in the list and every model was scored on its features.
