@@ -1663,7 +1663,7 @@ The questions this chapter and Chapter~\ref{chap:similarity} address are set out
 % This subsection holds the formal definitions; other sections point here in words.
 % Two corrections to the existing prose (checked against the code):
 % - CORRECTION: the prose says the hybrid has "$b$ columns". The budget is a maximum; the hybrid has at most $B$ features (Step 5).
-% - CORRECTION: the prose says binary features skip standardising. That holds only when one representation is scored on its own. Once the hybrid is assembled, every feature is standardised on training-fold statistics, binary bits included.
+% - CORRECTION: the prose says binary features skip standardising. That holds only for the search's own single-representation scores (the ones used to pick the comparator). Every other fit standardises every feature on training-fold statistics, binary bits included: the hybrid, and every single representation scored on the outer test fold.
 % Inputs:
 % - $K$ base representations of the same $n$ samples, $\mathbf{X}^{(k)} \in \mathbb{R}^{n\times d_k}$; widths $d_k$ range from tens to thousands.
 % - Labels $\mathbf{y}$; one group label per sample (e.g. scaffold); the dataset's metric; a downstream model; a list of budgets $B$.
@@ -1673,7 +1673,7 @@ The questions this chapter and Chapter~\ref{chap:similarity} address are set out
 % - With fewer groups than folds, the fold count drops to the number of groups. A dataset with one group is refused rather than split at random.
 % - A representation learned from the labels is re-trained inside each training fold, on training rows only.
 % Step 1, internal split inside each training fold:
-% - About 20% of the training fold's groups are held out as an internal validation part. The split is deterministic.
+% - About 20% of the training fold's rows, as whole groups (the first fold of a 5-fold grouped split), are held out as an internal validation part. The split is deterministic.
 % - Everything the search learns (importance, standalone scores, allocation) comes from the training fold only. Ranking features uses only the internal training part.
 % - The outer held-out rows are used only to score the finished hybrid.
 % Step 2, feature importance per representation:
@@ -1686,7 +1686,7 @@ The questions this chapter and Chapter~\ref{chap:similarity} address are set out
 %   - AUROC and concordance index: $\tilde r_k = \max(0, 2(r_k - 0.5))$.
 %   - RMSE: $\tilde r_k = \max(0, 1 - \mathrm{RMSE}_k/\mathrm{RMSE}_0)$, with $\mathrm{RMSE}_0$ the error of predicting the training mean. MAE: same form with the training median.
 %   - Accuracy and weighted F1: $\tilde r_k = \max(0, (r_k - r_0)/(1 - r_0))$, with $r_0$ the score of always predicting the majority class.
-% - Why: the budget split then does not depend on which metric the dataset uses, and a representation that adds nothing gets no share.
+% - Why: the budget split then does not depend on which metric the dataset uses, and under linear and squared weights (and the global pool) a representation that adds nothing gets no share; under softmax and rank decay it still gets a weight above 0.
 % - A representation whose fit fails gets weight 0 and is recorded as a failure.
 % Step 4, choose representations, then split the budget:
 % - Optional representation count $N$: keep the $N$ representations with the highest $\tilde r_k$ on this fold.
@@ -1695,9 +1695,9 @@ The questions this chapter and Chapter~\ref{chap:similarity} address are set out
 %   - squared: $w_k = \tilde r_k^2$;
 %   - softmax, $T = 1$: $w_k = \exp((\tilde r_k - \max_l \tilde r_l)/T)$;
 %   - rank decay: $w_k = e^{-0.3\rho_k}$, with $\rho_k = 0$ for the best representation, 1 for the next, and so on.
-% - Exact share $b^*_k = B\, w_k / \sum_l w_l$. Rounded by largest remainder: take $\min(\lfloor b^*_k \rfloor, d_k)$, then hand out leftover features one at a time, largest fractional part first, skipping full representations. So $\sum_k b_k = B$ and $b_k \le d_k$.
+% - Exact share $b^*_k = B\, w_k / \sum_l w_l$. Rounded by largest remainder: take $\min(\lfloor b^*_k \rfloor, d_k)$, then hand out leftover features one at a time, largest fractional part first, skipping full representations. So $\sum_k b_k = \min(B, \sum_k d_k)$ and $b_k \le d_k$.
 % - A representation with $w_k > 0$ keeps at least one feature. If every weight is 0, the budget is split equally.
-% - Global-pool method (squared weights): each representation offers its top $\mathrm{round}(2B\, w_k/\sum_l w_l)$ features to one shared pool; one importance ranking over the pool keeps the top $B$. Here $b_k$ is an outcome, not a fixed share.
+% - Global-pool method (squared weights): each representation offers its top $\mathrm{round}(2B\, w_k/\sum_l w_l)$ features to one shared pool; one importance ranking over the pool keeps at most the top $B$, and only features whose importance in that ranking is above 0 (candidates offered by each representation are likewise limited to features with importance above 0). Here $b_k$ is an outcome, not a fixed share.
 % Step 5, select and assemble:
 % - $S_k$ = the top $b_k$ features of representation $k$ by $s^{(k)}_j$, among those with $s^{(k)}_j > 0$. If none scores above 0, the full $b_k$ is taken.
 % - Hybrid: $\mathbf{H} = [\mathbf{X}^{(1)}_{:,S_1}, \dots, \mathbf{X}^{(K)}_{:,S_K}]$, with $\sum_k |S_k| \le B$.
@@ -1714,14 +1714,14 @@ The questions this chapter and Chapter~\ref{chap:similarity} address are set out
 % - TODO(results): how optimistic the inner search score is compared with the outer test score.
 % Links:
 % - Chapter 6: under label noise, all training-side quantities use the noisy labels; held-out scoring uses clean labels unless stated.
-% - Chapter 6: the similarity objective replaces Step 3's model score with a nearest-neighbour score; the rest is unchanged.
+% - Chapter 6: the similarity objective replaces both Step 3's model score and Step 7's downstream-model score with a nearest-neighbour score; no downstream model or internal evaluator is used.
 % DIAGRAM: Figure 5.1, the pipeline. Left: several matrices of different widths. Middle, inside one outer training fold: the internal 80/20 group split; importance bars per representation; standalone scores feeding the budget split; top features pulled from each matrix. Right: the hybrid, the downstream model, the held-out score. Around it: the loop over configurations and "best per (model, budget)". Mark the outer test fold as never seen by the search. Small inset: outer folds each containing the search.
 % ---- END NOTES 5.2.1 ----
 
 % TODO: review
-Given $K$ frozen representation matrices $\mathbf{R}_1, \dots, \mathbf{R}_K$ for the same $n$ samples, a label vector $\mathbf{y}$, and optional group assignments for cross-validation, the search finds which features from which sources best predict for a specified metric and downstream model. The output is a hybrid feature matrix of $b$ columns, where $b$ is the feature budget, together with a Blueprint that records all parameters needed to reproduce the identical feature selection on new data. The search first scores each source independently, then scores feature importance on training data within each cross-validation fold, allocates the budget among sources according to baseline performance, and scores candidate hybrid configurations via cross-validation. We retain the best configuration for each combination of downstream model and budget. Every selected feature traces back to its source and importance rank. 
+Given $K$ frozen representation matrices $\mathbf{R}_1, \dots, \mathbf{R}_K$ for the same $n$ samples, a label vector $\mathbf{y}$, and optional group assignments for cross-validation, the search finds which features from which sources best predict for a specified metric and downstream model. The output is a hybrid feature matrix of at most $b$ columns, where $b$ is the feature budget (plus any augmentation features added outside it), together with a Blueprint that records all parameters needed to reproduce the identical feature selection on new data. The search first scores each source independently, then scores feature importance on training data within each cross-validation fold, allocates the budget among sources according to baseline performance, and scores candidate hybrid configurations via cross-validation. We retain the best configuration for each combination of downstream model and budget. Every selected feature traces back to its source and importance rank. 
 
-Inputs from different sources differ in scale, distribution, and missingness patterns, and naively pooling them before splitting would leak validation-set statistics into the training procedure, a well-documented source of optimistic bias in feature selection studies \citep{Ambroise2002, Vabalas2019}. All preprocessing therefore runs within each cross-validation fold. We impute missing values with per-feature medians computed on the training fold and drop columns that are entirely missing. Binary feature matrices (molecular fingerprints, for instance) skip standardization, since their $\{0,1\}$ encoding already carries a consistent scale. For all other features, we standardize to zero mean and unit variance using training-fold statistics only.
+Inputs from different sources differ in scale, distribution, and missingness patterns, and naively pooling them before splitting would leak validation-set statistics into the training procedure, a well-documented source of optimistic bias in feature selection studies \citep{Ambroise2002, Vabalas2019}. All preprocessing therefore runs within each cross-validation fold. We impute missing values with per-feature medians computed on the training fold and drop columns that are entirely missing. Every feature of the hybrid, binary fingerprint bits included, is standardized; only when a single representation is scored on its own are binary features left as 0/1. We standardize to zero mean and unit variance using training-fold statistics only.
 
 \todo[inline, color=yellow!40]{Figure 5.1: the search pipeline schematic. Does not exist yet.}
 
@@ -1746,7 +1746,7 @@ Inputs from different sources differ in scale, distribution, and missingness pat
 % ---- END NOTES 5.2.6 ----
 
 % TODO: is this list for blueprint components complete? 
-To be able to better examine the selected features and to regenerate them on new data sets, we produce blueprints. After a hybrid feature selection search is completed, it's results are stored as a blueprint containing the ``recipe'' required to recreate this exact hybrid representation on any data. These blueprints store the selected picks for the pre-specified budget,  input representations actually used, feature importance scoring method, allocation strategy, and internal evaluator. It contains other runtime information like the step size, number of folds, the seed, the metric being used to score, the task domain, whether augmented features were being used, and the per-representation scores. 
+To be able to better examine the selected features and to regenerate them on new data sets, we produce blueprints. After a hybrid feature selection search is completed, it's results are stored as a blueprint containing the ``recipe'' required to recreate this exact hybrid representation on any data. These blueprints store the selected picks for the pre-specified budget,  the full list of input representations searched and how many of them the recipe used, feature importance scoring method, allocation strategy, and internal evaluator. It contains other runtime information like the step size, number of folds, the seed, the metric being used to score, the task type (regression or classification), whether augmented features were being used, and the per-representation scores. 
 
 The blueprint does not store selected feature indices, those can only be recovered when the blueprint is refit on the data, which re-runs the feature selection process deterministically from that recipe and seed. 
 
@@ -1766,7 +1766,7 @@ It also provides a registry of selected features, stating where that feature cam
 % - The winner is chosen per (downstream model, budget).
 % - DIAGRAM / Table 5.1: one row per axis: values in the full search, values in the fast tier, what it controls.
 % Downstream model:
-% - Values: random forest, LightGBM, XGBoost, SVM, a dense neural network (DNN). Architectures in "Models and metrics".
+% - Values: random forest, LightGBM, XGBoost, SVM, a dense neural network (DNN), plus a Gaussian process on datasets under 1,000 molecules. Architectures in "Models and metrics".
 % - Controls: which model the hybrid is built for and scored with.
 % - Why swept: the model decides what counts as a good feature and how many it can use.
 % - TODO(results): the best downstream model differs by dataset.
@@ -1819,11 +1819,11 @@ It also provides a registry of selected features, stating where that feature cam
 
 % TODO: citations??
 % What were the qualifications for correlation/filtering allocation strategies? Can I formalize this a bit? 
-Not all features from a given base representation are equally informative, and there are a variety of techniques that can assess each feature's relative importance. Tree-based feature importance measures favor features with high split gain, while gradient-based attributions reflect sensitivity in a neural network's loss landscape. \cite{??} 
-We tested if, for the purposes of this task, there was a single feature importance method that worked across data sets and model architectures. Not only was there no clear winner, but there was evidence that certain networks preferred tree-based measures of importance while certain tree ensembles preferred gradient-based approaches. We landed on a set of five who's predictions did not correlate strongly with each other and who's selected features performed well as model input.
+Not all features from a given base representation are equally informative, and there are a variety of techniques that can assess each feature's relative importance. Tree-based feature importance measures favor features with high split gain, while neural attributions such as DeepLIFT measure how much each feature moves a neural network's output away from its output on a reference input. \cite{??} 
+We tested if, for the purposes of this task, there was a single feature importance method that worked across data sets and model architectures. Not only was there no clear winner, but there was evidence that certain networks preferred tree-based measures of importance while certain tree ensembles preferred gradient-based approaches. We landed on a set of three who's predictions did not correlate strongly with each other and who's selected features performed well as model input.
 
 % TODO: background on each of these, also how do I name these in text
-We score features using LightGBM gain, performance-weighted, Power2, DeepLift, and TreeSHAP. LightGBM gain is a tree based method which.... TreeSHAP is explanation-based, meaning it... DeepLift relies on neural attribution which... 
+We score features using LightGBM gain, DeepLift, and TreeSHAP. LightGBM gain is a tree based method which.... TreeSHAP is explanation-based, meaning it... DeepLift relies on neural attribution which... 
 
 When searching for the features to use in the hybrid, thse feature importance scoring methods are swept.
 
@@ -1831,10 +1831,9 @@ When searching for the features to use in the hybrid, thse feature importance sc
 
 % TODO: allocation strategies completely out of date
 % Check framework doc? 
-How to divide the total feature budget among sources is the role of the allocation strategy. We tested 31 candidates and retained 13 that appeared in top-performing configurations on multiple datasets and model types. The 13 retained strategies fall into three families. Score-based strategies divide the budget in proportion to transformed baseline scores: restricting features to the top $k$ sources, for example, or penalizing redundancy between correlated sources. A floor-based variant guarantees every source a minimum allocation. Once we have the allocation, we select the top features from each source by importance score and concatenate them to form the hybrid.
+How to divide the total feature budget among sources is the role of the allocation strategy. We search five. Four divide the budget in fixed shares from transformed standalone scores (linear, squared, softmax, rank decay). The fifth, a global pool, lets features from all sources compete in one importance ranking. Once we have the allocation, we select the top features from each source by importance score and concatenate them to form the hybrid.
 
 % TODO: reconcile with the 13 strategies above -- these two are now a subset.
-Given a total feature budget $B$, we test two strategies for allocating features from the given base representations. The first method uses greedy forward selection, iteratively adding top-ranked features from the representation that provides the largest performance improvement on the validation set. If the performance plateaus, it stops early.
 
 % TODO: completely replace this is SO out of date, I need a version of this for all the allocation strategies I'm using, as well as the knobs
 
@@ -1862,36 +1861,36 @@ Given a total feature budget $B$, we test two strategies for allocating features
 
 % TODO: this is not what's happening
 
-The second method is performance-weighted allocation, where the distribution of features from each base representation is proportional to that representation's standalone predictive performance on the training set. This works under the assumption that representations with stronger predictive performance contribute more valuable features. It is worth noting that this is not always the case, as high-quality, large representations may rely on a small subset of valuable features. 
+The four fixed-share methods are variants of performance-weighted allocation, where the distribution of features from each base representation is proportional to that representation's standalone predictive performance on the training set. This works under the assumption that representations with stronger predictive performance contribute more valuable features. It is worth noting that this is not always the case, as high-quality, large representations may rely on a small subset of valuable features. 
 
 \begin{enumerate}
-    \item Train a RF on each base representation independently using the full training data.
-    \item Compute baseline $R^2$ for each representation via 5-fold cross-validation.
+    \item Fit the internal evaluator on each base representation independently, on the internal training part of the fold.
+    \item Score each representation on the internal validation part in the dataset's own metric, rescaled so 0 means no better than a trivial predictor.
     \item Allocate features proportionally: 
     \[
-    n_r = B \times \frac{R^2_r}{\sum_{r'} R^2_{r'}}
+    n_r = B \times \frac{w_r}{\sum_{r'} w_{r'}}, \quad w_r = g(\tilde r_r)
     \]
-    \item For each representation, rank features by RF importance and select the top $n_r$.
+    \item For each representation, rank features by the configuration's importance method and select the top $n_r$.
     \item Concatenate selected features to form the hybrid representation.
 \end{enumerate}
 
-This method is a lot more computationally efficient than the greedy approach, however it cannot adapt allocation based on feature complementarity in the same way, and it relies on the assumption that many features in a well-performing representation are valuable. 
+This method cannot adapt allocation based on feature complementarity, and it relies on the assumption that many features in a well-performing representation are valuable. 
 
 % TODO: explain why the greedy approach was tried, but it's too computationally intensive and actually quite ineffective 
 % TODO: explain framework experiments and how they helped here 
 
 \subsubsection{Search configuration and internal evaluation}
 
-Features that improve predictions under RF may not necessarily help a kNN model, and vice versa. This is because variable importance depends fundamentally on the model, as Dong and Rudin showed \citep{Dong2020}, and as we found in our feature importance scoring analysis. To address this, we use an internal evaluator which scores each candidate configuration with a model whose inductive bias best fits the downstream model. We use the following evaluators: RF, DNN, SVM, LightGBM, XGBoost, and the special case of matched, which matches the internal evaluator to the final downstream evalutors. We fit each on the training fold and score it on the held-out fold. 
+Features that improve predictions under RF may not necessarily help a kNN model, and vice versa. This is because variable importance depends fundamentally on the model, as Dong and Rudin showed \citep{Dong2020}, and as we found in our feature importance scoring analysis. To address this, we use an internal evaluator which scores each base representation on its own with a model whose inductive bias best fits the downstream model. We use the following evaluators: RF, DNN, LightGBM, and the special case of matched, which matches the internal evaluator to the final downstream evalutors. We fit each on the internal training part of the training fold and score it on the internal validation part. 
 
-This internal evaluator is used to score candidate configurations in the internal selection process of features within the larger hybrid search. Thus, it is another axes we sweep while searching for the best set of features. 
+This internal evaluator is used to score each representation, and those scores set how the budget is split and which representations are kept within the larger hybrid search. Thus, it is another axes we sweep while searching for the best set of features. 
 
 % TODO: need additional files to specify architectures 
 
 % TODO: does match always work? custom downstream model? 
 
 % TODO: these numbers are outdated
-The full search tests all combinations of budgets, allocations, importance methods, downstream models, and internal evaluators under 5-fold cross-validation: about 15,000 configurations per dataset when using 7 downstream models. We approach this problem combinatorially as it allows us to measure which factors contribute most to performance variance (model choice, budget, allocation, or their interactions) rather than assuming any single axis dominates.
+The full search tests all combinations of budgets, allocations, importance methods, representation counts, downstream models, and internal evaluators under 5-fold cross-validation: 8,160 configurations per dataset when using 5 downstream models. We approach this problem combinatorially as it allows us to measure which factors contribute most to performance variance (model choice, budget, allocation, or their interactions) rather than assuming any single axis dominates.
 
 % TODO: mention representation knobs
 
@@ -1959,7 +1958,7 @@ When making a selection, we took into account how many potential hybrid represen
 %   - $k = 0$ (keep nothing) is scored first and wins ties. "No extras" is the default outcome, not a failure.
 %   - Five whole-block choices replace about 50 one-by-one accept/reject decisions.
 %   - Choosing among many options on a small validation set overfits the choice \citep{cawley2010overfitting}. Fewer choices leaves less room for this.
-%   - Variant: instead of the fixed list, $k$ can be set as a fraction of the final width, $k = \mathrm{round}(f \cdot B)$.
+%   - Variant: instead of the fixed list, $k$ can be set as a fraction of the width: $k = \mathrm{round}(f \cdot B)$ when capped, $k = \mathrm{round}(f \cdot |\mathbf{H}|)$ when uncapped. That $k$ is taken without any validation comparison, and the margin is not used.
 % - Step 5, rebuild: the chosen block (donor name and feature indices) is stored. It is re-extracted from the full data for the outer fold, like the rest of the hybrid.
 % Two ways to fit extras against the budget $B$:
 % - Uncapped: extras are appended outside the budget. Final width $= |\mathbf{H}| + k^*$, up to $B + 40$.
@@ -1970,7 +1969,7 @@ When making a selection, we took into account how many potential hybrid represen
 % - Why it matters: uncapped and no-augmentation at the same nominal $B$ are not the same width. Comparing them mixes "better features" with "more features". Capped removes the width difference.
 % - Dominant-representation use: the base is one representation and $B = d_k$ (its full width). Uncapped is the natural mode there. Capped would drop the base's own features.
 % - In the main search, a dataset with two or more main representations and a donor list runs three separate conditions: no augmentation, uncapped, capped.
-% - A dataset with a single main representation runs uncapped only.
+% - The conditions depend only on whether the dataset has donors, not on how many main representations it has. The single-representation experiment (Complexity experiments) runs both capped and uncapped.
 % - Augmentation is a separate condition, not a swept axis inside one search. Every other axis (model, budget, allocation, importance) is searched once per condition.
 % - TODO(lit): search for literature on adding a few selected descriptors from a second feature set to a primary molecular fingerprint, chosen by the primary model's errors (residual-driven feature addition in QSAR).
 % - A decoy check tests whether the rule rejects useless extras; defined in "Complexity experiments".
@@ -1988,7 +1987,7 @@ When making a selection, we took into account how many potential hybrid represen
 % ---- END NOTES 5.2.4 ----
 
 % TODO: review, also I think this is out of date
-Some features are too low-dimensional or too specialized to participate in the budget allocation stage: MACCS fingerprints (167 features), for instance, or log-likelihood ratios (3 features). Excluding them from the allocation would lose potentially useful signal; including them would distort the budget distribution because they cannot contribute many features. We handle these as augmentation: after the base hybrid is constructed, we pool the augmentation features, rank them by random forest feature importance, and append them only if they improve the internal evaluator score.
+Some features are too low-dimensional or too specialized to participate in the budget allocation stage: MACCS fingerprints (167 features), for instance, or log-likelihood ratios (3 features). Excluding them from the allocation would lose potentially useful signal; including them would distort the budget distribution because they cannot contribute many features. We handle these as augmentation: after the base hybrid is constructed, we pool the augmentation features, rank them by how strongly each correlates with the out-of-fold errors of a small random forest fitted on the base features, and keep the top 0, 5, 10, 20 or 40 of them, whichever scores best with the downstream model on the internal validation set.
 
 % TODO: I need a better list to describe augmentations
 Augmentation features range from smaller fingerprints like MACCS or Coloumb matrices, sets of structural information like 3D pharmacophores, and features describing only the differences between the sames like mutation features for antibodies. 
@@ -2004,25 +2003,25 @@ Augmentation features range from smaller fingerprints like MACCS or Coloumb matr
 % - Adaptive pruning: decided during the search from this dataset's own fold scores. Aims to find the same best answer while skipping configurations that have already clearly lost.
 % - Why it matters: without these the search is impractical on large datasets. Links to: Chapter 7, speed as a stated limitation.
 % Fast tier (checked in the code):
-% - Downstream models: random forest, LightGBM and DNN only. XGBoost and SVM are dropped.
+% - Downstream models: all five are kept. The engine's own fast list has only random forest, LightGBM and DNN, but the runs name XGBoost and SVM back so every experiment can read all five.
 % - Allocation: linear, squared and rank decay. Softmax and the global pool are dropped.
 % - Importance: LightGBM gain only.
 % - Representation count: the top 3, or the whole pool.
-% - Internal evaluators: unchanged (matched, random forest, LightGBM, DNN). With three models, matched always repeats one of them, so each model has 3 evaluators.
+% - Internal evaluators: unchanged (matched, random forest, LightGBM, DNN). Matched repeats one of them for random forest, LightGBM and DNN (3 evaluators each) and adds XGBoost or SVM for those two (4 each).
 % - Size: given once, in Appendix "The search space and its defaults"; point there.
-% - A fast run is stored separately from a full one and cannot be topped up into a full result later. It is a different search, not a subset of one.
+% - A fast run can be upgraded to a full one later without redoing work: each configuration's score is stored by its settings, not by the tier, so the full search reuses what the fast one scored and runs only the rest.
 % - How the lists were chosen: a member stays in the fast lists if it is cheap and adds to the best score; an expensive member that wins often (e.g. the global pool) stays in the full search only.
 % - TODO(results): the evidence behind the fast lists: which dropped members cost the most run time, and how much the best score moves when each is added back.
 % - Which datasets use it: those where the full search cannot finish (large sample sizes, or run time beyond the cluster's job limits). TODO: name them and mark them in the dataset table.
 % - Dropped members are still searched on every other dataset. The fast tier is a compute compromise, not a claim that those members are useless.
 % Adaptive pruning, in words:
 % - After the first folds, some configurations are so far behind that scoring them on the remaining folds only confirms a loss. Stop scoring those.
-% - Pruning is off unless a study switches it on. The main search computed once per dataset does not prune.
+% - Pruning is off unless a study switches it on. The main search computed once per dataset does prune, with the calibrated schedule below (as submitted, on every dataset; the per-dataset script alone would leave datasets under about 1,500 molecules unpruned). TODO: settle which, and say so.
 % - TODO: state, study by study, which results used pruning.
 % - Pruning is judged on one criterion: it must never delete a configuration that would have been the best. The cut-offs were set as those that lost no winner on a calibration set of datasets, not for the largest saving.
 % Adaptive pruning, step by step (checked in the code):
 % - Step 1: every configuration is scored on the first two folds. All rules below rank by the mean over these two folds. Budgets run from smallest to largest.
-% - Step 2, checkpoint at budget 100: within each (downstream model, internal evaluator, representation count), rank the (allocation, importance) pairs on budgets up to 100. Drop the worse half from all larger budgets for that group. At least one pair is kept.
+% - Step 2, checkpoint at budget 100: within each (downstream model, internal evaluator, representation count), rank every configuration at budgets up to 100 and keep the better half. An (allocation, importance) pair with no configuration in the better half is not searched at any larger budget for that group. At least one pair is kept.
 % - Step 3, one vote per axis: groups fix every other axis, so values compete only against each other. A value is dropped from the remaining folds if it is among the best $t$ of its group in fewer than a cut-off share of groups.
 %   - Allocation: best 2, 20%. Representation count: best 1, 10%. Importance: best 2, 20%. Internal evaluator: best 3, 10%.
 %   - A vote runs only if the axis has more than $t$ values, and it can never delete every value.
@@ -2041,7 +2040,7 @@ Augmentation features range from smaller fingerprints like MACCS or Coloumb matr
 
 \subsubsection{Adaptive pruning}
 
-Adaptive pruning: allocation strategies are evaluated on fold 0 and pruned if they appear in the top-3 in fewer than a threshold fraction of (importance, evaluator, model, budget) groups. The primary hybrid searches (no augmentation and uncapped augmentation across general and top-tier representation sets) use a 15\% threshold. Capped augmentation searches and standalone experiment-specific searches use a more aggressive 25\% threshold to reduce computational cost; this higher threshold prunes more aggressively from the candidate allocation strategies without affecting the quality of the surviving strategies.
+Adaptive pruning: every configuration is first scored on the first two folds. At budget 100, within each (model, evaluator, representation count) group, (allocation, importance) pairs with no configuration in the better half are not searched at larger budgets. Each axis is then voted on within groups that fix every other axis: an allocation method is pruned if it is in the best 2 in fewer than 20\% of groups, a representation count if it is best in fewer than 10\%, an importance method if it is in the best 2 in fewer than 20\%, and an internal evaluator if it is in the best 3 in fewer than 10\%. Survivors are scored on the remaining folds.
 
 
 \section{Methods: experimental setup}
@@ -2176,7 +2175,7 @@ No random splits are used. Random splitting inflates performance estimates for m
 % TODO: cancer genomics by patient with subtype stratification). Carry them in as an itemized list,
 % TODO: or defer to Appendix A. They are verbatim in KIRBy/PAPER_DRAFT.md.
 
-The hybrid construction step uses a nested internal train/validation split within each training fold to score representations for feature allocation. This internal split is group-aware, using GroupShuffleSplit with the same grouping variable as the outer cross-validation, to prevent the allocation evaluator from seeing related samples on both sides of its split.
+The hybrid construction step uses a nested internal train/validation split within each training fold to score representations for feature allocation. This internal split is group-aware, taking the first fold of a grouped 5-fold split (GroupKFold) with the same grouping variable as the outer cross-validation, to prevent the allocation evaluator from seeing related samples on both sides of its split.
 
 
 \subsection{Representations by domain}
@@ -2555,7 +2554,7 @@ For every data set in this study, we pre-selected ten base representations that 
 % The existing prose is out of date. Fix these points when rewriting:
 % - The prose says seven standard models, including GP, kNN and MLP. The default set is now five: random forest, XGBoost, LightGBM, SVM and DNN.
 % - The MLP was cut and the DNN replaces it everywhere. Ridge, CatBoost, the 1D CNN and the MC-Dropout BNN are not part of the experiments. Drop them from the list.
-% - The prose gives the GP cap as 6,000 samples. The GP is not in the default set, and its cap is 1,000 training samples.
+% - The prose gives the GP cap as 6,000 samples. Its cap is 1,000 training samples. The GP is added as a sixth downstream model on every dataset under 1,000 molecules, except those whose skip table already drops it (tcga_brca_pam50, flab_thermo_tresanco, tcga_luad_vs_lusc, ddg_combined). Say this in the models paragraph and give it the RBF-plus-noise kernel it uses.
 % - The prose says there is no per-dataset tuning. That is true by default.
 %   - An optional per-fold tuning exists: random search, 20 draws, 3 inner folds, group-aware, on the outer training fold only.
 %   - The DNN is never tuned this way. It relies on its own early stopping.
@@ -2577,15 +2576,16 @@ For every data set in this study, we pre-selected ten base representations that 
 % - Implementation: scikit-learn \citep{scikit-learn} for the random forest and the SVM. XGBoost and LightGBM come from their own libraries. The DNN is written in PyTorch.
 %   - TODO(lit): add a citation for PyTorch. refs.bib has none; the standard reference is Paszke et al. 2019, NeurIPS.
 % - Hyperparameters are the same on every dataset: already in prose (end of the models paragraph). Keep that sentence.
-% - Features are standardised in each fold with training-fold statistics only (described in 5.2.1). Binary fingerprint features are left as 0/1.
+% - Features are standardised in each fold with training-fold statistics only (described in 5.2.1). Binary fingerprint features are left as 0/1 only when a single representation is scored on its own; in the hybrid every feature is standardised.
 % - Size cap: the SVM is skipped above 10,000 training samples (5,000 under the augmentation that adds features on top of the budget $B$).
+% - A skip table also drops some default models on some datasets. Examples: XGBoost on every nucleotide dataset under every setting; SVM on caco2, logd and the ADME sets under capped augmentation; random forest and SVM on herg and qm9 under capped augmentation; random forest on herg, qm9 and logd under uncapped augmentation; SVM on the five large FLAb sets under uncapped augmentation. TODO: list it in Appendix C or the dataset table.
 % - k-nearest neighbours is not a default downstream model ($k = 5$ when run as one). It is the model in the importance-weighted distance experiment (Complexity experiments), which reads 5, 10 and 20 neighbours, and Chapter 7 "Simple is often better" leans on that result. State its settings once, here, since it enters the argument.
 % - Why five models: the best set of features depends on the model that uses it.
 %   - Why it matters: a hybrid that helped only one model family would be a property of that model, not a better input.
 %   - Links to: "Why each axis is swept" (the downstream model is one of the swept axes) and Ch 7 "No single method fits every dataset".
 % - Tree-based models remain state of the art on medium-sized tabular data of about 10,000 samples \citep{Grinsztajn2022}.
 %   - A hybrid is a tabular feature matrix, so tree ensembles are the baseline to beat.
-% - Links to: "The search space" for the internal evaluators. Those are the models the search uses to score a candidate hybrid. They are separate from the downstream models reported here.
+% - Links to: "The search space" for the internal evaluators. Those are the models the search uses to score each representation on its own, which sets the budget split. They are separate from the downstream models reported here.
 % Metrics, one per dataset (definitions are in Chapter 2; no formulas here):
 % - Each dataset is scored in the metric its field normally uses, so the numbers can be compared with published work on the same dataset.
 %   - RMSE, lower is better: small-molecule regression (ADME, hERG $K_i$, logD, QM9) and reaction yields.
@@ -2614,7 +2614,7 @@ For every data set in this study, we pre-selected ten base representations that 
 % - Two antibody binding sets with censored labels (most values at the assay's ceiling or floor) would be scored as binder vs non-binder with AUROC, because a rank correlation says little when most labels share one clamped value. Links to Chapter 6, where censoring is one of the noise types.
 % ---- END NOTES 5.3.3 ----
 
-For a fair comparison, the downstream model pool must cover a range of inductive biases, from methods that degrade in high dimensions (kNN, SVM, GP) to tree ensembles that tolerate irrelevant features. Thirteen models are available: tree ensembles (random forest, XGBoost, LightGBM, CatBoost, NGBoost), kernel methods (SVM, Gaussian process), nearest-neighbor (kNN), linear models (Ridge regression for regression, logistic regression for classification, both with cross-validated regularization), and neural networks (single-layer MLP, three-layer DNN, MC-Dropout BNN for uncertainty quantification, and a multi-scale 1D CNN). Standard experiments use seven of these: random forest, XGBoost, LightGBM, kNN, SVM, Gaussian process, and MLP. We use the full set for model-matching and noise experiments, and skip models with cubic or higher scaling for large datasets: Gaussian processes above 6,000 samples, SVMs above 10,000. No per-dataset tuning is performed: all models use fixed hyperparameters throughout, so performance differences reflect the input, not the model configuration.
+For a fair comparison, the downstream model pool must cover a range of inductive biases, from methods that degrade in high dimensions (kNN, SVM, GP) to tree ensembles that tolerate irrelevant features. Eleven models are available: tree ensembles (random forest, XGBoost, LightGBM, CatBoost, NGBoost), kernel methods (SVM, Gaussian process), nearest-neighbor (kNN), and neural networks (three-layer DNN, MC-Dropout BNN for uncertainty quantification, and a multi-scale 1D CNN). Standard experiments use five of these: random forest, XGBoost, LightGBM, SVM and DNN, with a Gaussian process added on datasets under 1,000 molecules. We use the full set for model-matching and noise experiments, and skip models with cubic or higher scaling for large datasets: Gaussian processes above 1,000 samples, SVMs above 10,000. No per-dataset tuning is performed: all models use fixed hyperparameters throughout, so performance differences reflect the input, not the model configuration.
 
 
 
@@ -2676,10 +2676,10 @@ For a fair comparison, the downstream model pool must cover a range of inductive
 % - TODO(results): held-out score against $B$ for each arm; numbers come from the full runs.
 %
 % Does the internal evaluator need to match the final model?:
-% - The search scores candidate hybrids with an internal model (the evaluator), then hands the winner to a downstream model. Nested cross-validation as above; one search per outer fold per evaluator setting.
+% - The search scores each representation with an internal model (the evaluator) to split the budget, then hands the winner to a downstream model. Nested cross-validation as above; one search per outer fold per evaluator setting.
 % - Three settings to report:
 %   - matched: the same model family as the downstream model, at the search's lighter settings;
-%   - the default evaluator set the search ships with (random forest, LightGBM, XGBoost);
+%   - a fixed set of three evaluators (random forest, LightGBM, XGBoost), which is not the search's default set (matched, random forest, LightGBM, DNN);
 %   - exact match: the downstream model's own hyperparameters (for the random forest, 100 trees, no depth cap, square-root features per split).
 % - Near-family and far-family evaluators and a wider or narrower network for the DNN are also run; one line in the text.
 % - Report each setting minus matched, paired per outer fold, at the same number of features.
@@ -2904,7 +2904,7 @@ For a fair comparison, the downstream model pool must cover a range of inductive
 % - TODO(results): the lead over each comparator at each search size, reselected; numbers come from the full runs.
 %
 % Matching the internal evaluator to the final model:
-% - The comparison of matched, default and exact-match evaluators (Complexity experiments) is not a failed test. It says that the model scoring candidate hybrids during the search need not be the model that is finally trained.
+% - The comparison of matched, default and exact-match evaluators (Complexity experiments) is not a failed test. It says that the model scoring each representation during the search need not be the model that is finally trained.
 % - Open question for the author: why this holds. One possibility to discuss: if the features that carry signal are the same for every model family, any reasonable evaluator finds them. This sits against the claim in "Why each axis is swept" that different models prefer different features; say how the two fit together.
 % - Implication for Limitations: one cheap evaluator may be enough, so the search need not be re-run per model for this reason.
 % - TODO(results): each evaluator setting against matched, per model, at matched width; numbers come from the full runs.
@@ -2927,8 +2927,8 @@ Ambroise and McLachlan \citep{Ambroise2002} showed the extreme case of feature s
 % - TODO(check): the prose says there is no gain below about 200 molecules. That claim is older than the small-dataset allocation work. Re-check it against the full runs before keeping it.
 %
 % Compute and run time:
-% - The search is a full grid. Every configuration is scored on every fold, and under nested cross-validation the whole grid runs again inside every outer fold. The number of configurations is given once, in Appendix "The search space and its defaults"; point there.
-% - Importance scores are computed once per importance method per fold, on training data only. All allocation methods and budgets in that fold reuse them.
+% - The search is a full grid. Every configuration is scored on every fold unless pruning is on (see "Fast tier and adaptive pruning"), and under nested cross-validation the whole grid runs again inside every outer fold. The number of configurations is given once, in Appendix "The search space and its defaults"; point there.
+% - Importance scores are computed once per importance method per fold, on training data only. All allocation methods and budgets in that fold reuse them, except that the global-pool method runs one extra importance fit over its pooled features for each configuration.
 % - Importance methods differ in cost. SHAP values and neural-network attributions (DeepLIFT) cost far more than tree gain importance.
 % - Per-dataset cost grows with the number of molecules (every fit), with the total width of the pool (importance scoring over every feature) and with the number of representations.
 % - Caching repeated work (fold splits, importance scores, per-representation baseline scores) cuts the cost of a re-run. It does not cut the cost of the first run.
@@ -3085,7 +3085,7 @@ We want to be clear about KIRBy's limitations. For small datasets (below about 2
 % - Datasets, scaffold-group-aware folds and metrics are as in Chapter 5.
 %   - TODO: state which datasets each experiment runs on, from the full runs.
 % - Noise is injected into training labels only. Held-out labels are never changed.
-% - The hybrid never sees clean labels: it is built within each fold on that fold's noisy (or uncleaned) training labels.
+% - The hybrid's features are rebuilt within each fold on that fold's noisy (or uncleaned) training labels. Its recipe (representations, budget, allocation) is re-searched on the noisy labels only in the noise-robust training survey; in the censoring experiment it comes from the search on the unclipped labels.
 %   - Why it matters: a hybrid searched on clean labels would hand the noise method information a real user never has.
 % - Baseline: each downstream model's own top two single representations, ranked by that model's own score. Never a fixed list or one chosen fingerprint.
 %   - TODO(results): the preliminary runs compared against one fixed representation per dataset, sometimes the weakest one. The final comparison uses the top two.
@@ -3105,7 +3105,7 @@ We want to be clear about KIRBy's limitations. For small datasets (below about 2
 % Two ways to use a hybrid for similarity:
 % - Way 1: build an ordinary hybrid (features chosen to help a downstream model), then compute distances in it.
 % - Way 2, the similarity hybrid: the same search, but each candidate is ranked by how well each molecule's activity is predicted from its five nearest neighbours in the hybrid. No downstream model is fitted during the search.
-% - Same importance scores, allocation methods, budgets and folds in both. Only the score that ranks candidates differs.
+% - Same importance scores, allocation methods, budgets and folds in both. Only the score differs: the neighbour score ranks candidates and also sets each representation's share of the budget, so the internal evaluator is not used.
 % - Why it matters: Chapter 4 argued the space defines the neighbours. Way 2 tests whether choosing features for neighbourhood quality fixes that more directly than choosing them for prediction.
 % - DIAGRAM: two pipelines with a shared first half (base representations -> importance -> allocation -> hybrid). Top: hybrid -> downstream model -> dataset metric. Bottom: hybrid -> 5 nearest neighbours from other scaffold groups -> distance-weighted mean activity -> Spearman. Caption: same search, different score.
 %
@@ -3119,7 +3119,7 @@ We want to be clear about KIRBy's limitations. For small datasets (below about 2
 %   - Why: a same-scaffold neighbour is an easy match and inflates the score.
 % - Prediction: $\hat{y}_i = \frac{\sum_{j\in N_5(i)} y_j / d_{ij}}{\sum_{j\in N_5(i)} 1/d_{ij}}$.
 % - Score: Spearman $\rho(\hat{\mathbf{y}}, \mathbf{y})$ for regression; $2(\mathrm{AUROC} - 0.5)$ for binary classification, so chance is 0 in both.
-% - Undefined for multiclass labels and where a held-out block holds one group. So similarity results cover the small-molecule datasets only.
+% - Undefined for multiclass labels and where a held-out block holds one group. In code that removes three datasets: tcga_brca_pam50 and tz_her2_multiclass (more than two classes), and tz_her2_binary (a held-out block can hold one edit-distance shell). The similarity experiments are also skipped on the nucleotide datasets. Antibody and other non-small-molecule datasets are not excluded.
 % - Why it matters: the score turns "similar molecules have similar activity" into a number \citep{Cherkasov2014}.
 %
 % Importance-weighted distance (the \paragraph "Feature importance weighting", her prose):
@@ -3133,7 +3133,7 @@ We want to be clear about KIRBy's limitations. For small datasets (below about 2
 
 \paragraph{Feature importance weighting.}
 
-Beyond simply using the feature importance scores for allocation, we investigate whether feature weighting by importance during distance computation improves noise detection. For a feature importance vector $w$, weighted distances are computed by scaling features: $x' = x \odot \sqrt{w}$. 
+Beyond simply using the feature importance scores for allocation, we investigate whether feature weighting by importance during distance computation improves noise detection. For a feature importance vector $w$, weighted distances are computed by scaling the standardised features: $x' = x \odot w$ under Manhattan distance ($x \odot \sqrt{w}$ under Euclidean), with negative importances set to 0 and $w$ rescaled to average 1. 
 
 
 \subsection{Noise conditions}
@@ -3180,14 +3180,14 @@ Beyond simply using the feature importance scores for allocation, we investigate
 %
 % Experiment 1: correcting labels clipped at a detection limit
 % - Setup: training labels above a limit $c$ recorded as $c$; test labels untouched.
-% - CHECK: the notes gave the limit two ways, from the training labels and from the full label column. Confirm against the code which one the final runs use.
+% - The limit is set from the fold's clean training labels, not the full label column. The treatments read the limit off the recorded training labels: the largest label, when at least 1% and at least 2 training molecules sit on it.
 % - Clipped molecules are those whose recorded label equals the limit, which is what a user without the true values can see.
 % - Reference prediction $p_i$: out-of-fold boosted-tree prediction, inner folds keeping scaffold groups together. Residual spread $s$ from molecules not at the limit.
 % - Mean of a normal above a limit (the correction's basis): $\mathbb{E}[Y \mid Y > c] = \mu + \sigma\frac{\phi(a)}{1-\Phi(a)}$, $a = (c-\mu)/\sigma$. The censored (Tobit) model is built on this \citep{Tobin1958}.
 % - Label treatments, one line each in the text:
 %   - Clean (upper reference) and clipped as recorded (lower reference).
 %   - Constant lift: every clipped label raised by one shared amount.
-%   - Per-molecule lift, plus a control that deals the same lifts to the wrong molecules.
+%   - Per-molecule lift: each clipped label set to $c + s\frac{\phi(a_i)}{1-\Phi(a_i)}$, $a_i = (c-p_i)/s$. This starts from $c$, not $p_i$, so it is larger than the truncated-normal mean by $c - p_i$. Plus a control that deals the same lifts to the wrong molecules.
 %   - Truncated-normal mean per molecule.
 %   - Drop the clipped molecules.
 %   - Pull every label back to within a few residual widths of its prediction.
@@ -3422,7 +3422,7 @@ A recovery rate of 1.0 indicates complete restoration to clean performance; nega
 % Limits specific to this chapter:
 % - The hybrid is built on each fold's noisy labels, so feature choice sees the noise.
 % - The search settings come from searches on clean labels, a head start a real user would not have.
-% - Similarity results cover the small-molecule datasets only.
+% - Similarity results exclude the nucleotide datasets and the three where the score is undefined (tcga_brca_pam50, tz_her2_multiclass, tz_her2_binary).
 %
 % Bridge:
 % - To Chapter 7: model the noise before choosing a method; which method helps depends on noise type, amount, dataset and feature space.
@@ -3532,7 +3532,7 @@ A recovery rate of 1.0 indicates complete restoration to clean performance; nega
 % Fewer features is often better (Chapter 5):
 % - The search sweeps the budget and does not assume more features are better.
 % - TODO(results): how often the best hybrid uses fewer features than the largest budget, per dataset and model.
-% - Predicting each molecule's activity from its nearest neighbours on a small, task-relevant feature set works better than on raw features (Chapter 6). TODO(results): the per-dataset comparison.
+% - Whether predicting each molecule's activity from its five nearest neighbours on a small, task-relevant feature set works better than on the top two single representations (Chapter 6). TODO(results): the per-dataset comparison.
 % - The model stays simple; any gain comes from the input.
 %
 % Complex noise-handling methods that did not help (no method-level detail):
@@ -3597,7 +3597,7 @@ A recovery rate of 1.0 indicates complete restoration to clean performance; nega
 % - Many QSAR class labels come from cutting a continuous value at a threshold, so flips concentrate on molecules near the cut-off. That is molecule-dependent, not uniform.
 % - The noise-injection package already has six flip conditions; the hybrid search already handles classification. What is missing is running them at the scale of the regression study.
 % - Open question: do the regression findings carry over, and do noise-robust training methods (mostly built for flipped labels) behave differently there?
-% - Limit: the neighbour-based score is undefined where a held-out group holds one class.
+% - Limit: the neighbour-based score is undefined for more than two classes, and where a held-out block holds one class or one group.
 %
 % Hybrids as inputs to generative models:
 % - The hybrid worked, indirectly, in the federated setting (Chapter 5).
@@ -3607,7 +3607,7 @@ A recovery rate of 1.0 indicates complete restoration to clean performance; nega
 %
 % A faster search:
 % - As it stands the search is too heavy for routine use.
-% - Two existing ways to cut cost (Chapter 5): the fast tier (shorter fixed lists on four axes) and adaptive pruning (drops configurations far behind on this dataset's fold scores).
+% - Two existing ways to cut cost (Chapter 5): the fast tier (shorter fixed lists on three axes: allocation, importance and representation count) and adaptive pruning (drops configurations far behind on this dataset's fold scores).
 % - Warm start: begin from the blueprint of a similar dataset and search nearby.
 % - A faster search must still be able to reach every configuration; it only visits fewer.
 % - TODO(results): hours and number of model fits for the full search against the fast tier, per dataset.
@@ -3907,11 +3907,12 @@ The datasets used in this study are publicly available. The QM9 dataset is avail
 % - As defined in Chapter 5, "From base representations to a hybrid": $K$ base representations, budget $B$, allocation $b_k$, importance $s^{(k)}_j$, selected set $S_k$ = the $b_k$ features of representation $k$ with the highest importance.
 % Axis 1, downstream models (the model that is finally trained and scored on the hybrid):
 % - Full search: random forest \citep{Breiman2001}, LightGBM \citep{ke2017lightgbm}, a feed-forward neural network (DNN), XGBoost \citep{Chen2016}, support vector machine \citep{Vapnik1995}.
-% - Fast search: random forest, LightGBM, DNN.
+% - Per-dataset exceptions set for run time (code: tests/experiments/dataset_policy.py): XGBoost is not scored on the two nucleotide datasets; SVM is not scored under capped augmentation on Caco-2, LogD, RLM, MDR1 and the Buchwald-Hartwig plates, nor under uncapped on Koenig expression; random forest is not scored under uncapped on LogD and QM9, nor under capped on QM9 (SVM too). The GP is added on humanness. On datasets under 1,000 molecules a Gaussian process is added as a sixth (regression: RBF plus white-noise kernel, 3 optimiser restarts; classification: RBF kernel), except where the dataset's skip table drops it.
+% - Fast search: the same five. The fast tier shortens the allocation, importance and representation-count lists only; all five downstream models are kept.
 % - The near-unregularised linear model used only in the budget-overfitting experiment: least squares with penalty $\alpha = 10^{-6}$ (minimum-norm fit when $d > n$); logistic regression with $C = 10^{6}$ for classification. Its parameter count equals the budget.
 % - Default settings of each downstream model, the DNN architecture, k-nearest neighbours ($k = 5$, importance-weighted distance experiment only) and the SVM size limit: see Chapter 5 "Models and metrics" (NOTES 5.3.3).
 % - No model has a cap on budget. Every model is searched at every budget.
-% - Hyperparameters are defaults unless tuning is switched on (tuning setup: Chapter 5 "Models and metrics"). When on, tuning runs on all base representations joined.
+% - Hyperparameters are defaults unless tuning is switched on (tuning setup: Chapter 5 "Models and metrics"). When on, tuning runs inside each fold, on the training rows of the matrix the model is fitted on (one representation for a baseline, the selected features for a hybrid).
 % Axis 2, budget $B$ (maximum number of features in the hybrid):
 % - Values: $B \in \{10, 25, 50, 100, 250, 500, 1000, 2000\}$.
 % - The best result per model is the best over all budgets, so a small budget can win.
@@ -3926,7 +3927,7 @@ The datasets used in this study are publicly available. The QM9 dataset is avail
 % - Step 2, rescale so 0 means "no better than a trivial model":
 %   - correlation metrics (Spearman, Pearson, MCC, $R^2$): $\tilde{s}_k = \max(0, s_k)$
 %   - AUROC and concordance index: $\tilde{s}_k = \max(0,\, 2(s_k - 0.5))$
-%   - RMSE and MAE: $\tilde{s}_k = \max\!\left(0,\, 1 - \mathrm{err}_k / \mathrm{err}_0\right)$, where $\mathrm{err}_0$ is the error of predicting the training mean for every held-out molecule
+%   - RMSE and MAE: $\tilde{s}_k = \max\!\left(0,\, 1 - \mathrm{err}_k / \mathrm{err}_0\right)$, where $\mathrm{err}_0$ is the error of predicting the training mean for every held-out molecule (RMSE) or the training median (MAE)
 %   - weighted F1 or accuracy: $\tilde{s}_k = \max\!\left(0,\, \frac{s_k - s_0}{1 - s_0}\right)$, where $s_0$ is the score of always predicting the majority training class
 % - Step 3, weights $w_k$ from $\tilde{s}_k$. The five searched methods:
 %   - linear: $w_k = \tilde{s}_k$
@@ -3940,8 +3941,8 @@ The datasets used in this study are publicly available. The QM9 dataset is avail
 %   - If every weight is zero, the budget is split equally and a warning is recorded.
 % - Global pool method:
 %   - Candidate slots per representation: $c_k = \operatorname{round}\!\left(2B \cdot \frac{w_k}{\sum_j w_j}\right)$ with $w_k = \tilde{s}_k^{\,2}$, capped at $d_k$.
-%   - Take the top $c_k$ features of each representation by importance and join them into one pool of about $2B$ features.
-%   - Re-rank the whole pool with one importance fit and keep the top $B$.
+%   - Take the top $c_k$ features of each representation by importance, among those with importance above 0, and join them into one pool of at most $2B$ features.
+%   - Re-rank the whole pool with one importance fit and keep at most the top $B$, dropping any feature that fit scores at exactly 0.
 %   - So $b_k$ is set by competition inside the pool, not fixed ahead of time.
 % - Fast search: linear, squared, rank with exponential decay.
 % Axis 5, importance method (how $s^{(k)}_j$ is computed):
@@ -3953,10 +3954,10 @@ The datasets used in this study are publicly available. The QM9 dataset is avail
 % - For the two tree methods, a representation with more than 2,000 features is first cut to its 2,000 highest-variance features. Variance is measured before standardising. The rest get importance 0.
 % - Fast search: LightGBM gain only.
 % - Links to: Chapter 5 "The search space" (her prose on why importance depends on the model).
-% Axis 6, internal evaluator (the model that scores representations and candidate hybrids inside the search):
+% Axis 6, internal evaluator (the model that scores each representation on its own inside the search; candidate hybrids are scored by the downstream model):
 % - Values: "match" (the same model type as the downstream model), random forest, LightGBM, DNN. The fast search uses the same four.
 % - The evaluator models are lighter than the downstream ones: random forest 50 trees, depth 10; LightGBM 50 trees, depth 4; DNN the same as downstream.
-% - "match" becomes XGBoost (50 trees, depth 4) or SVM (RBF kernel) for those downstream models. So five evaluator types appear in a full search, although four are listed.
+% - "match" becomes XGBoost (50 trees, depth 4) or SVM (RBF kernel) for those downstream models. On datasets under 1,000 molecules it also becomes a GP (RBF kernel) for the GP. So five evaluator types appear in a full search, six where the GP is added, although four are listed.
 % - Why it matters: tests whether the features a model prefers depend on that model's own inductive bias (tree ensemble, boosted trees, neural network). Links to: Chapter 5 "Why each axis is swept".
 % Axis 7, objective (what the search maximises; chosen per run, not swept inside one run):
 % - Prediction (default): the downstream model's score in the dataset's metric.
@@ -3967,12 +3968,12 @@ The datasets used in this study are publicly available. The QM9 dataset is avail
 % - Settings: none; uncapped (extra features appended, total can exceed $B$); capped (extra features replace the base's weakest, total stays $\le B$).
 % - Candidate ranking, block sizes and the capped rule: Chapter 5, "Augmentation"; not repeated here. Two details not stated there: the residual split is grouped 2- or 3-fold, and no admission test is applied beyond the block comparison.
 % Size of the search (the one place the configuration count is given; Chapter 5 Limitations points here):
-% - Configurations per (downstream model, budget), full: $|\text{allocation}| \times |\text{importance}| \times |\text{evaluator}| \times |N| = 5 \times 3 \times 4 \times 4 = 240$.
-% - Fast: $3 \times 1 \times 4 \times 2 = 24$.
-% - Per fold, full: $5 \text{ models} \times 8 \text{ budgets} \times 240 = 9{,}600$ configurations. Fast: $3 \times 8 \times 24 = 576$.
-% - Under nested cross-validation, total model fits $\approx$ configurations $\times$ inner folds $\times$ outer folds, because the search runs again inside every outer fold.
-% - TODO(check): confirm the counts after duplicates. The Chapter 5 notes gave: "match" repeats random forest, LightGBM or DNN for those downstream models, so there are 5 x 4 - 3 = 17 (downstream model, internal evaluator) pairs, giving 5 x 3 x 4 x 17 x 8 = 8,160 configurations per dataset (full) and 3 x 1 x 2 x 9 x 8 = 432 (fast). Then multiply by folds, objectives and augmentation settings to give the total number of fits.
-% - A fast search is its own search, stored separately. It is not a subset that can later be extended to a full one.
+% - Configurations per (downstream model, budget), full: $|\text{allocation}| \times |\text{importance}| \times |\text{evaluator}| \times |N| = 5 \times 3 \times |\text{evaluator}| \times 4$. "Matched" is dropped where it repeats an evaluator already listed, so random forest, LightGBM and DNN have 3 evaluators (180 configurations) and XGBoost and SVM have 4 (240).
+% - That is 17 (downstream model, internal evaluator) pairs, and $5 \times 3 \times 4 \times 17 \times 8 \text{ budgets} = 8{,}160$ configurations per dataset, objective and augmentation setting (full).
+% - Fast: $3 \times 1 \times 2 \times 17 \times 8 = 816$. All five downstream models are kept in the fast runs; only the allocation, importance and representation-count lists are shorter.
+% - On datasets under 1,000 molecules the Gaussian process is a sixth downstream model, with its own matched evaluator, which adds to these counts.
+% - Every configuration is scored on each of the 5 outer folds, except those removed by adaptive pruning (Chapter 5, "Fast tier and adaptive pruning"), which are scored on the first two folds only.
+% - Each configuration's score is stored by its settings, not by the tier, so a later full search reuses what a fast search scored and runs only the rest.
 % Splitting inside the search:
 % - Outer: the 5 grouped folds of Chapter 5 'Datasets and splitting'.
 % - Inner: inside each outer training fold, the first fold of a grouped 5-fold split gives a 20% internal validation set. The standalone scores and the augmentation blocks are measured on it.
@@ -3983,7 +3984,7 @@ The datasets used in this study are publicly available. The QM9 dataset is avail
 % - The recipe: the list of representations searched; the allocation method; the importance method; the budget; the internal evaluator; the number of representations used $N$; the objective; the metric and whether lower is better; the task type; the number of folds; the random seed.
 % - Augmentation settings: strategy (none, uncapped, capped); candidate ranking rule; candidate list length (50); optional cap per source; margin a block must clear over $k=0$; optional fraction of the budget used instead of the block sizes.
 % - Data recorded alongside the recipe (not part of the recipe):
-%   - each representation's standalone score from the search
+%   - each representation's best full-width cross-validated score across the downstream models, over every row the search ran on (sign flipped for lower-is-better metrics such as RMSE, so higher is better). This is not the internal-evaluator score that splits the budget (Axis 4); no rebuild reads it, it is kept as provenance
 %   - the number of features each representation got, per fold ($b_k$ per fold)
 %   - the extra features kept by augmentation, per fold
 % - Rebuilding from a blueprint, and reuse on unlabelled molecules: Chapter 5, "Blueprints"; point there.
