@@ -389,7 +389,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             train_size = _min_train_rows(sub_groups, sub_labels, sub_folds,
                                          data['task_type'])
             sub_budgets = [b for b in sweep_budgets if b <= train_size]
-            budgets_searched_this_n.append(len(sub_budgets))
             if not sub_budgets:
                 # No sweep budget fits the training partition. The old line
                 # here re-evaluated the same empty generator inside min(...),
@@ -399,6 +398,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"    n={n_sub}: no sweep budget fits {train_size} "
                       f"training rows; using {sub_budgets[0]}, which is not "
                       f"in the sweep")
+            # Counted AFTER the fallback (2026-09-28). It was counted before,
+            # so a point searched at one budget outside the sweep printed
+            # nb=0. Under the local grid (one swept budget, 250 features) that
+            # was every point whose smallest training partition is under 250
+            # rows. The budget each seed ran is in best_configs.
+            budgets_searched_this_n.append(len(sub_budgets))
             # Subsample-specific cache key — won't collide with main precompute
             # cache. Capped strategy is fine for small subsamples but projects
             # 'capped' at every subsample size. The 250-row gate was removed
