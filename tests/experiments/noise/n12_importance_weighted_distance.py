@@ -225,6 +225,15 @@ ZERO_IMPORTANCE_TWIN = {c: zero_importance_twin(c) for c in CONDITION_NAMES
 # c10 and the Rust half of the study all use, and which records what was delivered.
 
 
+def _is_imp_method_free(condition_name):
+    """True when a condition's matrix does not depend on the sweep's
+    importance method: every '_unweighted' condition, and each hybrid space's
+    '_imp_base' condition, which is weighted by the recipe's own importance
+    method. base_<k>_imp_weighted and <space>_imp_own do depend on it."""
+    return (condition_name.endswith('_unweighted')
+            or condition_name.endswith('_imp_base'))
+
+
 def _importance_is_all_zero(importance):
     """True when there is no importance to weight by.
 
@@ -1007,6 +1016,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # per fold. Copying is bit-identical and is what the numbers already
         # were. Added 2026-09-21.
         'duplicate_conditions_copied': {},
+        # {importance method: {condition: {'n_scorings_skipped': n}}}. The
+        # conditions whose matrix does not depend on the importance method
+        # (every '_unweighted' one and each hybrid space's '_imp_base') are
+        # scored once per (level, fold, draw) and copied into the second
+        # importance method's half. Bit-identical: same matrix, same labels,
+        # deterministic estimators, seeded models. Added 2026-09-28.
+        'imp_method_independent_copied': {},
         # {importance method: {condition: [widths seen]}}. How many features
         # the distance was computed over in each condition, which is not the
         # same number for every condition and was never recorded. A weighted
@@ -1204,6 +1220,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 results['hybrid_objective_rebuilt_under'] = (
                     fold_shared_by_space['hybrid']['hybrid_objective'])
 
+            # Scores of the conditions whose matrix does not depend on the
+            # importance method, keyed by entry name, for this (level, fold,
+            # draw). Every '_unweighted' condition and every hybrid space's
+            # '_imp_base' condition (weighted by the RECIPE's importance
+            # method) is the same matrix under both halves of the sweep, and
+            # the estimators and the seeded models return the same numbers on
+            # it. Until 2026-09-28 each was scored again on the second half.
+            _imp_free_scored = {}
             for imp_method in IMPORTANCE_METHODS:
                 if imp_method not in grid_acc:
                     grid_acc[imp_method] = {}
@@ -1285,6 +1309,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         _dc['n_scorings_skipped'] += 1
                         if sigma not in _dc['sigmas']:
                             _dc['sigmas'].append(sigma)
+                    elif (_is_imp_method_free(cond_name)
+                          and _entry_name in _imp_free_scored):
+                        cond_results = copy.deepcopy(
+                            _imp_free_scored[_entry_name])
+                        _ic = (results['imp_method_independent_copied']
+                               .setdefault(imp_method, {})
+                               .setdefault(cond_name,
+                                           {'n_scorings_skipped': 0}))
+                        _ic['n_scorings_skipped'] += 1
                     else:
                         cond_results = _run_condition(
                             X_space, y_noisy, None, None,
@@ -1294,6 +1327,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             eval_by_model=eval_by_unit,
                             predict_mode=_predict_mode,
                         )
+                        if _is_imp_method_free(cond_name):
+                            _imp_free_scored[_entry_name] = copy.deepcopy(
+                                cond_results)
                     _scored_here[cond_name] = cond_results
 
                     for ek, score in cond_results.items():
