@@ -25,14 +25,25 @@ things. It does not open the npz files beside them.
    per level: the median, minimum and maximum across noise draws of the Spearman over
    the features either level scored non-zero, and how many of the clean top set
    survive. One row is one representation at one level; representations are never
-   pooled. Two things are printed beside the honest figures and both are the less
-   honest of their pair, because lightgbm_gain leaves most features at exactly 0.0 and
-   np.argsort orders tied zeros by index: the all-features Spearman, and (in the
-   experiment's own JSON, not here) the top-k retained fraction over the uncapped set.
-   Measured on buchwald_hartwig, lightgbm_gain scores 39 of diff_maccs's 167 features,
-   so an uncapped top-50 overlap is 1.00 at every level while the scored ranking moves
-   from Spearman 0.980 to 0.920. The 'top set' column says how many features the
-   reported set holds.
+   pooled. The all-features Spearman is printed beside it, and (in the experiment's
+   own JSON, not here) the top-k retained fraction over the uncapped set. Both are
+   inflated, because lightgbm_gain leaves most features at exactly 0.0 and np.argsort
+   orders tied zeros by index. Measured on buchwald_hartwig, lightgbm_gain scores 39
+   of diff_maccs's 167 features, so an uncapped top-50 overlap is 1.00 at every level
+   while the scored ranking moves from Spearman 0.980 to 0.920. The 'top set' column
+   says how many features the reported set holds.
+
+   The Spearman over the features either level scored is pulled the other way. A
+   feature scored at one level and not at the other enters with a 0.0 on one side
+   (f30_analyse.py:70), so this Spearman falls, and can go below zero, when many
+   features switch between scored and unscored, even while the features both levels
+   scored keep their order. It measures two things at once: whether the same
+   features get any score, and how the shared ones are ordered. Measured 2026-09-28
+   on herg_ki, gaussian, fold 0, from the saved vectors: grover at level 0.15 reads
+   -0.132 here, and +0.557 over the 255 features both levels scored; pdv reads 0.793
+   and 0.774. So a sparse representation and a dense one are not on one scale in
+   this column. The Spearman over the features both levels scored is not computed
+   by n16 or here.
 
 4. WHETHER THE AMOUNT OF MOVEMENT DEPENDS ON THE NOISE DRAW. Each level is compared with
    level 0.0 on the same training rows with the same scorer seed, so the labels are the
@@ -253,8 +264,13 @@ def report_drift(p):
           "'top set' is how many")
     print(f"  features that set holds: {p.get('top_k')} was asked for, capped at "
           f"how many features")
-    print("  the level-0.0 scorer gave a non-zero score, so the set never contains "
-          "a tied zero.")
+    print("  the level-0.0 scorer gave a non-zero score, so the level-0.0 set never "
+          "contains a tied zero.")
+    print("  A feature scored at only one of the two levels enters rho with a zero "
+          "on the other side,")
+    print("  so rho falls, and can go below zero, when many features switch between "
+          "scored and")
+    print("  unscored, even if the features both levels scored keep their order.")
     print(f"  'too thin' counts draws whose scorer ranked fewer than "
           f"{MIN_SCORED_FOR_RANK} features, or")
     print("  whose Spearman is undefined; they are left out of the row.")
