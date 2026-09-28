@@ -112,8 +112,11 @@ def run_it(data, name, recipe=no_recipe, **kw):
     real = n29.get_best_search_for_downstream
     n29.get_best_search_for_downstream = recipe
     try:
+        # Every model run() will fit, rf and svm included (ensure_dprime_models
+        # adds them), so base_1 is one cell keyed 'base_1' as the checks read it.
         kw.setdefault('base_reps', {m: ['ecfp4', 'second']
-                                    for m in kw.get('models', ['rf'])})
+                                    for m in n29.ensure_dprime_models(
+                                        kw.get('models', ['rf']))})
         return n29.run(data, {'n_splits': 3}, OUT, name, **kw)
     finally:
         n29.get_best_search_for_downstream = real
@@ -250,7 +253,8 @@ def test_run():
     check("both single-representation spaces ran, and are named",
           res['spaces_run'] == ['base_1', 'base_2']
           and res['base_reps_by_model'] == {
-              m: ['ecfp4', 'second'] for m in ('rf', 'lightgbm', 'xgboost')},
+              m: ['ecfp4', 'second']
+              for m in ('rf', 'lightgbm', 'xgboost', 'svm')},
           f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
     check("base_2 is scored", 'mean_label' in res['scores']['all'].get(
         'base_2', {}))
