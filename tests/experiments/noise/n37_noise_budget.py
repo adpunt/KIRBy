@@ -553,6 +553,10 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             frec['refused'] = (f'{n_tr} training rows is over MAX_PAIR_ROWS='
                                f'{MAX_PAIR_ROWS}; nothing was computed')
             per_fold.append(frec)
+            # Checkpointed like a finished fold, so a resumed run does not
+            # append a second refusal record for the same fold.
+            ledger.finish_pass(f'f{fold_i}', {'per_fold': per_fold, 'oof': oof,
+                                              'errors': errors})
             print(f"    fold {fold_i}: {frec['refused']}")
             continue
 
