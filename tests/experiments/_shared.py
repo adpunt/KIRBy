@@ -3445,11 +3445,21 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
 
     X_scaled = StandardScaler().fit_transform(X_concat)
     if d > 2000:
-        from sklearn.decomposition import TruncatedSVD
-        n_comp = min(500, n - 1)
-        svd = TruncatedSVD(n_components=n_comp, random_state=42)
-        svd.fit(X_scaled)
-        s = svd.singular_values_
+        # Exact singular values from the eigenvalues of the smaller Gram
+        # matrix. Until 2026-09-28 this kept only the top 500 singular values
+        # of a TruncatedSVD, which drops the tail from the entropy and so
+        # biases the effective rank DOWN for exactly the representations wider
+        # than 2,000 features -- every 2,048-bit fingerprint among them --
+        # while narrower ones got the exact value. The cost of this is about
+        # that of the truncated SVD it replaces.
+        Xs = np.asarray(X_scaled, dtype=np.float64)
+        G = Xs @ Xs.T if n < d else Xs.T @ Xs
+        ev = np.linalg.eigvalsh(G)
+        s = np.sqrt(np.clip(ev, 0.0, None))
+        # A Gram eigenvalue is accurate to about eps * the largest, so a
+        # singular value below sqrt(eps) * the largest is rounding, not signal.
+        if s.size:
+            s = s[s > 1e-7 * s.max()]
     else:
         _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
     eigvals = s ** 2 / n
