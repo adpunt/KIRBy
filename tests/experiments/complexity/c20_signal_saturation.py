@@ -339,7 +339,8 @@ def run_dataset(name, rep_filter=None, models=DEFAULT_MODELS, ks=DEFAULT_KS,
             "tested count below the width, not necessarily all of them. "
             "k_exceeds_ranked marks counts above the smallest per-fold number "
             "of features with nonzero lightgbm gain; past that the top-k is "
-            "filled in arbitrary tie order, not by importance."
+            "filled in arbitrary tie order, not by importance. The full-width "
+            "entry is never flagged, because it holds every feature."
             % (n_folds, n_folds, mname, PLATEAU_TOL_DDOF, n_folds)),
     }
 
@@ -372,7 +373,10 @@ def run_dataset(name, rep_filter=None, models=DEFAULT_MODELS, ks=DEFAULT_KS,
             # partly filled with features the ranker never distinguished.
             nr = n_ranked[rep_name]
             curve["n_nonzero_importance_per_fold"] = nr
-            curve["k_exceeds_ranked"] = [bool(k > min(nr)) for k in curve["ks"]]
+            # The last entry is the full width. Every feature is in it, so the
+            # ranking order cannot matter there and it is never flagged.
+            curve["k_exceeds_ranked"] = [
+                bool(k > min(nr)) and k < curve["width"] for k in curve["ks"]]
             curve["seconds"] = round(time.time() - t0, 1)
             ds_result["models"][model_name][rep_name] = curve
             if verbose:
