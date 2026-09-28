@@ -994,11 +994,17 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                             k: int(v.get('n_features', 0))
                             for k, v in (aug_info or {}).items()
                         }
-                        n_added = Xtr_h.shape[1] - base_dim
+                        # Extras admitted, counted from the admission record.
+                        # This was final width minus base width, which is 0 by
+                        # construction under 'capped' (extras displace base
+                        # features), so every capped arm reported 0 added.
+                        n_added = int(sum(kept_detail.values()))
                         fold_aug_info.append({
                             'kept': sorted(kept_detail),
                             'kept_detail': kept_detail,
-                            'n_added': max(0, n_added),
+                            'n_added': n_added,
+                            'n_base_dropped': int(
+                                base_dim - (Xtr_h.shape[1] - n_added)),
                             'final_dim': Xtr_h.shape[1],
                             # How many features this fold took from each decoy.
                             # Both should be 0. Anything above 0 says the rule
@@ -1086,6 +1092,9 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                         if not np.isnan(delta) else float('nan')),
                     'kept_augmentations': sorted(all_kept),
                     'mean_features_added': float(np.mean(total_added)),
+                    # Base features the extras pushed out ('capped' only).
+                    'mean_base_dropped': float(np.mean(
+                        [fi.get('n_base_dropped', 0) for fi in fold_aug_info])),
                     'fold_aug_info': fold_aug_info,
                     'aug_pool_reps': sorted(aug_dict) if aug_dict else [],
                     'per_source_budget': per_source,
