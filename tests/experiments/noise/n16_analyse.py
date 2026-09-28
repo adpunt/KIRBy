@@ -363,8 +363,14 @@ def report_replicate_spread(p):
         print(f"    {'representation':<22}{'level':>7}{'drift':>10}{'range':>10}"
               f"{'draws':>7}  reading")
         for rname, lv, drift, spread, ndraw in rows:
-            verdict = ('similar in every draw' if drift > spread
-                       else 'depends on the draw')
+            # An exact 0.0 range is its own reading. Under censoring the draws
+            # are one draw repeated (the clipped fraction has no random part),
+            # so the range is 0.0 by construction, not by agreement.
+            if spread == 0.0:
+                verdict = 'identical in every draw'
+            else:
+                verdict = ('similar in every draw' if drift > spread
+                           else 'depends on the draw')
             print(f"    {rname:<22}{lv:>7.2f}{drift:>10.4f}{spread:>10.4f}"
                   f"{ndraw:>7}  {verdict}")
 
@@ -382,9 +388,17 @@ def report_hybrid_ranking(p):
     if not blocks:
         return
     print("\n  THE HYBRID'S OWN FEATURE RANKING, AGAINST LEVEL 0.0")
-    print("  rho over the features selected at BOTH levels; shared = how many that "
-          "is; scored =")
-    print("  how many of the hybrid's features carry any importance at that level")
+    print("  rho over the features selected at BOTH levels and scored at either; "
+          "shared = how many")
+    print("  features both levels selected; scored =")
+    print("  how many of the hybrid's features carry any importance at that level. "
+          "cells = noise")
+    print("  draws; min and max are across them. The level-0.0 row compares one "
+          "array with itself.")
+    print("  Each level's hybrid holds a different feature set, and a feature's "
+          "importance depends")
+    print("  on the features beside it, so rho moves with the selection as well as "
+          "with the labels.")
     for method, per_level in blocks.items():
         print(f"\n  [{method}]")
         print(f"    {'level':>7}{'cells':>7}{'rho med':>10}{'rho min':>10}"
