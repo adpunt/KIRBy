@@ -425,7 +425,7 @@ RANDOM_EXEMPTION_SEED = 20260923
 def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHOLD,
                            activity_k=CLIFF_ACTIVITY_K, threshold_mode='mad',
                            potency_threshold=CLIFF_POTENCY_THRESHOLD,
-                           subset=None, structure=None):
+                           subset=None, structure=None, structure_kind=None):
     """One boolean per molecule: is it in at least one activity-cliff pair.
 
     ⛔ WHAT `subset` AND `structure` ARE FOR, added 2026-09-23.
@@ -544,9 +544,30 @@ def cliff_mask_for_dataset(data, labels, is_clf, sim_threshold=CLIFF_SIM_THRESHO
 
     sim = structure
     if sim is not None:
-        info['structure_reference'] = 'reused from a previous call'
-        info['similar_percentile'] = SIMILAR_PERCENTILE
-        similar_percentile = SIMILAR_PERCENTILE
+        # ⛔ THE REUSED MATRIX KEEPS THE CUTOFF ITS OWN KIND USES. Fixed
+        # 2026-09-28. This used to set the top-2-percent-of-pairs cutoff for
+        # every reused matrix. On a molecular set the matrix is ECFP4 Tanimoto
+        # and n01's cutoff is the absolute 0.55, which the whole-dataset call
+        # used. So every per-fold call -- the one that picks the exempt
+        # molecules -- ran a different definition from the one reported and
+        # from the one this docstring names. The kind is decided by the same
+        # branch order as below; `structure_kind` overrides it for a caller
+        # whose first call fell through to the Euclidean fallback.
+        kind = structure_kind
+        if kind is None:
+            if smiles is not None and domain == 'molecular':
+                kind = 'ecfp4_tanimoto'
+            elif domain == 'reaction' and rxn_smiles is not None:
+                kind = 'reaction_ecfp4_tanimoto'
+            elif domain == 'dta' and drug_smiles is not None:
+                kind = 'drug_ecfp4_tanimoto_within_protein'
+            else:
+                kind = 'euclidean_on_every_representation'
+        info['structure_reference'] = f'{kind} (reused from a previous call)'
+        similar_percentile = (None if kind == 'ecfp4_tanimoto'
+                              else SIMILAR_PERCENTILE)
+        if kind == 'euclidean_on_every_representation':
+            info['reference_independent'] = False
     if sim is None and smiles is not None and domain == 'molecular':
         try:
             sim = _compute_ecfp4_tanimoto_sim(smiles)
@@ -1466,7 +1487,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                   'mad')),
                     potency_threshold=float(kwargs.get(
                         'cliff_potency_threshold', CLIFF_POTENCY_THRESHOLD)),
-                    subset=train_idx, structure=cliff_structure)
+                    subset=train_idx, structure=cliff_structure,
+                    structure_kind=cliff_info.get('structure_reference'))
 
                 rand_train, n_rand = random_exempt_mask(
                     cliff_train, int(cliff_train.sum()), fold_i, seed)
