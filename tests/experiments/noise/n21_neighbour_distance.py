@@ -126,6 +126,9 @@ from kirby.noise_spec import REGRESSION_STRATEGIES as _REG_STRATEGIES
 _INJECTABLE_CONDITIONS = tuple(c for c in DETECTION_IS_DEFINED
                                if c in _REG_STRATEGIES)
 from experiments.noise.n07_remediation import _predict_for_metric
+# DIRTY-LOCAL 2026-09-28: the representations the stored search built each
+# outer fold's hybrid on (n02, commit 736ec93; n12, n30, n37 use it the same way).
+from experiments.noise.n02_sample_weighting import search_fold_reps
 from experiments._shared import (
     noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
     load_data, get_config, create_experiment_parser,
@@ -1205,6 +1208,31 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
              errors, provenance, sim_ap, sim_unavailable) = _st0['level_acc']
 
         for fold_i, (train_idx, val_idx) in enumerate(splits):
+            # DIRTY-LOCAL 2026-09-28. A recipe with rep_count below the pool
+            # size keeps, in the search, the representations THIS fold's
+            # training rows rank highest. Handed the whole pool and no
+            # per-fold scores, build_fold_hybrid ranks by Blueprint.rep_scores
+            # instead (_shared.py:5270-5300), one score per representation
+            # over every molecule, this fold's held-out ones included. The
+            # local recipes are rep_count 5 over a pool of 10. Same defect and
+            # same helper as n02 (736ec93), n12 (1a34901), n30 (ea8da9f) and
+            # n37 (7d9f64f). Computed before the checkpoint skip so every
+            # fold's list is recorded on a resumed run too.
+            fold_rep_keep = {}
+            for _fam, _bp in (('hybrid', bp), ('hybrid_similarity', bp_sim)):
+                if _bp is None:
+                    continue
+                _keep, _keep_src = search_fold_reps(_bp, fold_i, len(splits),
+                                                    list(reps))
+                fold_rep_keep[_fam] = _keep
+                results.setdefault('hybrid_fold_reps', {}).setdefault(
+                    _fam, {})[str(fold_i)] = {
+                        'reps': sorted(_keep) if _keep is not None else None,
+                        'source': _keep_src}
+                if lvl_key == f'{levels[0]:g}':
+                    print(f"    fold {fold_i} {_fam}: built on "
+                          f"{sorted(_keep) if _keep is not None else 'the pool'}"
+                          f" ({_keep_src})")
             if ck.is_done(f'{lvl_key}|f{fold_i}'):
                 print(f"    level {lvl_key} fold {fold_i}: already in the "
                       f"checkpoint, skipped")
@@ -1279,8 +1307,15 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                   ('hybrid_similarity', bp_sim)):
                     if _bp is None:
                         continue
+                    _keep = fold_rep_keep.get(_fam)
+                    _tr_pool = (train_reps if _keep is None else
+                                {k: v for k, v in train_reps.items()
+                                 if k in _keep})
+                    _va_pool = (val_reps if _keep is None else
+                                {k: v for k, v in val_reps.items()
+                                 if k in _keep})
                     _X, why = _build_hybrid_space(
-                        train_reps, val_reps, y_noisy, _bp, g_train,
+                        _tr_pool, _va_pool, y_noisy, _bp, g_train,
                         train_augs, val_augs,
                         model_factories[downstream_models[0]](),
                         metric_fn, lower_is_better,
