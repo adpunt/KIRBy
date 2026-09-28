@@ -493,6 +493,10 @@ LABEL_BETTER_WHEN = {
     'herg_ki':   'low',   # pKi against hERG: low pKi = weak binder = low cardiotoxicity
     'caco2':     'high',  # apparent permeability: high = more permeable
     'adme_mdr1': 'low',   # MDR1/P-gp efflux ratio: low = less effluxed
+    # Reaction yield, 0-100 (reaction_yields.load_buchwald_hartwig). A higher
+    # yield is the reaction a chemist wants. Unlisted, it fell back to RMSE's
+    # direction and hunted the LOWEST-yield reaction.
+    'buchwald_hartwig': 'high',
 }
 
 
