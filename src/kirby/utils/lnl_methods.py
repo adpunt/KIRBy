@@ -485,16 +485,32 @@ class LNLMethod(ABC):
             return self.classes_
         return np.unique(np.asarray(y_train).ravel())
 
-    def _default_predict(self, X_train, y_train, X_val, sample_weights=None):
+    def _default_predict(self, X_train, y_train, X_val, sample_weights=None,
+                         keep=None):
         """Convenience: standard DNN train+predict with current hyperparams.
 
         Routes to the clf trainer when self.is_clf=True.
+
+        keep: the rows of the ORIGINAL training set that X_train/y_train hold
+        (a boolean mask or an index array), for a method that dropped rows.
         """
         # The trainer's own early-stopping carve is group-disjoint when the
         # groups still line up with the rows. The data-level methods drop rows
-        # before calling this, so pass them only when the lengths agree rather
-        # than silently mis-aligning a scaffold to the wrong molecule.
+        # before calling this. Until 2026-09-28 they passed no `keep`, the
+        # lengths disagreed and the groups were dropped, so the final fit of
+        # small_loss, confident_learning, distance_selection and
+        # multistage_cleaning stopped on a RANDOM 20% while the other methods
+        # stopped on a scaffold-disjoint one. With `keep` the groups are cut to
+        # the kept rows. A length mismatch still drops them rather than
+        # mis-align a scaffold to the wrong molecule.
         _g = self.selection_groups
+        if _g is not None and keep is not None:
+            _ga = np.asarray(_g)
+            _k = np.asarray(keep)
+            if _k.dtype == bool and len(_k) == len(_ga):
+                _g = _ga[_k]
+            elif _k.dtype != bool and (len(_k) == 0 or _k.max() < len(_ga)):
+                _g = _ga[_k]
         if _g is not None and len(np.asarray(_g)) != len(np.asarray(y_train).ravel()):
             _g = None
         if self.is_clf:
@@ -612,7 +628,8 @@ class SmallLossSelection(LNLMethod):
         keep_idx = np.argsort(per_sample_loss)[:n_keep]
 
         # Retrain on filtered data (routes to clf or reg trainer via _default_predict)
-        y_pred = self._default_predict(X_t[keep_idx], y_train[keep_idx], X_val)
+        y_pred = self._default_predict(X_t[keep_idx], y_train[keep_idx], X_val,
+                                        keep=keep_idx)
 
         return {
             'y_pred': y_pred,
@@ -701,7 +718,8 @@ class ConfidentLearning(LNLMethod):
             keep_mask = np.ones(len(y_train), dtype=bool)
 
         # Retrain on clean subset (routes to clf or reg trainer)
-        y_pred = self._default_predict(X_t[keep_mask], y_train[keep_mask], X_val)
+        y_pred = self._default_predict(X_t[keep_mask], y_train[keep_mask], X_val,
+                                        keep=keep_mask)
 
         return {
             'y_pred': y_pred,
@@ -786,7 +804,8 @@ class DistanceBasedSelection(LNLMethod):
         if keep_mask.sum() < 10:
             keep_mask = np.ones(len(y_train), dtype=bool)
 
-        y_pred = self._default_predict(X_t[keep_mask], y_train[keep_mask], X_val)
+        y_pred = self._default_predict(X_t[keep_mask], y_train[keep_mask], X_val,
+                                        keep=keep_mask)
 
         return {
             'y_pred': y_pred,
@@ -884,7 +903,8 @@ class MultistageCleaning(LNLMethod):
                 break
 
         # Final training on cleaned data (routes through _default_predict)
-        y_pred = self._default_predict(X_t[current_idx], y_train[current_idx], X_val)
+        y_pred = self._default_predict(X_t[current_idx], y_train[current_idx], X_val,
+                                        keep=current_idx)
 
         return {
             'y_pred': y_pred,
