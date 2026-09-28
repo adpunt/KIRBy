@@ -363,6 +363,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # distinct groups, skip the second pass for it and record an
             # explicit flag rather than crash or silently emit nothing.
             all_rows_bp_skipped = None
+            # Per model: why the all-rows recipe has no score in this half.
+            # Both reasons used to leave the model out with nothing written.
+            all_rows_bp_not_scored = {}
             from sklearn.preprocessing import StandardScaler as _SS
             from experiments._shared import cv_split as _cv_sp7, get_model_factories as _gmf
             n_folds = config.get('n_splits', 5)
@@ -376,6 +379,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             for cand_model, (bp_fd, _t, _a) in (
                     all_rows_blueprints.items() if all_rows_bp_skipped is None else []):
                 if bp_fd.budget is not None and bp_fd.budget > len(sub_labels):
+                    all_rows_bp_not_scored[cand_model] = (
+                        f'budget {bp_fd.budget} features > {len(sub_labels)} '
+                        f'rows in this half')
                     continue
                 try:
                     factory = _gmf([cand_model], task_type=data['task_type'],
@@ -384,8 +390,16 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         continue
                     fold_scores = []
                     try:
+                        # task_type picks the splitter the search itself used
+                        # (_make_cv_splitter): StratifiedGroupKFold(shuffle,
+                        # seed 42) on a classification set, GroupKFold
+                        # otherwise. Without it cv_split guessed from the label
+                        # dtype, so on a classification set with float labels
+                        # this pass scored different folds from the search
+                        # beside it and the per-fold columns were not paired.
                         _sp7_splits = list(_cv_sp7(sub_groups, sub_folds,
-                                                   sub_sample_X, sub_labels))
+                                                   sub_sample_X, sub_labels,
+                                                   task_type=data['task_type']))
                     except ValueError:
                         # Group count below the (reduced) fold count after
                         # StratifiedGroupKFold's own checks — flag + skip.
@@ -423,6 +437,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         sc = _SS()
                         X_tr_s = sc.fit_transform(X_tr)
                         X_va_s = sc.transform(X_va)
+                        # Same order as the search's hybrid scorer: scale, then
+                        # fill NaN with the training median. Without it a NaN
+                        # feature made svm raise, the except below swallowed it
+                        # and the model vanished from this column unrecorded.
+                        from kirby.find_best_hybrid import _impute_nan as _imp7
+                        X_tr_s, X_va_s, _ = _imp7(X_tr_s, X_va_s)
                         mdl = factory()
                         mdl.fit(X_tr_s, sub_labels[tr_i])
                         # Graded scores for ranking metrics. mdl.predict gave
@@ -437,8 +457,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         all_rows_bp_scores[cand_model] = float(np.mean(fold_scores))
                         all_rows_bp_fold_scores[cand_model] = [
                             float(s) for s in fold_scores]
-                except Exception:
-                    pass
+                except Exception as _e7:
+                    all_rows_bp_not_scored[cand_model] = (
+                        f'{type(_e7).__name__}: {_e7}')
+                    print(f"    {subpop_name}: all-rows recipe for {cand_model} "
+                          f"not scored ({type(_e7).__name__}: {_e7})")
 
             # Honest per-model rescore block (CONTRACT json_convention). Carries
             # per-fold scores for BOTH arms — hybrid candidate recipes AND
@@ -466,6 +489,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'top2_pairs_by_model': (sel['pairs'] if sel else []),
                 'all_rows_bp_scores': all_rows_bp_scores,
                 'all_rows_bp_fold_scores': all_rows_bp_fold_scores,
+                'all_rows_bp_not_scored': all_rows_bp_not_scored,
                 # Per-model per-fold reselection inputs (per-fold, both arms). Exact
                 # CONTRACT keys inside: lower_is_better / candidates_by_model /
                 # baselines_by_model. None if the search itself failed.
