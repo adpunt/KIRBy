@@ -734,15 +734,26 @@ def print_analysis(all_results):
         # WARNING: paper used held-out test sets; this experiment uses
         # CDR3-deduped stratified KFold CV. Numbers are NOT directly
         # comparable — treat the gap as a rough sanity check only.
-        best_roc = max(
-            (m.get('roc_auc', {}).get('mean', 0)
-             for rd in results.values() for m in rd['models'].values()),
-            default=0
-        )
+        _cells = [m.get('roc_auc', {}).get('mean')
+                  for rd in results.values() for m in rd['models'].values()]
+        _cells = [c for c in _cells if c is not None and not np.isnan(c)]
+        best_roc = max(_cells) if _cells else float('nan')
         gnn_roc = PAPER_BASELINES['ITsFlexible GNN (crystal)']['roc_auc']
-        print(f"\n  Best KIRBy ROC AUC: {best_roc:.4f}")
-        print(f"  ITsFlexible GNN:    {gnn_roc:.2f} "
-              f"(paper held-out test set — not directly comparable)")
+        gnn_pr = PAPER_BASELINES['ITsFlexible GNN (crystal)']['pr_auc']
+        # The share of antibodies labelled flexible. PR AUC has no fixed floor:
+        # a model that guesses at random scores the positive share, so a PR AUC
+        # in the table above is only readable beside this number, and the
+        # paper's PR AUC was measured on a test set with a different share.
+        _prev = ds['n_flexible'] / ds['n_samples'] if ds['n_samples'] else float('nan')
+        print(f"\n  Best KIRBy ROC AUC: "
+              f"{'—' if np.isnan(best_roc) else format(best_roc, '.4f')} "
+              f"— the largest of {len(_cells)} (representation, model) means, "
+              f"picked on the same folds it is reported on")
+        print(f"  ITsFlexible GNN:    {gnn_roc:.2f} ROC AUC, {gnn_pr:.2f} PR "
+              f"AUC (paper held-out test set — not directly comparable)")
+        print(f"  {ds['n_flexible']} of {ds['n_samples']} antibodies here are "
+              f"flexible ({100*_prev:.1f}%), which is the PR AUC a random "
+              f"guess scores on this data")
 
 
 # =============================================================================
