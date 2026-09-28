@@ -4068,14 +4068,26 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         # noisy has to say the noise hurt, and which sign that is depends on
         # the metric's direction.
         m_hurt = (m_gap < 0) if lower_is_better else (m_gap > 0)
+        # DIRTY-LOCAL 2026-09-28: the GAP_MIN_FRAC floor, as the per-rep and
+        # per-top-rep recoveries already apply. This block had 1e-10, so the
+        # canonical per-model percentage divided by a gap of 1.6% of the clean
+        # score and wrote the +350% / -474% the floor exists to stop.
+        m_floor = (max(1e-10, GAP_MIN_FRAC * abs(m_clean))
+                   if not np.isnan(m_clean) else 1e-10)
         m_recovery = {}
         for strat in remediation_strategies:
             s = m_strats.get(strat, {}).get('score', float('nan'))
             if (not np.isnan(s) and not np.isnan(m_gap)
-                    and abs(m_gap) > 1e-10 and m_hurt):
+                    and abs(m_gap) > m_floor and m_hurt):
                 m_recovery[strat] = float((s - m_noisy) / m_gap * 100)
             else:
                 m_recovery[strat] = float('nan')
+        if not np.isnan(m_gap) and m_hurt and abs(m_gap) <= m_floor:
+            results.setdefault('recovery_undefined', {})[m_name] = (
+                f'the injected noise moved this model by {abs(m_gap):.6g} '
+                f'{metric_name}, under {GAP_MIN_FRAC:.0%} of its clean score '
+                f'({m_clean:.6g}); a percentage of that is a percentage of a '
+                f'rounding error')
         if not np.isnan(m_gap) and not m_hurt:
             results.setdefault('recovery_undefined', {})[m_name] = (
                 f'noise did not degrade this model: clean={m_clean:.6g}, '
