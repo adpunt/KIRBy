@@ -8,8 +8,10 @@ Runs the three measurements that never ran:
                           with origin counts.
 
 FIXED: importance=lightgbm_gain, internal_evaluator=lightgbm, downstream scorer=lightgbm
-(for internal consistency of paired deltas; the rf target anchor 14.37 is kept from step1).
-Full 5-fold GroupKFold-by-additive. Importance always computed on TRAIN rows only.
+(for internal consistency of paired deltas). The target anchor is cgr_morgan alone under
+lightgbm, read from c43_buchwald_signal's file; the per-fold paired version is computed here
+against the saturation curve's full-width fit, which is the same fit on the same folds.
+GroupKFold by additive, KIRBY_LOCAL_FOLDS folds (5 when unset). Importance always computed on TRAIN rows only.
 Calls hybrid.create_hybrid / apply_feature_selection DIRECTLY; find_best_hybrid() never called.
 Writes JSON checkpoints so partial progress survives.
 
@@ -168,9 +170,14 @@ def main():
     sat = {}   # K -> per-fold rmse
     full_per_fold = []
     rank_cache = []  # per fold: (order desc, tr, va)
+    sat_npos = []    # per fold: cgr_morgan features with gain above zero
     for fi, (tr, va) in enumerate(folds):
-        order = np.argsort(H.rank_columns(reps[BEST][tr], y[tr]))[::-1]
+        _imp = H.rank_columns(reps[BEST][tr], y[tr])
+        order = np.argsort(_imp)[::-1]
         rank_cache.append(order)
+        # Past this many, the K columns added are ones no tree used, taken in
+        # column order.
+        sat_npos.append(int(np.sum(_imp > 0)))
         r_full, _ = lgbm_rmse(reps[BEST][tr], y[tr], reps[BEST][va], y[va])
         full_per_fold.append(r_full)
         for K in SAT_KS:
@@ -183,6 +190,7 @@ def main():
         "native_width": W,
         "full_rmse_mean": float(np.mean(full_per_fold)),
         "full_per_fold": [float(x) for x in full_per_fold],
+        "n_gain_above_zero_per_fold": sat_npos,
         # delta = K-rmse - full-rmse (RMSE lower better, so positive = K WORSE than full)
         "K_rmse_mean": {K: float(np.mean(sat[K])) for K in SAT_KS},
         "K_delta_vs_full_mean": {K: float(np.mean(sat[K]) - np.mean(full_per_fold)) for K in SAT_KS},
@@ -196,7 +204,7 @@ def main():
         for B in BUDGETS:
             key = f"{method}_B{B}"
             print(f"\n== cell {key} ==", flush=True)
-            slice_pf, hyb_pf, full_pf, q_pf = [], [], [], []
+            slice_pf, hyb_pf, full_pf, q_pf, w_pf = [], [], [], [], []
             for fi, (tr, va) in enumerate(folds):
                 pool_tr = {r: H._clean(reps[r][tr]) for r in POOL}
                 pool_va = {r: H._clean(reps[r][va]) for r in POOL}
@@ -208,6 +216,9 @@ def main():
                 # hybrid score
                 r_hyb, _ = lgbm_rmse(Xh_tr, y[tr], Xh_va, y[va])
                 hyb_pf.append(r_hyb)
+                # Realised width: below B when a representation had fewer
+                # features with gain above zero than its share of the budget.
+                w_pf.append(int(Xh_tr.shape[1]))
                 # realised quota for best rep
                 sel = info.get(BEST, {})
                 q = len(sel["selected_indices"]) if isinstance(sel, dict) and "selected_indices" in sel else 0
@@ -231,6 +242,10 @@ def main():
                 "full_rmse_per_fold": [float(x) for x in full_pf],
                 "hybrid_rmse_per_fold": [float(x) for x in hyb_pf],
                 "hybrid_rmse_mean": float(np.mean(hyb_pf)),
+                "hybrid_width_per_fold": w_pf,
+                # Hybrid minus cgr_morgan alone at full width, same folds, both
+                # lightgbm. Positive = hybrid WORSE (RMSE, lower is better).
+                "hybrid_minus_full_per_fold": [float(h - f) for h, f in zip(hyb_pf, full_pf)],
                 # SIGNAL SURVIVAL: slice - full  (positive = slice WORSE, i.e. truncation hurt the rep alone)
                 "slice_minus_full_mean": float(np.nanmean(np.array(slice_pf) - np.array(full_pf))),
                 "slice_minus_full_per_fold": [None if np.isnan(x) else float(x)
