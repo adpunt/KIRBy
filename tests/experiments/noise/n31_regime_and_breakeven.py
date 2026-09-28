@@ -30,6 +30,16 @@ WHAT IS MEASURED, per (condition, level, draw, fold, feature space):
                        of the NOISY labels, against the injector's mask. The
                        signed residual is graded too, because the shift formula
                        is written for a signed score.
+  the same, clean fit  both scores against the model fitted on the CLEAN
+                       labels, which is what the formulas assume (2026-09-28).
+                       Evaluation only. The gap between formula and noisy-fit
+                       detector then splits into the formula's own error and
+                       what the noise did to the fit.
+  s_m, noisy fit       the noisy-label fit's rmse on the molecules the
+                       injector left alone, over the label SD, and the
+                       predicted AUROC computed from it: the report's own
+                       reading of s_m ("clean-row residual" of the model in
+                       use). Evaluation only; it reads the mask.
   residual shape       excess kurtosis of the out-of-fold residual, its one-way
                        intraclass correlation by scaffold group, and its
                        correlation with the prediction (the report's D4). On
@@ -762,6 +772,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                            else float('nan'))
                     resid = y0 - p
                     rec = {
+                        # Which downstream models use this matrix. The summary
+                        # reads a model's detection numbers from its own
+                        # matrix only; base_1 holds one matrix per distinct
+                        # rank-1 representation.
+                        'cell_models': list(cell_models),
                         'training_molecules': int(len(y0)),
                         'molecules_moved': n_moved,
                         'label_sd': label_sd,
@@ -812,6 +827,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             mask, np.abs(resid), condition)
                         rec['detection_signed_residual'] = detection_scores(
                             mask, resid, condition)
+                        # Evaluation only. The formulas assume the residual of
+                        # a model fitted on CLEAN labels; the detector above
+                        # uses the model fitted on the noisy ones. This is the
+                        # same score against the clean-label fit, so the gap
+                        # between formula and detector can be split into the
+                        # formula's own error and the damage the noise did to
+                        # the fit.
+                        resid_cf = y0 - p_clean
+                        rec['detection_abs_residual_clean_fit'] = (
+                            detection_scores(mask, np.abs(resid_cf),
+                                             condition))
+                        rec['detection_signed_residual_clean_fit'] = (
+                            detection_scores(mask, resid_cf, condition))
+                        # Evaluation only (reads the mask). The report defines
+                        # s_m as the residual SD on the clean rows of the
+                        # model in use; here that is the noisy-label fit on
+                        # the molecules the injector left alone.
+                        s_m_nu = (float(np.sqrt(np.mean(resid[~moved] ** 2)))
+                                  / label_sd if (~moved).any() and label_sd > 0
+                                  else float('nan'))
+                        rec['s_m_noisy_fit_untouched_label_sd_units'] = s_m_nu
+                        rec['predicted_auroc_noisy_fit_s_m'] = (
+                            predicted_auroc_shift(delta, s_m_nu) if is_shift
+                            else predicted_auroc_wider(sig, s_m_nu))
                     else:
                         rec['detection_not_defined_because'] = (
                             'every training label moved, so no molecule is '
@@ -972,9 +1011,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 
 def _arm_setting(arm):
-    """The rows' method_setting for an arm: the arm name. (Until 2026-09-28
-    bayes_shrink rows carried |uses_injection_knowledge; its weight is now
-    estimated from the model's errors.)"""
+    """The rows' method_setting for an arm: the arm name. A synthetic flag
+    set (flags_share...) is drawn from the injector's mask, so its rows carry
+    |uses_injection_knowledge: a read of the rows file by `method` alone
+    would otherwise pool them with the detector's remove, downweight, rewrite
+    and bayes_shrink. (Until 2026-09-28 bayes_shrink rows carried the same
+    marker; its weight is now estimated from the model's errors.)"""
+    if arm.startswith('flags_'):
+        return f'{arm}|uses_injection_knowledge'
     return arm
 
 
@@ -1003,6 +1047,43 @@ def _mean(vals):
     return float(np.mean(vals)) if vals else float('nan')
 
 
+def _detection_summary(drecs, flag_shares):
+    """Means over one model's pass records of the detector numbers: the
+    predicted AUROC (two definitions of s_m), the measured AUROC of the
+    noisy-fit and the clean-fit residual, and the detector's precision."""
+    def _det(key, stat, recs=drecs):
+        return _mean((r.get(key) or {}).get(stat) for r in recs.values())
+    return {
+        'predicted_auroc_mean': _mean(
+            r.get('predicted_auroc') for r in drecs.values()),
+        'predicted_auroc_noisy_fit_s_m_mean': _mean(
+            r.get('predicted_auroc_noisy_fit_s_m') for r in drecs.values()),
+        'measured_auroc_abs_residual_mean': _det(
+            'detection_abs_residual', 'detection_auroc'),
+        'measured_auroc_signed_residual_mean': _det(
+            'detection_signed_residual', 'detection_auroc'),
+        'measured_auroc_abs_residual_clean_fit_mean': _det(
+            'detection_abs_residual_clean_fit', 'detection_auroc'),
+        'measured_auroc_signed_residual_clean_fit_mean': _det(
+            'detection_signed_residual_clean_fit', 'detection_auroc'),
+        'detector_precision_at_k_mean': _det(
+            'detection_abs_residual', 'detection_precision_at_k'),
+        's_m_mean': _mean(r.get('s_m_label_sd_units') for r in drecs.values()),
+        's_m_noisy_fit_untouched_mean': _mean(
+            r.get('s_m_noisy_fit_untouched_label_sd_units')
+            for r in drecs.values()),
+        'excess_kurtosis_noisy_mean': _mean(
+            r['residual_shape_noisy'].get('excess_kurtosis')
+            for r in drecs.values()),
+        'n_pass_records': len(drecs),
+        'detector_precision_by_share_mean': {
+            f'{sh:g}': _mean(
+                (r.get('detector_precision_by_share') or {}).get(f'{sh:g}')
+                for r in drecs.values())
+            for sh in flag_shares},
+    }
+
+
 def _summarise(acc, diag, models, precisions, flag_seeds, metric_name,
                lower_is_better, flag_shares=FLAG_SHARES):
     """Per (condition, level, space, model, flag share): the detector ops, the
@@ -1022,43 +1103,27 @@ def _summarise(acc, diag, models, precisions, flag_seeds, metric_name,
             lrow = {}
             for space, by_arm in by_space.items():
                 # The detection record lives under the space key or a
-                # space/model key when models had separate matrices.
-                drecs = {}
+                # space/model key when models had separate matrices. Each
+                # model reads only the records of its own matrix: base_1
+                # can hold a different representation per model, and a
+                # detector's quality is never averaged across them.
+                drecs_all = {}
                 for ek, recs in (diag.get(cond, {}).get(lvl, {})).items():
                     if ek == space or ek.startswith(space + '/'):
-                        drecs.update({f'{ek}|{pk}': r for pk, r in recs.items()})
-                det = {
-                    'predicted_auroc_mean': _mean(
-                        r.get('predicted_auroc') for r in drecs.values()),
-                    'measured_auroc_abs_residual_mean': _mean(
-                        (r.get('detection_abs_residual') or {}).get(
-                            'detection_auroc') for r in drecs.values()),
-                    'measured_auroc_signed_residual_mean': _mean(
-                        (r.get('detection_signed_residual') or {}).get(
-                            'detection_auroc') for r in drecs.values()),
-                    'detector_precision_at_k_mean': _mean(
-                        (r.get('detection_abs_residual') or {}).get(
-                            'detection_precision_at_k') for r in drecs.values()),
-                    's_m_mean': _mean(r.get('s_m_label_sd_units')
-                                      for r in drecs.values()),
-                    'excess_kurtosis_noisy_mean': _mean(
-                        r['residual_shape_noisy'].get('excess_kurtosis')
-                        for r in drecs.values()),
-                    'n_pass_records': len(drecs),
-                    'detector_precision_by_share_mean': {
-                        f'{sh:g}': _mean(
-                            (r.get('detector_precision_by_share') or {}).get(
-                                f'{sh:g}') for r in drecs.values())
-                        for sh in flag_shares},
-                }
-                srow = {'detection': det, 'per_model': {}}
+                        drecs_all.update({f'{ek}|{pk}': r
+                                          for pk, r in recs.items()})
+                srow = {'per_model': {}}
                 noisy = by_arm.get('noisy') or {}
                 clean = by_arm.get('clean') or {}
                 for m in models:
                     b = noisy.get(m) or {}
                     if not b:
                         continue
-                    row = {'noisy_mean': _mean(b.values()),
+                    drecs = {k: r for k, r in drecs_all.items()
+                             if m in (r.get('cell_models') or [m])}
+                    det = _detection_summary(drecs, flag_shares)
+                    row = {'detection': det,
+                           'noisy_mean': _mean(b.values()),
                            'clean_mean': _mean((clean.get(m) or {}).values()),
                            'clean_vs_noisy': _paired(b, clean.get(m) or {},
                                                      lower_is_better),
@@ -1129,15 +1194,18 @@ def _print_summary(results, metric_name):
         for lvl, lrow in crow.items():
             print(f"\n  {cond} level {lvl}:")
             for space, srow in lrow.items():
-                d = srow['detection']
-                print(f"    {space}: model error {d['s_m_mean']:.3f} label SDs; "
-                      f"predicted AUROC {d['predicted_auroc_mean']:.3f}, "
-                      f"measured {d['measured_auroc_abs_residual_mean']:.3f} "
-                      f"(absolute residual) / "
-                      f"{d['measured_auroc_signed_residual_mean']:.3f} (signed); "
-                      f"detector precision at k "
-                      f"{d['detector_precision_at_k_mean']:.3f}")
+                print(f"    {space}:")
                 for m, row in srow['per_model'].items():
+                    d = row['detection']
+                    print(f"      {m}: model error {d['s_m_mean']:.3f} label "
+                          f"SDs; predicted AUROC "
+                          f"{d['predicted_auroc_mean']:.3f}, measured "
+                          f"{d['measured_auroc_abs_residual_mean']:.3f} "
+                          f"(absolute residual, noisy fit) / "
+                          f"{d['measured_auroc_abs_residual_clean_fit_mean']:.3f}"
+                          f" (absolute residual, clean fit); detector "
+                          f"precision at k "
+                          f"{d['detector_precision_at_k_mean']:.3f}")
                     print(f"      {m}: noisy {row['noisy_mean']:.4f}, clean "
                           f"{row['clean_mean']:.4f}")
                     for shk, by_op in row['detector_ops'].items():
