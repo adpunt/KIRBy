@@ -1589,6 +1589,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             # uncleaned one on, out of the folds both scored.
                             'folds_won': int(sum(scored)),
                             'folds_scored': len(scored),
+                            # How many folds this experiment split into. A
+                            # row with fewer folds scored (a refused target, a
+                            # failed fit, a hybrid that did not build) cannot
+                            # have won every fold. Added 2026-09-28.
+                            'folds_in_run': int(len(splits)),
                             # Beside it, never instead of it.
                             'mean_gain': float(diff.mean()) if diff.size else float('nan'),
                             'fold_gains': [float(x) for x in diff],
@@ -1713,6 +1718,8 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name,
                             'flag_rate': r,
                             'folds_won': cell['folds_won'],
                             'folds_scored': cell['folds_scored'],
+                            'folds_in_run': cell.get('folds_in_run',
+                                                     cell['folds_scored']),
                             'mean_gain': cell['mean_gain'],
                         })
             if not rows:
@@ -1720,14 +1727,29 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name,
                 continue
             majority = [x for x in rows
                         if x['folds_won'] * 2 > x['folds_scored']]
+            # ⛔ DIRTY-LOCAL 2026-09-28. This was folds_won == folds_scored,
+            # so a setting scored on 1 fold of 3 -- gp_smooth refused on the
+            # folds whose training block is over GP_SMOOTH_MAX_ROWS, or any fit
+            # that failed -- counted as winning every fold at 1 of 1. Every
+            # fold now means every fold the run split into.
             clean_sweep = [x for x in rows
-                           if x['folds_won'] == x['folds_scored']]
-            best = max(rows, key=lambda x: (x['folds_won'] / max(x['folds_scored'], 1),
-                                            x['mean_gain']))
+                           if x['folds_won'] == x['folds_scored']
+                           == x.get('folds_in_run', x['folds_scored'])]
+            short = [x for x in rows
+                     if x['folds_scored'] < x.get('folds_in_run',
+                                                  x['folds_scored'])]
+            # Out of the folds of the run, for the same reason: 1 of 1 is not
+            # a better record than 2 of 3.
+            best = max(rows, key=lambda x: (
+                x['folds_won'] / max(x.get('folds_in_run',
+                                           x['folds_scored']), 1),
+                x['mean_gain']))
             per_cleanup[cleanup] = {
                 'settings_scored': len(rows),
                 'settings_winning_most_folds': len(majority),
                 'settings_winning_every_fold': len(clean_sweep),
+                'settings_scored_on_fewer_folds_than_the_run':
+                    len(short),
                 'best_setting': best,
             }
         out['per_space'][space] = {'per_cleanup': per_cleanup}
