@@ -67,9 +67,10 @@ def _mi_knn_capped(X, y, k=5, max_rows=MI_MAX_ROWS, seed=42):
 
     Returns (mi, n_components): the MI on a fixed random subset of <= max_rows
     rows, and the number of PCA components the estimator summed that MI over.
-    Below the row cap every row is used. Below the component cap the block is
-    PCA-rotated here first (see the comment in the body), so every block is
-    summed over decorrelated components.
+    Below the row cap every row is used. Every block is PCA-rotated here to at
+    most the component cap, keeping only components with non-zero variance
+    (see the comment in the body), so every block is summed over decorrelated
+    components and counted by its rank, not by the cap.
 
     The component count is returned because the MI is NOT measured over the
     features handed in. estimate_mutual_information_knn PCA-reduces to
@@ -89,26 +90,42 @@ def _mi_knn_capped(X, y, k=5, max_rows=MI_MAX_ROWS, seed=42):
     n_rows, n_features = X.shape
     # Mirrors the estimator's own cap.
     cap = max(1, min(50, n_rows // 5))
-    if n_features > cap:
-        # The estimator PCA-reduces to `cap` decorrelated components itself.
-        n_components = cap
-    else:
-        # Under the cap the estimator skips its PCA and sums per-feature MI
-        # over the raw, correlated features, so information two features
-        # share is counted twice. The full representation (over the cap) is
-        # always decorrelated, so the two sides of mi_density_ratio were
-        # measured two different ways. Rotate here instead, keeping every
-        # component with non-zero variance: duplicate fingerprint bits give
-        # zero-variance components, which the estimator would rescale to unit
-        # variance and count as components. (dirty local 2026-09-28)
-        Xs = StandardScaler().fit_transform(X)
-        pca = PCA(n_components=n_features, random_state=42).fit(Xs)
-        ev = pca.explained_variance_
-        keep = ev > 1e-10 * max(float(ev.max()), 1e-300)
-        n_components = int(keep.sum())
-        if n_components == 0:
-            return 0.0, 0
-        X = pca.transform(Xs)[:, keep]
+    # Every block is rotated here, over the cap and under it, keeping only
+    # components with non-zero variance, so the estimator (handed at most
+    # `cap` columns) never runs its own PCA.
+    #
+    # Under the cap the estimator skips its PCA and sums per-feature MI over
+    # the raw, correlated features, so information two features share is
+    # counted twice; the full representation (over the cap) was always
+    # decorrelated, so the two sides of mi_density_ratio were measured two
+    # different ways. (dirty local 2026-09-28)
+    #
+    # Over the cap the estimator took exactly `cap` components whatever the
+    # block's rank, and the count returned was `cap`. A block of 60 columns of
+    # which 30 are constant -- a random draw from a sparse fingerprint -- gave
+    # the same MI as its 30 live columns (0.1897 against 0.1895 nats on a
+    # synthetic check) over 50 components instead of 30, so its MI per
+    # component read 5/3 too low. Same rule on both sides now. Duplicate
+    # fingerprint bits and constant columns give zero-variance components,
+    # which the estimator would rescale to unit variance and count.
+    # (dirty local 2026-09-28, second pass)
+    #
+    # fit_transform, not fit then transform: over the cap sklearn picks its
+    # randomized solver, whose fit_transform (U * S) and transform (X @ V) are
+    # not the same matrix when the spectrum is flat, and the estimator itself
+    # used fit_transform. Measured on 300 standard-normal columns: 0.130 nats
+    # through fit_transform, 0.042 through transform. fit_transform keeps the
+    # full representation's number identical to what the estimator gave.
+    Xs = StandardScaler().fit_transform(X)
+    n_fit = min(cap, n_features, n_rows)
+    pca = PCA(n_components=n_fit, random_state=42)
+    Z = pca.fit_transform(Xs)
+    ev = pca.explained_variance_
+    keep = ev > 1e-10 * max(float(ev.max()), 1e-300)
+    n_components = int(keep.sum())
+    if n_components == 0:
+        return 0.0, 0
+    X = Z[:, keep]
     return estimate_mutual_information_knn(X, y, k=k), n_components
 
 
