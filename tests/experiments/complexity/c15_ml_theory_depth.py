@@ -659,14 +659,22 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
         if _align_te is not None:
             sweep_splits[highest_rep] = (sub_reps[highest_rep][_align_tr],
                                          sub_reps[highest_rep][_align_te])
-    if 50 in results['per_budget']:
+    # 2026-09-28: the compact hybrid is budget 50 when that budget was run,
+    # else the smallest budget that was. With budgets [250] the sweep used to
+    # hold one space, so the comparison it exists for was never made.
+    _sweep_b = (50 if 50 in results['per_budget']
+                else (min(results['per_budget']) if results['per_budget']
+                      else None))
+    _sweep_name = f'hybrid_b{_sweep_b}'
+    results['gamma_sweep_hybrid_budget'] = _sweep_b
+    if _sweep_b is not None:
         try:
             X_h50, _, _search, _meta = _pool_hybrid_once(
                 reps, labels, groups, downstream_model='rf',
-                budget=50, augmentations=data.get('augmentations'),
+                budget=_sweep_b, augmentations=data.get('augmentations'),
                 dataset_name=dataset_name, task_type=task_type, data=data)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
-            sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
+            sweep_spaces[_sweep_name] = StandardScaler().fit_transform(X_h50_sub)
             if _align_te is not None and _meta:
                 bp50 = _meta['best_config']['blueprint']
                 _tr_reps = {k: v[_align_tr] for k, v in sub_reps.items()}
@@ -682,7 +690,7 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                     augmentations_train=_tr_a, augmentations_val=_te_a,
                     groups=(sub_groups[_align_tr]
                             if sub_groups is not None else None),
-                    budget_override=50,
+                    budget_override=_sweep_b,
                     precomputed_importance=_fold_importance(
                         _align_tr, _tr_reps, sub_labels[_align_tr],
                         (sub_groups[_align_tr]
@@ -694,9 +702,9 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                         (sub_groups[_align_tr]
                          if sub_groups is not None else None),
                         bp50, _metric_fn_15b, space='15b_alignment'))
-                sweep_splits['hybrid_b50'] = (Xh_tr, Xh_te)
-        except Exception:
-            pass
+                sweep_splits[_sweep_name] = (Xh_tr, Xh_te)
+        except Exception as _se:
+            print(f"    gamma sweep: {_sweep_name} unavailable - {_se}")
 
     results['gamma_sweep'] = {}
     for space_name, X_s in sweep_spaces.items():
