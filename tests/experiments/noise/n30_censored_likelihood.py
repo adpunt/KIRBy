@@ -31,9 +31,10 @@ WHAT THE INJECTOR DOES, READ IN THIS SESSION. `noiseInject/core.py:736-779`,
 reached through `noise_helpers.inject_train_labels`:
 
   - side 'upper' (`core.py:73`): values ABOVE the limit are replaced by it.
-  - the limit is the (1 - level) quantile of the FULL label column, so the
-    level is the fraction of labels clipped, not a dose in label units
-    (`kirby/noise_spec.py:219`).
+  - the limit is the (1 - level) quantile of this fold's CLEAN TRAINING
+    labels (`kirby/noise_spec.py` inject_training_rows, since 2026-09-27;
+    before that it was the full label column). So the level is the fraction
+    of training labels clipped, not a dose in label units.
   - the limit comes back on the provenance row as `censoring_limit`.
   - the draw does not enter: the clip is `np.minimum(y, limit)`. MEASURED on
     500 labels at level 0.25: noise seeds 0, 1 and 2 give bit-identical
@@ -492,7 +493,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'noise_condition': condition,
         'dose_units': noise_dose_units(dataset_name),
-        'level_means': 'the fraction of the full label column clipped to the limit',
+        'level_means': ('the fraction of the fold\'s training labels clipped '
+                        'to the limit; the limit is the (1 - level) quantile '
+                        'of the clean training labels'),
         'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
                             else kwargs['draws']),
         'noise_draws_note': (
