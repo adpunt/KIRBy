@@ -473,6 +473,10 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     models = get_model_factories(MODELS_LIST, 'classification', n_samples=n)
     print(f"\n  Evaluating {len(reps)} reps × {len(models)} models × {n_folds}-fold CV...")
     results = {}
+    # A pair that scored no fold, or was SKIPPED, used to leave no trace in
+    # the JSON: the table simply had one row fewer. Recorded here with the
+    # reason, in its own key, so nothing that iterates 'results' sees it.
+    pairs_not_scored = {}
     for rep_name in sorted(reps.keys()):
         X = reps[rep_name]
         rep_results = {}
@@ -482,6 +486,8 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
                 res = evaluate_rep_clf(X, labels, groups, factory(), n_folds)
             except ValueError as e:
                 print(f"    {rep_name:25s} {model_name:8s}  SKIPPED: {e}")
+                pairs_not_scored.setdefault(rep_name, {})[model_name] = (
+                    f'skipped: {type(e).__name__}: {e}')
                 continue
             elapsed = time.time() - t0
             if res is not None:
@@ -490,6 +496,9 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
                 auroc = res.get('auroc', {}).get('mean', float('nan'))
                 print(f"    {rep_name:25s} {model_name:8s}  "
                       f"acc={acc:.4f}  auroc={auroc:.4f}  ({elapsed:.1f}s)")
+            else:
+                pairs_not_scored.setdefault(rep_name, {})[model_name] = (
+                    'no fold produced a score; the fold lines above say why')
         if rep_results:
             results[rep_name] = {
                 'dim': X.shape[1],
@@ -509,6 +518,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         'reps_requested': list(rep_names),
         'reps_built': sorted(reps.keys()),
         'reps_not_built': sorted(set(rep_names) - set(reps.keys())),
+        'pairs_not_scored': pairs_not_scored,
     }
     # Additive: the honest, per-model, held-out comparison block (contract
     # json_convention). Absent only when the hybrid search was unavailable.
