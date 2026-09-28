@@ -1177,10 +1177,17 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
     # Get optimal hybrid config from precomputed search
     augs = data.get('augmentations')
     metric_name_b, metric_fn_b, lower_is_better_b = get_domain_metric(data)
+    # DIRTY-LOCAL 2026-09-28: the width the headline row is read at, as Part A
+    # asks since 588863f. It was a fixed 100, so under a sweep without 100 the
+    # lookup fell through to the best recipe at whatever width the search liked.
+    _hb_search = (HEADLINE_BUDGET if HEADLINE_BUDGET in PART_B_BUDGETS
+                  else PART_B_BUDGETS[0])
+    _recipe_source = 'search'
     try:
         _search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
-            downstream_model=fed_to_kirby_model(fed_model), budget=100,
+            downstream_model=fed_to_kirby_model(fed_model),
+            budget=_hb_search,
             augmentations=augs,
             metric=metric_name_b,
             task_type=data['task_type'],
@@ -1190,8 +1197,13 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
             **smoke_search_kwargs(config),
         )
         _bp = _meta['best_config']['blueprint'] if _meta else None
-    except Exception:
+        if _bp is None:
+            _recipe_source = 'fallback: the search returned no recipe'
+    except Exception as _search_err:
         _bp = None
+        _recipe_source = f'fallback: the search raised {_search_err!r}'
+        print(f"  recipe search FAILED ({_search_err!r}); Part B falls back "
+              f"to the hard-coded recipe below")
     # 'capped' blueprints are tuned for the full top-tier rep set; using them
     # on Part B's silo subset (a small asymmetric slice) is a recipe
     # mismatch. Force fallback to non-capped defaults in that case.
@@ -1200,10 +1212,23 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
             "Part B: ignoring 'capped' blueprint (tuned for top-tier rep set, "
             "not asymmetric silo subset). Falling back to uncapped/none.")
         _bp = None
+        _recipe_source = ("fallback: the search's recipe was 'capped' and was "
+                          "discarded, with its allocation and importance")
     aug_cond = _bp.augmentation_strategy if _bp else ('uncapped' if augs else 'none')
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'
+    # Which recipe C2 and C3 were built with, and where it came from. The
+    # fallback (treeshap, 'match', uncapped augmentation when the dataset has
+    # augmentations) is a different recipe from any searched one, and the
+    # result file used to say nothing about which ran.
+    _recipe = {'allocation': _alloc, 'importance': _imp,
+               'internal_evaluator': _int_eval,
+               'augmentation_strategy': aug_cond,
+               'searched_at_budget': int(_hb_search),
+               'source': _recipe_source}
+    print(f"  recipe ({_recipe_source}): allocation {_alloc}, importance "
+          f"{_imp}, internal evaluator {_int_eval}, augmentation {aug_cond}")
 
     # Sort THIS dataset's own representations into the three families.
     silo_reps, _unclassified = assign_rep_families(list(reps.keys()))
@@ -1633,6 +1658,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
         'config': {
             'silo_reps': {s: silo_reps[s] for s in silo_names},
             'n_folds': n_folds,
+            'recipe': _recipe,
             'primary_metric': primary_key,
             'is_classification': is_clf,
         },
