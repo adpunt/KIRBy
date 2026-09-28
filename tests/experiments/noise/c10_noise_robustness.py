@@ -744,6 +744,105 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
 
         results['hybrids'][budget] = budget_results
 
+    # --- Phase 2c: hybrid against best_single, fold by fold ---
+    # Added 2026-09-28 (dirty local review). Additive: no number above changes
+    # and no model is fitted. c10's claim is that the hybrid is more robust than
+    # the best single representation, and until now it wrote one auc_norm per
+    # arm and never the difference. fold_reselection already returns both arms'
+    # held-out score on each fold and their direction-corrected difference; this
+    # writes them, and a per-fold auc_norm for each arm and its difference.
+    # Positive delta means the hybrid is better, on rmse and on spearman alike.
+    # auc_norm divides each arm by its own clean score, so an arm that starts
+    # better can retain less; read auc_norm_delta beside rmse_delta at the top
+    # level.
+    print("\n  Phase 2c: hybrid minus best_single, per fold "
+          "(+ = hybrid better)")
+    paired = {}
+    for budget in budgets:
+        _b_out = {}
+        for strategy in strategies:
+            try:
+                _levels = sorted(float(lv) for lv in _levels_for(strategy))
+                _by_level = {}
+                for level in _levels:
+                    cell = cells.get((strategy, level))
+                    if cell is None:
+                        continue
+                    e = cell['per_budget'][budget]
+                    _by_level[level] = {
+                        'per_fold_delta': e.get('per_fold_delta'),
+                        'hybrid_fold_scores': e.get('hybrid_fold_scores'),
+                        'baseline_fold_scores': e.get('baseline_fold_scores'),
+                        'baseline_winners_per_fold':
+                            e.get('baseline_winners_per_fold'),
+                        'delta_mean_of_folds': e.get('delta_mean_of_folds'),
+                        'n_paired_folds': e.get('n_paired_folds'),
+                        'n_folds_hybrid_better': sum(
+                            1 for d in (e.get('per_fold_delta') or [])
+                            if d is not None and np.isfinite(d) and d > 0),
+                    }
+                # Per-fold auc_norm needs the same fold scored at every level.
+                _auc = {}
+                _n_f = max((len(v['hybrid_fold_scores'] or [])
+                            for v in _by_level.values()), default=0)
+                for f in range(_n_f):
+                    _arm = {}
+                    for arm_key, arm in (('hybrid_fold_scores', 'hybrid'),
+                                         ('baseline_fold_scores', 'best_single')):
+                        _xs, _ys = [], []
+                        for level, v in _by_level.items():
+                            fs = v[arm_key] or []
+                            s = fs[f] if f < len(fs) else None
+                            if s is None or not np.isfinite(s):
+                                continue
+                            _xs.append(level)
+                            _ys.append(float(s))
+                        if len(_xs) == len(_levels):
+                            _arm[arm] = float(robustness_metrics(
+                                np.array(_xs), np.array(_ys),
+                                baseline_threshold=None,
+                                lower_is_better=lower_is_better)['auc_norm'])
+                    if len(_arm) == 2:
+                        _auc[f] = {
+                            'auc_norm_hybrid': _arm['hybrid'],
+                            'auc_norm_best_single': _arm['best_single'],
+                            'auc_norm_delta': _arm['hybrid'] - _arm['best_single'],
+                        }
+                _top = max(_by_level) if _by_level else None
+                _b_out[strategy] = {
+                    'by_level': _by_level,
+                    'auc_norm_by_fold': _auc,
+                    'n_folds_auc_norm_hybrid_better': sum(
+                        1 for v in _auc.values()
+                        if np.isfinite(v['auc_norm_delta'])
+                        and v['auc_norm_delta'] > 0),
+                    'n_folds_auc_norm_scored': len(_auc),
+                }
+                if _top is not None:
+                    _t = _by_level[_top]
+                    print(f"    b{budget} {strategy}: at level {_top:g}, "
+                          f"{metric_name} delta per fold "
+                          + ", ".join('nan' if d is None else f'{d:+.4f}'
+                                      for d in (_t['per_fold_delta'] or []))
+                          + f"; auc_norm delta per fold "
+                          + ", ".join(f"{v['auc_norm_delta']:+.4f}"
+                                      for v in _auc.values()))
+            except Exception as _e:
+                # A bookkeeping failure here must not cost the run its results.
+                _b_out[strategy] = {'error': f'{type(_e).__name__}: {_e}'}
+                print(f"    b{budget} {strategy}: FAILED, {_b_out[strategy]['error']}")
+        paired[budget] = _b_out
+    results['hybrid_vs_best_single_by_fold'] = convert_numpy(paired)
+    results['hybrid_vs_best_single_by_fold_schema'] = (
+        "Per budget, then noise condition. by_level: each level's held-out score "
+        "per fold for the hybrid and for best_single (the representation "
+        "re-picked on the other folds; baseline_winners_per_fold names it), and "
+        "per_fold_delta, the difference with + meaning the hybrid is better in "
+        "the dataset's own metric. auc_norm_by_fold: auc_norm of each arm's "
+        "per-fold curve and hybrid minus best_single; only folds scored at every "
+        "level. Excluded folds are None. One noise draw per condition: the fold "
+        "spread is the only spread here.")
+
     # --- Phase 2a: does the recipe move under noise? ---
     # Every hybrid number above now comes from a search run on that cell's own
     # corrupted labels, so the clean-label advantage the old version of this
