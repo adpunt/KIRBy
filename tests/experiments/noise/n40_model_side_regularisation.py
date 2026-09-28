@@ -406,6 +406,19 @@ def knn_cp_choice(X, y, sigma2, k_grid=KNN_K_GRID, neighbour_idx=None):
     return best, cps
 
 
+def knn_regressor(k):
+    """Equal-weight kNN in the process-wide distance (manhattan by default).
+
+    The same distance knn_cp_choice and gamma_sigma2 read under model_input.
+    Until 2026-09-28 every kNN arm here predicted with sklearn's default,
+    Euclidean, while knn_cp_choice chose k from manhattan neighbours: Cp
+    picked k for one smoother and a different smoother made the prediction.
+    """
+    from kirby.similarity.distance_config import sklearn_kwargs
+    return KNeighborsRegressor(n_neighbors=int(k), weights='uniform',
+                               **sklearn_kwargs())
+
+
 def knn_cv_choice(X, y, groups, metric_fn, lower_is_better, k_grid=KNN_K_GRID,
                   inner_folds=TUNE_INNER_FOLDS):
     k_fold = min(inner_folds, len(np.unique(groups)))
@@ -415,7 +428,7 @@ def knn_cv_choice(X, y, groups, metric_fn, lower_is_better, k_grid=KNN_K_GRID,
     for k in ks:
         s = []
         for tr, va in splits:
-            m = KNeighborsRegressor(n_neighbors=k, weights='uniform').fit(X[tr], y[tr])
+            m = knn_regressor(k).fit(X[tr], y[tr])
             s.append(float(metric_fn(y[va], m.predict(X[va]))))
         scores[k] = float(np.mean(s))
     pick = (min if lower_is_better else max)(scores, key=scores.get)
@@ -1032,21 +1045,18 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # ── kNN, k by Cp and by CV ──
                 if not skip_knn:
                     try:
-                        pred = KNeighborsRegressor(
-                            n_neighbors=min(KNN_REFERENCE_K, len(y0)),
-                            weights='uniform').fit(X_tr_s, y0).predict(X_va_s)
+                        pred = knn_regressor(min(KNN_REFERENCE_K, len(y0))) \
+                            .fit(X_tr_s, y0).predict(X_va_s)
                         _store(lvl_key, space, 'fixed', 'knn_k5_uniform', pass_key, pred, y_val)
                         k_cv, cv_s = knn_cv_choice(X_tr_s, y0, g_tr, metric_fn,
                                                    lower_is_better, inner_folds=tune_inner)
-                        pred = KNeighborsRegressor(n_neighbors=k_cv, weights='uniform') \
-                            .fit(X_tr_s, y0).predict(X_va_s)
+                        pred = knn_regressor(k_cv).fit(X_tr_s, y0).predict(X_va_s)
                         _store(lvl_key, space, 'fixed', 'knn_k_cv', pass_key, pred, y_val)
                         sp_rec['knn'] = {'k_cv': int(k_cv),
                                          'cv_scores': {str(k): v for k, v in cv_s.items()}}
                         if sigma2 is not None:
                             k_cp, cps = knn_cp_choice(X_tr_s, y0, sigma2)
-                            pred = KNeighborsRegressor(n_neighbors=k_cp, weights='uniform') \
-                                .fit(X_tr_s, y0).predict(X_va_s)
+                            pred = knn_regressor(k_cp).fit(X_tr_s, y0).predict(X_va_s)
                             _store(lvl_key, space, 'fixed', 'knn_k_cp', pass_key, pred, y_val)
                             sp_rec['knn'].update({'k_cp': int(k_cp),
                                                   'cp': {str(k): v for k, v in cps.items()}})
@@ -1067,8 +1077,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                 continue
                             try:
                                 k_cp, cps = knn_cp_choice(X_tr_s, y0, s2_k)
-                                pred = KNeighborsRegressor(
-                                    n_neighbors=k_cp, weights='uniform') \
+                                pred = knn_regressor(k_cp) \
                                     .fit(X_tr_s, y0).predict(X_va_s)
                                 _store(lvl_key, space, 'fixed',
                                        f'knn_k_cp@{nm}', pass_key, pred, y_val)
