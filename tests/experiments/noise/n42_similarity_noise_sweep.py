@@ -67,7 +67,8 @@ a method; the functions named are called.
        the neighbours' mean (n23's rule). activity_cliff_aware is scored under
        every setting and k.
   n30  winsorise at every WINSOR_C; under censoring the three lift columns
-       (n30.lift_columns without its shuffled controls).
+       (n30.lift_columns without its shuffled controls) and drop_clipped, at
+       the limit n30.limit_from_labels reads off the noisy training labels.
   n31  remove / downweight / rewrite on the top-residual molecules
        (n31.detector_flags, n31.apply_operation), at every share in
        FLAG_SHARES of the training molecules.
@@ -671,18 +672,27 @@ def _fam_n30(u, sim):
             u.errors.add('n30/winsorise', exc)
             d = None
         u.emit('n30', 'winsorise', f'c={float(c):g}', n07.NO_NEIGHBOURS, d)
-    if u.condition != 'censoring' or float(u.level) <= 0:
+    # The lift and drop arms: n30's own condition only, every level, as n30
+    # runs them (n30:430-438, 696-797).
+    if u.condition != n30.CENSORING_CONDITION:
         return
-    limit = (u.prov or {}).get('censoring_limit')
+    # The limit is read off the training labels as they look
+    # (n30.limit_from_labels), as n30 does since 2026-09-28. Until 2026-09-28
+    # this read prov['censoring_limit'], the injector's own limit, set from
+    # the CLEAN training labels, which the owner's rule of 2026-09-28 forbids
+    # any method to read.
+    limit = n30.limit_from_labels(u.y0)
     if limit is None:
-        u.errors.add('n30/lift', 'no censoring_limit on the provenance row')
+        # n30 runs no lift or drop arm when no limit is visible in the labels.
+        u.counts['n30_no_limit_in_labels'] = (
+            u.counts.get('n30_no_limit_in_labels', 0) + 1)
         return
     try:
         at = n30.rows_at_limit(u.y0, float(limit))
         sd = n30.residual_sd(u.y0, p, at)
         if not at.any() or not np.isfinite(sd):
-            u.errors.add('n30/lift', 'no molecule at the limit, or no residual '
-                                     'SD off it')
+            u.counts['n30_no_residual_sd_off_limit'] = (
+                u.counts.get('n30_no_residual_sd_off_limit', 0) + 1)
             return
         cols, _info = n30.lift_columns(u.y0, p, at, float(limit), sd, (), ())
     except Exception as exc:
@@ -691,6 +701,10 @@ def _fam_n30(u, sim):
     for arm, col in cols.items():
         u.emit('n30', arm, 'default', n07.NO_NEIGHBOURS,
                n07.cleaned_from_labels(u.X_tr, col))
+    # n30's drop_clipped arm (n30:797): the rows at the limit removed. It
+    # changes the training data and was missing here until 2026-09-28.
+    u.emit('n30', 'drop_clipped', 'default', n07.NO_NEIGHBOURS,
+           _keep_dict(u.X_tr, u.y0, ~at))
 
 
 def _fam_n31(u, sim):
