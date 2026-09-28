@@ -166,6 +166,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Not explained (no tree SHAP): {_not_tree}")
     models = get_model_factories(model_names, task_type=task_type,
                                  n_samples=n_samples)
+    # Threads per random forest: KIRBY_RF_JOBS in the local run, every core
+    # otherwise (same rule as c15 and c16). DEFAULT_MODELS builds rf with
+    # n_jobs=-1. A seeded forest gives the same trees at any thread count, so
+    # this changes no number; it stops c22 taking every core while the local
+    # queue runs other jobs beside it.
+    _rf_jobs = int(os.environ.get('KIRBY_RF_JOBS') or -1)
+    if 'rf' in models:
+        _rf_factory = models['rf']
+        models['rf'] = lambda _f=_rf_factory: _f().set_params(n_jobs=_rf_jobs)
     print(f"  Models: {list(models.keys())}")
 
     # ── One recipe per downstream model, and one feature build per recipe ──
