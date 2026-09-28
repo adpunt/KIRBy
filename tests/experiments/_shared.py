@@ -6990,6 +6990,26 @@ def get_fitted_pool_hybrid(
     aug_strat = meta['aug_condition']
     augs = augmentations if aug_strat != 'none' else None
 
+    # The recipe's representation count (dirty local 2026-09-28). The search
+    # ran each configuration on the top `bp.rep_count` representations only;
+    # this rebuild handed create_hybrid the whole pool, so a recipe that won
+    # on 5 of 6 was rebuilt over 6, with a different budget split. Same rule
+    # and same ranking source as build_fold_hybrid: Blueprint.rep_scores
+    # (higher is better whatever the metric), and a recipe that cannot be
+    # ranked raises rather than rebuilding on the whole pool.
+    _rc = getattr(bp, 'rep_count', None)
+    if _rc is not None and int(_rc) < len(reps):
+        _rc = int(_rc)
+        _scores = getattr(bp, 'rep_scores', None) or {}
+        if sum(1 for r in reps if r in _scores) < _rc:
+            raise ValueError(
+                f"get_fitted_pool_hybrid: the recipe was searched on {_rc} "
+                f"representations and blueprint.rep_scores ranks only "
+                f"{sorted(r for r in reps if r in _scores)} of {sorted(reps)}.")
+        _keep = set(sorted(reps, key=lambda r: (
+            -_scores.get(r, float('-inf')), r))[:_rc])
+        reps = {k: v for k, v in reps.items() if k in _keep}
+
     X_hybrid, fi = create_hybrid(
         reps, labels,
         allocation_method=bp.allocation_method,
