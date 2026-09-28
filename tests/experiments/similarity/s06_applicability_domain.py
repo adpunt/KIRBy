@@ -274,6 +274,60 @@ def _fmt_rho(value):
     return 'n/a' if value is None else f'{value:.4f}'
 
 
+def _fold_local_rep_subset(train_reps, y_train, groups_train, blueprint,
+                           metric_fn, lower_is_better):
+    """The representations a predictive recipe keeps, ranked on this fold only.
+
+    Added 2026-09-28. The local recipe asks for 5 representations
+    (blueprint.rep_count). On a pool of 6 (logd, buchwald_hartwig),
+    build_fold_hybrid cuts to 5 by blueprint.rep_scores when it is given no
+    fold scores. Those scores are the search's cross-validated baselines over
+    EVERY molecule, this fold's held-out ones included, so held-out labels
+    chose which representation was left out. The search itself ranks on each
+    fold's own training rows (find_best_hybrid.py, the rep_count block).
+
+    This ranks the same way on this fold's training rows: the carve
+    create_hybrid makes (internal_holdout_split) and the score it splits the
+    budget by (_score_rep_for_budget). Only the subset is returned. Handing
+    build_fold_hybrid exactly rep_count representations turns its own cut
+    off, and create_hybrid re-scores those for the budget split as before.
+
+    Returns (subset dict, sorted kept names), or (train_reps, None) when no
+    cut applies or the recipe is not a plain predictive one. A geometry recipe
+    is left to build_fold_hybrid, which still ranks it on the whole-dataset
+    scores.
+    """
+    rep_count = getattr(blueprint, 'rep_count', None)
+    if rep_count is None or int(rep_count) >= len(train_reps):
+        return train_reps, None
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    from kirby.find_best_hybrid import _is_geometry_objective
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or isinstance(objective, dict)
+            or (objective is not None and _is_geometry_objective(objective))):
+        return train_reps, None
+    from kirby.hybrid import (_score_rep_for_budget, internal_holdout_split,
+                              OBJECTIVE_PREDICTIVE)
+    inner_tr, inner_va = internal_holdout_split(len(y_train), y_train,
+                                                groups_train)
+    scores = {}
+    for name, X in train_reps.items():
+        X = np.asarray(X)
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        s = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lower_is_better,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=False))
+        scores[name] = s if np.isfinite(s) else float('-inf')
+    keep = sorted(train_reps, key=lambda r: (-scores[r], r))[:int(rep_count)]
+    return {k: v for k, v in train_reps.items() if k in keep}, sorted(keep)
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Hybrid distance tracks prediction uncertainty better than standard distance."""
     print("\n" + "=" * 70)
@@ -588,7 +642,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         run_identity('s06_applicability_domain', dataset_name, data, config,
                      kwargs=kwargs, k_values=list(k_values),
                      cmp_rep=cmp_rep, ad_statistic=ad_statistic_name(),
-                     has_sim_recipe=bp_sim is not None))
+                     has_sim_recipe=bp_sim is not None,
+                     # 2026-09-28: the recipe's representations are ranked on
+                     # each fold's training rows, so a sidecar written before
+                     # that is not read back.
+                     rep_ranking='fold_local'))
 
     for k in k_values:
         print(f"\n  k={k}:")
@@ -650,8 +708,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_tr = {aug_k: v[train_idx] for aug_k, v in augmentations.items()} if augmentations else None
             aug_va = {aug_k: v[val_idx] for aug_k, v in augmentations.items()} if augmentations else None
             try:
+                _sub_tr, _kept = _fold_local_rep_subset(
+                    train_reps_h, y_train,
+                    groups[train_idx] if groups is not None else None,
+                    bp, metric_fn, lower_is_better)
+                if _kept is not None:
+                    results.setdefault('hybrid_reps_kept_per_fold', {}) \
+                        .setdefault(f'k{k}', []).append(_kept)
                 X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                    train_reps_h, val_reps_h, y_train, bp,
+                    _sub_tr, {n: val_reps_h[n] for n in _sub_tr},
+                    y_train, bp,
                     augmentations_train=aug_tr, augmentations_val=aug_va,
                     groups=(groups[train_idx] if groups is not None else None),
                     **fold_hybrid_scoring_kwargs(
@@ -1125,8 +1191,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 aug_ap_c = {k: v[apply_rows] for k, v in augmentations.items()} if augmentations else None
                 _tr_groups = groups[tr_rows] if groups is not None else None
                 try:
+                    _sub_tr_c, _kept_c = _fold_local_rep_subset(
+                        train_reps_fold, y_tr, _tr_groups, bp, metric_fn,
+                        lower_is_better)
+                    if _kept_c is not None:
+                        results.setdefault('hybrid_reps_kept_per_fold', {}) \
+                            .setdefault('conformal', []).append(_kept_c)
                     X_hybrid_tr, X_hybrid_ap, fi = build_fold_hybrid(
-                        train_reps_fold, apply_reps_fold, y_tr, bp,
+                        _sub_tr_c, {n: apply_reps_fold[n] for n in _sub_tr_c},
+                        y_tr, bp,
                         augmentations_train=aug_tr_c, augmentations_val=aug_ap_c,
                         groups=_tr_groups,
                         **fold_hybrid_scoring_kwargs(
