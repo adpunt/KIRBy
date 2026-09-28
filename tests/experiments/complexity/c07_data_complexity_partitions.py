@@ -589,11 +589,25 @@ def run(data, config, output_dir, dataset_name, partitions=None):
         hard_best = part_result['hard'].get('best')
         if easy_best and hard_best:
             part_result['delta_budget'] = hard_best['budget'] - easy_best['budget']
-            part_result['config_differs'] = (
-                easy_best['model'] != hard_best['model']
-                or easy_best['budget'] != hard_best['budget']
-                or easy_best.get('importance') != hard_best.get('importance')
-            )
+            # allocation is part of the recipe best_config records, and it was
+            # left out, so two halves that won with different allocation
+            # methods read as 'same config'. Under the one-configuration local
+            # grid it cannot differ; on the full grid it can.
+            _fields = ('model', 'budget', 'importance', 'allocation')
+            part_result['config_differs_fields'] = [
+                f for f in _fields if easy_best.get(f) != hard_best.get(f)]
+            part_result['config_differs'] = bool(
+                part_result['config_differs_fields'])
+            # The winner is the best of the models that scored in that half. If
+            # a model failed in one half only, the two winners were picked from
+            # different lists and a 'differs' can come from that alone.
+            _scored = {
+                h: sorted(m for m, v in part_result[h].get('best_by_model', {}).items()
+                          if v.get('score') is not None
+                          and np.isfinite(v['score']))
+                for h in ('easy', 'hard')}
+            part_result['models_scored'] = _scored
+            part_result['same_models_scored'] = _scored['easy'] == _scored['hard']
             print(f"    >> Configs differ: {part_result['config_differs']} "
                   f"(easy={easy_best['model']}/b={easy_best['budget']}/{easy_best.get('importance')}, "
                   f"hard={hard_best['model']}/b={hard_best['budget']}/{hard_best.get('importance')})")
