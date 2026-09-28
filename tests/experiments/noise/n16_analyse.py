@@ -18,8 +18,8 @@ things. It does not open the npz files beside them.
 2. HOW MANY FEATURES CARRY ANY IMPORTANCE, per scoring method per level, beside each
    representation's own width and its pre-screen ceiling. A representation wider than
    2000 features has a block that is structurally zero at every level
-   (hybrid.py:4359, :4379-4383), so the count is read against the ceiling, not the
-   width.
+   (hybrid.py:5052-5062 and :5084 for lightgbm_gain), so the count is read against
+   the ceiling, not the width.
 
 3. HOW FAR THE RANKING MOVED from level 0.0, per scoring method, per representation,
    per level: the median, minimum and maximum across noise draws of the Spearman over
@@ -84,8 +84,9 @@ EXP_DIR = 'n16_importance_under_noise'
 # Cells below it are counted and NAMED in the output, never silently dropped.
 MIN_SCORED_FOR_RANK = 3
 
-# The control tolerance. Level 0.0 against itself is the same array, so the Spearman
-# is 1.0 exactly; anything below this means the reference row was not the same rows.
+# The self-comparison tolerance. Level 0.0 against itself is ONE stored array read
+# twice, so the Spearman is 1.0 exactly; anything below this means the comparison
+# code is broken. It cannot say whether the reference row was the right rows.
 CONTROL_RTOL = 1e-9
 
 
@@ -95,9 +96,11 @@ def load(input_dir, dataset=None):
     if not d.is_dir():
         print(f"  (no {d})")
         return []
-    # Two filename shapes, both real. A standalone run writes
-    # <dataset>__<condition>.json; noise_helpers.run_all writes <dataset>.json and
-    # keeps the condition inside the file (noise_helpers.py:494-495).
+    # Two filename shapes. Each condition's result is <dataset>__<condition>.json,
+    # written by noise_helpers.sweep_conditions (noise_helpers.py:1164-1166).
+    # <dataset>.json is the sweep's index, written by run_all or by n16's own
+    # __main__, and holds file names, not results (noise_helpers.py:1182-1190);
+    # it is recognised and named below, never read as a result.
     if dataset:
         paths = sorted(set(d.glob(f'{dataset}__*.json')) | set(d.glob(f'{dataset}.json')))
     else:
