@@ -501,7 +501,10 @@ def main():
     found = load(args.input, args.dataset)
     if not found:
         print(f"  nothing to read under {Path(args.input) / EXP_DIR}")
-        return
+        # Non-zero, so a queue job pointed at the wrong directory is recorded
+        # as failed. It exited 0 here, and the five queued n16_analyse jobs
+        # read results/n16_analyse/<dataset>, where n16 writes nothing.
+        return 1
     for path, p in found:
         report(path, p)
     print("\n" + "=" * 78)
@@ -510,7 +513,8 @@ def main():
     print("  a Spearman on an rmse-scored dataset and one on a spearman-scored "
           "dataset are")
     print("  not the same quantity.")
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
