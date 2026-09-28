@@ -109,6 +109,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Without it a violation_rate has nothing to be read against.
     results['_violation_random_reference'] = _violation_random_reference(
         labels, is_classification, scalable=_scalable)
+    # What sali_mean tends to when no pair is close: each molecule's largest
+    # activity difference to any other molecule, averaged over molecules. It
+    # uses no representation. A representation's
+    # sali_mean_without_identical_vector_pairs is read against it.
+    _y = np.asarray(labels)
+    _order = np.sort(_y)
+    if is_classification:
+        _mx = (np.unique(_y).size > 1) * np.ones(len(_y))
+    else:
+        _mx = np.maximum(np.abs(_y - _order[0]), np.abs(_y - _order[-1]))
+    results['_sali_representation_free_reference'] = {
+        'mean_max_activity_difference': float(np.mean(_mx)),
+        'note': ('SALI with every similarity set to 0. Distances between '
+                 'standardised feature vectors run into the hundreds, so '
+                 '1/(1+distance) is near 0 for almost every pair and a '
+                 'representation\'s SALI, once identical-vector pairs are '
+                 'left out, lands close to this number.'),
+    }
     print(f"\n  {len(pairs[0])} molecule pairs of "
           f"{n_samples * (n_samples - 1) // 2}, and {perm_ranks.shape[0]} "
           f"shuffled activity columns over them, built in "
@@ -251,7 +269,21 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
     _iu = np.triu_indices(len(labels), k=1)
     _zero = D[_iu] == 0
     _n_ident = int(_zero.sum())
-    _n_ident_diff = int((_zero & (labels[_iu[0]] != labels[_iu[1]])).sum())
+    _zero_diff = _zero & (labels[_iu[0]] != labels[_iu[1]])
+    _n_ident_diff = int(_zero_diff.sum())
+    # The pair count does not give the SALI term: sali_mean averages each
+    # molecule's largest pair score, so what adds x1,000,000 is the number of
+    # MOLECULES with an identical-vector partner of a different label. Three
+    # identical vectors labelled 0, 0, 1 are 2 such pairs and 3 such molecules.
+    _n_ident_diff_mols = int(len(np.union1d(_iu[0][_zero_diff],
+                                            _iu[1][_zero_diff])))
+    # The same SALI with identical-vector pairs left out (their similarity set
+    # to 0). Measured on herg_ki and humanness_therapeutic on 2026-09-28, this
+    # sits within 1% of the mean over molecules of the largest activity
+    # difference to any molecule, a number that uses no representation
+    # (_sali_representation_free_reference in run()).
+    _sali_no_ident = compute_sali(np.where(D == 0, np.inf, D), labels,
+                                  is_clf=is_classification)
 
     # Is that correlation distinguishable from a shuffled activity column?
     sac_perm_p, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
@@ -284,11 +316,15 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
         'sali_std': sali['std'],
         'n_identical_vector_pairs': _n_ident,
         'n_identical_vector_pairs_label_differs': _n_ident_diff,
+        'n_molecules_identical_vector_label_differs': _n_ident_diff_mols,
+        'sali_mean_without_identical_vector_pairs': _sali_no_ident['mean'],
     }
 
     print(f"    SAC rho={sac_rho:.4f} (permutation p={sac_perm_p:.3f}), "
-          f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}, "
-          f"identical-vector pairs with different labels={_n_ident_diff}")
+          f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f} "
+          f"({_sali_no_ident['mean']:.3f} without identical-vector pairs), "
+          f"molecules with an identical-vector partner of a different "
+          f"label={_n_ident_diff_mols}")
 
     results[rep_name] = rep_result
 
@@ -335,6 +371,8 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
         # Not counted on this path: it would need every pair's distance.
         'n_identical_vector_pairs': None,
         'n_identical_vector_pairs_label_differs': None,
+        'n_molecules_identical_vector_label_differs': None,
+        'sali_mean_without_identical_vector_pairs': None,
     }
 
     print(f"    SAC rho={sac_rho:.4f} (permutation p={sac_perm_p:.3f}), "
