@@ -204,7 +204,8 @@ def _exact_spearman_p(x, y, rho_obs):
     y = list(y)
     if len(x) > 8:
         return float(spearmanr(x, y)[1])
-    target = abs(float(rho_obs)) - 1e-12
+    # Recomputed here, so a rounded rho_obs cannot shift the cut-off.
+    target = abs(float(spearmanr(x, y)[0])) - 1e-9
     hits = total = 0
     for perm in permutations(y):
         total += 1
