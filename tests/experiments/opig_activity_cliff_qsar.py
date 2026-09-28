@@ -597,6 +597,17 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     # Generate representations
     reps = get_representations(smiles, rep_preset)
     print(f"  {len(reps)} reps loaded")
+    # A requested representation that was not built is said out loud and
+    # saved. 'sns' is the live case: get_representations leaves every name in
+    # FACTORY_REPS to get_rep_factories, which this file never calls, so Sort
+    # & Slice is asked for by DEFAULT_REPS and scored nowhere.
+    from find_best_hybrid_molecular import REP_PRESETS as _PRESETS
+    _requested = (list(_PRESETS[rep_preset]) if rep_preset in _PRESETS else
+                  [r.strip().lower() for r in rep_preset.split(',') if r.strip()])
+    reps_not_built = sorted(r for r in _requested if r not in reps)
+    if reps_not_built:
+        print(f"  ⛔ requested but not built, so scored nowhere in this run: "
+              f"{', '.join(reps_not_built)}")
 
     if not reps:
         print("  No reps available, skipping target")
@@ -927,6 +938,7 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         'n_acs': data['n_activity_cliffs'],
         'target_name': data['target_name'],
         'results': results,
+        'reps_requested_not_built': reps_not_built,
     }
     # Attach the per-fold reselection block under the exact contract key name so the
     # reader can load result[target]['fold_reselection'] and call fold_reselection().
