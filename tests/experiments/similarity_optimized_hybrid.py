@@ -714,6 +714,11 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
                                       groups=(noise_groups[tr]
                                               if noise_groups is not None else None))
         mask = np.asarray(mask, dtype=bool)
+        # Detection against the mask is defined only when some rows are marked
+        # and some are not. Under gaussian every row is perturbed equally, the
+        # mask is all True, and any flag scored precision 1.0 with no skill.
+        # Those detection numbers are NaN now; the deltas are still recorded.
+        _detect_defined = bool(mask.any() and not mask.all())
         # Scaffold groups of the (possibly subsampled) train rows, for the
         # read-across scoring inside create_hybrid.
         groups_tr = None if _groups is None else _groups[tr]
@@ -767,7 +772,8 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
                 try:
                     filt = get_mitigation_method(method)
                     flagged = np.asarray(filt.identify_noise(X_tr, y_noisy), dtype=int)
-                    p, r, f1 = _detection_scores(flagged, mask)
+                    p, r, f1 = (_detection_scores(flagged, mask) if _detect_defined
+                                else (np.nan, np.nan, np.nan))
                     # flag_fraction makes F1 interpretable: a zero-skill detector
                     # that flags everything still scores F1 = 2f/(1+f), f=NOISE_FRAC.
                     rec.update(precision=p, recall=r, f1=f1,
@@ -815,7 +821,9 @@ def _noise_eval(reps, labels, groups, is_clf, bp_sim, bp_pred, best_rep,
                                     mth, precomputed_distances=D)
                                 fl = np.asarray(filt.identify_noise(X_tr, y_noisy),
                                                 dtype=int)
-                                pw, _, f1 = _detection_scores(fl, mask)
+                                pw, _, f1 = (_detection_scores(fl, mask)
+                                             if _detect_defined
+                                             else (np.nan, np.nan, np.nan))
                                 w['f1'] = f1
                                 w['precision'] = pw
                                 w['flag_fraction'] = len(np.unique(fl)) / len(y_noisy)
