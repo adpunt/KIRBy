@@ -183,12 +183,23 @@ ALL_CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
 from experiments.noise.n07_remediation import REGRESSION_ONLY_CLEANUPS
 
 
+# ⛔ ON A CLASS LABEL knn_smooth IS label_smooth. n07.cleaned_training_set's
+# classification branches of the two are the same code: the same nine
+# neighbours, the same (1 - rate) cut, the flagged labels set to the neighbours'
+# majority class, and label_smooth ignores its strength there. Checked
+# 2026-09-28 on synthetic data at every rate and strength, both detectors:
+# bit-identical training sets. Scoring both wrote every number twice under two
+# names and counted each setting twice. label_smooth is kept.
+CLASSIFICATION_DUPLICATES = {'knn_smooth': 'label_smooth'}
+
+
 def cleanups_for(is_clf):
     """The cleanups this task type can actually run."""
     if not is_clf:
         return ALL_CLEANUPS
     return tuple(c for c in ALL_CLEANUPS
-                 if c not in REGRESSION_ONLY_CLEANUPS)
+                 if c not in REGRESSION_ONLY_CLEANUPS
+                 and c not in CLASSIFICATION_DUPLICATES)
 
 
 # Kept as a name because the module-level accumulators below are built from it
@@ -557,6 +568,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'models': downstream_models,
         'cleanups': list(CLEANUPS),
         'cleanups_not_run': [c for c in ALL_CLEANUPS if c not in CLEANUPS],
+        'cleanups_not_run_because_identical_to': (
+            {c: k for c, k in CLASSIFICATION_DUPLICATES.items()
+             if c not in CLEANUPS} if is_clf else {}),
         'flag_rates': flag_rates,
         'cleanups_that_read_the_flag_rate': [
             c for c in CLEANUPS if reads_flag_rate(c, is_clf)],
