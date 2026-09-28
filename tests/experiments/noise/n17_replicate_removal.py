@@ -53,9 +53,13 @@ what row weight.
                target; `quantile_clip` moves only the labels outside the range of
                label values entities in their own forest leaves carry. They are
                n07's, not this file's -- see CORRECTIONS.
-  ceiling      the entities the ranking quantity ranks worst are removed. It uses
-               the answer, so no detector can beat it. It says how much is on the
-               table before any detector is involved.
+  ceiling      the entities the ranking quantity ranks worst are removed. It reads
+               the repeat measurements, which no detector sees. It is NOT an upper
+               bound: under 'measurement_spread' it ranks how far the
+               laboratories disagreed, and an entity measured twice trains on the
+               mean of both, so its training label is not the wrong one. A
+               detector can beat it (corrected 2026-09-28). It says how much a
+               ranking by laboratory disagreement is worth.
   floor        the same NUMBER of entities, chosen at random FROM THE SAME
                ENTITIES THE CEILING COULD HAVE PICKED. It says how much of any
                gain is just from training on fewer entities.
