@@ -948,7 +948,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             def _heldout(fc):
                 r = ((fc.get('fold_reselection_result') or {}).get('knn') or {})
                 v = r.get('delta_mean_of_folds')
-                return v if isinstance(v, (int, float)) else None
+                # fold_reselection writes NaN when no fold paired. A NaN
+                # passed the isinstance test, and max() over a dict holding a
+                # NaN returns whichever key comes first, so the family was
+                # picked by dict order. (dirty-local 2026-09-28)
+                if isinstance(v, (int, float)) and np.isfinite(v):
+                    return float(v)
+                return None
 
             _heldout_scored = {k: _heldout(v) for k, v in budget_block.items()}
             _heldout_scored = {k: v for k, v in _heldout_scored.items()
