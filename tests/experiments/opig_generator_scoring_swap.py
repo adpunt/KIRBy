@@ -486,6 +486,11 @@ def _score_with_oracle(smiles, oracle):
 
     reps = get_representations(list(smiles), oracle['rep_name'], cache=False)
     X = np.asarray(reps[oracle['rep_name']], dtype=float)
+    if X.shape[0] != len(smiles):
+        raise RuntimeError(
+            f"{oracle['rep_name']} came back with {X.shape[0]} rows for "
+            f"{len(smiles)} molecules, so a score cannot be matched to a "
+            f"molecule")
     ok = np.isfinite(X).all(axis=1) & (np.abs(X).sum(axis=1) > 0)
     p = np.full(len(smiles), np.nan)
     if ok.any():
