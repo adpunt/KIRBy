@@ -441,7 +441,20 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
     nn = make_nearest_neighbors(n_neighbors=k_use + 1, n_jobs=-1)
     nn.fit(X_sub)
     _, indices = nn.kneighbors(X_sub)
-    indices = indices[:, 1:]  # exclude self
+    # Exclude each point itself. Until 2026-09-28 this dropped column 0,
+    # assuming the nearest neighbour of a point is always the point. With
+    # duplicate rows (ECFP4 and ChemBERTa both have molecules sharing a vector)
+    # the duplicate can come back first, so the point stayed in its own list
+    # and counted as its own neighbour while the duplicate lost one occurrence.
+    # Synthetic check: 60 rows with 10 duplicated pairs, 10 rows kept
+    # themselves. Now the point's own index is removed wherever it sits, and
+    # the (k+1)th neighbour is dropped when it is not in the list at all.
+    _own = np.arange(len(X_sub))[:, None]
+    _keep = []
+    for _i in range(len(X_sub)):
+        _row = indices[_i][indices[_i] != _own[_i, 0]]
+        _keep.append(_row[:k_use])
+    indices = np.vstack(_keep)
 
     # k-occurrence count: N_k(i) = how many times point i appears in others' k-NN
     n_occ = np.zeros(len(X_sub))
