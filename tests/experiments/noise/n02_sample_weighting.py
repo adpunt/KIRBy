@@ -292,6 +292,31 @@ def reliability_from_neighbours(y, neighbor_idx, is_clf=False, strength=None):
         strength=DEFAULT_STRENGTH if strength is None else float(strength))
 
 
+def weight_vs_label_extremity(weights, y, is_clf=False):
+    """Spearman correlation between each training molecule's weight and how
+    far its label sits from the training-fold mean label. DIRTY-LOCAL
+    2026-09-28, a diagnostic only: no fit reads it.
+
+    On herg_ki svm lost 0.010 to 0.017 RMSE to these weights in every feature
+    set, against at most 0.0011 for the same weights shuffled, and the loss
+    grew with the number of neighbours (0.0148 at 5, 0.0224 at 20, mhg_gnn).
+    With many neighbours the neighbour mean approaches the training mean, so
+    the weight may be down-weighting the molecules with the most extreme
+    labels. A strongly negative value here says it is. None on
+    classification, or when the correlation is undefined.
+    """
+    if is_clf:
+        return None
+    try:
+        from scipy.stats import spearmanr
+        y = np.asarray(y, dtype=float)
+        rho = spearmanr(np.asarray(weights, dtype=float),
+                        np.abs(y - y.mean())).correlation
+        return float(rho) if np.isfinite(rho) else None
+    except Exception:
+        return None
+
+
 def search_fold_reps(bp, fold_idx, n_folds, pool):
     """The representations the stored search built this outer fold's hybrid on.
 
@@ -620,6 +645,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 'min': float(np.min(sample_weights)),
                                 'pct_below_05': float(
                                     np.mean(sample_weights < 0.5) * 100),
+                                'rho_weight_vs_label_extremity':
+                                    weight_vs_label_extremity(
+                                        sample_weights, y_train, is_clf),
                             }
 
                             model_w = model_factory()
@@ -704,6 +732,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {model_name}: unweighted={uw_mean:.4f}, "
                   f"weighted={w_mean:.4f} (delta={sign}{delta:.4f}) "
                   f"[{primary_importance}]")
+            _rhos = [s.get('rho_weight_vs_label_extremity')
+                     for s in primary['reliability_stats']]
+            _rhos = [r for r in _rhos if r is not None]
+            if _rhos:
+                print(f"      {'':<{len(model_name)}}  spearman(weight, "
+                      f"|label - training mean|) per fold: "
+                      f"{', '.join(f'{r:+.3f}' for r in _rhos)}")
             for imp_method in importance_methods[1:]:
                 _b = by_importance[imp_method]
                 print(f"      {'':<{len(model_name)}}  weighted="
@@ -1053,6 +1088,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 'min': float(np.min(sample_weights)),
                                 'pct_below_05': float(
                                     np.mean(sample_weights < 0.5) * 100),
+                                'rho_weight_vs_label_extremity':
+                                    weight_vs_label_extremity(
+                                        sample_weights, y_train, is_clf),
                             }
 
                             model_w = model_factory()
