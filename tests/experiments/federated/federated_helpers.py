@@ -1802,10 +1802,18 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
 
                 tp = int((flagged_mask & mask_true).sum())
                 n_flagged = int(flagged_mask.sum())
-                precision = tp / max(n_flagged, 1)
-                recall = tp / max(mask_true.sum(), 1)
-                f1 = (2 * precision * recall /
-                      max(precision + recall, 1e-10))
+                n_true = int(mask_true.sum())
+                # Undefined is NaN, not 0. Precision has no value when
+                # nothing is flagged. Recall has no value when the rows hold
+                # no flipped label, which is always so for fed01's silo 1.
+                # A 0 there entered the fold means as a detector failure.
+                precision = tp / n_flagged if n_flagged > 0 else float('nan')
+                recall = tp / n_true if n_true > 0 else float('nan')
+                if np.isnan(precision) or np.isnan(recall):
+                    f1 = float('nan')
+                else:
+                    f1 = (2 * precision * recall /
+                          max(precision + recall, 1e-10))
 
                 setting_results[det_name] = {
                     'n_flagged': n_flagged,
