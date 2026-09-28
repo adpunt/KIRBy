@@ -493,7 +493,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         pca_baselines[budget] = {}
         for model_name, model_factory in models.items():
             pca_scores = []
-            for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels, mode=mode):
+            # task_type is passed so these are the search's own folds. Without
+            # it cv_split guesses from the label dtype, and on a classification
+            # set with float 0/1 labels it chose plain GroupKFold where the
+            # search (find_best_hybrid._make_cv_splitter) used
+            # StratifiedGroupKFold: the PCA row was then on different molecules.
+            for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels,
+                                               task_type=data['task_type']):
                 # Cap n_components at per-fold train size, not the full dataset.
                 # With CV splits, train is a strict subset and PCA's
                 # n_components constraint is against the train slice.
