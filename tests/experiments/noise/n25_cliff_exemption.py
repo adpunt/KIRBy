@@ -216,6 +216,7 @@ from experiments.noise.n07_remediation import (
     _compute_noise_scores, _evaluate_fold, _predict_for_metric,
     CLEANUPS as N07_CLEANUPS,
     REGRESSION_ONLY_CLEANUPS as N07_REGRESSION_ONLY,
+    SCORE_FREE_CLEANUPS,
 )
 # The cliff reference, reused rather than redefined. n14 imports the same two
 # names from n01 for the same reason.
@@ -855,7 +856,7 @@ def _pairs_for_detector(detector, scores, sim, only, X_tr_s, X_va_s, y_noisy,
                         model_factories, metric_fn, metric_name, pass_key, *,
                         arm_cell, spared_cell, rows, label_fn, space,
                         base_noisy, base_clean, condition, level, draw,
-                        fold_i):
+                        fold_i, score_free=True):
     """Every (setting slot, cleanup) of one detector: the plain cleanup, the
     cliff exemption and the random exemption, each fitted per model.
 
@@ -867,12 +868,21 @@ def _pairs_for_detector(detector, scores, sim, only, X_tr_s, X_va_s, y_noisy,
     sweep under cross_val, which reads no neighbours, runs only the cleanups
     that read this setting). arm_cell / spared_cell None: the sweep writes
     rows only, not the result file's per-arm blocks.
+
+    score_free False skips the cleanups that read no suspicion score
+    (n07.SCORE_FREE_CLEANUPS: quantile_clip, and invvar_weight when asked
+    for). DIRTY-LOCAL 2026-09-28: their three arms are the same training sets
+    under every detector and every similarity setting, so scoring them more
+    than once wrote one number several times and counted it as several
+    settings, the defect n18 fixed in a797a90.
     """
     for slot, rate in enumerate(flag_rates):
         rk = str(rate)
         for cleanup in cleanups:
             if only is not None and not (
                     cleanup in only and cleanup_reads_setting(cleanup, sim[2])):
+                continue
+            if not score_free and cleanup in SCORE_FREE_CLEANUPS:
                 continue
             axis, vals = setting_axis(cleanup, is_clf)
             if slot >= len(vals):
@@ -1110,6 +1120,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'values': list(setting_axis(c, is_clf)[1])}
             for c in CLEANUPS},
         'detectors': detectors,
+        # A cleanup that reads no suspicion score gives the same three arms
+        # under every detector, so it is scored and written under this one
+        # only (2026-09-28).
+        'score_free_cleanups_scored_under_detector': {
+            c: detectors[0] for c in CLEANUPS if c in SCORE_FREE_CLEANUPS},
         'noise_condition': condition,
         'noise_levels': levels,
         'noise_seeds': seeds,
@@ -1347,13 +1362,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── What this run will fit, before it starts ────────────────────────────
     n_passes = len(splits) * len(seeds) * len(levels)
     n_settings = sum(min(len(flag_rates), len(setting_axis(c, is_clf)[1]))
-                     for c in CLEANUPS)
-    n_cleanup_fits = (n_passes * len(spaces) * len(detectors) * n_settings
+                     for c in CLEANUPS if c not in SCORE_FREE_CLEANUPS)
+    # A cleanup that reads no suspicion score is scored under one detector.
+    n_settings_score_free = sum(
+        min(len(flag_rates), len(setting_axis(c, is_clf)[1]))
+        for c in CLEANUPS if c in SCORE_FREE_CLEANUPS)
+    n_cleanup_fits = (n_passes * len(spaces)
+                      * (len(detectors) * n_settings + n_settings_score_free)
                       * len(downstream_models) * len(ARMS))
     n_baseline_fits = n_passes * len(spaces) * len(downstream_models) * 2
     results['planned_model_fits'] = {
         'passes': n_passes,
         'cleanup_settings_per_pass_per_space_per_detector': n_settings,
+        'cleanup_settings_per_pass_per_space_under_the_first_detector_only':
+            n_settings_score_free,
         'cleanup_fits': int(n_cleanup_fits),
         'baseline_fits': int(n_baseline_fits),
         'total_model_fits': int(n_cleanup_fits + n_baseline_fits),
@@ -1710,7 +1732,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 rows=rows, label_fn=_today_label, space=space,
                                 base_noisy=base_noisy, base_clean=base_clean,
                                 condition=condition, level=level, draw=seed,
-                                fold_i=fold_i)
+                                fold_i=fold_i,
+                                # A cleanup that reads no suspicion score is
+                                # scored under the first detector only.
+                                score_free=(detector == detectors[0]))
 
                         # ── The similarity sweep (2026-09-25) ──
                         if not sim_axis:
@@ -1797,7 +1822,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         space=space, base_noisy=base_noisy,
                                         base_clean=base_clean,
                                         condition=condition, level=level,
-                                        draw=seed, fold_i=fold_i)
+                                        draw=seed, fold_i=fold_i,
+                                        score_free=False)
                 # The pass is finished: its rows to disk, then the
                 # accumulators to the checkpoint.
                 rows.flush()
