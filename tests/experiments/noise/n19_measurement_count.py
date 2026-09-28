@@ -460,18 +460,29 @@ def interval_bounds(ent, stats, build, y_train):
     return lo, hi
 
 
-def fit_interval_aft_predict(X_tr, lower, upper, X_va, sd):
+def fit_interval_aft_predict(X_tr, lower, upper, X_va, sd, centre=None):
     """XGBoost survival:aft on [lower, upper] labels; predictions in label units.
 
-    n30's map and settings (n30_censored_likelihood.fit_aft_predict,
-    AFT_PARAMS, AFT_ROUNDS): time = exp(label - centre), centre the median of
-    the interval midpoints, prediction = log(predicted time) + centre.
+    n30's map and settings as they stood before 2026-09-28
+    (n30_censored_likelihood.fit_aft_predict, AFT_PARAMS, AFT_ROUNDS): time =
+    exp(label - centre), prediction = log(predicted time) + centre.
+
+    `centre` is passed by the caller as the median TRAINING label, the same
+    number for xgboost_aft_point and xgboost_interval_aft, so the two arms
+    differ in the label bounds alone. Until 2026-09-28 each arm took the
+    median of its own interval midpoints, and under `averaged` the midpoint
+    (min + max) / 2 is not the mean for a molecule measured three or more
+    times. The shift moves XGBoost's starting value, and so the fit: a 0.15
+    shift moved predictions by up to 0.0015 on synthetic data. None keeps the
+    old midpoint rule.
     """
     import xgboost as xgb
     from experiments.noise.n30_censored_likelihood import AFT_PARAMS, AFT_ROUNDS
     lower = np.asarray(lower, dtype=float)
     upper = np.asarray(upper, dtype=float)
-    centre = float(np.median((lower + upper) / 2.0))
+    if centre is None:
+        centre = float(np.median((lower + upper) / 2.0))
+    centre = float(centre)
     dtr = xgb.DMatrix(np.asarray(X_tr, dtype=float))
     dtr.set_float_info('label_lower_bound', np.exp(lower - centre))
     dtr.set_float_info('label_upper_bound', np.exp(upper - centre))
@@ -1682,8 +1693,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     lo_b = hi_b = y_tr
                                 else:
                                     lo_b, hi_b = aft_lo_all[tr], aft_hi_all[tr]
+                                # One centre for both arms: the median
+                                # training label.
                                 pred = fit_interval_aft_predict(
-                                    X_tr_s, lo_b, hi_b, X_va_s, sd)
+                                    X_tr_s, lo_b, hi_b, X_va_s, sd,
+                                    centre=float(np.median(y_tr)))
                             else:  # gp_per_molecule_noise
                                 if s2e is None:
                                     continue
