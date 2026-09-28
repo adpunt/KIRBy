@@ -329,16 +329,20 @@ def mode_representations(ctx):
                 d = 1.0 - np.sum(a * b, axis=1) / np.maximum(na * nb, 1e-12)
             r = dict(rep=name, metric=metric)
             basis = REP_BASIS[name]
+            # An undefined correlation stays NaN, as score_subset does. It was
+            # written as 0.0, which reads as a measured zero. BaseDelta under
+            # euclidean is sqrt(2 x differing positions), so its count-
+            # controlled score has a zero denominator and is undefined.
             cleans = []
             for g in GRADERS:
                 raw = spearmanr(d, ctx['truth'][g])[0]
-                r[f'{g}_raw'] = float(0 if not np.isfinite(raw) else raw)
+                r[f'{g}_raw'] = float(raw) if np.isfinite(raw) else float('nan')
                 clean = not conflicts(g, basis)
                 r[f'{g}_clean'] = clean
                 if g != 'identity':
                     c = partial_spearman(d, ctx['truth'][g], ham)
-                    r[f'{g}_ctrl'] = float(0 if not np.isfinite(c) else c)
-                    if clean:
+                    r[f'{g}_ctrl'] = float(c) if np.isfinite(c) else float('nan')
+                    if clean and np.isfinite(r[f'{g}_ctrl']):
                         cleans.append(r[f'{g}_ctrl'])
             r['struct_ctrl_best'] = float(max(cleans)) if cleans else float('nan')
             rows.append(r)
