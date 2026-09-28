@@ -312,6 +312,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # feature_weighted changes (see WEIGHTED_MODELS), so this count is
             # the size of that condition for the two tree models.
             n_zero_importance = {}
+            # Folds, per condition, where the model refused sample_weight and
+            # was fitted without it. Those scores sit under a weighted
+            # condition but are unweighted fits. Every model in this run takes
+            # sample_weight, so each count should be 0.
+            sample_weight_dropped = {}
 
             for cond in conditions:
                 fold_scores = []
@@ -394,6 +399,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # back for this specific case — broader except would
                         # silently mask real bugs (numerical instability, etc.).
                         if 'sample_weight' in fit_kwargs:
+                            sample_weight_dropped[cond] = (
+                                sample_weight_dropped.get(cond, 0) + 1)
                             model = model_factory()
                             model.fit(X_tr_s, y_train)
                             fold_scores.append(metric_fn(
@@ -433,6 +440,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # on spearman/auc. Added 2026-09-10 (metric-direction audit).
                 'deltas_oriented': deltas_oriented,
                 'n_zero_importance_features_per_fold': n_zero_importance,
+                'sample_weight_dropped_folds': sample_weight_dropped,
                 # None when no condition was scored. The sentinel alone let an
                 # all-NaN column return the first condition, 'unweighted',
                 # which the summary then counted as a win.
