@@ -275,7 +275,7 @@ def _evaluate_task(task_name, rep_preset, config):
             metric=metric_name,
             task_type=task_type,
             augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped' if aug_dict else 'none',
+            augmentation_strategy=_c14_aug_strategy if aug_dict else 'none',
             internal_evaluators=INTERNAL_EVALUATORS,
             verbose=False,
         )
