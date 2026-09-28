@@ -86,7 +86,7 @@ from experiments._shared import (
     resolve_comparison_models,
 )
 from kirby.find_best_hybrid import find_best_hybrid
-from kirby.hybrid import create_hybrid, apply_feature_selection
+from kirby.hybrid import apply_feature_selection
 
 
 def _predict_for_metric(m, X, task_type, metric_name):
@@ -377,13 +377,20 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
               f"eval={target_bp.internal_evaluator}")
 
         # Build source hybrid on FULL source data -> feature_info for full_transfer
+        #
+        # 2026-09-28 (dirty local): built through build_fold_hybrid, not a bare
+        # create_hybrid. The bare call ignored source_bp.rep_count, so a recipe
+        # the source search ran on its top 5 representations was rebuilt here on
+        # every shared one (7 for logd->herg_ki and logd->caco2). full_transfer
+        # then carried features from representations the source recipe never
+        # used, while recipe_transfer (built through build_fold_hybrid) kept
+        # only the top rep_count. build_fold_hybrid ranks them by
+        # source_bp.rep_scores, the source search's own scores. No target row
+        # is touched. The "validation" side is the same source rows and is
+        # discarded.
         try:
-            _, fi_source = create_hybrid(
-                src, source_labels,
-                allocation_method=source_bp.allocation_method,
-                budget=source_bp.budget,
-                importance_method=source_bp.importance_method,
-                internal_evaluator=source_bp.internal_evaluator,
+            _, _, fi_source = build_fold_hybrid(
+                src, src, source_labels, source_bp,
                 # The accept/reject holdout inside create_hybrid is a GroupKFold
                 # fold when groups are given and a RandomState(42) 20% random
                 # split when they are not. These molecules are scaffold-grouped,
@@ -395,15 +402,17 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 # the one the search settled on, instead of every representation
                 # being scored again here.
                 precomputed_alloc_scores=getattr(source_bp, 'rep_scores', None),
-                # Explicit: this experiment has no augmentations. Default of
-                # 'uncapped' would silently mismatch the search recipe if
-                # any future caller introduces augs without updating here.
-                augmentations=None,
-                augmentation_strategy='none',
+                # Explicit: this experiment has no augmentations.
+                augmentations_train=None, augmentations_val=None,
+                lower_is_better=lower_is_better,
             )
         except Exception as e:
             print(f"      Source hybrid build failed: {e}")
             continue
+        if fi_source.get('rep_count_kept'):
+            print(f"      Source recipe rebuilt on its top "
+                  f"{fi_source.get('rep_count_applied')} representations: "
+                  f"{fi_source['rep_count_kept']}")
 
         # Report which features the source blueprint selected
         print(f"      Source blueprint feature selection:")
