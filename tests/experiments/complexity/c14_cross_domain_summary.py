@@ -311,8 +311,17 @@ def _evaluate_task(task_name, rep_preset, config):
         return (min(cands, key=_key_on(field)) if lower_is_better
                 else max(cands, key=_key_on(field)))
 
-    _eligible = [m for m in ncv.by_model
-                 if _finite(ncv.by_model[m].get('hybrid_mean'))]
+    # Eligible = the paired delta exists for that model (both arms scored on at
+    # least one common outer fold). Checked 2026-09-28: requiring only a finite
+    # hybrid_mean let search_mean pick a model whose single side never scored,
+    # so the task was dropped from the aggregate as having no delta while
+    # another model had one. Still an existence check, not a read of a value.
+    # Falls back to the old rule only when no model has a paired delta, so such
+    # a task still reaches tasks_without_delta instead of vanishing.
+    _eligible = ([m for m in ncv.by_model
+                  if _finite(ncv.by_model[m].get('delta_mean_of_folds'))]
+                 or [m for m in ncv.by_model
+                     if _finite(ncv.by_model[m].get('hybrid_mean'))])
     if not _eligible:
         print(f"    WARNING: no outer-fold hybrid score for {task_name}")
         return None
