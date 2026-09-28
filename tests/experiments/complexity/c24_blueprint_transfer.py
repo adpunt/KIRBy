@@ -26,8 +26,10 @@ Dependencies: None (standalone). Uses find_best_hybrid or precomputed search.
 Design (as run):
     For each CV fold k:
         1. Discover the optimal blueprint on fold k's training data.
-        2. For each other fold j: search a recipe on the rows outside BOTH k
-           and j, apply it to fold j's held-out rows.
+        2. For each other fold j: search a recipe and select features on the
+           rows outside BOTH k and j. Fit the downstream model on fold j's own
+           training rows (as the diagonal does) with those features, and score
+           it on fold j's held-out rows.
         3. Measure performance vs fold j's own-fold blueprint.
 
     If feature selection is NOT overfit:
@@ -507,9 +509,6 @@ def run(data, config, output_dir, dataset_name):
             _pair_mask[val_idx] = False
             _pair_idx = np.where(_pair_mask)[0]
             y_val_tgt = labels[val_idx]
-            val_reps_tgt = {k: v[val_idx] for k, v in reps.items()}
-            val_augs_tgt = ({k: v[val_idx] for k, v in augs.items()}
-                            if augs else None)
             src_bp = None
             try:
                 if len(np.unique(groups[_pair_idx])) < 2:
@@ -585,6 +584,9 @@ def run(data, config, output_dir, dataset_name):
                 continue
             cell_recipe_provenance[f'{src_fold}->{tgt_fold}'] = {
                 'rows_selection_saw': int(len(_pair_idx)),
+                # The downstream model is fitted on the target's own training
+                # rows, the same rows as the diagonal's model.
+                'rows_model_fitted_on': int(len(train_idx)),
                 'folds_excluded_from_selection': [int(src_fold), int(tgt_fold)],
                 'features_transferred': True,
                 # Which model the recipe was chosen for, and which one scores
@@ -604,22 +606,39 @@ def run(data, config, output_dir, dataset_name):
                 if best_model_tgt is not None:
                     factories = get_model_factories(
                         [best_model_tgt], task_type=task_type,
-                        n_samples=len(_pair_idx))
+                        n_samples=len(train_idx))
                     model = factories[best_model_tgt]()
                 elif task_type == 'classification':
                     model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
                 else:
                     model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
 
-                # Features chosen on the pair-excluded rows, then APPLIED to
-                # the target fold's held-out rows — build_fold_hybrid does both
-                # halves, so the same columns come off both sides.
+                # ⛔ ONLY THE SELECTION LOSES A FOLD. The downstream model is
+                # fitted on the TARGET's own training rows (every fold but the
+                # target), the same rows the diagonal's model is fitted on.
+                # Until 2026-09-28 it was fitted on the pair-excluded rows, so
+                # the downstream model ALSO lost a fold. At 3 outer folds that
+                # halved its training rows (two folds' worth on the diagonal,
+                # one fold's worth here), and the delta then measured mostly
+                # training-set size, not the selection that delta_meaning and
+                # the printed reading say it measures.
+                #
+                # How: build_fold_hybrid chooses the features on the
+                # pair-excluded rows only (create_hybrid never sees val_reps),
+                # then applies that same column choice to whatever val_reps it
+                # is handed. It is handed the target's training rows followed by
+                # the target's held-out rows, and the result is split back.
+                # Nothing that chose a feature has seen the target's rows.
                 y_pair = labels[_pair_idx]
                 _pair_key = ('pair', tuple(sorted((src_fold, tgt_fold))))
-                X_train, X_val, fi = build_fold_hybrid(
-                    _pair_reps, val_reps_tgt, y_pair, src_bp,
+                _apply_idx = np.concatenate([train_idx, val_idx])
+                _apply_reps = {k: v[_apply_idx] for k, v in reps.items()}
+                _apply_augs = ({k: v[_apply_idx] for k, v in augs.items()}
+                               if augs else None)
+                _, X_applied, fi = build_fold_hybrid(
+                    _pair_reps, _apply_reps, y_pair, src_bp,
                     augmentations_train=_pair_augs,
-                    augmentations_val=val_augs_tgt,
+                    augmentations_val=_apply_augs,
                     groups=groups[_pair_idx],
                     model=model,
                     metric_fn=metric_fn,
@@ -627,12 +646,19 @@ def run(data, config, output_dir, dataset_name):
                     precomputed_importance=_c24_fold_importance(
                         _imp_cache, _pair_key, _pair_reps, y_pair,
                         groups[_pair_idx], src_bp))
+                X_train = X_applied[:len(train_idx)]
+                X_val = X_applied[len(train_idx):]
+                y_tgt_train = labels[train_idx]
 
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_train)
                 X_va = scaler.transform(X_val)
 
-                model.fit(X_tr, y_pair)
+                # A fresh instance: build_fold_hybrid may have fitted `model`
+                # for its admission checks on the pair-excluded rows.
+                if best_model_tgt is not None:
+                    model = factories[best_model_tgt]()
+                model.fit(X_tr, y_tgt_train)
                 score = float(metric_fn(
                     y_val_tgt, _predict_for_metric(model, X_va, metric_fn)))
                 transfer_matrix[(src_fold, tgt_fold)] = score
@@ -654,9 +680,10 @@ def run(data, config, output_dir, dataset_name):
     print("    Diagonal: recipe and features chosen on every fold but the "
           "target's, scored on the target. Off-diagonal: chosen on every fold "
           "but the target's and one more, then those same features applied to "
-          "the target's rows. Nothing that produced a cell has seen the rows "
-          "that cell is scored on. What differs between the two is which rows "
-          "the selection saw — one fold's worth.")
+          "the target's rows. On both, the downstream model is fitted on every "
+          "fold but the target's. Nothing that produced a cell has seen the "
+          "rows that cell is scored on. What differs between the two is which "
+          "rows the selection saw — one fold's worth.")
 
     # For each target fold: compare own blueprint score vs cross-fold blueprint scores
     per_target = {}
@@ -744,7 +771,9 @@ def run(data, config, output_dir, dataset_name):
             'how much the held-out score moves when the recipe and the '
             'selected features are searched on the rows outside BOTH folds '
             'rather than on the target fold own training rows -- one fold '
-            'fewer for the search to work with. It is NOT a measurement of '
+            'fewer for the search to work with. The downstream model is '
+            'fitted on the target fold own training rows in both cases. '
+            'It is NOT a measurement of '
             'transferring one fold blueprint to another: the source fold '
             'Step-1 blueprint is never applied off the diagonal, because it '
             'was searched on rows that include the target fold'),
