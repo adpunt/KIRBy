@@ -892,11 +892,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # so it scored about 1,000 records in all while every other
                 # detector scored all 12,008, and the ranking below set its
                 # average precision beside theirs over different records.
-                # The cap bought no compute: GaussianProcessEstimator already
-                # fits each of its inner folds on at most 1,000 training rows
+                # What removing the cap costs. GaussianProcessEstimator fits
+                # each of its inner folds on at most 1,000 training rows
                 # (noise_estimation.py, n_max in fold_fn) and only PREDICTS
-                # the rest. GP_SUBSAMPLED_ESTIMATORS and GP_MAX_ROWS stay
-                # imported and unused so n06's constants are not touched.
+                # the rest. With the cap its inner training folds held about
+                # 800 rows; now they hold about 9,600 and are cut to 1,000.
+                # A fit grows with the cube of its rows, so each inner fit is
+                # about (1000/800)^3 = 1.95 times the work it was. That is
+                # arithmetic, not a measured time. GP_SUBSAMPLED_ESTIMATORS
+                # and GP_MAX_ROWS stay imported and unused so n06's constants
+                # are not touched.
 
                 t_est = time.time()
                 try:
