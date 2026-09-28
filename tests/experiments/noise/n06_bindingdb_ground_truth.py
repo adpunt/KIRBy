@@ -1129,7 +1129,11 @@ if __name__ == '__main__':
     config = get_config(args)
 
     dataset = getattr(args, 'dataset', 'bindingdb_kd')
-    if dataset == 'logd':  # the parser default; n06 started life on DTA data
+    # DIRTY-LOCAL 2026-09-28: only the parser DEFAULT 'logd' means "no dataset
+    # named". An explicit --dataset logd was silently swapped for bindingdb_kd.
+    _named = any(a == '--dataset' or a.startswith('--dataset=')
+                 for a in sys.argv[1:])
+    if dataset == 'logd' and not _named:  # the parser default; n06 started life on DTA data
         dataset = 'bindingdb_kd'
     data = load_data(dataset, args.reps)
     results = run(data, config, args.output, dataset, budget=args.budget,

@@ -118,6 +118,11 @@ from experiments.noise.noise_helpers import (
     DETECTION_IS_DEFINED, hybrid_for_fold, sweep_conditions,
 )
 from kirby.noise_spec import GROUPED_STRATEGIES
+from kirby.noise_spec import REGRESSION_STRATEGIES as _REG_STRATEGIES
+# dirty-local 2026-09-28: the members of DETECTION_IS_DEFINED an injector
+# can produce. See run().
+_INJECTABLE_CONDITIONS = tuple(c for c in DETECTION_IS_DEFINED
+                               if c in _REG_STRATEGIES)
 from experiments.noise.n07_remediation import _predict_for_metric
 from experiments._shared import (
     noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
@@ -715,7 +720,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return sweep_conditions(
         _run_one_condition, 'n21_neighbour_distance',
         data, config, output_dir, dataset_name,
-        default_conditions=DETECTION_IS_DEFINED, kwargs=kwargs,
+        # dirty-local 2026-09-28: only the names NoiseSpec accepts.
+        # DETECTION_IS_DEFINED also holds shift_only_* and sparse_dprime_*,
+        # which noise_spec_for refuses with ValueError (not in the NoiseInject
+        # registry), so the default sweep crashed after the eighth condition.
+        default_conditions=_INJECTABLE_CONDITIONS, kwargs=kwargs,
         groups_needed=GROUPED_STRATEGIES)
 
 
@@ -1899,7 +1908,7 @@ def main():
     parser = create_experiment_parser(
         'N21: which distance are the nearest neighbours found in')
     parser.add_argument('--noise-condition', type=str, default=NOISE_CONDITION,
-                        choices=list(DETECTION_IS_DEFINED),
+                        choices=list(_INJECTABLE_CONDITIONS),
                         help='The five conditions under which a corrupted '
                              'subset exists and average precision is defined.')
     parser.add_argument('--levels', type=str, default=None,

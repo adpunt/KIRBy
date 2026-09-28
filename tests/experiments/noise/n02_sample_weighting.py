@@ -312,8 +312,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return model.predict(X)
 
     # Only use models that support sample_weight
+    # DIRTY-LOCAL 2026-09-28: the configured model list (--models, or
+    # config['models'] from run_all) was ignored and all five WEIGHTED_MODELS
+    # were fitted. Now the intersection, in WEIGHTED_MODELS order; with no
+    # configured list it is WEIGHTED_MODELS as before.
+    _asked = kwargs.get('models') or config.get('models')
+    _weighted = ([m for m in WEIGHTED_MODELS if m in list(_asked)]
+                 if _asked else list(WEIGHTED_MODELS))
     model_factories = get_model_factories(
-        WEIGHTED_MODELS, task_type=task_type, n_samples=n_samples)
+        _weighted, task_type=task_type, n_samples=n_samples)
 
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
@@ -1476,7 +1483,7 @@ if __name__ == '__main__':
     print(f"Mode: {args.mode}")
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
-    print(f"Models: {WEIGHTED_MODELS}")
+    print(f"Models: {[m for m in WEIGHTED_MODELS if m in config['models']]}")
     print(f"k-neighbors: {args.k_neighbors}")
     print(f"Importance scorers: {importance_methods}")
 

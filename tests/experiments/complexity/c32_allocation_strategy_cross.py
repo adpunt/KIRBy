@@ -93,7 +93,9 @@ BUDGETS = [500, 1000]                # B (part of the CELL, not a strategy axis)
 POOL_TOTAL_MULT = 2                  # global sub-knob, PINNED (c31 default)
 IMP = "lightgbm_gain"                # per-rep candidate + global-ranking importance, PINNED
 
-NFOLDS = 5
+# Dirty local run 2026-09-28: KIRBY_LOCAL_FOLDS (env.sh) sets the outer fold
+# count here too, as get_config does for the other experiments. Unset -> 5.
+NFOLDS = int(os.environ.get("KIRBY_LOCAL_FOLDS") or 5)
 N_INNER = 3                          # inner group-aware CV folds for train-only pool sizing
 N_BOOT = int(os.environ.get("C32_BOOT", "1000"))   # group-block bootstrap; 0 disables
 

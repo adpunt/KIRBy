@@ -1273,9 +1273,16 @@ if __name__ == '__main__':
     # metric_name and lower_is_better are passed explicitly: registry_lookup would be
     # handed 'logd__gaussian', find nothing, and leave the file with no metric name
     # for the direction gate to read (_shared.py:6089-6109).
+    # dirty-local 2026-09-28: run() goes through sweep_conditions, which has
+    # ALREADY written this condition's result to
+    # <output>/n16_importance_under_noise/<dataset>__<condition>.json. What
+    # comes back here is the sweep's index, and saving it under that same name
+    # overwrote the result with the index (n16_analyse then read "no
+    # per_replicate block"). The index goes to <dataset>.json, where run_all
+    # puts it.
     save_experiment_results(
         results, args.output,
         'n16_importance_under_noise',
-        f'{args.dataset}__{args.noise_condition}',
+        args.dataset,
         metric_name=results.get('metric'),
         lower_is_better=results.get('lower_is_better'))

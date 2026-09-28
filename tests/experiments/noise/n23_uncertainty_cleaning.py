@@ -928,7 +928,14 @@ DEFAULT_NOISE_CONDITION = 'outlier_p10'
 #
 # It is a LIST and the run loops it. Passing a single `noise_condition` still
 # works and becomes a one-element list.
-SWEPT_CONDITIONS = tuple(DETECTION_IS_DEFINED)
+# dirty-local 2026-09-28: only the names NoiseSpec accepts. DETECTION_IS_DEFINED
+# also holds shift_only_p05/p10 and the six sparse_dprime_* conditions, which
+# are not in the NoiseInject registry; noise_spec_for raises ValueError on them
+# outside any try, so a sweep with no --noise-condition wrote the eight real
+# conditions and then crashed on shift_only_p05 before the index was saved.
+from kirby.noise_spec import REGRESSION_STRATEGIES as _REG_STRATEGIES
+SWEPT_CONDITIONS = tuple(c for c in DETECTION_IS_DEFINED
+                         if c in _REG_STRATEGIES)
 NOISE_DRAWS = (0, 1, 2)
 REGIMES = ('injected', 'as_they_come')
 
@@ -2481,9 +2488,13 @@ def main():
     if args.regimes:
         kw['regimes'] = [x.strip() for x in args.regimes.split(',')]
     res = run(data, config, args.output, args.dataset, **kw)
+    # dirty-local 2026-09-28: run() goes through sweep_conditions, which has
+    # ALREADY written each condition's result to <dataset>__<condition>.json.
+    # `res` is the sweep's index; with --noise-condition it was saved under
+    # that same suffix and overwrote the result. The index goes to
+    # <dataset>.json.
     save_experiment_results(res, args.output, 'n23_uncertainty_cleaning',
-                            args.dataset,
-                            filename_suffix=kw.get('noise_condition'))
+                            args.dataset)
 
 
 if __name__ == '__main__':

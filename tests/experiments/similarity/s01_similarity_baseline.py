@@ -298,5 +298,11 @@ if __name__ == '__main__':
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
-    results = run(data, config, args.output, args.dataset)
+    # The pair count the similarity wave (similarity_helpers.run_all) passes,
+    # SIMILARITY_EXTRA['n_sample'] = 50,000. Without it this entry point fell
+    # back to run()'s 5,000, a different statistic from the wave's under the
+    # same file name. (dirty-local 2026-09-28)
+    from experiments.similarity.similarity_helpers import SIMILARITY_EXTRA
+    results = run(data, config, args.output, args.dataset,
+                  n_sample=SIMILARITY_EXTRA['n_sample'])
     save_experiment_results(results, args.output, 's01_similarity_baseline', args.dataset)

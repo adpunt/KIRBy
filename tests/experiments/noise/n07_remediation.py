@@ -373,15 +373,23 @@ DEFAULT_CONDITION = 'outlier_p05'
 AS_THEY_COME = 'as_they_come'
 
 
-def _inject_or_recorded(y_all, spec, *, train_idx, is_clf, dataset_name):
+def _inject_or_recorded(y_all, spec, *, train_idx, is_clf, dataset_name,
+                        groups=None):
     """inject_train_labels, or the recorded labels when spec is None
-    (AS_THEY_COME). Same return shape: (y_train, moved_mask, provenance)."""
+    (AS_THEY_COME). Same return shape: (y_train, moved_mask, provenance).
+
+    groups: the FULL scaffold-group array (dataset_policy.noise_groups_for),
+    needed by grouped_shifted and grouped_wider. DIRTY-LOCAL 2026-09-28: the
+    three callers in _run_one_condition passed none, so the default sweep
+    raised ValueError inside make_noisy_train_labels on grouped_shifted, the
+    second condition, and ended the whole n07 sweep."""
     if spec is None:
         y_tr = np.asarray(y_all)[np.asarray(train_idx)].copy()
         return (y_tr, np.zeros(len(y_tr), dtype=bool),
                 {'condition': AS_THEY_COME, 'injected': False})
     return inject_train_labels(y_all, spec, train_idx=train_idx,
-                               is_clf=is_clf, dataset_name=dataset_name)
+                               is_clf=is_clf, dataset_name=dataset_name,
+                               groups=groups)
 
 
 def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False,
@@ -2419,6 +2427,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         noise_level = 0.0
     _seeds_here = NOISE_SEEDS[:1] if condition == AS_THEY_COME else NOISE_SEEDS
     noise_provenance = {}
+    # DIRTY-LOCAL 2026-09-28: scaffold groups for the two grouped conditions,
+    # handed to every injection below (see _inject_or_recorded).
+    from experiments.dataset_policy import noise_groups_for as _ngf
+    _noise_groups = _ngf(data)[0]
     # How well the detector found the corrupted molecules, before any cleanup.
     # One reading per (fold, draw) per feature space. Owner's decision 2026-09-12.
     detection_acc = {}
@@ -3374,7 +3386,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # (noise_spec.py:407-412). Not changed in this wiring pass.
                 y_tr_noisy, _cmask, _prov = _inject_or_recorded(
                     labels, _spec, train_idx=train_idx, is_clf=is_clf,
-                    dataset_name=dataset_name)
+                    dataset_name=dataset_name, groups=_noise_groups)
                 noise_provenance.setdefault(
                     _spec.spec_id if _spec else AS_THEY_COME, _prov)
 
@@ -3702,7 +3714,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                     is_clf=is_clf, condition=condition)
                 y_tr_noisy, _, _prov = _inject_or_recorded(
                     labels, _spec, train_idx=train_idx, is_clf=is_clf,
-                    dataset_name=dataset_name)
+                    dataset_name=dataset_name, groups=_noise_groups)
                 noise_provenance.setdefault(
                     _spec.spec_id if _spec else AS_THEY_COME, _prov)
                 noise_scores_cache = _compute_noise_scores(
@@ -3821,7 +3833,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                         is_clf=is_clf, condition=condition)
                     y_tr_noisy, _cm, _prov = _inject_or_recorded(
                         labels, _spec, train_idx=train_idx, is_clf=is_clf,
-                        dataset_name=dataset_name)
+                        dataset_name=dataset_name, groups=_noise_groups)
                     noise_provenance.setdefault(
                         _spec.spec_id if _spec else AS_THEY_COME, _prov)
                     ns_cache = _compute_noise_scores(X_tr_s, y_tr_noisy,

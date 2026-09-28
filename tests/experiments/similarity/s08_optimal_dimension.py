@@ -558,7 +558,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # rebuilds at the blueprint's own budget, so the curve is
                     # the same hybrid measured over and over.
                     budget_override=budget)
-            except Exception:
+            except Exception as _exc:
+                # A NaN slot per SAC list, not a skipped fold: fold_reselection
+                # reads these lists by POSITION against the per-rep lists,
+                # which never skip. (dirty-local 2026-09-28)
+                print(f"    fold hybrid build failed: {type(_exc).__name__}: {_exc}")
+                sac_fold_scores.append(float('nan'))
+                sac_fold_scores_unweighted.append(float('nan'))
                 continue
 
             # Held-out SAC: distance quality on the val fold using train-fold
@@ -574,7 +580,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     D_va, y_val, n_sample, is_clf=is_clf)
                 sac_fold_scores.append(float(sac_va))
             except Exception:
-                pass
+                sac_fold_scores.append(float('nan'))  # keep fold positions
 
             # Second hybrid arm (2026-08-26): the SAME held-out fold and the same
             # train-fold feature selection, scored with UNWEIGHTED distances --
@@ -588,7 +594,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     D_va_unw, y_val, n_sample, is_clf=is_clf)
                 sac_fold_scores_unweighted.append(float(sac_va_unw))
             except Exception:
-                pass
+                sac_fold_scores_unweighted.append(float('nan'))  # keep fold positions
 
             # Prediction arm: each model on the features ITS OWN recipe
             # selected from this fold's training rows, at THIS loop's budget.
@@ -914,7 +920,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     D_va_rep, y_val, n_sample, is_clf=is_clf)
                 rep_sac_fold_scores.append(float(sac_va_rep))
             except Exception:
-                pass
+                rep_sac_fold_scores.append(float('nan'))  # keep fold positions
 
         rep_model_means = {mname: float(np.mean(s)) if s else float('nan')
                            for mname, s in rep_model_scores.items()}
@@ -1299,8 +1305,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         bd = results['budgets'][b]
         if 'error' in bd:
             continue
-        _w = bd.get('sac_fold_scores') or []
-        _u = bd.get('sac_fold_scores_unweighted') or []
+        # Finite folds only: a failed fold is now a NaN slot (kept so the
+        # lists stay fold-aligned for fold_reselection), and np.mean would turn
+        # one NaN into a NaN mean. (dirty-local 2026-09-28)
+        _w = [s for s in (bd.get('sac_fold_scores') or []) if np.isfinite(s)]
+        _u = [s for s in (bd.get('sac_fold_scores_unweighted') or [])
+              if np.isfinite(s)]
         results['sac_weighting_effect'][b] = {
             'weighted_mean': float(np.mean(_w)) if _w else float('nan'),
             'unweighted_mean': float(np.mean(_u)) if _u else float('nan'),
@@ -1354,8 +1364,13 @@ if __name__ == '__main__':
     # create_experiment_parser already defines --budgets (comma-separated), so
     # re-adding it here raised ArgumentError and s08 could not be launched from
     # its own command line at all. Read the shared flag instead.
-    parser.add_argument('--n-sample', type=int, default=5000,
-                        help='Number of pairs to sample for SAC (default: 5000)')
+    # Default is the pair count the similarity wave passes
+    # (SIMILARITY_EXTRA['n_sample'], 50,000), not 5,000. (dirty-local 2026-09-28)
+    from experiments.similarity.similarity_helpers import SIMILARITY_EXTRA
+    parser.add_argument('--n-sample', type=int,
+                        default=SIMILARITY_EXTRA['n_sample'],
+                        help='Number of pairs to sample for SAC (default: '
+                             'SIMILARITY_EXTRA n_sample, the wave setting)')
     args = parser.parse_args()
     config = get_config(args)
 

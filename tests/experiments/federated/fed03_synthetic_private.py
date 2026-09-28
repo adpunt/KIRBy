@@ -217,16 +217,32 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     metric_name = 'auc'
     from kirby.find_best_hybrid import BUILTIN_METRICS
     metric_fn, lower_is_better = BUILTIN_METRICS[metric_name]
+    # Binarize ChEMBL labels. When the calling dataset already has 0/1 labels
+    # (e.g. load_data('herg') returns binary blocker labels — no continuous
+    # pKi), the pKi>=6.0 threshold would collapse every sample to class 0.
+    # Detect already-binary labels by value and pass them through.
+    _uniq_chembl = set(np.unique(labels_chembl).tolist())
+    labels_chembl_binary, _chembl_cut_note = binarise_labels(
+        'herg_ki', labels_chembl,
+        is_binary=bool(data.get('is_binary')))
+    # DIRTY-LOCAL 2026-09-28: the search below used to run on the
+    # CONTINUOUS pKi labels with task_type='regression' and metric 'auc',
+    # which cannot be scored, so it returned no recipe and Part A always
+    # fell to the hard defaults (treeshap / match). It now runs on the
+    # same blocker/non-blocker labels every Part A condition trains on,
+    # so binarisation moved above it.
     try:
         _search, _meta = get_best_search_for_downstream(
-            reps_chembl, labels_chembl, data.get('groups'),
+            reps_chembl, labels_chembl_binary, data.get('groups'),
             downstream_model=fed_to_kirby_model(fed_model), budget=100,
             augmentations=augs,
             metric=metric_name,
-            task_type=data['task_type'],
+            task_type='classification',
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name,
-            data=data,
+            # data=None, as fed01 and fed04 do: the in-memory store holds
+            # searches over the registry's continuous pKi.
+            data=None,
             **smoke_search_kwargs(config),
         )
         _bp = _meta['best_config']['blueprint'] if _meta else None
@@ -239,14 +255,6 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'
 
-    # Binarize ChEMBL labels. When the calling dataset already has 0/1 labels
-    # (e.g. load_data('herg') returns binary blocker labels — no continuous
-    # pKi), the pKi>=6.0 threshold would collapse every sample to class 0.
-    # Detect already-binary labels by value and pass them through.
-    _uniq_chembl = set(np.unique(labels_chembl).tolist())
-    labels_chembl_binary, _chembl_cut_note = binarise_labels(
-        'herg_ki', labels_chembl,
-        is_binary=bool(data.get('is_binary')))
     print(f"  ChEMBL silo labels: {_chembl_cut_note}")
 
     # Compute InChIKeys for ChEMBL
@@ -1375,7 +1383,10 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 silo_fis = {}
                 silo_scores = {}
                 _n_fam = max(1, len(silo_names))
-                _per_family_budget = max(5, PART_B_BUDGET // _n_fam)
+                # DIRTY-LOCAL 2026-09-28: was PART_B_BUDGET (fixed 100) inside
+                # the _pb_budget sweep, so C3 was the same 100-feature build
+                # at every width while C2 swept. C3's total now matches C2's.
+                _per_family_budget = max(5, _pb_budget // _n_fam)
                 for i, sname in enumerate(silo_names, 1):
                     rep_list = silo_reps[sname]
                     silo_rep_tr = {r: train_reps[r] for r in rep_list}
@@ -1473,7 +1484,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 else:
                     c3 = {'error': 'no valid silo selections'}
                 c3['silo_scores'] = convert_numpy(silo_scores)
-                c3['budget_total'] = PART_B_BUDGET
+                c3['budget_total'] = int(_pb_budget)
                 c3['budget_per_family'] = _per_family_budget
                 results['c3_federated_fs'] = convert_numpy(c3)
                 primary = c3.get('mcc', c3.get('rmse', float('nan')))

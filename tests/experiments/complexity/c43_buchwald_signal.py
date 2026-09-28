@@ -57,7 +57,9 @@ def main():
     print(f"group size: min={counts.min()} median={int(np.median(counts))} "
           f"max={counts.max()} n_groups={len(counts)}")
 
-    folds = H.make_folds(groups, y, task, n=5)
+    # Dirty local run 2026-09-28: KIRBY_LOCAL_FOLDS sets the fold count; unset -> 5.
+    folds = H.make_folds(groups, y, task,
+                         n=int(os.environ.get("KIRBY_LOCAL_FOLDS") or 5))
 
     # --- TARGET: cgr_morgan, scored under BOTH downstream models -----------
     # c43_step3 fits lightgbm. This anchor used to be a random forest number
@@ -129,7 +131,10 @@ def main():
 
     # Write it. Printing only meant the anchor was lost when the process
     # exited, and c43_step3 held it as a typed-in literal instead.
-    out_dir = os.path.join(_REPO, "tests", "results", "complexity")
+    # C43_OUT_DIR (dirty local run 2026-09-28) redirects the result file;
+    # unset -> the repo's tests/results/complexity as before.
+    out_dir = (os.environ.get("C43_OUT_DIR")
+               or os.path.join(_REPO, "tests", "results", "complexity"))
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"c43_buchwald_signal_{DS}.json")
     with open(out_path, "w") as fh:

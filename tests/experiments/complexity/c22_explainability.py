@@ -101,7 +101,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
 
-    model_names = ['rf', 'xgboost']
+    # Dirty local run 2026-09-28: this was the literal ['rf', 'xgboost'], so
+    # --models was ignored, and under KIRBY_LOCAL_MODELS xgboost has no recipe
+    # in the pool and was dropped, leaving rf alone. The run's own model list is
+    # honoured now, kept to the tree models TreeExplainer handles; a non-tree
+    # model (svm, dnn) would fall to KernelExplainer over every validation row,
+    # which is not affordable. Falls back to the old pair when none is named.
+    _TREE = ('rf', 'xgboost', 'lightgbm', 'catboost')
+    _asked = list(config.get('models') or [])
+    model_names = [m for m in _asked if m in _TREE] or ['rf', 'xgboost']
+    _not_tree = [m for m in _asked if m not in _TREE]
+    if _not_tree:
+        print(f"  Not explained (no tree SHAP): {_not_tree}")
     models = get_model_factories(model_names, task_type=task_type,
                                  n_samples=n_samples)
     print(f"  Models: {list(models.keys())}")

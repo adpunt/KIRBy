@@ -236,7 +236,28 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                   f"this budget and it is recorded as unsearched")
             _s, _m = None, None
         _b = _m['best_config']['blueprint'] if _m else None
-        # ── Phase 1: Setup ───────────────────────────────────────────────────
+        # DIRTY-LOCAL 2026-09-28: the body below was missing (commit 01e309a
+        # stopped here), so _recipe_for returned None and the unpack at the
+        # top of the budget loop raised TypeError on the first fold. Restored
+        # from the pre-01e309a logic: meta's aug_condition first, then the
+        # blueprint, then the hard defaults.
+        if _m is not None:
+            _aug = _m.get('aug_condition',
+                          _b.augmentation_strategy if _b else
+                          ('uncapped' if augs else 'none'))
+        else:
+            _aug = 'uncapped' if augs else 'none'
+        _a = _b.allocation_method if _b else 'performance_weighted'
+        _i = _b.importance_method if _b else 'treeshap'
+        _e = _b.internal_evaluator if _b else 'match'
+        return _s, _m, _b, _aug, _a, _i, _e
+
+    # The top-2 rows and hybrid deltas read one search with no budget named
+    # (see the comment above). Both names were read below and bound nowhere.
+    _top2_search = _recipe_for(None)[0]
+    recipe_source_by_budget = {}
+
+    # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")
 
     # Resolve silo reps
@@ -649,6 +670,10 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     fluid_within_kirby_across(
                         kirby_train, kirby_test, y_train,
                         k_intra=K_INTRA,
+                        # DIRTY-LOCAL 2026-09-28: budget was not passed, so C6
+                        # took the helper default of 100 at every BUDGET while
+                        # being filed under c6_by_budget[BUDGET].
+                        budget=BUDGET,
                         allocation_method=_alloc, importance_method=_imp,
                         internal_evaluator=_int_eval,
                         downstream_model=fed_to_kirby_model(fed_model),  # 'match' resolution

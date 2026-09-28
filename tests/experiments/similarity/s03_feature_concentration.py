@@ -334,5 +334,12 @@ if __name__ == '__main__':
     data = load_data(args.dataset, args.reps,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
-    results = run(data, config, args.output, args.dataset)
+    # --models used to be parsed into config['models'] and then ignored: run()
+    # asked for its own three, rf/lightgbm/dnn, so a run given
+    # --models rf,svm,lightgbm scored no svm and wrote an error cell for dnn,
+    # which no local search scores. Passed through only when given, so a run
+    # without the flag is unchanged. (dirty-local 2026-09-28)
+    _kw = ({'downstream_models': list(config['models'])}
+           if getattr(args, 'models', None) else {})
+    results = run(data, config, args.output, args.dataset, **_kw)
     save_experiment_results(results, args.output, 's03_feature_concentration', args.dataset)

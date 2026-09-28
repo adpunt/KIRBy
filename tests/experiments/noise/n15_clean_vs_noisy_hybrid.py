@@ -668,14 +668,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             # section 3): the same fit and the same
                             # model.predict, stored under the content of the
                             # features and labels. Seeded models only.
+                            # predict_mode follows the metric (dirty-local
+                            # 2026-09-28): 'predict' here scored auc on hard
+                            # class labels on a classification dataset.
                             _pred = nc.cached_fit_predict(
                                 dataset_name, model_name, model_factory,
                                 X_tr_s, y_train, X_va_s,
-                                predict_mode='predict')
+                                predict_mode=nc.predict_mode_for(metric_name))
                         else:
+                            from experiments.noise.n07_remediation import (
+                                _predict_for_metric)
                             m = model_factory()
                             m.fit(X_tr_s, y_train)
-                            _pred = m.predict(X_va_s)
+                            _pred = _predict_for_metric(m, X_va_s, metric_name)
                         scores[arm][fold_i] = float(metric_fn(y_val, _pred))
                     except Exception as exc:
                         print(f"    WARNING: {model_name}/{arm} fold {fold_i} "
