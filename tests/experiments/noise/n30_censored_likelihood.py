@@ -926,6 +926,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     sP, err = fit_cleaned(
                                         model_factories[mname], tw, X_va_s,
                                         y_val, metric_fn, metric_name)
+                                    # A failed control fit is still written
+                                    # as a NaN row; its reason goes here, as
+                                    # the main fits' reasons do.
+                                    if sP is None:
+                                        errors[f'{lvl_key}|{_ekey}|{arm}|'
+                                               f'{cname}|{mname}|'
+                                               f'f{fold_i}'] = err
                                     rows.add(
                                         method=arm.split('/')[0],
                                         method_setting=f'{arm}|control={cname}',
