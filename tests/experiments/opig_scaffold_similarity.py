@@ -158,6 +158,17 @@ def load_single_scaffold(name, n_pairs, seed, max_samples):
     from kirby.datasets.flab import load_flab_dataset
     d = load_flab_dataset(name, max_samples=max_samples)
     S, wt, muts = SR.encode_sequences(d)
+    # No label is used below, so a row is a SEQUENCE. The Adams sets carry the
+    # same sequence on many rows (5000 rows, 2400 distinct sequences after the
+    # loader's subsample, measured 2026-09-28). Kept as rows, two copies of one
+    # sequence formed pairs at distance 0 on every representation and grader,
+    # and could sit in both variant halves, so --mode features chose and
+    # reported on the same variant. Each distinct sequence is kept once.
+    n_rows = len(S)
+    _u, first = np.unique(S, axis=0, return_index=True)
+    first = np.sort(first)
+    S = S[first]
+    muts = [muts[i] for i in first]
     n = len(S)
     rs = np.random.RandomState(seed)
     # Each VARIANT goes to half 0 or half 1, and a pair is kept only when both
@@ -177,9 +188,10 @@ def load_single_scaffold(name, n_pairs, seed, max_samples):
              'blosum': SR.grader_pair_distance(S, I, J, SR.blosum_matrix()),
              'identity': SR.grader_pair_distance(S, I, J, SR.identity_matrix())}
     return dict(name=name, kind='single_scaffold', S=S, wt=wt, muts=muts, n=n,
+                n_rows_loaded=n_rows,
                 pairs=(I, J), pair_half=variant_half[I], truth=truth,
                 mean_mutations=float(np.mean([len(x) for x in muts])),
-                labels=np.asarray(d['labels'], float),
+                max_mutations=int(max((len(x) for x in muts), default=0)),
                 task_type=d.get('task_type', 'regression'))
 
 
@@ -409,14 +421,19 @@ def mode_controls(ctx):
                           'each rich ground truth; high = the ground truth is '
                           'mostly counting, so raw scores are inflated')
         # C3: is the bespoke metric identical to a ground truth?
-        if ctx['mean_mutations'] <= 1.001:
+        # dist_position_gated reads only each variant's first mutation, so it
+        # is defined only when no variant carries more than one. A mean of 1.0
+        # does not guarantee that; the maximum does.
+        if ctx.get('max_mutations', 99) <= 1:
             D = SR.dist_position_gated(ctx['S'], ctx['wt'], ctx['muts'],
                                        SR.grantham_matrix())
             I, J = ctx['pairs']
+            max_diff = float(np.abs(D[I, J] - t['grantham']).max())
             out['C3_position_gated_vs_grantham'] = dict(
                 spearman=float(spearmanr(D[I, J], t['grantham'])[0]),
-                max_abs_difference=float(np.abs(D[I, J] - t['grantham']).max()),
-                verdict='IDENTICAL — not a metric result')
+                max_abs_difference=max_diff,
+                verdict=('IDENTICAL — not a metric result' if max_diff < 1e-9
+                         else 'DIFFERS from the Grantham grader'))
         out['mean_mutations_per_variant'] = ctx['mean_mutations']
     else:
         _SD, truth, ham, _half = feature_sqdiff(ctx)
@@ -567,6 +584,7 @@ def main():
             _failed.append(ds)
             continue
         r = {'mean_mutations': ctx['mean_mutations'], 'n': ctx['n'],
+             'n_rows_loaded': ctx.get('n_rows_loaded', ctx['n']),
              'kind': ctx['kind'], 'domain': SCAFFOLD_DATASETS[ds]['domain']}
         _base = dict(r)
         for m in modes:
