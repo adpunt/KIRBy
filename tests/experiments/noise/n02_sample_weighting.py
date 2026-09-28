@@ -751,10 +751,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     else f"family={pool_family}, {pool_metric_name}")
             print(f"  Top-3 base reps ({_lbl}): "
                   f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+    # DIRTY-LOCAL 2026-09-28: a missing random-forest recipe no longer ends the
+    # run. It used to return {'error': 'no_blueprint'} here, which threw away
+    # every condition 1 and 2 number already computed above and skipped the
+    # hybrid for models that have a recipe of their own. This recipe is read
+    # by nothing below; each model's hybrid comes from its own lookup, and a
+    # model with none is recorded in hybrid_recipe_missing.
     bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
-        print("  WARNING: No blueprint found, skipping hybrid conditions")
-        return {'error': 'no_blueprint', 'metric': metric_name}
+        print("  WARNING: the pool holds no random-forest recipe; each model's "
+              "hybrid is still looked up on its own below")
+        results['rf_recipe_missing'] = True
 
     # Matched evaluator: fetch a per-model blueprint instead of reusing the
     # RF one for xgboost/lightgbm/ridge. Per project_model_matching the
