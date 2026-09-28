@@ -1017,7 +1017,8 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                         scores_aug.append(float('nan'))
                         fold_aug_info.append({'kept': [], 'n_added': 0,
                                               'final_dim': base_dim,
-                                              'decoys': {'noise': 0, 'echo': 0}})
+                                              'decoys': {'noise': 0, 'echo': 0},
+                                              'failed': True})
 
                 base_mean = float(np.nanmean(scores_base))
                 # A search that found no winning config makes every augmented
@@ -1105,10 +1106,21 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                         / max(abs(base_mean), REL_IMPROVEMENT_DENOM_FLOOR)
                         if not np.isnan(delta) else float('nan')),
                     'kept_augmentations': sorted(all_kept),
-                    'mean_features_added': float(np.mean(total_added)),
+                    # Both means are over the folds that built, so a failed
+                    # fold's placeholder 0 does not pull them down. NaN when
+                    # no fold built.
+                    'mean_features_added': (
+                        float(np.mean([fi['n_added'] for fi in fold_aug_info
+                                       if not fi.get('failed')]))
+                        if any(not fi.get('failed') for fi in fold_aug_info)
+                        else float('nan')),
                     # Base features the extras pushed out ('capped' only).
-                    'mean_base_dropped': float(np.mean(
-                        [fi.get('n_base_dropped', 0) for fi in fold_aug_info])),
+                    'mean_base_dropped': (
+                        float(np.mean([fi.get('n_base_dropped', 0)
+                                       for fi in fold_aug_info
+                                       if not fi.get('failed')]))
+                        if any(not fi.get('failed') for fi in fold_aug_info)
+                        else float('nan')),
                     'fold_aug_info': fold_aug_info,
                     'aug_pool_reps': sorted(aug_dict) if aug_dict else [],
                     'per_source_budget': per_source,
@@ -1132,7 +1144,7 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                              if with_decoys else "")
                     print(f"    {arm_name}/{model_name}: base={base_mean:.4f}  "
                           f"aug={aug_mean:.4f}  delta={sign * delta:+.4f} [{status}]  "
-                          f"kept={sorted(all_kept)}  added={np.mean(total_added):.1f}"
+                          f"kept={sorted(all_kept)}  added={result['mean_features_added']:.1f}"
                           f"{decoy}")
 
     # ── Multi-rep reference arms: the c02 top-tier hybrid, and that hybrid
