@@ -214,19 +214,31 @@ def _ckpt_path(output_dir, dataset_name):
     return os.path.join(output_dir, f'.s11_checkpoint_{dataset_name}.json')
 
 
-def _ckpt_load(output_dir, dataset_name):
+def _ckpt_load(output_dir, dataset_name, key=None):
+    """Conditions a previous attempt finished, or {}.
+
+    `key` names the settings the conditions were computed under (hunted end,
+    length-scale start, loop sizes, storage version). A checkpoint written
+    under different settings is not resumed: before this, an attempt under
+    KIRBY_S11_HUNT or KIRBY_S11_LENGTHSCALE picked up conditions an earlier
+    attempt had computed under the other value and filed them together.
+    """
     f = _ckpt_path(output_dir, dataset_name)
     try:
         with open(f) as fh:
             d = json.load(fh)
         if isinstance(d, dict) and isinstance(d.get('conditions'), dict):
+            if key is not None and d.get('key') != key:
+                print(f"  [checkpoint] {f} was written under other settings "
+                      f"({d.get('key')}); not resuming from it")
+                return {}
             return d['conditions']
     except Exception:
         pass
     return {}
 
 
-def _ckpt_save(output_dir, dataset_name, conditions):
+def _ckpt_save(output_dir, dataset_name, conditions, key=None):
     """Write via a temporary file and rename, so a kill mid-write cannot leave a
     half-written checkpoint that the next attempt would read as truth."""
     f = _ckpt_path(output_dir, dataset_name)
@@ -234,7 +246,7 @@ def _ckpt_save(output_dir, dataset_name, conditions):
         os.makedirs(output_dir, exist_ok=True)
         tmp = f + '.tmp'
         with open(tmp, 'w') as fh:
-            json.dump({'conditions': conditions}, fh)
+            json.dump({'conditions': conditions, 'key': key}, fh)
         os.replace(tmp, f)
     except Exception as e:
         print(f"  [checkpoint] could not write {f}: {e}")
@@ -1270,7 +1282,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Resume whatever a killed attempt already finished. Nothing is recomputed
     # for a condition that is already on disk.
-    _resume = _ckpt_load(output_dir, dataset_name)
+    # What the checkpoint's conditions must have been computed under.
+    # 'storage': 2 is the hunt-oriented AUC storage; checkpoints from before
+    # it hold caco2 areas with the opposite sign and are not resumed.
+    _ckpt_key = {
+        'storage': 2, 'hunt': _hunt, 'lengthscale': LENGTH_SCALE_INIT,
+        'max_iterations': int(max_iterations), 'n_seeds': int(n_seeds),
+        'rebuild_interval': int(rebuild_interval),
+        'hybrid_budget': int(hybrid_budget), 'target_dim': int(target_dim),
+        'recipe_objective': recipe_objective,
+    }
+    _resume = _ckpt_load(output_dir, dataset_name, _ckpt_key)
     if _resume:
         results['conditions'].update(_resume)
         _already = [c for c in conditions if c in _resume]
@@ -1383,7 +1405,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
 
             # This seed's hybrid settings, searched on its seed rows only.
-            bp = _seed_blueprint(seed_i, seed, seed_idx)
+            # Only the hybrid conditions read it; the others no longer trigger
+            # a recipe search they do not use.
+            bp = (_seed_blueprint(seed_i, seed, seed_idx)
+                  if _is_hybrid_condition(condition) else None)
 
             # No recipe, no hybrid. The two builds used to fall back to fixed
             # settings — an allocation method the search no longer sweeps, and
@@ -1743,7 +1768,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"/{m['iters_to_top5pct_found']} found")
 
         # this condition is complete; put it on disk before starting the next
-        _ckpt_save(output_dir, dataset_name, results['conditions'])
+        _ckpt_save(output_dir, dataset_name, results['conditions'], _ckpt_key)
 
     # =================================================================
     # FINAL SUMMARY
