@@ -57,7 +57,8 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
                                 alloc='performance_weighted',
                                 imp='treeshap',
                                 int_eval='match',
-                                augs=None, aug_cond='none', train_groups=None):
+                                augs=None, aug_cond='none', train_groups=None,
+                                metric_fn=None, lower_is_better=False):
     """Run create_hybrid per cluster and extract importance profiles.
 
     Returns:
@@ -98,6 +99,8 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
                 importance_method=imp,
                 budget=budget,
                 internal_evaluator=int_eval,
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better,
                 augmentations=cluster_augs,
                 augmentation_strategy=aug_cond,
             )
@@ -229,6 +232,15 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     _int_eval = _bp.internal_evaluator if _bp else 'match'
     _int_eval = _resolve_match(_int_eval, 'rf')
 
+    # The metric each representation's share of the budget is scored on,
+    # inside every create_hybrid call below. The search above ranked on AUC.
+    # Without metric_fn, create_hybrid sizes the shares by the internal
+    # evaluator's own score, which is plain accuracy for a classifier. On
+    # labels with 25 to 35% actives, accuracy barely separates the
+    # representations. fed01 passes AUC for the same reason.
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    _metric_fn, _lower_is_better = BUILTIN_METRICS['auc']
+
     # SPLIT — scaffold-group-aware, 5-fold per-fold accumulation.
     # P1 fix: hard-fail when groups unavailable. federated_helpers.py:107-110
     # silently sets groups=None, which would trigger the cv_split random
@@ -282,7 +294,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 train_reps, y_train, train_silo_indices, K, budget=BUDGET,
                 alloc=_alloc, imp=_imp, int_eval=_int_eval,
                 augs=train_augs, aug_cond=aug_cond,
-                train_groups=(groups[train_idx] if groups is not None else None))
+                train_groups=(groups[train_idx] if groups is not None else None),
+                metric_fn=_metric_fn, lower_is_better=_lower_is_better)
 
             # Global baseline (full training set)
             _, fi_global = create_hybrid(
@@ -292,6 +305,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 importance_method=_imp,
                 budget=BUDGET,
                 internal_evaluator=_int_eval,
+                metric_fn=_metric_fn,
+                lower_is_better=_lower_is_better,
                 augmentations=train_augs,
                 augmentation_strategy=aug_cond)
             global_profile = extract_importance_profile(fi_global)
@@ -319,7 +334,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 train_reps, y_train, _null_indices, K, budget=BUDGET,
                 alloc=_alloc, imp=_imp, int_eval=_int_eval,
                 augs=train_augs, aug_cond=aug_cond,
-                train_groups=(groups[train_idx] if groups is not None else None))
+                train_groups=(groups[train_idx] if groups is not None else None),
+                metric_fn=_metric_fn, lower_is_better=_lower_is_better)
             null_spearman, null_pairwise = compare_importance_profiles(
                 null_profiles)
 
@@ -488,7 +504,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         train_reps, y_train, train_silo_idx_sf, K, budget=BUDGET,
                         alloc=_alloc, imp=_imp, int_eval=_int_eval,
                         augs=train_augs, aug_cond=aug_cond,
-                        train_groups=(groups[train_idx] if groups is not None else None))
+                        train_groups=(groups[train_idx] if groups is not None else None),
+                        metric_fn=_metric_fn, lower_is_better=_lower_is_better)
                     mean_sp, pw = compare_importance_profiles(prof_sf)
                     smooth_sweep[str(sf)] = convert_numpy({
                         'stability': mean_sp,
