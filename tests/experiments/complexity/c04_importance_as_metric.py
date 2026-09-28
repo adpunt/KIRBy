@@ -28,7 +28,7 @@ from sklearn.metrics import r2_score, mean_absolute_error
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    compute_feature_importance, cv_split,
+    compute_feature_importance, cv_split, importance_feature_weights,
 )
 
 
@@ -37,8 +37,16 @@ from experiments._shared import (
 # =========================================================================
 
 def _importance_to_weights(imp_scores):
-    """Convert raw importance scores to normalised non-negative weights."""
-    w = np.sqrt(np.maximum(imp_scores, 0))
+    """Convert raw importance scores to normalised non-negative weights.
+
+    The multiplier comes from importance_feature_weights, the one place the
+    suite turns importance into a feature multiplier. Unset, it is the square
+    root of the clipped importance, which is what this function wrote inline
+    before, so no default number changes. It also honours
+    KIRBY_IMPORTANCE_EXPONENT like s05, s10 and s13, and zeroes a NaN score
+    instead of letting it reach every distance.
+    """
+    w = importance_feature_weights(imp_scores)
     return w / (w.sum() + 1e-10)
 
 
