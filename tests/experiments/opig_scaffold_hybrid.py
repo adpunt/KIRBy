@@ -235,6 +235,10 @@ def summarise_one(dataset_name, block):
     out = {'dataset': dataset_name,
            'metric_name': block.get('metric_name'),
            'lower_is_better': lower_is_better,
+           # How many outer folds the run had. Every per-representation mean
+           # below is a mean over the folds that scored, which is this many
+           # only when nothing went non-finite — see n_folds_scored.
+           'n_outer_folds': block.get('n_outer_folds'),
            'delta_mean_of_folds': {
                m: e.get('delta_mean_of_folds') for m, e in by_model.items()},
            'n_paired_folds': {
@@ -257,6 +261,17 @@ def summarise_one(dataset_name, block):
                  if v.get('mean') is not None and np.isfinite(v.get('mean'))}
         if not means:
             continue
+        # HOW MANY OUTER FOLDS EACH MEAN IS A MEAN OVER. The engine writes a
+        # fold's score as None when that fold's score was not finite, and takes
+        # the mean over whatever is left, so two representations on one line can
+        # be means over different numbers of folds. Spearman of a constant
+        # prediction is not finite, which is exactly what a representation whose
+        # features are all zero on the held-out rows produces, so this is the
+        # denominator behind the rank printed below.
+        folds_scored = {
+            r: sum(1 for x in (v.get('fold_scores') or [])
+                   if x is not None and np.isfinite(x))
+            for r, v in reps.items()}
         base_means = {r: m for r, m in means.items() if r not in SCAFFOLD_REPS}
         if base_means:
             best_base = (min(base_means, key=base_means.get) if lower_is_better
@@ -291,6 +306,8 @@ def summarise_one(dataset_name, block):
                 abs(top2_base[0]['mean'] - top2_base[1]['mean'])
                 if len(top2_base) > 1 else None),
             'n_base_reps_ranked': len(base_means),
+            # {representation: outer folds that produced a finite score}.
+            'n_folds_scored': folds_scored,
             'scaffold_rank': {
                 r: (1 + sum(1 for v in means.values()
                             if (v < means[r] if lower_is_better
@@ -321,14 +338,27 @@ def print_summary(summaries):
                       f'{sup["folds_with_no_shared_feature"]} of '
                       f'{sup["n_outer_folds"]} outer folds — its score below '
                       f'is not a measurement of the representation.')
+        n_outer = s.get('n_outer_folds')
         for model, d in sorted(s.get('baseline_by_model', {}).items()):
             sc = d['scaffold']
+            fs = d.get('n_folds_scored') or {}
+
+            def _folds(rep, _fs=fs, _n=n_outer):
+                # Every mean on this line is a mean over the outer folds that
+                # scored, which is not always all of them.
+                k = _fs.get(rep)
+                return '' if k is None else f' on {k} of {_n} outer folds'
+
             sc_str = ', '.join(
-                f'{r}={sc[r]:.3f}(rank {d["scaffold_rank"].get(r,"?")}/{d["n_reps_ranked"]})'
-                if sc.get(r) is not None else f'{r}=n/a' for r in SCAFFOLD_REPS)
+                f'{r}={sc[r]:.3f} (rank {d["scaffold_rank"].get(r,"?")} of '
+                f'{d["n_reps_ranked"]} representations{_folds(r)})'
+                if sc.get(r) is not None
+                else f'{r}=no finite score on any outer fold'
+                for r in SCAFFOLD_REPS)
             bb = d['best_base_mean']
             print(f'  {model:10s} best_base={d["best_base_rep"]}='
-                  f'{bb:.3f}  |  {sc_str}' if bb is not None
+                  f'{bb:.3f}{_folds(d["best_base_rep"])}  |  {sc_str}'
+                  if bb is not None
                   else f'  {model:10s} (no base baselines)')
         # The delta never prints alone: one outer fold and five outer folds
         # give the same-looking number otherwise.
