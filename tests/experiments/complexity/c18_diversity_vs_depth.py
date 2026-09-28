@@ -131,7 +131,9 @@ def _select_top_features(train_reps, val_reps, y_train, rep_subset, budget,
     # n_select by argsort keeps features whatever they scored, and
     # lightgbm_gain writes exactly 0.0 for every feature no tree split on -- so
     # past the count that scored above zero this arm is padded from a block of
-    # exact ties, broken by column position. The 'natural' arm goes through
+    # exact ties. np.argsort's default sort is not stable, so which zero-gain
+    # columns fill the padding is fixed but arbitrary, not column order
+    # (checked 2026-09-28 on numpy 1.26.4). The 'natural' arm goes through
     # build_fold_hybrid -> create_hybrid, which STOPS at the last positively
     # scored feature. On flab at budget 1,000 that is roughly 1,000 features
     # against roughly 400.
