@@ -1016,8 +1016,14 @@ def _summarise_replicate(rep_block, rep_order, imp_methods, levels, n_folds,
                         row.update(_pair_stats(ref, v, top_k))
                         row.update(_turnover(ref, v, top_k))
                         per_fold.append(row)
-                        k = int(min(top_k, v.size))
-                        sets.append(set(np.argsort(v)[-k:].tolist()))
+                        # Capped at how many features this fold's scorer
+                        # actually ranked. Uncapped, a top 100 on a scorer that
+                        # ranked 39 holds 61 tied zeros that np.argsort orders by
+                        # index, the same 61 in every fold, and the stability
+                        # across folds reads high for that reason alone.
+                        k = int(min(top_k, int((v != 0).sum())))
+                        sets.append(set(np.argsort(v)[-k:].tolist()) if k > 0
+                                    else set())
                     if not per_fold:
                         continue
                     cells[f'{lv:g}'] = {
