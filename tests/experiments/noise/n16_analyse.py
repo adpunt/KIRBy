@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """n16 read-out — which features change rank when the labels get noisier.
 
-Reads every n16_importance_under_noise/<dataset>__<condition>.json and the npz files
-beside them, and prints four things.
+Reads every n16_importance_under_noise/<dataset>__<condition>.json and prints four
+things. It does not open the npz files beside them.
 
-1. THE CONTROL. Level 0.0 against itself must give Spearman 1.0 and keep every one of
-   the top-k features. If it does not, the run compared two different things and
-   nothing below it can be read.
+1. THE CONTROLS. Two of them.
+   (a) Level 0.0 must have delivered no noise at all: the delivered amount the injector
+       recorded at level 0.0 must be exactly 0.0. This one can fail, and if it does the
+       reference row is not the clean labels and nothing below can be read.
+   (b) Level 0.0 against itself must give Spearman 1.0 and keep every top-k feature.
+       n16 compares the level-0.0 vector with the very same array here
+       (_summarise_replicate reads one key twice), so this only proves the comparison
+       code runs. It cannot detect a wrong reference row. A cell whose scorer ranked
+       fewer than 3 features has no Spearman at all and is counted apart, not failed.
 
 2. HOW MANY FEATURES CARRY ANY IMPORTANCE, per scoring method per level, beside each
    representation's own width and its pre-screen ceiling. A representation wider than
@@ -14,20 +20,25 @@ beside them, and prints four things.
    (hybrid.py:4359, :4379-4383), so the count is read against the ceiling, not the
    width.
 
-3. HOW FAR THE RANKING MOVED from level 0.0, per scoring method per level: the median,
-   minimum and maximum Spearman over the features either level scored non-zero, and
-   how many of the clean top set survive. Two things are printed beside the honest
-   figures and both are the less honest of their pair, because lightgbm_gain leaves
-   most features at exactly 0.0 and np.argsort orders tied zeros by index: the
-   all-features Spearman, and (in the experiment's own JSON, not here) the top-k
-   retained fraction over the uncapped set. Measured on buchwald_hartwig,
-   lightgbm_gain scores 39 of diff_maccs's 167 features, so an uncapped top-50
-   overlap is 1.00 at every level while the scored ranking moves from Spearman 0.980
-   to 0.920. The 'top set' column says how many features the reported set holds.
+3. HOW FAR THE RANKING MOVED from level 0.0, per scoring method, per representation,
+   per level: the median, minimum and maximum across noise draws of the Spearman over
+   the features either level scored non-zero, and how many of the clean top set
+   survive. One row is one representation at one level; representations are never
+   pooled. Two things are printed beside the honest figures and both are the less
+   honest of their pair, because lightgbm_gain leaves most features at exactly 0.0 and
+   np.argsort orders tied zeros by index: the all-features Spearman, and (in the
+   experiment's own JSON, not here) the top-k retained fraction over the uncapped set.
+   Measured on buchwald_hartwig, lightgbm_gain scores 39 of diff_maccs's 167 features,
+   so an uncapped top-50 overlap is 1.00 at every level while the scored ranking moves
+   from Spearman 0.980 to 0.920. The 'top set' column says how many features the
+   reported set holds.
 
-4. WHETHER THE MOVEMENT CLEARS THE NOISE DRAW. With two or more replicates, the spread
-   between replicates at one level is what any level-to-level movement has to beat. A
-   level whose drift from 0.0 sits inside the replicate spread has not moved.
+4. WHETHER THE AMOUNT OF MOVEMENT DEPENDS ON THE NOISE DRAW. Each level is compared with
+   level 0.0 on the same training rows with the same scorer seed, so the labels are the
+   only thing that differs and any drift above zero is caused by the noise. With two or
+   more draws, the range of the drift across draws says how much that amount depends on
+   which draw was made. It is not a test of whether the ranking moved, and it is not a
+   reference for how much a ranking moves for reasons other than noise.
 
 Datasets are never pooled. A Spearman measured on rmse-scored logd and one measured on
 spearman-scored flab_thermo_tresanco are not the same quantity, and each table below is
@@ -90,6 +101,13 @@ def load(input_dir, dataset=None):
             print(f"  {f.stem}: SKIPPED — {p.get('reason')} "
                   f"(policy={p.get('policy')})")
             continue
+        if 'swept_conditions' in p and 'per_replicate' not in p:
+            # The sweep's index (noise_helpers.sweep_conditions), not a result.
+            print(f"  {f.stem}: sweep index, names "
+                  f"{len(p.get('conditions_written') or {})} condition files; "
+                  f"skipped conditions: "
+                  f"{sorted((p.get('conditions_skipped_and_why') or {}))}")
+            continue
         if 'per_replicate' not in p:
             print(f"  {f.stem}: no per_replicate block — older schema, not read")
             continue
@@ -101,29 +119,66 @@ def _levels_of(p):
     return [float(x) for x in p['levels']]
 
 
+def _finite(x):
+    try:
+        return x is not None and bool(np.isfinite(float(x)))
+    except (TypeError, ValueError):
+        return False
+
+
+def control_clean_reference(p):
+    """Level 0.0 delivered no noise: the recorded delivered amount is exactly 0.0.
+
+    This is the control that can fail. n16 compares every level with level 0.0, so
+    a level 0.0 that moved any label would make every drift below a comparison of
+    two noisy rankings. Returns (n_rows_checked, failures, n_rows_unrecorded).
+    """
+    bad, checked, unrecorded = [], 0, 0
+    for r in p.get('dose_check') or []:
+        if float(r.get('level', -1)) != 0.0:
+            continue
+        got = r.get('realised_dose_label_units')
+        if not _finite(got):
+            unrecorded += 1
+            continue
+        checked += 1
+        if float(got) != 0.0:
+            bad.append((r.get('replicate'), f'delivered {float(got):.9g}'))
+    return checked, bad, unrecorded
+
+
 def control(p):
     """Level 0.0 against itself: Spearman 1.0 and the whole top-k retained.
 
-    Returns (n_cells_checked, failures). The count is returned so a run with no
-    base-arm cells reports "nothing to check" rather than passing vacuously — a
-    control that cannot fail is not a control.
+    n16 builds this row from ONE stored array compared with itself
+    (_summarise_replicate reads the level-0.0 key as both sides), so it proves the
+    comparison code runs and nothing more. A cell whose scorer ranked fewer than
+    MIN_SCORED_FOR_RANK features has no Spearman (_pair_stats returns nan) and is
+    counted as thin, not as a failure.
+
+    Returns (n_cells_checked, failures, thin).
     """
-    bad, checked = [], 0
+    bad, thin, checked = [], [], 0
     for rkey, block in p['per_replicate'].items():
         for method, reps in block.get('base', {}).items():
             for rname, cells in reps.items():
-                checked += 1
                 c = cells.get('0')
                 if c is None:
+                    checked += 1
                     bad.append((rkey, method, rname, 'no level-0.0 row'))
                     continue
                 rho = c['mean_spearman_both_scored']
                 kept = c['mean_topk_retained_fraction']
+                if (c.get('mean_n_scored_features', 0) < MIN_SCORED_FOR_RANK
+                        or not _finite(rho)):
+                    thin.append((rkey, method, rname))
+                    continue
+                checked += 1
                 if not (abs(rho - 1.0) <= CONTROL_RTOL
                         and abs(kept - 1.0) <= CONTROL_RTOL):
                     bad.append((rkey, method, rname,
                                 f'spearman={rho:.9f} retained={kept:.9f}'))
-    return checked, bad
+    return checked, bad, thin
 
 
 def report_counts(p):
@@ -158,91 +213,124 @@ def report_counts(p):
             print(row)
 
 
+def _rep_names(p, method):
+    names = set()
+    for block in p['per_replicate'].values():
+        names |= set(block.get('base', {}).get(method, {}))
+    order = p.get('rep_order') or []
+    return [r for r in order if r in names] + sorted(names - set(order))
+
+
 def report_drift(p):
-    """How far the ranking moved from level 0.0, per method per level."""
+    """How far the ranking moved from level 0.0, per method, per representation,
+    per level. The spread is across noise draws only; representations are never
+    pooled, because a 167-feature fingerprint and a 2048-feature one ranked by the
+    same scorer are not the same quantity."""
     levels = [lv for lv in _levels_of(p) if lv > 0.0]
     print("\n  RANK AGREEMENT WITH LEVEL 0.0")
-    print("  rho = Spearman over the features either level scored non-zero; "
+    print("  one row is one representation at one level. rho = Spearman over the "
+          "features either")
+    print("  level scored non-zero, as median, min and max across noise draws. "
           "kept = the fraction")
-    print(f"  of the level-0.0 top set still in the top set at that level. "
-          f"'top set' is how many")
+    print("  of the level-0.0 top set still in the top set at that level. "
+          "'top set' is how many")
     print(f"  features that set holds: {p.get('top_k')} was asked for, capped at "
           f"how many features")
-    print("  the scorer gave a non-zero score, so the set never contains a tied "
-          "zero.")
+    print("  the level-0.0 scorer gave a non-zero score, so the set never contains "
+          "a tied zero.")
+    print(f"  'too thin' counts draws whose scorer ranked fewer than "
+          f"{MIN_SCORED_FOR_RANK} features, or")
+    print("  whose Spearman is undefined; they are left out of the row.")
     for method in p['importance_methods']:
         rows = []
-        for lv in levels:
-            rho, rho_all, kept, keff, thin = [], [], [], [], 0
-            for block in p['per_replicate'].values():
-                for rname, cells in block.get('base', {}).get(method, {}).items():
-                    c = cells.get(f'{lv:g}')
+        for rname in _rep_names(p, method):
+            for lv in levels:
+                rho, rho_all, kept, keff, thin = [], [], [], [], 0
+                for block in p['per_replicate'].values():
+                    c = (block.get('base', {}).get(method, {}).get(rname, {})
+                         .get(f'{lv:g}'))
                     if c is None:
                         continue
-                    if c['mean_n_scored_features'] < MIN_SCORED_FOR_RANK:
+                    if (c['mean_n_scored_features'] < MIN_SCORED_FOR_RANK
+                            or not _finite(c['mean_spearman_both_scored'])):
                         thin += 1
                         continue
                     rho.append(c['mean_spearman_both_scored'])
                     rho_all.append(c['mean_spearman_all_features'])
-                    # The EFFECTIVE top set: capped at how many features the scorer
-                    # actually ranked. The plain top-k includes tied zeros ordered by
-                    # index, identically on both sides, and comes back 1.00 whenever
-                    # the scorer left more than (width - k) features at zero.
+                    # The EFFECTIVE top set: capped at how many features the
+                    # scorer actually ranked. The plain top-k includes tied zeros
+                    # ordered by index, identically on both sides, and comes back
+                    # 1.00 whenever the scorer left more than (width - k) features
+                    # at zero.
                     kept.append(c['mean_topk_effective_retained_fraction'])
                     keff.append(c['mean_topk_effective_size'])
-            if rho:
-                rows.append((lv, len(rho), float(np.median(rho)),
-                             float(np.min(rho)), float(np.max(rho)),
-                             float(np.median(rho_all)),
-                             float(np.median(kept)),
-                             float(np.median(keff)), thin))
+                if rho:
+                    rows.append((rname, lv, len(rho), float(np.median(rho)),
+                                 float(np.min(rho)), float(np.max(rho)),
+                                 float(np.nanmedian(rho_all)),
+                                 float(np.nanmedian(kept)),
+                                 float(np.nanmedian(keff)), thin))
+                elif thin:
+                    rows.append((rname, lv, 0, float('nan'), float('nan'),
+                                 float('nan'), float('nan'), float('nan'),
+                                 float('nan'), thin))
         if not rows:
             continue
         print(f"\n  [{method}]")
-        print(f"    {'level':>7}{'cells':>7}{'rho med':>10}{'rho min':>10}"
-              f"{'rho max':>10}{'rho all':>10}{'kept':>8}{'top set':>9}"
-              f"{'too thin':>10}")
-        for lv, ncell, med, lo, hi, med_all, kept, keff, thin in rows:
-            print(f"    {lv:>7.2f}{ncell:>7}{med:>10.4f}{lo:>10.4f}{hi:>10.4f}"
-                  f"{med_all:>10.4f}{kept:>8.3f}{keff:>9.0f}{thin:>10}")
+        print(f"    {'representation':<22}{'level':>7}{'draws':>7}{'rho med':>10}"
+              f"{'rho min':>10}{'rho max':>10}{'rho all':>10}{'kept':>8}"
+              f"{'top set':>9}{'too thin':>10}")
+        for rname, lv, ndraw, med, lo, hi, med_all, kept, keff, thin in rows:
+            print(f"    {rname:<22}{lv:>7.2f}{ndraw:>7}{med:>10.4f}{lo:>10.4f}"
+                  f"{hi:>10.4f}{med_all:>10.4f}{kept:>8.3f}{keff:>9.0f}{thin:>10}")
 
 
 def report_replicate_spread(p):
-    """The drift has to clear the spread between independent noise draws."""
+    """How much the amount of movement depends on which noise draw was made."""
     reps = p['per_replicate']
     if len(reps) < 2:
-        print("\n  REPLICATE SPREAD: one noise draw only, so there is nothing for "
-              "the drift above to clear. Re-run with --replicates 2 or more before "
-              "reading any level-to-level movement as real.")
+        print("\n  DRAW-TO-DRAW RANGE: one noise draw only, so there is no range to "
+              "print. Re-run with --replicates 2 or more to see whether the drift "
+              "above depends on the draw.")
         return
     levels = [lv for lv in _levels_of(p) if lv > 0.0]
-    print("\n  DRIFT AGAINST THE SPREAD BETWEEN NOISE DRAWS")
-    print(f"  drift = 1 - rho against level 0.0, median over cells. spread = the "
-          f"range of that")
-    print(f"  same figure across the {len(reps)} independent draws. A level whose "
-          f"drift does not")
-    print("  exceed its own spread has not moved.")
+    print("\n  DRIFT AND ITS RANGE ACROSS NOISE DRAWS")
+    print("  one row is one representation at one level. drift = 1 - rho against "
+          "level 0.0,")
+    print("  median across draws. range = max minus min of that drift across "
+          f"the {len(reps)} draws.")
+    print("  Each draw is compared on the same rows with the same scorer seed, so "
+          "any drift above")
+    print("  zero is caused by the noise. The range says whether the AMOUNT depends "
+          "on the draw;")
+    print("  it is not a test of whether the ranking moved.")
     for method in p['importance_methods']:
         rows = []
-        for lv in levels:
-            per_draw = []
-            for block in reps.values():
-                vals = [c['mean_spearman_both_scored']
-                        for cells in block.get('base', {}).get(method, {}).values()
-                        if (c := cells.get(f'{lv:g}')) is not None]
-                if vals:
-                    per_draw.append(1.0 - float(np.median(vals)))
-            if len(per_draw) >= 2:
-                rows.append((lv, float(np.median(per_draw)),
-                             float(np.max(per_draw) - np.min(per_draw)),
-                             len(per_draw)))
+        for rname in _rep_names(p, method):
+            for lv in levels:
+                per_draw = []
+                for block in reps.values():
+                    c = (block.get('base', {}).get(method, {}).get(rname, {})
+                         .get(f'{lv:g}'))
+                    if c is None or not _finite(c['mean_spearman_both_scored']):
+                        continue
+                    if c['mean_n_scored_features'] < MIN_SCORED_FOR_RANK:
+                        continue
+                    per_draw.append(1.0 - float(c['mean_spearman_both_scored']))
+                if len(per_draw) >= 2:
+                    rows.append((rname, lv, float(np.median(per_draw)),
+                                 float(np.max(per_draw) - np.min(per_draw)),
+                                 len(per_draw)))
         if not rows:
             continue
         print(f"\n  [{method}]")
-        print(f"    {'level':>7}{'drift':>10}{'spread':>10}{'draws':>7}  verdict")
-        for lv, drift, spread, ndraw in rows:
-            verdict = 'clears the draw' if drift > spread else 'inside the draw'
-            print(f"    {lv:>7.2f}{drift:>10.4f}{spread:>10.4f}{ndraw:>7}  {verdict}")
+        print(f"    {'representation':<22}{'level':>7}{'drift':>10}{'range':>10}"
+              f"{'draws':>7}  reading")
+        for rname, lv, drift, spread, ndraw in rows:
+            verdict = ('similar in every draw' if drift > spread
+                       else 'depends on the draw')
+            print(f"    {rname:<22}{lv:>7.2f}{drift:>10.4f}{spread:>10.4f}"
+                  f"{ndraw:>7}  {verdict}")
 
 
 def report_hybrid_ranking(p):
@@ -348,22 +436,42 @@ def report(path, p):
         print(f"  POOL DIFFERS from the signed-off list: "
               f"missing={p['pool_missing']} extra={p['pool_extra']}")
 
-    checked, bad = control(p)
-    if not checked:
-        print("\n  CONTROL: not run — this file has no base-arm cells, so there is "
-              "no level-0.0-against-itself row to check. The hybrid tables below "
-              "stand on their own counts.")
+    n0, bad0, un0 = control_clean_reference(p)
+    if bad0:
+        print(f"\n  CONTROL FAILED: level 0.0 delivered noise in {len(bad0)} of "
+              f"{n0} draws. The reference row is not the clean labels, so no "
+              f"drift below can be read.")
+        for rep, msg in bad0[:10]:
+            print(f"    replicate {rep}: {msg}")
+    elif n0:
+        print(f"\n  CONTROL: level 0.0 delivered exactly 0.0 label units in all "
+              f"{n0} draws, so the reference row is the clean labels.")
+    else:
+        print("\n  CONTROL: this file records no delivered amount at level 0.0, so "
+              "whether the reference row is clean is NOT checked.")
+    if un0:
+        print(f"    {un0} level-0.0 rows carry no delivered amount.")
+
+    checked, bad, thin = control(p)
+    if not checked and not thin:
+        print("  SELF-COMPARISON: no base-arm cells, so nothing to check. The "
+              "hybrid tables below stand on their own counts.")
     elif bad:
-        print(f"\n  CONTROL FAILED on {len(bad)} cells. Level 0.0 against itself "
-              f"must give Spearman 1.0 and retain every top-k feature. Nothing "
-              f"below can be read.")
+        print(f"  SELF-COMPARISON FAILED on {len(bad)} cells. Level 0.0 against "
+              f"itself must give Spearman 1.0 and retain every top-k feature, so "
+              f"the comparison code is broken.")
         for row in bad[:10]:
             print(f"    replicate {row[0]} {row[1]}/{row[2]}: {row[3]}")
         if len(bad) > 10:
             print(f"    ... and {len(bad) - 10} more")
     else:
-        print(f"\n  CONTROL: level 0.0 against itself gives Spearman 1.0 and keeps "
-              f"every top-k feature, on all {checked} cells.")
+        print(f"  SELF-COMPARISON: level 0.0 against itself gives Spearman 1.0 on "
+              f"all {checked} cells. It compares one array with itself, so this "
+              f"shows only that the comparison code runs.")
+    if thin:
+        print(f"    {len(thin)} cells ranked fewer than {MIN_SCORED_FOR_RANK} "
+              f"features at level 0.0 and have no Spearman: "
+              f"{sorted({f'{m}/{r}' for _, m, r in thin})}")
 
     report_dose(p)
     report_counts(p)
