@@ -14,8 +14,8 @@ injected distribution", never as "method X is robust to noise".
 Conditions swept (regression): gaussian, student_t at nu = 10, 5 and 3, laplace,
 outlier at p = 1%, 5% and 10%, grouped_wider and grouped_shifted. Every one of them
 delivers the SAME amount of noise at a given level, so a difference between two cells
-is a difference of shape. Censoring is not here: its level is the fraction of labels
-clipped rather than a dose, so it is not dose-matched and belongs on its own axis.
+is a difference of shape. Censoring also runs (owner, 2026-09-12), on its own level
+grid: its level is the fraction of labels clipped rather than a dose.
   - 'multiplicative' was REMOVED: for mean-centred / arbitrarily-shifted targets
     y*(1+eps) is not a meaningful label-noise model (it scales by absolute value,
     so its magnitude depends on an arbitrary origin), so it was dropped rather
@@ -2181,6 +2181,16 @@ def _compute_summary(results):
             hybrid_sim_total_by_type[_b][nt] = 0
 
         for sk, sd in nt_data.get('per_strength', {}).items():
+            # Level 0 is the recorded labels under every condition: the
+            # injector moves nothing, and the seeds and spaces are the same, so
+            # the cell is one set of numbers copied under every condition name.
+            # Counted, it makes the best method the same everywhere and hands
+            # every condition the same hybrid vote. Skipped since 2026-09-28.
+            try:
+                if float(sk) == 0.0:
+                    continue
+            except (TypeError, ValueError):
+                pass
             for space_name, space_data in sd.get('track_a', {}).items():
                 for mn, mv in space_data.items():
                     s = mv.get('score', float('nan'))
@@ -2266,13 +2276,12 @@ def _compute_summary(results):
     else:
         transfers = None
 
-    # Every condition sweeps the SAME axis now -- the noise level -- and delivers
-    # the same amount at a given level, so every cell is comparable with every other
-    # and they all share one x-axis. Censoring is the one condition that does not
-    # belong on it, because its level is the fraction of labels clipped rather than
-    # a dose; it is swept on its own axis and n13 does not include it.
+    # The dose-matched conditions share one axis, the noise level. Censoring has
+    # been in n13 since 2026-09-12 on its own axis, the fraction of labels
+    # clipped; this said 'noise_level' for it until 2026-09-28.
     sweep_axis_by_noise_type = {
-        nt: 'noise_level' for nt in results.get('per_noise_type', {})
+        nt: ('censored_fraction' if nt in CENSORING_STRATEGIES else 'noise_level')
+        for nt in results.get('per_noise_type', {})
     }
 
     return convert_numpy({
