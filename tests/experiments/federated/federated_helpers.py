@@ -2153,8 +2153,17 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
                 **_quality_cv_kwargs(n_cv, groups, len(y_train_t),
                                      classification=False))
             rmses[t] = float(np.sqrt(mean_squared_error(y_train_t, y_cv)))
-        except Exception:
-            rmses[t] = float('inf')
+        except Exception as e:
+            # This used to set the silo's RMSE to infinity and carry on. That
+            # silo then got weight 0 with nothing in the result saying so, and
+            # when every silo failed the weights fell back to equal: an
+            # unweighted mean filed as the quality-weighted ensemble. Checked
+            # 2026-09-28 with groups of the wrong length: weights came back
+            # {1: 0.5, 2: 0.5} and no error. The caller records a raise as a
+            # failed fold, which is what this is.
+            raise RuntimeError(
+                f"quality ensemble: silo {t}'s cross-validated RMSE could not "
+                f"be computed ({type(e).__name__}: {e})") from e
 
     if not all_preds:
         # All teachers were None — return zeros
@@ -2328,8 +2337,13 @@ def predict_fluid_quality_ensemble_classification(
                 **_quality_cv_kwargs(n_cv, groups, len(y_train_t),
                                      classification=True))
             mccs[t] = max(0.0, float(matthews_corrcoef(y_train_t, y_cv)))
-        except Exception:
-            mccs[t] = 0.0
+        except Exception as e:
+            # Raised, not set to 0, for the reason given in the regression
+            # version above: a silent 0 drops the silo, and all silos failing
+            # returns an unweighted mean under this ensemble's name.
+            raise RuntimeError(
+                f"quality ensemble: silo {t}'s cross-validated MCC could not "
+                f"be computed ({type(e).__name__}: {e})") from e
 
     if not all_probs:
         return np.zeros(n_test, dtype=int), np.full(n_test, 0.5), {}
