@@ -880,6 +880,24 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
+    # One fold partition, shared by every arm of this file: the zero-shot
+    # ranking, the per-representation supervised loop and the per-fold hybrid.
+    # Built here rather than beside the supervised loop so the zero-shot arm can
+    # be counted on the same held-out rows as everything else.
+    try:
+        fold_splits = _fold_splits(labels, groups, n_folds)
+    except ValueError as e:
+        print(f"  Cannot split: {e}")
+        return None
+    # The fraction of each held-out fold that is a binder. This is the level a
+    # random ranking reaches on that fold, and on this dataset the folds are
+    # edit-distance shells, so it is not the same number in each of them.
+    fold_base_rates = [float(labels[val_idx].mean())
+                       for _, val_idx in fold_splits]
+    print(f"  Held-out binder rate per fold: "
+          f"{', '.join(f'{r:.3f}' for r in fold_base_rates)} "
+          f"(whole dataset {n_binders / n:.3f})")
+
     # Zero-shot evaluation: LLR reps used directly as ranking scores
     # (matches paper's protocol — no classifier training, just rank by score)
     LLR_REPS = {'esmc_llr', 'antiberty_llr'}
@@ -902,13 +920,48 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
                 auroc_val = roc_auc_score(labels, scores)
             except Exception:
                 auroc_val = float('nan')
+            # The same count on the same held-out folds the supervised table
+            # below is scored on. Nothing is fitted here, so scoring every row
+            # at once is sound on its own terms — but the supervised numbers it
+            # is printed beside are means over held-out folds of 855 to 2,434
+            # rows with binder rates from 0.18 to 0.39, and the top 1% of one
+            # fold is not the top 1% of the whole library. These per-fold keys
+            # are the like-for-like pair; 'enrichment' above is kept unchanged.
+            fold_enrich = [compute_enrichment(labels[val_idx], scores[val_idx])
+                           for _, val_idx in fold_splits]
+            fold_auroc = []
+            for _, val_idx in fold_splits:
+                try:
+                    fold_auroc.append(
+                        float(roc_auc_score(labels[val_idx], scores[val_idx])))
+                except Exception:
+                    pass
+            per_fold = {}
+            for frac in ENRICHMENT_FRACTIONS:
+                for key in (f'enrich_{frac}', f'ef_{frac}'):
+                    vals = [fe[key] for fe in fold_enrich if key in fe]
+                    if vals:
+                        per_fold[key] = {'mean': float(np.mean(vals)),
+                                         'std': float(np.std(vals)),
+                                         'per_fold': [float(v) for v in vals]}
+            if fold_auroc:
+                per_fold['auroc'] = {'mean': float(np.mean(fold_auroc)),
+                                     'std': float(np.std(fold_auroc)),
+                                     'per_fold': fold_auroc}
+            per_fold['base_rate_per_fold'] = list(fold_base_rates)
             zero_shot_results[rep_name] = {
                 'enrichment': enrichment,
                 'auroc': float(auroc_val),
+                # Scored on the same held-out folds as the supervised table.
+                'held_out_folds': per_fold,
             }
             e1 = enrichment.get('enrich_0.01', float('nan'))
+            e1_f = per_fold.get('enrich_0.01', {}).get('mean', float('nan'))
+            auroc_f = per_fold.get('auroc', {}).get('mean', float('nan'))
             print(f"    {rep_name:25s} zero-shot  "
-                  f"E@1%={e1:.4f}  AUROC={auroc_val:.4f}")
+                  f"whole library E@1%={e1:.4f} AUROC={auroc_val:.4f}  |  "
+                  f"mean over the held-out folds E@1%={e1_f:.4f} "
+                  f"AUROC={auroc_f:.4f}")
 
     # Supervised evaluation (KIRBy's extension beyond paper).
     # NOTE: this is a second pass over `reps` after the zero-shot loop
@@ -916,13 +969,9 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # has no model factory and the supervised pass runs |models| inner
     # iterations per rep; merging them is mechanical but not minimal-diff.
     models = get_model_factories(MODELS_LIST, 'classification', n_samples=n)
-    # One fold partition, shared by the per-representation loop and the per-fold
-    # hybrid arm, so their held-out enrichments can be subtracted fold by fold.
-    try:
-        fold_splits = _fold_splits(labels, groups, n_folds)
-    except ValueError as e:
-        print(f"  Cannot split: {e}")
-        return None
+    # fold_splits was built before the zero-shot arm above; every arm of this
+    # file scores on that one partition, so their held-out enrichments can be
+    # subtracted fold by fold.
     print(f"\n  Supervised evaluation ({len(reps)} reps × {len(models)} models × {n_folds}-fold CV)...")
     results = {}
     for rep_name in sorted(reps.keys()):
