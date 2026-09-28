@@ -491,9 +491,23 @@ def get_clf_model_factories(model_names, n_samples=None):
     from sklearn.neighbors import KNeighborsClassifier
     from sklearn.neural_network import MLPClassifier
 
+    # Thread counts come from KIRBY_RF_JOBS and KIRBY_LGBM_THREADS, the
+    # repository's switches for a shared machine; both default to -1, which is
+    # what was hard-coded here, so a cluster run is unchanged. n_jobs changes how
+    # the same forest is built, not the forest, so no score moves (2026-09-28).
+    try:
+        _rf_jobs = int(os.environ.get('KIRBY_RF_JOBS', '-1') or -1)
+    except ValueError:
+        _rf_jobs = -1
+    try:
+        from kirby.hybrid import lgbm_n_jobs as _lgbm_n_jobs
+        _lgbm_jobs = _lgbm_n_jobs()
+    except Exception:
+        _lgbm_jobs = -1
+
     catalog = {
         'rf':    lambda: RandomForestClassifier(n_estimators=100, max_features='sqrt',
-                                                random_state=42, n_jobs=-1),
+                                                random_state=42, n_jobs=_rf_jobs),
         'knn':   lambda: KNeighborsClassifier(n_neighbors=5, n_jobs=-1),
         'mlp':   lambda: MLPClassifier(hidden_layer_sizes=(100, 50),
                                        random_state=42, max_iter=500),
@@ -510,7 +524,7 @@ def get_clf_model_factories(model_names, n_samples=None):
     try:
         from lightgbm import LGBMClassifier
         catalog['lightgbm'] = lambda: LGBMClassifier(n_estimators=100, random_state=42,
-                                                      n_jobs=-1, verbose=-1)
+                                                      n_jobs=_lgbm_jobs, verbose=-1)
     except ImportError:
         pass
 
