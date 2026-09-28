@@ -627,9 +627,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             #
             # What that costs, measured here: this is the widest matrix
             # anything in the suite fits -- every loaded representation glued
-            # together, 16,405 features on herg_ki against 1,412 molecules --
-            # and one LightGBM at 600 trees over 5 folds took more than 14
-            # minutes at 1.5 GB resident on one thread. The fix is the
+            # together, 16,405 features on herg_ki against 1,412 molecules
+            # when this was written (15,081 over ten representations in the
+            # 2026-09-28 local run) -- and one LightGBM at 600 trees over 5
+            # folds took more than 14 minutes at 1.5 GB resident on one
+            # thread. In the 2026-09-28 local run, 3 folds on a loaded
+            # machine, this fit took about 2 h 18 min of wall time on herg_ki. The fix is the
             # dimension cap NOISE_AUDIT_2026_09_10.md asks for at n14:399,
             # NOT more threads, and it is a change to what the residual spread
             # is measured on, so it is not made here.
