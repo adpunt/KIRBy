@@ -789,7 +789,11 @@ def main():
         # slicing the sweep is meant to avoid.
         spread, c_results = args.fold_spread, {}
         run_c = 'C' in args.compare and args.fold_spread is None
-        if run_c or 'C' in args.compare:
+        # Was `if run_c or 'C' in args.compare`, which is just "C was asked
+        # for": a task handed --fold-spread re-ran C anyway, and then took the
+        # max of the handed spread and the new one, so the margin unit was not
+        # the number passed in. Fixed 2026-09-28 (dirty local audit).
+        if run_c:
             for name, rep_pool in hybrid_pools.items():
                 res, folds = run_comparison(name, data, ds, rep_pool, None,
                                             config, args)
