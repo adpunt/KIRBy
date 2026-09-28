@@ -3255,7 +3255,16 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
 
 
 def estimate_intrinsic_dim_mle(X: np.ndarray, k: int = 10) -> float:
-    """MLE estimator of intrinsic dimensionality (Levina-Bickel 2004)."""
+    """MLE estimator of intrinsic dimensionality (Levina-Bickel 2004).
+
+    Repeated rows are dropped first. The estimator assumes distinct points: a
+    row with an exact copy among its neighbours has a nearest distance of 0,
+    log(T_k / 0) is infinite, and that row's estimate becomes 0 and is averaged
+    in. Measured 2026-09-28 on a 5-dimensional Gaussian cloud of 1,000 points:
+    5.59 as generated, 3.95 once 200 rows were repeated. logd's ecfp4 repeats
+    339 of 5,028 rows and buchwald_hartwig's diff_maccs 1,756 of 3,955.
+    """
+    X = np.unique(np.asarray(X), axis=0)
     n_samples = X.shape[0]
     k = min(k, n_samples - 1)
 
