@@ -1014,8 +1014,12 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
         bp_pred, pred_src = _predictive_blueprint(
             reps, labels, groups, is_clf, 42 + seed, dataset_name, data, cache_dir)
         # Best single rep by held-out SAC (from the sim baseline).
-        best_rep = max(reps.keys(),
-                       key=lambda r: base_sim.get(r, {}).get('rf', -np.inf))
+        # A NaN baseline (read-across undefined on every fold) compares False
+        # against everything, so max() could return it depending on dict order.
+        def _base_score(r):
+            v = base_sim.get(r, {}).get('rf', -np.inf)
+            return v if (isinstance(v, (int, float)) and np.isfinite(v)) else -np.inf
+        best_rep = max(reps.keys(), key=_base_score)
         picks.append({'seed': 42 + seed,
                       'sim_alloc': getattr(bp_sim, 'allocation_method', None),
                       'sim_budget': getattr(bp_sim, 'budget', None),
@@ -1069,13 +1073,16 @@ def run_dataset(dataset_name, seeds, verbose=True, cache_dir=None, rep_names=Non
     payoff2_est = result['payoff2_estimation']
     payoff3 = result['payoff3_importance_weighted']
     if verbose:
+        # A None mean (no blueprint for one space) used to raise a TypeError
+        # here, after every number was computed; main() then overwrote the
+        # dataset's JSON with an error entry.
+        def _m(d): return d['mean'] if d and d['mean'] is not None else float('nan')
         s = result['payoff1_heldout_similarity']['sac']
-        print(f"  held-out SAC   sim={s['sim']['mean']:.3f}  "
-              f"pred={s['pred']['mean']:.3f}  best_rep={s['rep']['mean']:.3f}")
+        print(f"  held-out SAC   sim={_m(s['sim']):.3f}  "
+              f"pred={_m(s['pred']):.3f}  best_rep={_m(s['rep']):.3f}")
         if 'skipped' in payoff2:
             print("  payoff2 noise: skipped (classification — denoisers are regression-designed)")
             return result
-        def _m(d): return d['mean'] if d and d['mean'] is not None else float('nan')
         print(f"  (chance precision = NOISE_FRAC = {NOISE_FRAC:.2f}; deltas are raw "
               f"score changes, not fractions)")
         for nt in NOISE_TYPES:
