@@ -69,8 +69,10 @@ labels.
   itlm_a<alpha>             4 rounds. Each round: a LightGBM (oof_predict's
                             settings) is fitted on the kept molecules; a kept
                             molecule's loss is its OUT-OF-FOLD squared error, a
-                            dropped molecule's is its error under the model
-                            fitted on all kept molecules (the report's snippet);
+                            dropped molecule's is its error under a fold model
+                            that held its scaffold group out, or under the model
+                            fitted on all kept molecules when no kept molecule
+                            shares its group (subset_loss);
                             the lowest-loss share alpha is kept. The overlap of
                             the kept sets of consecutive rounds is written.
   itlm_a<alpha>_random/seed<k>
@@ -1062,27 +1064,52 @@ def _knn_shapley_sweep(fsim, settings, ks, X_tr_s, y0, g_tr, cmask, condition,
 def subset_loss(make, X, y, groups, keep, oof_splits):
     """Squared error of every molecule under a model trained on the kept ones.
 
-    A kept molecule's error is OUT OF FOLD within the kept set (group-aware); a
-    dropped molecule's is under one model fitted on every kept molecule. This is
-    the report's H2 snippet with the model left as an argument.
+    A kept molecule's error is OUT OF FOLD within the kept set (group-aware).
+    A dropped molecule is scored with its scaffold group held out too: by the
+    fold model whose held-out part holds its group's kept members. A dropped
+    molecule whose group has no kept member is scored by one model fitted on
+    every kept molecule, which saw nothing of its group. That last model is the
+    report's H2 snippet, with the model left as an argument.
+
+    Changed 2026-09-28. Before, every dropped molecule was scored by the model
+    fitted on all kept molecules, which had trained on its scaffold mates, while
+    every kept molecule was scored with its group held out. Measured on 300
+    synthetic molecules in 50 groups, 30 dropped at random, 4 draws: mean
+    squared error 0.171 for the dropped against 0.414 for the kept, and 0.566
+    for the same dropped molecules with their group held out. The lowest-loss
+    cut then ranked two scales against each other. Datasets without scaffold
+    groups (one group per molecule) score exactly as before.
     """
     y = np.asarray(y, dtype=float)
     keep = np.asarray(keep, dtype=bool)
+    g = np.asarray(groups)
     ki = np.flatnonzero(keep)
-    g_k = np.asarray(groups)[ki]
+    di = np.flatnonzero(~keep)
+    g_k = g[ki]
+    g_d = g[di]
     loss = np.empty(len(y))
     k = _safe_n_splits(g_k, oof_splits)
     oof = np.full(ki.size, np.nan)
+    pred_d = np.full(di.size, np.nan)
+    done_d = np.zeros(di.size, dtype=bool)
     for tr, te in group_kfold_splitter(g_k, k, X[ki], y[ki]):
         m = make()
         m.fit(X[ki][tr], y[ki][tr])
         oof[te] = m.predict(X[ki][te])
+        if di.size:
+            # The dropped molecules whose group this fold model held out.
+            here = np.isin(g_d, g_k[te]) & ~done_d
+            if here.any():
+                pred_d[here] = m.predict(X[di[here]])
+                done_d |= here
     loss[ki] = (y[ki] - oof) ** 2
-    di = np.flatnonzero(~keep)
     if di.size:
-        m = make()
-        m.fit(X[ki], y[ki])
-        loss[di] = (y[di] - m.predict(X[di])) ** 2
+        rest = ~done_d
+        if rest.any():
+            m = make()
+            m.fit(X[ki], y[ki])
+            pred_d[rest] = m.predict(X[di[rest]])
+        loss[di] = (y[di] - pred_d) ** 2
     return loss
 
 
