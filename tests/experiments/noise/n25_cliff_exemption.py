@@ -17,7 +17,8 @@ is called ONCE. What comes back is then fitted three times:
 
   plain           exactly what the cleanup produced
   cliff_exempt    the same thing with every cliff molecule put back: its label
-                  restored, its weight set to 1, its row undeleted
+                  restored, its weight set to the untouched level (the
+                  largest weight in the column), its row undeleted
   random_exempt   the same thing with as many NON-cliff molecules put back,
                   drawn at random from that fold's training molecules
 
@@ -40,8 +41,8 @@ weight in the fit. `remove` deletes the row. The other seven overwrite the
 label. If the exemption helps the weighting cleanups as much as it helps the
 rewriting ones, then what matters is WHICH molecules are touched; if it helps
 only the rewriting ones, what matters is WHAT is done to them.
-`summary.per_space[space].by_what_the_cleanup_does` puts the three families side
-by side for exactly that reading.
+`per_level[<level>].summary.per_space[space].by_what_the_cleanup_does` puts
+the three families side by side for exactly that reading.
 
 WHAT DEFINES A CLIFF HERE, AND THE TWO DEFINITIONS THAT DISAGREE. Three already
 exist in this repository and no fourth is written here:
