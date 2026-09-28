@@ -183,7 +183,13 @@ def _recall_at_k(y_true, y_pred, frac=0.1):
 # Properties where LOWER values are better (sign-flip for top-K recall).
 # From abdev-benchmark constants.py ASSAY_HIGHER_IS_BETTER:
 #   HIC=False, PR_CHO=False, AC-SINS=False (i.e. lower is better for these)
-LOWER_IS_BETTER = {'ginkgo_hic', 'ginkgo_pr_cho', 'ginkgo_acsins'}
+# ginkgo_colloidal (SMAC retention time, minutes) is not a competition property,
+# so the benchmark's table does not list it. A longer SMAC retention means more
+# column interaction and poorer colloidal stability, the same polarity as HIC,
+# so its top-10% recall is read at the low end too (added 2026-09-28; before,
+# its recall counted the antibodies with the WORST colloidal behaviour).
+LOWER_IS_BETTER = {'ginkgo_hic', 'ginkgo_pr_cho', 'ginkgo_acsins',
+                   'ginkgo_colloidal'}
 
 
 def evaluate_rep_reg(X, labels, groups, prebuilt_splits, model,
@@ -954,13 +960,13 @@ def print_reselection_analysis(all_results):
 def main():
     parser = argparse.ArgumentParser(
         description='Ginkgo developability experiment (OPIG B5). '
-                    'Evaluates all 9 properties with KIRBy antibody reps.')
+                    'Evaluates the 5 properties in ALL_PROPERTIES with KIRBy antibody reps.')
     parser.add_argument(
         '--properties', type=str, default=None,
-        help='Comma-separated property names (default: all 9)')
+        help='Comma-separated property names (default: the 5 in ALL_PROPERTIES)')
     parser.add_argument(
         '--reps', type=str, default=None,
-        help='Comma-separated rep names (default: hand-picked set of 10)')
+        help='Comma-separated rep names (default: each property\'s approved pool)')
     parser.add_argument(
         '--n-folds', type=int, default=5,
         help='Number of CV folds (default: 5, uses pre-computed splits)')
