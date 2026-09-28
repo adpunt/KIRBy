@@ -257,11 +257,11 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         the base representations depends on the fold and the importance method
         and on nothing else, so every cell can read the same vector.
     alloc_scores_by_fold: {(fold, internal_evaluator): {rep: score}} shared by
-        the budgets of ONE (family, regularisation setting) and filled from
-        feature_info['allocation_baseline_scores'] on first use. Those scores
-        depend on the fold and the estimator, so they may not be shared across
-        regularisation settings -- alpha=0.001 and alpha=100 are different
-        estimators and score the representations differently.
+        the WHOLE heatmap and filled on first use. They depend on the fold and
+        the recipe's internal evaluator and on nothing else: create_hybrid
+        scores each representation with _score_rep_for_budget, which fits the
+        internal evaluator and never the downstream model (hybrid.py, its
+        docstring says so). So alpha=0.001 and alpha=100 get the same scores.
     Both None (the cluster default) recomputes everything inside create_hybrid,
     which is what this file did before 2026-09-25.
 
@@ -705,6 +705,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Shared by every cell of every family: one importance vector per (fold,
     # importance method). Empty and unused when _C16_REUSE_FOLD_WORK is off.
     _importance_by_fold = {} if _C16_REUSE_FOLD_WORK else None
+    # Shared the same way: one per-representation score vector per (fold,
+    # internal evaluator). It was one cache per regularisation setting, under a
+    # comment saying the scores depend on the downstream model. They do not --
+    # create_hybrid scores representations with the internal evaluator only --
+    # so the 14 settings recomputed one vector 14 times. Same numbers.
+    _alloc_scores_by_fold = {} if _C16_REUSE_FOLD_WORK else None
 
     for fam_name, variants in families.items():
         print(f"\n  --- {fam_name} ({len(variants)} regularization levels × {len(budgets)} budgets) ---")
@@ -714,18 +720,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         fam_blueprints = blueprints.get(fam_name, {})
 
         heatmap = {}  # {budget: {param_value: {'val': score, 'train': score}}}
-        # One entry per regularisation setting of this family, reused across
-        # this family's budgets and across nothing else. The scores belong to
-        # the estimator, and the estimator is what the setting changes.
-        _alloc_by_setting = {}
         for budget in budgets:
             heatmap[budget] = {}
             for pname, pval, factory in variants:
                 _t_cell = time.time()
-                if _C16_REUSE_FOLD_WORK:
-                    _alloc_cache = _alloc_by_setting.setdefault(str(pval), {})
-                else:
-                    _alloc_cache = None
+                _alloc_cache = _alloc_scores_by_fold
                 val_score, train_score, fold_scores = _evaluate_cell(
                     reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
                     augmentations=augmentations,
