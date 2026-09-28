@@ -49,7 +49,12 @@ WHAT IS COMPUTED, per fold, on the fold's training molecules as recorded:
   2. THE CHECK. `gaussian` at the dataset's level grid, injected into the
      training labels only. The distances in `gamma_reference_rep` do not depend
      on the labels, so its intercept minus its level-0 value should equal the
-     realised injected variance on that fold. Only that representation is
+     realised injected variance on that fold, in expectation over draws. One
+     draw adds a second term: each neighbour pair's clean label difference
+     times its noise difference. That term is linear in the level, so it
+     weighs most at the lowest level, and the levels share one draw scaled
+     (noise_spec_for), as do the folds. On herg_ki, one draw, the rise was
+     0.25 to 0.96 of the injected variance, lowest at level 0.15. Only that representation is
      checked: the hybrid and forest spaces would move their neighbours with the
      labels.
 
