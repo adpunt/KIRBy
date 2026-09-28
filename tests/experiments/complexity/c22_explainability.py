@@ -541,7 +541,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     shap_by_rep = {}
     shap_share_by_rep = {}
     shap_by_rep_std = {}
-    shap_models_by_fold = [fr.get('best_model') for fr in fold_results]
+    # Only folds whose SHAP vector entered the averages. A fold where SHAP
+    # failed contributed nothing, so its model cannot make the averages mixed.
+    shap_models_by_fold = [fr.get('best_model') if fr.get('shap_available')
+                           else None for fr in fold_results]
     shap_models_used = sorted({m for m in shap_models_by_fold if m})
     if len(shap_models_used) > 1:
         print(f"\n  ⛔ the SHAP averages below mix {len(shap_models_used)} "
@@ -711,12 +714,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # comparable between folds.
         'allocation_by_fold': allocation_by_fold,
         'allocation_moved_between_folds': allocation_moved,
-        'allocation_is_from_fold': 'last',
+        'allocation_is_from_fold': top_feature_fold,
         'top_features': explanation.get('top_features', [])[:30],
-        'top_features_from_fold': 'last',
+        'top_features_from_fold': top_feature_fold,
         # One fold's SHAP read against that same fold's feature map. No
         # cross-fold average is taken at any hybrid width.
-        'top_features_basis': "the last fold's own SHAP vector",
+        # When no fold produced SHAP, explain_hybrid falls back to the
+        # importance method's own scores (lightgbm gain), and says so here.
+        'top_features_basis': (
+            "the paired fold's own SHAP vector" if last_fold_shap is not None
+            else "NOT SHAP: no fold produced SHAP, so these are the importance "
+                 "method's own per-feature scores from the build"),
         # The model create_hybrid's keep/drop test was run with inside the
         # build behind the reported feature map, scored with the dataset's own
         # metric. Since 2026-09-28 every model builds its own features from its
