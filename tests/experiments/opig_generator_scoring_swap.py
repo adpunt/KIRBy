@@ -252,7 +252,7 @@ def _best_single_rep(data, rep_names, metric_fn, lower_is_better, seed):
 # ---------------------------------------------------------------------------
 
 def _arm_features(arm, budget, data, rep_names, metric_fn, lower_is_better,
-                  seed, search_result=None):
+                  seed, search_result=None, pool_reps=None):
     """Return (X, feature_info, rep_names_used, note) for one arm.
 
     feature_info is what kirby_reinvent_score.py replays on generated
@@ -300,8 +300,18 @@ def _arm_features(arm, budget, data, rep_names, metric_fn, lower_is_better,
         # s11's random Gaussian PROJECTION of the concatenated representations,
         # which is a different null and tests compression instead of selection.
         rng = np.random.RandomState(seed)
+        # pool_reps is arm C's own representations. Without it the draw ran
+        # over every representation the dataset offers, which changes WHICH
+        # representations the predictor sees as well as which features, so the
+        # arm stopped being the null this docstring describes.
+        draw_from = sorted(pool_reps) if pool_reps else sorted(data['reps'])
+        missing = [r for r in draw_from if r not in data['reps']]
+        if missing:
+            raise ValueError(
+                f"arm D was asked to draw from {sorted(missing)}, which the "
+                f"loaded representations do not hold")
         pool = []
-        for rep in sorted(data['reps']):
+        for rep in draw_from:
             width = np.asarray(data['reps'][rep]).shape[1]
             pool.extend((rep, j) for j in range(width))
         width = int(budget)
@@ -525,6 +535,15 @@ def _report_arm(arm_name, rows, oracles, train_keys):
             'molecules_the_oracle_could_not_featurise': n_unscored,
         }
         if len(finite):
+            # The best-of-k numbers below rise with the number of molecules an
+            # arm produced, and the arms do not all produce the same number:
+            # REINVENT stops a stage when the total score passes its threshold,
+            # and that score contains the arm's own predictor. These two are
+            # over every scored molecule, so they do not move with pool size.
+            entry['mean_blocker_probability_over_every_scored_molecule'] = float(
+                np.mean(finite))
+            entry['median_blocker_probability_over_every_scored_molecule'] = float(
+                np.median(finite))
             entry['blocker_probability_of_the_single_best_molecule'] = float(finite[0])
             for k in (10, 100):
                 take = finite[:k]
@@ -647,14 +666,24 @@ def stage_fit(args):
             + [('C', b) for b in budgets]
             + [('D', b) for b in budgets])
     c_widths = {}
+    c_reps = {}
     commands = []
     for arm, budget in plan:
         name = arm if budget is None else f'{arm}_b{budget}'
         X, info, rep_names, note = _arm_features(
             arm, budget, steer, steer_reps, metric_fn, lower_is_better,
-            args.seed, search_result=search)
+            args.seed, search_result=search,
+            pool_reps=c_reps.get(budget) if arm == 'D' else None)
         if arm == 'C':
             c_widths[budget] = X.shape[1]
+            # The representations that actually received a feature, which is
+            # what arm D draws from. feature_info also carries entries that
+            # are not representations at all ('allocation', 'greedy_history',
+            # 'augmentation_info'), so take only the ones holding columns.
+            c_reps[budget] = sorted(
+                r for r, e in info.items()
+                if isinstance(e, dict) and 'selected_indices' in e
+                and len(np.asarray(e['selected_indices']).ravel()) > 0)
         if arm == 'D':
             # Arm C's allocation can hand out fewer features than the budget
             # asks for, so arm D is rebuilt at the width C actually produced.
@@ -662,7 +691,7 @@ def stage_fit(args):
             if want is not None and want != X.shape[1]:
                 X, info, rep_names, note = _arm_features(
                     'D', want, steer, steer_reps, metric_fn, lower_is_better,
-                    args.seed)
+                    args.seed, pool_reps=c_reps.get(budget))
 
         scaler = StandardScaler().fit(X)
         model = factory()
