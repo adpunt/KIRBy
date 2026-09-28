@@ -428,7 +428,19 @@ def _evaluate_hybrid_enrichment_per_fold(
             continue
 
         if fold_idx == 0 and fold_search is not None:
-            top3_first_fold = extract_top3_base_reps(fold_search)
+            # A printed diagnostic -- the three best base representations on
+            # fold 0 -- and nothing below reads it. It sat outside every try in
+            # this loop, so a search result that carries no metric name and no
+            # lower_is_better made extract_top3_base_reps raise
+            # (_shared.py:1775, reproduced this session against a stub search),
+            # the exception left this function, and the caller's except at the
+            # per-fold hybrid call turned a fold-0 print into the loss of the
+            # whole per-fold hybrid arm. It is now named and skipped.
+            try:
+                top3_first_fold = extract_top3_base_reps(fold_search)
+            except Exception as e:
+                print(f"    fold 0: top-3 base representations not read "
+                      f"({type(e).__name__}: {e}); the hybrid arm continues")
 
         fitted_all = (getattr(fold_search, 'fitted_results', None) or {}
                       if fold_search is not None else {})
