@@ -1075,6 +1075,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         print(f"      held-out, family re-picked per fold: "
                               f"delta={_k.get('delta_mean_of_folds'):+.4f}, "
                               f"winners={_k.get('hybrid_winners_per_fold')}")
+                elif len(_heldout_scored) < 2:
+                    # At most one family has a held-out delta, so nothing
+                    # was chosen on it and the number is not raised by a
+                    # choice. (dirty-local 2026-09-28)
+                    cell['fold_reselection_scope'] = (
+                        f'one family only, no family choice made: {_mwhy}')
+                    print(f"      families not pooled: {_mwhy}")
                 else:
                     cell['fold_reselection_scope'] = (
                         f'family chosen by its own held-out delta '
