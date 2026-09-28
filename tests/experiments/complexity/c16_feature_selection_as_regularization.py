@@ -381,7 +381,13 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
             _bp_budget = getattr(blueprint, 'budget', None)
             if _bp_budget is not None and int(_bp_budget) != int(budget):
                 blueprint_budget_mismatch.add((int(budget), int(_bp_budget)))
-        except Exception:
+        except Exception as _e:
+            # Said out loud. A bare `continue` turned any build failure --
+            # including build_fold_hybrid's own refusal when a recipe's
+            # representations cannot be ranked -- into a None fold with no
+            # trace, and a cell that lost every fold into a silent nan.
+            print(f"      budget {budget}: fold {_fold_i} hybrid build failed, "
+                  f"fold left blank: {type(_e).__name__}: {_e}", flush=True)
             continue
 
         scaler = StandardScaler()
