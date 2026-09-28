@@ -205,6 +205,12 @@ def main():
             key = f"{method}_B{B}"
             print(f"\n== cell {key} ==", flush=True)
             slice_pf, hyb_pf, full_pf, q_pf, w_pf = [], [], [], [], []
+            # Per fold, per representation: what the allocation asked for,
+            # what was taken, and how many features had gain above zero. The
+            # taken count is capped by the gain-above-zero count, so without
+            # these the two allocation methods can give the same hybrid, or the
+            # same cgr_morgan columns, and nothing in the output says so.
+            asked_pf, taken_pf, npos_pf, scores_pf, best_idx_pf = [], [], [], [], []
             for fi, (tr, va) in enumerate(folds):
                 pool_tr = {r: H._clean(reps[r][tr]) for r in POOL}
                 pool_va = {r: H._clean(reps[r][va]) for r in POOL}
@@ -223,6 +229,21 @@ def main():
                 sel = info.get(BEST, {})
                 q = len(sel["selected_indices"]) if isinstance(sel, dict) and "selected_indices" in sel else 0
                 q_pf.append(q)
+                _alloc = info.get("allocation") or {}
+                asked_pf.append({r: int(_alloc.get(r, 0)) for r in POOL})
+                taken_pf.append({r: (int(info[r]["n_features"])
+                                     if isinstance(info.get(r), dict) else 0)
+                                 for r in POOL})
+                npos_pf.append({r: (int(info[r]["n_scored_above_zero"])
+                                    if isinstance(info.get(r), dict)
+                                    and "n_scored_above_zero" in info[r] else None)
+                                for r in POOL})
+                # Internal R2 of each representation on the hybrid's own 80/20
+                # split of this fold's training rows; the budget is split by these.
+                scores_pf.append({r: float(s) for r, s in
+                                  (info.get("allocation_baseline_scores") or {}).items()})
+                best_idx_pf.append(sorted(int(i) for i in sel["selected_indices"])
+                                   if q > 0 else [])
                 # best-rep full width (reuse saturation full)
                 full_pf.append(full_per_fold[fi])
                 # slice = best rep's contributed columns ALONE
@@ -243,6 +264,11 @@ def main():
                 "hybrid_rmse_per_fold": [float(x) for x in hyb_pf],
                 "hybrid_rmse_mean": float(np.mean(hyb_pf)),
                 "hybrid_width_per_fold": w_pf,
+                "allocation_asked_per_fold": asked_pf,
+                "features_taken_per_fold": taken_pf,
+                "gain_above_zero_per_fold": npos_pf,
+                "internal_r2_per_fold": scores_pf,
+                "best_selected_indices_per_fold": best_idx_pf,
                 # Hybrid minus cgr_morgan alone at full width, same folds, both
                 # lightgbm. Positive = hybrid WORSE (RMSE, lower is better).
                 "hybrid_minus_full_per_fold": [float(h - f) for h, f in zip(hyb_pf, full_pf)],
