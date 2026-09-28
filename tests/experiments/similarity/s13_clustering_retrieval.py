@@ -1058,10 +1058,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         h_ret_space = (min(_ret_by_slot, key=_ret_by_slot.get)
                        if _ret_by_slot else None)
         h_ret = _ret_by_slot.get(h_ret_space, float('nan'))
+        # No scored representation used to read as 1e10 (retrieval) and 0
+        # (coherence), so the hybrid "won" against nothing, and a NaN hybrid
+        # read as a loss. A side that is missing now gives None, not a verdict.
         best_rep_ret_name, best_rep_ret_val = (top3_retrieval[0]
-                                               if top3_retrieval else ('?', 1e10))
+                                               if top3_retrieval
+                                               else (None, float('nan')))
         best_rep_coh_name, best_rep_coh_val = (top3_clustering[0]
-                                               if top3_clustering else ('?', 0))
+                                               if top3_clustering
+                                               else (None, float('nan')))
+
+        def _win(h, b, lower):
+            if not (np.isfinite(h) and np.isfinite(b)):
+                return None
+            return bool(h < b) if lower else bool(h > b)
+
+        _cw = _win(h_coh, best_rep_coh_val, False)
+        _rw = _win(h_ret, best_rep_ret_val, True)
         results['summary'] = {
             'hybrid_coherence': h_coh,
             'hybrid_retrieval': h_ret,
@@ -1070,10 +1083,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid_spaces': hybrid_spaces,
             'best_rep_coherence': (best_rep_coh_name, best_rep_coh_val),
             'best_rep_retrieval': (best_rep_ret_name, best_rep_ret_val),
-            'hybrid_clustering_wins': bool(h_coh > best_rep_coh_val),
-            'hybrid_retrieval_wins': bool(h_ret < best_rep_ret_val),
-            'metrics_agree': ((h_coh > best_rep_coh_val)
-                              == (h_ret < best_rep_ret_val)),
+            'hybrid_clustering_wins': _cw,
+            'hybrid_retrieval_wins': _rw,
+            'metrics_agree': (None if _cw is None or _rw is None
+                              else _cw == _rw),
         }
         print(f"\n  Best hybrid slot (held-out): coherence={h_coh:.4f} "
               f"({h_coh_space}) vs best_rep={best_rep_coh_val:.4f} "
