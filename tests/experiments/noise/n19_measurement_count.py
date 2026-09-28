@@ -2106,7 +2106,7 @@ def main():
                         help="Comma-separated: single, averaged")
     parser.add_argument('--model-arms', type=str, default=None,
                         help=f"Comma-separated, from {','.join(MODEL_ARMS)}; "
-                             f"'none' fits none. Default: all four")
+                             f"'none' fits none. Default: all six")
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, rep_preset=args.reps)
