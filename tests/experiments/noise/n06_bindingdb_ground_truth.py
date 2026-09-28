@@ -237,33 +237,42 @@ def union_exclusion_groups(ground_truths, n):
     return np.array([find(i) for i in range(n)], dtype=np.int64)
 
 
-def _cap_whole_groups(rows, exclusion, cap, rng):
+def _cap_whole_groups(rows, exclusion, cap, rng, priority=None):
     """Keep at most `cap` rows, dropping a whole group at a time.
 
-    THE REPEAT GROUPS ARE TAKEN FIRST. Most rows of a dataset are measured
-    once, and one of those rows carries no ground truth at all — it is there so
-    the molecules that do have one have neighbours. Filling the cap from every
-    row on equal terms spends it almost entirely on rows that cannot be scored:
-    measured on BindingDB, a 1,000-row cap drawn that way left gaussian_process
-    with 45 of the 1,502 replicate groups, below the floor a correlation needs,
-    so it wrote no number at all and left the comparison without ever
-    appearing as a failure. Taking the repeated groups first leaves it 340.
+    THE ROWS THAT CAN BE GRADED ARE TAKEN FIRST. Only a held-out row inside a
+    ground-truth group keeps a score that is graded; every other row is there
+    so those rows have neighbours. `priority` marks the gradable rows, and
+    every exclusion group holding one is kept before any other group.
+
+    DIRTY-LOCAL 2026-09-28. This used to take groups with more than one row
+    first. That served BindingDB, where a ground-truth group is several rows,
+    but it spent the cap on training-fold groups whose scores are thrown away.
+    On herg_ki every ground-truth group is one row, so nothing was taken first:
+    1,000 of 1,412 rows were drawn at random and about 30% of the 65 curator
+    groups lost their score, leaving fewer than the 50-group floor.
 
     Dropping individual rows would leave a group holding one member, and one
     member has no spread, so a whole group is kept or none of it.
 
-    Returns (positions kept, how many REPEAT groups were dropped, how many
-    there were).
+    Returns (positions kept, how many PRIORITY groups were dropped, how many
+    there were). Without `priority`, groups with more than one row are the
+    priority, as before.
     """
     from _ground_truth_providers import rows_by_group
 
     index = rows_by_group(np.asarray(exclusion))
-    repeated = [g for g, m in index.items() if len(m) > 1]
+    if priority is None:
+        first = [g for g, m in index.items() if len(m) > 1]
+    else:
+        priority = np.asarray(priority, dtype=bool)
+        first = [g for g, m in index.items() if priority[m].any()]
     if len(rows) <= cap:
-        return np.arange(len(rows)), 0, len(repeated)
+        return np.arange(len(rows)), 0, len(first)
 
-    single = [g for g, m in index.items() if len(m) == 1]
-    order = list(rng.permutation(repeated)) + list(rng.permutation(single))
+    first_set = set(first)
+    rest = [g for g in index if g not in first_set]
+    order = list(rng.permutation(first)) + list(rng.permutation(rest))
     keep_mask = np.zeros(len(rows), dtype=bool)
     n_kept_rows = 0
     for gid in order:
@@ -277,9 +286,9 @@ def _cap_whole_groups(rows, exclusion, cap, rng):
         # its other members outside and make its spread a different number, so
         # the smallest whole group is kept and the cap is exceeded knowingly.
         keep_mask[min(index.values(), key=len)] = True
-    kept_repeated = sum(1 for g in repeated if keep_mask[index[g][0]])
+    kept_first = sum(1 for g in first if keep_mask[index[g][0]])
     return (np.flatnonzero(keep_mask),
-            int(len(repeated) - kept_repeated), len(repeated))
+            int(len(first) - kept_first), len(first))
 
 
 # ── feature spaces ─────────────────────────────────────────────────────────
@@ -631,6 +640,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return results
 
     exclusion = union_exclusion_groups(ground_truths, n_samples)
+    # Rows inside any provider's ground-truth group: the only rows whose score
+    # is ever graded. The Gaussian-process row cap keeps these first.
+    gradable = np.zeros(n_samples, dtype=bool)
+    for _gt in ground_truths:
+        gradable |= _gt.in_group
     estimators = resolve_estimators(is_clf=is_clf)
     results['estimators_run'] = list(estimators)
     results['estimator_list_source'] = (
@@ -926,11 +940,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # between them would be measuring that as well.
                     keep, dropped, n_repeat = _cap_whole_groups(
                         rows, excl_fold, GP_MAX_ROWS,
-                        np.random.RandomState(42 + fold_i))
+                        np.random.RandomState(42 + fold_i),
+                        priority=is_val & gradable[rows])
                     gp_groups_dropped[space_name].append(
                         {'fold': fold_i,
-                         'repeat_groups_dropped': int(dropped),
-                         'repeat_groups_in_this_fold': int(n_repeat),
+                         'gradable_groups_dropped': int(dropped),
+                         'gradable_groups_in_this_fold': int(n_repeat),
+                         'what_gradable_means': (
+                             'an exclusion group holding a held-out row '
+                             'that sits in a ground-truth group'),
                          'rows_kept': int(len(keep))})
                     X_e, y_e, rows_e = X_fold[keep], y_fold[keep], rows[keep]
                     excl_e, val_e = excl_fold[keep], is_val[keep]
