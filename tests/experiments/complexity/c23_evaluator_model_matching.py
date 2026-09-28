@@ -523,8 +523,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         for r in abc_results]
         all_c_deltas = [r['scores'].get('C_strong_off', {}).get('delta_vs_matched')
                         for r in abc_results]
-        b_deltas = [d for d in all_b_deltas if d is not None]
-        c_deltas = [d for d in all_c_deltas if d is not None]
+        # _paired_fold_delta returns NaN, not None, when no fold paired, so a
+        # None test let one unpaired model turn the whole printed mean into NaN.
+        b_deltas = [d for d in all_b_deltas
+                    if d is not None and np.isfinite(d)]
+        c_deltas = [d for d in all_c_deltas
+                    if d is not None and np.isfinite(d)]
         if b_deltas:
             print(f"\n  Mean delta (matched - slight_off):  {np.mean(b_deltas):+.4f}")
         if c_deltas:
