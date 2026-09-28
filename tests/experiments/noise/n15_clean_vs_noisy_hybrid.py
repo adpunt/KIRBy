@@ -53,12 +53,15 @@ SCOPE / CAVEATS (read first).
     labels are never noised. Claims do NOT transfer to real label noise of unknown
     structure.
   - Levels are the WHOLE shared grid since 2026-09-18: noisy_search_specs reads
-    dataset_policy.noise_levels() for this task type, so regression sweeps
-    (0.0, 0.15, 0.3, 0.5, 0.75, 1.0) and classification (0.0, 0.05, 0.1, 0.2,
-    0.3, 0.4). It was the bottom three, which answered the oracle question where
-    the corruption is mildest and left it open where it is worst. Draws go from
-    7 to 16 on a regression dataset, and every draw is a fresh recipe search on
-    both arms, so this is about 2.3 times the searches.
+    dataset_policy.noise_levels() for this task type. The level list is not
+    restated here: it lives in dataset_policy (_DEFAULT_NOISE_LEVELS and
+    CLASSIFICATION_NOISE_LEVELS), it has changed since this line was first
+    written, and the result file records it under 'noise_levels'. Level 0.0
+    runs one draw on a regression dataset and every other level three. It was
+    the bottom three levels, which answered the oracle question where the
+    corruption is mildest and left it open where it is worst. Every draw is one
+    more recipe search on the noisy arm; the clean arm's search is the same for
+    every draw and is read back from disk after the first.
   - NOTHING IS PRECOMPUTED, AND SINCE 2026-09-18 THAT IS TRUE OF BOTH ARMS.
     The noisy-label precompute was deleted on 2026-09-11. Until 2026-09-18 the
     CLEAN arm could still read a search held in memory while the noisy arm could
@@ -496,12 +499,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         #    null this experiment is trying to test for.
         #
         # ⛔ WHAT THEY DO NOT PROVE. They do not check this column against the
-        # one find_best_hybrid derived inside the noisy search. That column is
-        # built on the engine's own label_noise branch and is not returned on
-        # the SearchResult, so there is nothing here to compare it to. Asserting
-        # that needs the engine to expose its derived column or its label digest.
-        # Until it does, that gap is open and this comment is where it is
-        # recorded.
+        # one find_best_hybrid derived inside the noisy search. That check is
+        # made further down, per model, against SearchResult.train_labels_id.
+        # Both sides are a digest of TrainingNoise.identity_bytes -- the spec,
+        # the clean labels and the groups -- not of drawn values, so it proves
+        # the two were built from the same inputs. Checks 1 to 3 here are what
+        # cover the draw itself, on fold 0's training rows only.
         _recheck = TrainingNoise(labels, spec, is_clf=is_clf)[_tr0]
         if noisy_labels_hash(_recheck) != _noisy_hash:
             raise RuntimeError(
