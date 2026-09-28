@@ -70,8 +70,10 @@ sys.path.insert(0, os.path.join(HERE, '..'))          # tests/  -> experiments._
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, 'similarity_metrics'))
 
-# --distance-metric, taken straight from the config module: this script does not
-# put tests/ on sys.path, so experiments._shared is not importable here.
+# --distance-metric, taken straight from the config module rather than through
+# experiments._shared, so it is parsed before the first heavy import. Line 69
+# does put tests/ on sys.path, and main() imports experiments._shared from it —
+# the comment that used to sit here said the opposite and was wrong.
 from kirby.similarity.distance_config import (          # noqa: E402
     DISTANCE_METRICS as _DISTANCE_METRICS,
     DEFAULT_DISTANCE_METRIC as _DEFAULT_DISTANCE_METRIC,
@@ -120,6 +122,17 @@ SCAFFOLD_REPS = ('dphyschem', 'dphyschem_pos')
 #         for r, n in inner.items() if r in SCAFFOLD_REPS)
 # EXPERIMENTS_FINALIZED records this question as dropped for want of the
 # number. The number exists; nothing reads it.
+#
+# ⛔ SECOND CAVEAT, MEASURED 2026-09-28. On flab_expression_koenig and
+# flab_binding_koenig a variant's fold is its mutation position modulo 5, and
+# each variant carries exactly one mutation, so every position sits wholly
+# inside one fold. dphyschem_pos has one block of features per position, so on
+# all three outer folds of both koenig sets it shares ZERO non-zero features
+# between the training and the held-out rows. Its standalone score there is
+# produced by the split and says nothing about the representation. The two
+# adams sets group on the set of mutated positions instead, and there all 100
+# non-zero features are shared, so they answer the question. The counts are
+# recorded per dataset under 'scaffold_feature_support'.
 TIER = 'scaffold_cmp'          # distinct cache identity; does not touch existing DBs
 
 
@@ -127,12 +140,78 @@ def build_scaffold_reps(heavy_seqs, light_seqs):
     """Compute the two scaffold-diff reps from the SAME sequences load_data
     returned, guaranteeing row alignment with the base reps. Uses the validated
     research implementations in scaffold_reps (bit-identical to what the study ran).
+
+    A dataset with no light chain returns light_seqs=None, and list(None)
+    raises; scaffold_reps treats an empty list as heavy-only, which is what is
+    wanted. All four datasets here are paired, so this changes no number.
+
+    KIRBY_LOCAL_MAX_FEATURES_PER_REP is applied here as well. load_data applies
+    it to the base pool, and these two arrive afterwards, so without this the
+    scaffold representations would be the only uncapped members of the pool the
+    experiment compares them against. Unset (the cluster case, and this local
+    run) it is a no-op.
     """
     import scaffold_reps as SR
     S, wt, muts = SR.encode_sequences(
-        {'heavy_seqs': list(heavy_seqs), 'light_seqs': list(light_seqs)})
-    return {'dphyschem': SR.rep_dphys(S, wt, muts),
-            'dphyschem_pos': SR.rep_dphys_positional(S, wt, muts)}, S.shape[0]
+        {'heavy_seqs': list(heavy_seqs), 'light_seqs': list(light_seqs or [])})
+    out = {'dphyschem': SR.rep_dphys(S, wt, muts),
+           'dphyschem_pos': SR.rep_dphys_positional(S, wt, muts)}
+    try:
+        from experiments._local_grid import cap_rep_width
+        out = cap_rep_width(out)
+    except ImportError:
+        pass
+    return out, S.shape[0]
+
+
+def scaffold_feature_support(reps, labels, groups, task_type, n_outer, seed=42):
+    """Per outer fold, how many features of each scaffold representation are
+    non-zero on the training rows, on the held-out rows, and on both.
+
+    WHY IT IS RECORDED. Both scaffold representations are zero at every
+    position a variant does not mutate, so a feature only carries a value for
+    the positions its rows mutate. flab_expression_koenig and
+    flab_binding_koenig put a variant in a fold by its mutation position modulo
+    5, and each variant carries exactly one mutation, so every position sits
+    wholly inside one fold. Measured on the real data 2026-09-28: on all three
+    outer folds of both koenig sets, dphyschem_pos shares ZERO non-zero
+    features between training and held-out rows. The model is fitted on columns
+    that are constant zero for every held-out row, and scored on columns it saw
+    as constant zero — its held-out score is not a measurement of the
+    representation. The two adams sets group on the SET of mutated positions,
+    which spreads all 20 mutated positions across every fold, and there all 100
+    non-zero features are shared.
+
+    dphyschem sums the property change and has no position axis, so it is
+    unaffected on all four datasets.
+
+    NO MODEL IS FITTED HERE. The splits come from the engine's own splitter,
+    with the fold count and seed run_nested_cv will use, so these are the folds
+    the scores below are computed on.
+    """
+    from kirby.find_best_hybrid import nested_cv_outer_folds
+    out = {}
+    for rep in SCAFFOLD_REPS:
+        X = reps.get(rep)
+        if X is None:
+            continue
+        folds = nested_cv_outer_folds({rep: X}, np.asarray(labels), groups,
+                                      n_outer, seed, task_type)
+        per_fold, n_empty = [], 0
+        for tr, te in folds:
+            nz_tr = np.flatnonzero(np.abs(X[tr]).sum(axis=0) > 0)
+            nz_te = np.flatnonzero(np.abs(X[te]).sum(axis=0) > 0)
+            shared = int(np.intersect1d(nz_tr, nz_te).size)
+            per_fold.append({'train_nonzero_features': int(nz_tr.size),
+                             'test_nonzero_features': int(nz_te.size),
+                             'shared_nonzero_features': shared})
+            if shared == 0:
+                n_empty += 1
+        out[rep] = {'n_features': int(X.shape[1]),
+                    'n_outer_folds': len(folds),
+                    'per_fold': per_fold,
+                    'folds_with_no_shared_feature': n_empty}
+    return out
 
 
 def base_pool_for(dataset_name, override=None):
@@ -164,7 +243,11 @@ def summarise_one(dataset_name, block):
            # mean over one outer fold and a mean over five print the same
            # without them.
            'per_fold_delta': {
-               m: e.get('per_fold_delta') for m, e in by_model.items()}}
+               m: e.get('per_fold_delta') for m, e in by_model.items()},
+           # Whether each scaffold representation had any feature that carried
+           # a value on both sides of an outer fold. Read it before reading a
+           # rank below. See scaffold_feature_support.
+           'scaffold_feature_support': block.get('scaffold_feature_support')}
 
     # does each scaffold rep beat the base reps, per model?
     bbm = block.get('baselines_by_model', {}) or {}
@@ -231,6 +314,13 @@ def print_summary(summaries):
         direction = 'lower better' if s.get('lower_is_better') else 'higher better'
         print(f'\n### {s["dataset"]}   '
               f'(metric: {s.get("metric_name")}, {direction})')
+        for r, sup in (s.get('scaffold_feature_support') or {}).items():
+            if sup.get('folds_with_no_shared_feature'):
+                print(f'  !! {r}: no feature carries a value on both the '
+                      f'training and the held-out rows on '
+                      f'{sup["folds_with_no_shared_feature"]} of '
+                      f'{sup["n_outer_folds"]} outer folds — its score below '
+                      f'is not a measurement of the representation.')
         for model, d in sorted(s.get('baseline_by_model', {}).items()):
             sc = d['scaffold']
             sc_str = ', '.join(
@@ -368,6 +458,25 @@ def _run_one_dataset(ds, args, override, config, budgets, t0):
               f'scaffold present = {[r for r in SCAFFOLD_REPS if r in data["reps"]]}',
               flush=True)
 
+        # Costs no model fits. See scaffold_feature_support for why it is here.
+        n_outer = args.max_folds or config.get('n_splits', 5)
+        support = scaffold_feature_support(
+            data['reps'], data['labels'], data['groups'], data['task_type'],
+            n_outer)
+        for _r, _s in support.items():
+            print(f'  {_r}: {_s["n_features"]} features; per outer fold, '
+                  f'features non-zero on both the training and the held-out '
+                  f'rows: '
+                  + ', '.join(str(f['shared_nonzero_features'])
+                              for f in _s['per_fold']), flush=True)
+            if _s['folds_with_no_shared_feature']:
+                print(f'  !! {_r} shares no non-zero feature between training '
+                      f'and held-out rows on '
+                      f'{_s["folds_with_no_shared_feature"]} of '
+                      f'{_s["n_outer_folds"]} outer folds. Its score on those '
+                      f'folds measures the split, not the representation.',
+                      flush=True)
+
         result = run_nested_cv(
             reps=data['reps'], labels=np.asarray(data['labels']),
             groups=data['groups'], config=config, dataset_name=ds,
@@ -376,6 +485,7 @@ def _run_one_dataset(ds, args, override, config, budgets, t0):
             budgets=budgets, n_outer_folds=args.max_folds,
             verbose=True)
         block = result.to_dict()
+        block['scaffold_feature_support'] = support
 
         out_path = os.path.join(args.output_dir, f'opig_scaffold_hybrid_{ds}.json')
         with open(out_path, 'w') as f:
