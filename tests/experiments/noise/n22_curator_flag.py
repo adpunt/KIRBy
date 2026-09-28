@@ -1063,25 +1063,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for hs in hybrid_spaces:
             d = {}
             for est_name in estimators:
-                a = (per_space[hs][est_name]['records'] or {}).get(
-                    'detection_average_precision')
-                b = (per_space[base_sp][est_name]['records'] or {}).get(
-                    'detection_average_precision')
+                # Both numbers over the SAME records (2026-09-28). A fold whose
+                # hybrid would not build, or a detector that failed in one
+                # fold of one space, leaves those records unscored in that
+                # space only. Graded apart, the two average precisions were
+                # then over different records with a different flagged share,
+                # and their difference was partly that. When every record is
+                # scored in both, this is the same number as before.
+                _sa = np.asarray(scores[hs][est_name], dtype=float)
+                _sb = np.asarray(scores[base_sp][est_name], dtype=float)
+                _both = np.isfinite(_sa) & np.isfinite(_sb)
+                if not _both.any():
+                    continue
+                ga = grade(flag[_both], _sa[_both], label='records')
+                gb = grade(flag[_both], _sb[_both], label='records')
+                a = (ga or {}).get('detection_average_precision')
+                b = (gb or {}).get('detection_average_precision')
                 if a is None or b is None or not (np.isfinite(a)
                                                   and np.isfinite(b)):
                     continue
                 d[est_name] = {
                     'average_precision_in_the_hybrid': float(a),
                     f'average_precision_in_{base_rn}': float(b),
-                    'difference': float(a - b)}
+                    'difference': float(a - b),
+                    'n_records_scored_in_both': int(_both.sum()),
+                    'n_flagged_among_them': int(flag[_both].sum())}
             per_hybrid[hs] = d
         delta[base_sp] = {'comparator_representation': base_rn,
                           'per_hybrid_space': per_hybrid}
     results['hybrid_minus_single_representation'] = convert_numpy(delta)
     results['hybrid_minus_single_representation_note'] = (
         'both numbers are average precision against the curator flag over '
-        'records, and both are printed so the difference is never read '
-        'without the pair it came from')
+        'records, both over the records scored in both spaces '
+        '(n_records_scored_in_both), and both are printed so the difference '
+        'is never read without the pair it came from')
 
     # ── the ordering, so it can be put beside n11's ──
     best = {}
