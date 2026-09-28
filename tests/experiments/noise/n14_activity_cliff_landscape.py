@@ -269,6 +269,35 @@ def _geometry(adj):
     return out, cliff_mask
 
 
+def _same_molecule(data, n):
+    """(n, n) bool, True where two rows are the same molecule, or None.
+
+    A loader that keeps one row per measurement (herg_ic50 today) says which
+    rows are one molecule in data['replicate_groups']. Two such rows have
+    Tanimoto 1 and, if their measurements differ by more than 2 log units,
+    passed as an activity cliff until 2026-09-28. A cliff is two different
+    molecules; two measurements of one molecule disagreeing is a repeat
+    measurement, which has_replicates reports.
+    """
+    rg = data.get('replicate_groups')
+    if rg is None:
+        return None
+    rg = np.asarray(rg)
+    if len(rg) != n:
+        raise ValueError(f"replicate_groups has {len(rg)} rows for {n} labels")
+    same = rg[:, None] == rg[None, :]
+    np.fill_diagonal(same, False)
+    return same
+
+
+def _drop_same_molecule(adj, same):
+    """adj with every same-molecule pair removed, and how many pairs that was."""
+    if same is None:
+        return adj, 0
+    n_dropped = int((adj & same).sum()) // 2
+    return adj & ~same, n_dropped
+
+
 def _build_ac_reference(data, dataset_name, labels):
     """Return (cliff_adjacency, provenance) for the high-confidence AC list.
 
@@ -278,8 +307,11 @@ def _build_ac_reference(data, dataset_name, labels):
     which filters were applied so downstream readers can gauge confidence.
     """
     n = len(labels)
+    same = _same_molecule(data, n)
     provenance = {
         'potency_threshold_log_units': AC_POTENCY_THRESHOLD,
+        # Rows that are the same molecule are never a cliff pair (2026-09-28).
+        'same_molecule_rows_known': same is not None,
         # Strict: a gap of exactly 2.0 log units is not a cliff (the mask
         # uses >). The label said >= until 2026-09-28.
         'potency_criterion': '>100-fold (|delta label| > 2 log units)',
@@ -298,7 +330,9 @@ def _build_ac_reference(data, dataset_name, labels):
     if mmp_pairs:
         adj, n_considered = _cliff_mask_from_pairs(
             n, mmp_pairs, AC_POTENCY_THRESHOLD)
+        adj, n_same = _drop_same_molecule(adj, same)
         provenance.update({
+            'same_molecule_pairs_dropped': n_same,
             'similarity_criterion': 'matched_molecular_pair',
             'similarity_source': 'loader_mmp_pairs',
             'mmp_pairs_considered': int(n_considered),
@@ -322,7 +356,9 @@ def _build_ac_reference(data, dataset_name, labels):
     # own name, never in its place.
     adj, sim_cutoff = _cliff_mask_from_similarity(
         sim, labels, ECFP4_SIM_THRESHOLD, AC_POTENCY_THRESHOLD)
+    adj, n_same = _drop_same_molecule(adj, same)
     provenance.update({
+        'same_molecule_pairs_dropped': n_same,
         'similarity_criterion': 'ecfp4_tanimoto',
         'similarity_source': 'computed_from_smiles',
         'similarity_cutoff': float(sim_cutoff),
@@ -332,6 +368,7 @@ def _build_ac_reference(data, dataset_name, labels):
         adj_p, cut_p = _cliff_mask_from_similarity(
             sim, labels, ECFP4_SIM_THRESHOLD, AC_POTENCY_THRESHOLD,
             similar_percentile=SIMILAR_PERCENTILE)
+        adj_p, _ = _drop_same_molecule(adj_p, same)
         provenance['relaxed_top_percentile_not_high_confidence'] = {
             'similar_percentile': SIMILAR_PERCENTILE,
             'similarity_cutoff': float(cut_p),
@@ -409,11 +446,17 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
             unavailable[sp] = ('a recipe build chooses features from training '
                                'labels and n14 has no fold; see the TODO in '
                                '_cliff_geometry_by_similarity')
+    # Rows that are the same molecule are never joined (2026-09-28). The key
+    # is in the fingerprint only where such rows exist, so a dataset with one
+    # row per molecule, whose graphs this cannot change, keeps its checkpoint.
+    same = _same_molecule(data, n)
     ckpt = FoldCheckpoint(output_dir, 'n14_activity_cliff_landscape',
                           dataset_name, tag='geometry', fingerprint={
                               'input': input_fingerprint(data, config),
                               'potency': AC_POTENCY_THRESHOLD,
-                              'base': base})
+                              'base': base,
+                              **({'same_molecule_excluded': True}
+                                 if same is not None else {})})
     nb = fold_neighbours(dataset_name, settings, spaces, None, labels,
                          smiles_train=data.get('smiles'), is_clf=False)
     out = {}
@@ -433,6 +476,7 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
                 adj[rows[gap], cols[gap]] = True
                 adj |= adj.T
                 np.fill_diagonal(adj, False)
+                adj, _ = _drop_same_molecule(adj, same)
                 return _geometry(adj)[0]
             out.setdefault(st.name, {})[str(k)] = ckpt.cached(
                 [st.name, int(k)], _geo)
