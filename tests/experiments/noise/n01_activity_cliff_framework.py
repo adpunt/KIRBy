@@ -803,10 +803,18 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     else:
         _act_thr = float(activity_k) * float(
             np.median(np.abs(labels - np.median(labels))))
+    # input_fingerprint holds each representation's name and width, not its
+    # values, and the checkpoint key names a representation by name. A
+    # representation cache rebuilt at the same width therefore read the old
+    # predictions back as the new matrix's. The content hash of every matrix
+    # is in the fingerprint since 2026-09-28, so any change recomputes.
+    from experiments.noise.noise_cache import array_hash as _array_hash
     ckpt = FoldCheckpoint(output_dir, 'n01_activity_cliff_framework',
                           dataset_name or 'unnamed', tag='folds',
                           fingerprint={
                               'input': input_fingerprint(data, config),
+                              'rep_content': {str(k): _array_hash(v)
+                                              for k, v in sorted(reps.items())},
                               'models': list(model_factories),
                               'sim_threshold': sim_threshold,
                               'activity_k': activity_k,
