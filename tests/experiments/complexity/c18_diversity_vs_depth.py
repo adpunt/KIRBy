@@ -158,7 +158,9 @@ def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget,
     """
     sub_names = sorted([k for k in rep_subset if k in train_reps])
     if not sub_names:
-        return None, None
+        # Three values, as _select_top_features returns: the third is the
+        # width note, added 2026-09-28 so this arm's width is on disk too.
+        return None, None, None
 
     # The equal share has to add up to the SAME number of features the depth
     # arms get, or a loss for it is a loss on width and not on spreading the
@@ -186,20 +188,31 @@ def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget,
         remaining = int(min(budget, sum(width.values()))) - sum(quota.values())
 
     tr_parts, va_parts = [], []
+    # Same three counts _select_top_features records, summed over the
+    # representations: features built, features in the pool that scored above
+    # zero, and how many would be built if each share stopped at its last
+    # positively scored feature, as the natural arm does.
+    _built = _pos = _cut = 0
     for name in sub_names:
         n_sel = quota[name]
-        if n_sel <= 0:
-            continue
         imp_dict = _importance_for_reps(
             {name: train_reps[name]}, y_train, method, cache)
         imp = imp_dict[name]
+        _n_pos = int(np.sum(np.asarray(imp) > 0))
+        _pos += _n_pos
+        if n_sel <= 0:
+            continue
         top_idx = np.argsort(imp)[::-1][:n_sel]
+        _built += int(len(top_idx))
+        _cut += int(min(len(top_idx), _n_pos))
         tr_parts.append(train_reps[name][:, top_idx])
         va_parts.append(val_reps[name][:, top_idx])
 
     if not tr_parts:
-        return None, None
-    return np.hstack(tr_parts), np.hstack(va_parts)
+        return None, None, None
+    _width_note = {'built': _built, 'scored_above_zero': _pos,
+                   'would_be_if_cut': _cut}
+    return np.hstack(tr_parts), np.hstack(va_parts), _width_note
 
 
 def _fold_heldout_rep_scores(train_reps, y_train, groups_train, blueprint,
@@ -636,9 +649,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
 
             # Uniform allocation across all reps
-            X_tr, X_va = _uniform_allocation(
+            X_tr, X_va, _wn = _uniform_allocation(
                 train_reps, val_reps_fold, y_train, all_rep_names, budget,
                 method=fold_imp_method, cache=_imp_cache)
+            if _wn:
+                _arm_widths.setdefault('uniform_all', []).append(_wn)
             if X_tr is not None:
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_tr)
