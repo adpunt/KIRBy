@@ -868,8 +868,10 @@ def main():
         '--reps', type=str, default=None,
         help='Comma-separated rep names (default: hand-picked set of 8)')
     parser.add_argument(
-        '--n-folds', type=int, default=5,
-        help='Number of GroupKFold folds (default: 5)')
+        '--n-folds', type=int, default=None,
+        help="Number of GroupKFold folds (default: the hybrid search's own "
+             "fold count, find_best_hybrid.DEFAULT_N_FOLDS: 5, or "
+             "KIRBY_LOCAL_FOLDS when that is set)")
     parser.add_argument(
         '--max-foldx', type=int, default=5000,
         help='Max samples for FoldX synthetic preset (default: 5000). '
@@ -895,6 +897,18 @@ def main():
 
 
     apply_distance_metric_arg(args)
+    # The table and the hybrid search must be split the same way. The search
+    # reads find_best_hybrid.DEFAULT_N_FOLDS at call time, which _local_grid
+    # sets from KIRBY_LOCAL_FOLDS; a fixed default of 5 here put the table on
+    # 5 GroupKFold folds and the search on 3 under the local grid, so the two
+    # blocks of one results file were scored on different partitions.
+    import kirby.find_best_hybrid as _fbh
+    if args.n_folds is None:
+        args.n_folds = int(_fbh.DEFAULT_N_FOLDS)
+    elif args.n_folds != _fbh.DEFAULT_N_FOLDS:
+        print(f"WARNING: --n-folds {args.n_folds} but the hybrid search runs "
+              f"{_fbh.DEFAULT_N_FOLDS} folds; the table and the held-out "
+              f"hybrid comparison are on different splits.")
     conditions = (args.conditions.split(',') if args.conditions
                   else ALL_CONDITIONS)
     rep_names = (args.reps.split(',') if args.reps else _default_reps())
