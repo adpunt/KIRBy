@@ -14,8 +14,11 @@ reaction, Tanimoto on the drug within one protein for drug-target affinity —
 and error is measured with held-out CV.
 
 The exception is Euclidean on the concatenated representations, which is what
-runs when no such reference exists (TCGA, and any molecular dataset where RDKit
-refuses the SMILES). There the cliffs ARE a function of the representations
+runs when no such reference exists (TCGA, a reaction or drug-target set whose
+Tanimoto build raises, and a molecular set whose ECFP4 build raises). A SMILES
+RDKit refuses does not trigger it: that molecule gets no fingerprint bits and
+is similar to nothing (cliff_info['n_reference_rows_unparsed'] counts them).
+There the cliffs ARE a function of the representations
 being graded, and whichever contributes the most features defines most of them.
 Every result records `cliff_reference_independent`; when it is False the
 cliff-versus-non-cliff comparison between representations is circular and must
