@@ -575,8 +575,10 @@ def test_per_model_spaces():
                models=['rf', 'lightgbm'],
                base_reps={'rf': ['aaa', 'bbb'], 'lightgbm': ['bbb', 'aaa']},
                flag_rates=[0.10], random_seeds=[0])
+    # dirty-local 2026-09-28: ensure_dprime_models adds svm (owner decision
+    # 2026-09-25), so the pool is asked for it too.
     check('the pool was asked once per downstream model',
-          sorted(lookup.asked) == ['lightgbm', 'rf'], str(lookup.asked))
+          sorted(lookup.asked) == ['lightgbm', 'rf', 'svm'], str(lookup.asked))
     check('both single-representation spaces and the hybrid ran',
           r['spaces_run'] == ['base_1', 'base_2', 'hybrid'],
           str(r['spaces_run']))
