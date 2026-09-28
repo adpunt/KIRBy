@@ -386,10 +386,16 @@ def _build_hybrid_fold(reps_tr, reps_va, y_tr, bp, objective, is_clf,
                 "train-fold rows."
             )
     elif objective == OBJECTIVE_PREDICTIVE:
-        from sklearn.metrics import f1_score, mean_squared_error
+        # The SAME metric function object the search used (_search passes
+        # metric='rmse' / 'f1_weighted'). create_hybrid recognises it by
+        # identity (hybrid.metric_name_for_fn) and applies the origin rule to
+        # the per-representation scores. A lambda was not recognised, so the
+        # rebuild split the budget by a min-shift instead, which gives the
+        # worst representation zero features: not the recipe the search scored.
+        from kirby.find_best_hybrid import BUILTIN_METRICS
         model = _model(is_clf)
-        metric_fn = ((lambda y, p: f1_score(y, p, average='weighted')) if is_clf
-                     else (lambda y, p: -np.sqrt(mean_squared_error(y, p))))
+        metric_fn, metric_lower = BUILTIN_METRICS[
+            'f1_weighted' if is_clf else 'rmse']
     else:
         # Previously an unlisted objective got a model and NO metric_fn here,
         # so every candidate allocation scored -inf and the rebuild returned a
@@ -399,16 +405,55 @@ def _build_hybrid_fold(reps_tr, reps_va, y_tr, bp, objective, is_clf,
             f"_build_hybrid_fold: objective={objective!r} is neither a geometry "
             f"objective nor {OBJECTIVE_PREDICTIVE!r}."
         )
-    # Within-rep feature selection stays importance-based (a cheap predictive
-    # prior); the ALLOCATION across reps is what the objective drives. greedy/
-    # dominant_greedy require importance to be supplied explicitly.
-    imp = compute_feature_importance(reps_tr, y_tr, method=bp.importance_method)
+    if model is None:
+        metric_lower = False
+    y_tr = np.asarray(y_tr)
+    # create_hybrid's own internal train/held-out carve of these rows, from
+    # the one function that defines it (the search uses the same one).
+    from kirby.hybrid import internal_holdout_split, _score_rep_for_budget
+    _itr, _iva = internal_holdout_split(len(y_tr), y_tr, groups_tr, 0.2)
+
+    # The recipe's representation count. The search restricts each fold to the
+    # rep_count representations its per-representation scores rank highest
+    # (find_best_hybrid, "Top-N representation restriction"). This rebuild used
+    # to hand create_hybrid the whole pool, so on a pool larger than rep_count
+    # it built a different hybrid from the one the search scored. The ranking
+    # is recomputed here on THIS fold's training rows, with the same scorer
+    # the search uses, so no held-out row decides which representations stay.
+    _rep_count = getattr(bp, 'rep_count', None)
+    _alloc_scores = None
+    if _rep_count is not None and int(_rep_count) < len(reps_tr):
+        _gva = None if groups_tr is None else np.asarray(groups_tr)[_iva]
+        _scores = {}
+        for _rn, _X in reps_tr.items():
+            try:
+                _scores[_rn] = float(_score_rep_for_budget(
+                    _X[_itr], _X[_iva], y_tr[_itr], y_tr[_iva],
+                    internal_evaluator=bp.internal_evaluator,
+                    metric_fn=metric_fn, lower_is_better=metric_lower,
+                    objective=objective, is_clf=is_clf, groups_val=_gva))
+            except Exception:
+                _scores[_rn] = float('nan')
+        _ranked = sorted(reps_tr, key=lambda r: (
+            -(_scores[r] if np.isfinite(_scores[r]) else -np.inf), r))
+        _keep = set(_ranked[:int(_rep_count)])
+        reps_tr = {k: v for k, v in reps_tr.items() if k in _keep}
+        reps_va = {k: v for k, v in reps_va.items() if k in _keep}
+        _alloc_scores = {k: _scores[k] for k in _keep}
+
+    # Within-rep feature selection stays importance-based; the ALLOCATION across
+    # reps is what the objective drives. Importance is computed on the internal
+    # TRAINING part only, as the search's importance pre-pass does. It used to
+    # be computed on every row of the fold, internal held-out part included.
+    imp = compute_feature_importance({k: v[_itr] for k, v in reps_tr.items()},
+                                     y_tr[_itr], method=bp.importance_method)
     X_tr, fi = create_hybrid(
         reps_tr, y_tr, allocation_method=bp.allocation_method, budget=bp.budget,
         step_size=bp.step_size, importance_method=bp.importance_method,
         internal_evaluator=bp.internal_evaluator, augmentation_strategy='none',
-        model=model, metric_fn=metric_fn, lower_is_better=False,
+        model=model, metric_fn=metric_fn, lower_is_better=metric_lower,
         objective=objective, is_clf=is_clf, precomputed_importance=imp,
+        precomputed_alloc_scores=_alloc_scores,
         groups=groups_tr,
     )
     X_va = apply_feature_selection(reps_va, fi)
