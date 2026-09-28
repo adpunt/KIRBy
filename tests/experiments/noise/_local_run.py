@@ -171,7 +171,10 @@ def sweep_cuts(exp_ids):
         m = mod('n02_sample_weighting')
         m.WEIGHTED_MODELS = list(MODELS)
         m.DEFAULT_IMPORTANCE_METHODS = ['lightgbm_gain']
-        notes['n02'] = '5 weighted models -> 2, deeplift dropped'
+        # DIRTY-LOCAL 2026-09-28: the count was a literal 2, while the
+        # caller may override MODELS (dirty_noise.py sets three).
+        notes['n02'] = (f'5 weighted models -> {len(MODELS)}, '
+                        'deeplift dropped')
 
     if 'n07' in exp_ids:
         m = mod('n07_remediation')
