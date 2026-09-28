@@ -7,9 +7,19 @@ Dependencies: None (standalone).
 
 Profiles each representation for:
 - Intrinsic dimensionality (PCA thresholds at 90/95/99% + MLE)
-- Mutual information with labels (KSG estimator)
-- Effective rank (exp-entropy of normalised singular values)
-- Per-model baseline R2 (single-rep CV)
+- Mutual information with labels. NOT the joint Kraskov (KSG) estimate of
+  I(X;Y): it is the SUM over up to 50 principal components of each
+  component's own Kraskov estimate with the label, minus the same sum under
+  three label permutations, floored at 0 (estimate_mutual_information_knn).
+  A sum of per-component terms is neither an upper nor a lower bound on the
+  joint quantity, so read it as a relevance score in nats.
+- Effective rank (exp-entropy of normalised singular values, Roy & Vetterli)
+- Per-model baseline in the dataset's own metric (single-rep CV); the
+  direction is in _meta.lower_is_better.
+
+The MLE intrinsic dimension (Levina-Bickel) takes its neighbours under the
+process-wide distance (--distance-metric, manhattan by default), not the
+Euclidean distance of the paper; the value is in _meta.distance_metric.
 """
 import sys
 import os
@@ -54,6 +64,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'metric': metric_name,
             'lower_is_better': bool(lower_is_better),
             'task_type': data['task_type'],
+            'distance_metric': config.get('distance_metric'),
+            'n_folds': n_folds,
         }
     }
 
@@ -115,9 +127,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             #
             # The width fitted is still recorded per fold, which now equals
             # n_features_offered on every fold.
+            #
+            # binary_raw=True: a 0/1 matrix is fitted unscaled, as the search's
+            # own baselines do (find_best_hybrid._evaluate_single). Without it
+            # svm on ecfp4, avalon, atom_pair and the other fingerprints was
+            # fitted on standardised bits and disagreed with the search's number
+            # for the same representation on the same folds.
+            #
+            # One difference remains by design: above 5,000 features the search
+            # keeps only the top 200 or 500 by LightGBM importance per fold, and
+            # this fits every feature (humanness_therapeutic blosum, 5,600).
             mean_score, std_score, widths = evaluate_single_rep_cv(
                 X, labels, groups, model_factory, n_folds, mode=mode,
-                metric_fn=metric_fn, return_width=True, cap=False)
+                metric_fn=metric_fn, return_width=True, cap=False,
+                binary_raw=True)
             rep_result['baselines'][model_name] = {
                 'score_mean': mean_score,
                 'score_std': std_score,
