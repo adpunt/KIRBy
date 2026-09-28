@@ -297,7 +297,7 @@ def _fetch_bp(reps, labels, groups, augmentations, config, data,
     return search, bp, aug_cond
 
 
-def _reusable_caches(search, n_folds, arm, model_name):
+def _reusable_caches(search, n_folds, arm, model_name, folds_match=True):
     """Per-fold scores this arm's own search already wrote to disk.
 
     importance_cache holds per-feature importance keyed (fold index,
@@ -312,8 +312,17 @@ def _reusable_caches(search, n_folds, arm, model_name):
     method). They are used only when their fold indices are exactly the folds
     this run asks for, the guard c06 uses.
 
+    Matching indices are not matching rows. `folds_match` is the row check:
+    False when the engine's splitter puts different molecules in fold i than
+    this run's cv_split does, and then both caches are discarded.
+
     Returns (importance_cache, alloc_cache), either {} when unusable.
     """
+    if not folds_match:
+        print(f"    {model_name}/{arm}: discarding the search's stored "
+              f"importance and allocation scores — its folds hold different "
+              f"molecules from this run's. Both are rebuilt per fold.")
+        return {}, {}
     imp = getattr(search, 'importance_cache', None) or {}
     alloc = getattr(search, 'alloc_cache', None) or {}
     if not imp and not alloc:
@@ -357,6 +366,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     model_factories = get_model_factories(
         downstream_models, task_type=task_type, n_samples=len(labels))
     sample_X = next(iter(reps.values()))
+
+    # The folds this run scores on, and whether the searches' own folds hold
+    # the SAME molecules. The searches' stored per-fold scores are reused only
+    # when they do: a stored "fold 0" whose training rows include this run's
+    # fold-0 held-out molecules would put their labels into the features.
+    # task_type is passed so the splitter is chosen the way the engine chooses
+    # it (StratifiedGroupKFold for classification), not by the label dtype.
+    _folds_n15 = list(cv_split(groups, n_folds, sample_X, labels,
+                               task_type=task_type))
+    _folds_match = False
+    try:
+        from kirby.find_best_hybrid import _make_cv_splitter
+        _spl, _use_g = _make_cv_splitter(groups, n_folds, 42,
+                                         task_type=task_type)
+        _eng = list(_spl.split(sample_X, labels, groups) if _use_g
+                    else _spl.split(sample_X, labels))
+        _folds_match = (len(_eng) == len(_folds_n15) and all(
+            np.array_equal(np.sort(a[0]), np.sort(b[0]))
+            and np.array_equal(np.sort(a[1]), np.sort(b[1]))
+            for a, b in zip(_eng, _folds_n15)))
+    except Exception as exc:
+        print(f"  could not rebuild the search's folds to compare rows "
+              f"({type(exc).__name__}: {exc}); stored per-fold scores unused")
+    print(f"  search folds hold the same molecules as this run's folds: "
+          f"{_folds_match}")
 
     specs = kwargs.get('noise_specs') or noisy_search_specs(task_type)
     # The models the search fits are the models this run will hand recipes to.
@@ -428,7 +462,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # wraps the same (labels, spec) in a TrainingNoise, which corrupts each
         # fold's training labels from those labels alone.
         y_noisy_full = TrainingNoise(labels, spec, is_clf=is_clf)
-        _folds_n15 = list(cv_split(groups, n_folds, sample_X, labels, mode=mode))
         _tr0 = _folds_n15[0][0]
         _noisy_hash = noisy_labels_hash(y_noisy_full[_tr0])
         results.setdefault('noisy_labels_hash', {})[sid] = _noisy_hash
@@ -585,9 +618,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # crossed.
             arm_caches = {
                 'clean_bp': _reusable_caches(clean_search, n_folds,
-                                             'clean_bp', model_name),
+                                             'clean_bp', model_name,
+                                             folds_match=_folds_match),
                 'noisy_bp': _reusable_caches(noisy_search, n_folds,
-                                             'noisy_bp', model_name),
+                                             'noisy_bp', model_name,
+                                             folds_match=_folds_match),
             }
 
             fp_c, fp_n = _bp_fingerprint(clean_bp), _bp_fingerprint(noisy_bp)
@@ -619,8 +654,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Keyed by fold index, not appended, so a fold that failed in one
             # arm cannot silently pair with a different fold in the other.
             scores = {'clean_bp': {}, 'noisy_bp': {}}
-            for fold_i, (train_idx, val_idx) in enumerate(
-                    cv_split(groups, n_folds, sample_X, labels, mode=mode)):
+            for fold_i, (train_idx, val_idx) in enumerate(_folds_n15):
                 # Noise on TRAIN rows only; validation labels stay clean.
                 y_train = y_noisy_full[train_idx]
                 y_val = labels[val_idx]
