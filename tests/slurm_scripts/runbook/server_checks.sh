@@ -93,6 +93,19 @@
 #   --task-noise <dataset> <experiment> <condition or -> <output dir>
 set -o pipefail
 
+# Must be launched from a LOGIN node. Inside an allocation (an interactive
+# `srun --pty` shell, or a batch job) SLURM_JOB_ID is set and every srun below
+# becomes a STEP of that one job instead of a job of its own. On 2026-09-28 all
+# 78 checks died at once with "Unable to create step for job 8924184: Memory
+# required by task is not available" because they were launched from inside an
+# interactive session on htc-g010.
+if [ -n "${SLURM_JOB_ID:-}" ] && [[ " $* " != *" --dry-run "* ]]; then
+    echo "server_checks.sh: you are inside SLURM job ${SLURM_JOB_ID} (host $(hostname))."
+    echo "Every srun would become a step of that job and fail for memory."
+    echo "Type 'exit' to leave the interactive session, then run this again on the login node."
+    exit 2
+fi
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
 REPO="${KIRBY_REPO:-$(cd "$HERE/../../.." && pwd)}"
