@@ -31,9 +31,11 @@ so grows with the amount of noise injected. Beside it, the share of the
 clean-to-corrupted gap that repairing on each distance puts back -- n12's
 recovery figure, computed the same way.
 
-WHICH NOISE CONDITIONS THIS CAN RUN UNDER. Five, and no others:
-`outlier_p01`, `outlier_p05`, `outlier_p10`, `grouped_wider`, `censoring`.
-Those are `noise_helpers.DETECTION_IS_DEFINED`. Under the other six every
+WHICH NOISE CONDITIONS THIS CAN RUN UNDER. Eight, and no others:
+`outlier_p01`, `outlier_p05`, `outlier_p10`, `outlier_only_p01`,
+`outlier_only_p05`, `outlier_only_p10`, `grouped_wider`, `censoring`. Those
+are the members of `noise_helpers.DETECTION_IS_DEFINED` an injector accepts
+(`_INJECTABLE_CONDITIONS`). Under the constant-width conditions every
 training molecule's label moves, so the list of molecules that moved is the
 list of all of them and average precision is 1.0 by construction. n21 raises
 rather than run there, because average precision is the headline and under
@@ -1644,6 +1646,12 @@ def _level_block(specs, models, detectors, k_values, seeds, clean, noisy,
     block = {
         'molecules_corrupted_mean': _mean(counts['n_corrupted']),
         'molecules_in_training_fold_mean': _mean(counts['n_training']),
+        # What average precision a random ranking scores: the share of the
+        # training fold that moved, averaged over the passes where some moved
+        # and some did not. Every space's average precision reads against it.
+        'detection_average_precision_of_a_random_ranking': _mean(
+            [c / t for c, t in zip(counts['n_corrupted'], counts['n_training'])
+             if 0 < c < t]),
         'clean_score_by_model': _first['clean_score_by_model'],
         'noisy_score_by_model': _first['noisy_score_by_model'],
         'gap_by_model': _first['gap_by_model'],
@@ -1891,7 +1899,8 @@ def _print_summary(results):
         print(f"\n  level {lvl}: "
               f"{block['molecules_corrupted_mean']:.0f} molecules corrupted of "
               f"{block['molecules_in_training_fold_mean']:.0f} in the training "
-              f"fold, on average")
+              f"fold, on average; a random ranking scores ap "
+              f"{block.get('detection_average_precision_of_a_random_ranking', float('nan')):.4f}")
         for space, ap in row['average_precision_by_space'].items():
             rec = row['recovery_percent_of_gap_by_space'].get(space,
                                                              float('nan'))
@@ -1924,11 +1933,11 @@ def main():
         'N21: which distance are the nearest neighbours found in')
     parser.add_argument('--noise-condition', type=str, default=NOISE_CONDITION,
                         choices=list(_INJECTABLE_CONDITIONS),
-                        help='The five conditions under which a corrupted '
+                        help='The eight conditions under which a corrupted '
                              'subset exists and average precision is defined.')
     parser.add_argument('--levels', type=str, default=None,
                         help='Comma-separated levels. Default is the shared '
-                             'grid minus 0.0, where nothing is corrupted.')
+                             'grid, 0.0 included.')
     parser.add_argument('--metrics', type=str, default=None,
                         help='Comma-separated distance metrics to sweep. '
                              'Default euclidean,manhattan.')
