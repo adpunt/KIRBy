@@ -1158,17 +1158,25 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             errors[f'{ekey}|gp'] = f'{type(exc).__name__}: {exc}'
                         # regression kriging on the host's residuals
                         try:
-                            # Cached on the label hash (2026-09-25).
-                            p_oof = _nc.cached_oof_predict(
-                                dataset_name, X_tr_s, y0, g_tr,
-                                n_splits=oof_splits)
+                            # The residuals are the SAME lightgbm's as the one
+                            # the GP is added to: find_best_hybrid's default
+                            # (100 trees). Until 2026-09-28 they came from
+                            # noise_cache.cached_oof_predict, whose LightGBM is
+                            # noisy_labels.DEFAULT_LGB_PARAMS (600 trees,
+                            # 63 leaves, bagging), so the GP learned the
+                            # residuals of a different model from the one it
+                            # corrected.
+                            from kirby.find_best_hybrid import get_model
+                            _lgb = lambda: get_model('lightgbm', 'regression')
+                            p_oof = oof_by_model.get('lightgbm') if host == 'lightgbm' else None
+                            if p_oof is None:
+                                p_oof = _oof_model(_lgb, X_tr_s, y0, g_tr, oof_splits)
                             gp_r = make_gp().fit(X_tr_s, y0 - p_oof)
                             host_pred = (fixed_val.get('lightgbm') if host == 'lightgbm'
                                          else None)
                             if host_pred is None:
-                                from kirby.find_best_hybrid import get_model
-                                host_pred = _fit_predict(get_model('lightgbm', 'regression'),
-                                                         X_tr_s, y0, X_va_s, metric_name)
+                                host_pred = _fit_predict(_lgb(), X_tr_s, y0, X_va_s,
+                                                         metric_name)
                             _store(lvl_key, space, 'fixed', 'lightgbm_plus_gp_residual',
                                    pass_key, host_pred + gp_r.predict(X_va_s), y_val)
                             if host != 'lightgbm':
