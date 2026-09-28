@@ -1092,7 +1092,7 @@ def _uncertainty(source, X_tr_s, y_tr, groups_train, is_clf, n_folds,
         nn.fit(X_tr_s)
         _, nbr_idx = nn.kneighbors(X_tr_s)
         return (scores, np.mean(y_tr[nbr_idx[:, 1:]], axis=1),
-                'the mean of the ten nearest neighbours')
+                'the mean of the nine nearest neighbours (ten asked for, the first dropped as the molecule itself, as n07 label_smooth does)')
     except Exception as exc:
         return scores, None, f'no target: {type(exc).__name__}: {exc}'
 
@@ -1340,10 +1340,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             '1.5 to 2.3; random forest 1.1, recorded as FAIL.'),
         'gaussian_process_is_not_that_number': (
             "KIRBy's gaussian_process estimator returns the posterior standard "
-            'deviation plus the out-of-fold residual, which is the '
-            'MODEL-UNSURE term, and its label-noise term is one number for the '
-            'whole fold. Read out of noise_estimation.py:726-800 on '
-            '2026-09-17. It is swept so the difference is measured here.'),
+            'deviation (the model-unsure term) plus the absolute out-of-fold '
+            "residual (the molecule's own label against a prediction that did "
+            'not see it), in label units. Its label-noise term is one number '
+            'for the whole fold and is not used. So its score is mostly a '
+            'residual detector, not a predicted spread. Read out of '
+            'noise_estimation.py GaussianProcessEstimator.estimate on '
+            '2026-09-28.'),
         'features_are_fixed_note': (
             "The hybrid is built once per fold per downstream model on that "
             "fold's training molecules at their UNCLEANED labels, from the "
