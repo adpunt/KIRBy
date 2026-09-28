@@ -85,11 +85,17 @@ _ARM_OPTIMISTIC = 'selection-optimistic'
 _ARM_HELD_OUT = 'held-out'
 _ARM_PREREGISTERED = 'pre-registered cell, scored in-sample'
 _ARM_NO_SELECTION = 'no winner selected'
+# Only the single-representation side is a best-of-many picked on the reported
+# scores; the hybrid side is one arm fixed without looking at them. The
+# optimism favours the baseline, not the hybrid. (dirty-local 2026-09-28)
+_ARM_BASELINE_PICKED = ('baseline side picked on the reported scores; '
+                        'hybrid side fixed')
 
 # Print / store order of the aggregated series: each optimistic quantity is
 # followed by the counterpart arms read from the same experiment.
 _SERIES_ORDER = (
     'SAC_delta',
+    'SAC_delta_vs_weighted_rep',
     'SAC_delta_heldout',
     'RMSE_cliff_reduction_%',
     'RMSE_cliff_reduction_%_vs_weighted_rep',
@@ -232,6 +238,11 @@ def run(all_dataset_results):
                                  'scored; no selection over the grid, score '
                                  'still in-sample'),
             _ARM_NO_SELECTION: 'a descriptive statistic with no cell to pick',
+            _ARM_BASELINE_PICKED: ('the single representation is the best of '
+                                   'several on the same scores that are '
+                                   'reported; the hybrid is one arm fixed '
+                                   'in advance, so any optimism favours the '
+                                   'baseline'),
         },
     }
 
@@ -311,6 +322,37 @@ def run(all_dataset_results):
                       f"(best_rep {best_rep_name}={best_rep_sac:.4f} -> "
                       f"hybrid={best_hybrid_sac:.4f})")
             ds_summary['best_rep'] = best_rep_name
+            ds_summary['sac_delta_contrast'] = (
+                'importance-weighted hybrid vs UNWEIGHTED single reps '
+                '(rep mixing and importance weighting together)')
+
+            # Like-for-like: s02 also scores every single representation
+            # with the same importance-weighted distance and stores the best
+            # under best_individual_rep_weighted. Both sides then differ in
+            # rep mixing only, as in s04's '_vs_weighted_rep' quantity. Both
+            # sides are still a best-of-many on the whole dataset.
+            # (dirty-local 2026-09-28)
+            _bw = exp2.get('best_individual_rep_weighted') or {}
+            _src2w = ('s02 best_sac - best_individual_rep_weighted.sac_rho '
+                      '(both importance-weighted, both whole dataset)')
+            if _is_number(best_hybrid_sac) and _is_number(_bw.get('sac_rho')):
+                _dw = float(best_hybrid_sac) - float(_bw['sac_rho'])
+                _record(ds_summary, 'sac_delta_vs_weighted_rep', _dw,
+                        _ARM_OPTIMISTIC, _src2w)
+                ds_summary['sac_delta_vs_weighted_rep_contrast'] = (
+                    'importance-weighted hybrid vs importance-weighted single '
+                    'reps (rep mixing only)')
+                _series('SAC_delta_vs_weighted_rep', ds_name, _dw,
+                        _ARM_OPTIMISTIC, _src2w)
+                print(f"    SAC delta [{_ARM_OPTIMISTIC}, weighted baseline]: "
+                      f"{_dw:+.4f} (best_rep_weighted {_bw.get('name')}="
+                      f"{float(_bw['sac_rho']):.4f})")
+            else:
+                _record_absent(
+                    ds_summary, 'sac_delta_vs_weighted_rep', _src2w,
+                    f"best_sac={best_hybrid_sac!r}, "
+                    f"best_individual_rep_weighted.sac_rho="
+                    f"{_bw.get('sac_rho')!r}")
 
             # Counterpart arm: s02 also stores the held-out CV SAC, winner
             # re-picked per fold, under 'fold_reselection_result'.
@@ -338,12 +380,19 @@ def run(all_dataset_results):
             best_rep_rmse = min(valid_rmse) if valid_rmse else float('nan')
             hybrid_w = exp4['hybrid'].get('weighted', {})
             hybrid_rmse = hybrid_w.get('rmse_cliff', float('nan'))
+            # Since the pool change s04's hybrid.weighted is one named arm
+            # (hybrid.lead_arm: the first family's rank-1 hybrid), not a best
+            # over hybrids. Only the single-representation side is a minimum
+            # over the reported scores. Older files picked on both sides.
+            # (dirty-local 2026-09-28)
+            _arm4o = (_ARM_BASELINE_PICKED if exp4['hybrid'].get('lead_arm')
+                      else _ARM_OPTIMISTIC)
             if not np.isnan(best_rep_rmse) and not np.isnan(hybrid_rmse) and best_rep_rmse > 0:
                 reduction = (best_rep_rmse - hybrid_rmse) / best_rep_rmse * 100
                 _src4 = ('s04 min over per_rep[*].rmse_cliff vs '
                          'hybrid.weighted.rmse_cliff')
                 _record(ds_summary, 'cliff_rmse_reduction_pct', reduction,
-                        _ARM_OPTIMISTIC, _src4)
+                        _arm4o, _src4)
                 # The two sides of this ratio differ in TWO ways: the hybrid
                 # mixes reps AND weights its distance by importance, the
                 # baseline does neither. The '_vs_weighted_rep' quantity below
@@ -352,8 +401,8 @@ def run(all_dataset_results):
                     'importance-weighted hybrid vs UNWEIGHTED single reps '
                     '(rep mixing and importance weighting together)')
                 _series('RMSE_cliff_reduction_%', ds_name, reduction,
-                        _ARM_OPTIMISTIC, _src4)
-                print(f"    RMSE_cliff reduction [{_ARM_OPTIMISTIC}, "
+                        _arm4o, _src4)
+                print(f"    RMSE_cliff reduction [{_arm4o}, "
                       f"unweighted baseline]: {reduction:.1f}% "
                       f"(best_rep={best_rep_rmse:.4f} -> hybrid={hybrid_rmse:.4f})")
             else:
@@ -374,13 +423,13 @@ def run(all_dataset_results):
                 reduction_w = ((_best_rep_rmse_w - hybrid_rmse)
                                / _best_rep_rmse_w * 100)
                 _record(ds_summary, 'cliff_rmse_reduction_pct_vs_weighted_rep',
-                        reduction_w, _ARM_OPTIMISTIC, _src4w)
+                        reduction_w, _arm4o, _src4w)
                 ds_summary['cliff_rmse_reduction_pct_vs_weighted_rep_contrast'] = (
                     'importance-weighted hybrid vs importance-weighted single '
                     'reps (rep mixing only)')
                 _series('RMSE_cliff_reduction_%_vs_weighted_rep', ds_name,
-                        reduction_w, _ARM_OPTIMISTIC, _src4w)
-                print(f"    RMSE_cliff reduction [{_ARM_OPTIMISTIC}, "
+                        reduction_w, _arm4o, _src4w)
+                print(f"    RMSE_cliff reduction [{_arm4o}, "
                       f"weighted baseline]: {reduction_w:.1f}% "
                       f"(best_rep_weighted={_best_rep_rmse_w:.4f} -> "
                       f"hybrid={hybrid_rmse:.4f})")
@@ -390,7 +439,7 @@ def run(all_dataset_results):
                 _record_absent(ds_summary,
                                'cliff_rmse_reduction_pct_vs_weighted_rep',
                                _src4w, _why4w)
-                print(f"    RMSE_cliff reduction [{_ARM_OPTIMISTIC}, weighted "
+                print(f"    RMSE_cliff reduction [{_arm4o}, weighted "
                       f"baseline]: not read ({_why4w})")
 
             ds_summary['n_cliff_compounds'] = exp4.get('cliff_definition', {}).get('n_cliff_compounds', 0)
@@ -596,8 +645,17 @@ def run(all_dataset_results):
                 _src6 = ('s06 mean over k of '
                          'distance_error_correlation.k<K>.hybrid_weighted '
                          f'minus .{baseline_label}')
+                # Since 2026-09-24 s06 names as comparator the single
+                # representation with the HIGHEST correlation at the smallest k,
+                # among every single arm including the weighted ones, and
+                # records that under 'comparator_basis'. The baseline side is
+                # then a maximum over the numbers reported here. Older files
+                # named a comparator chosen by kNN error, not by this number.
+                # (dirty-local 2026-09-28: was labelled no-selection.)
+                _arm6 = (_ARM_BASELINE_PICKED if exp6.get('comparator_basis') is not None
+                         else _ARM_NO_SELECTION)
                 _record(ds_summary, 'ad_corr_delta', delta_ad,
-                        _ARM_NO_SELECTION, _src6)
+                        _arm6, _src6)
                 ds_summary['ad_corr_weighted'] = hw_mean
                 ds_summary['ad_corr_baseline'] = base_mean
                 # Which arm the delta was taken against: the name of the single
@@ -612,12 +670,12 @@ def run(all_dataset_results):
                 _record_absent(
                     ds_summary, 'ad_corr_delta_heldout',
                     's06 (no key)',
-                    's06 selects no cell and stores no fold_reselection block; it '
-                    'has no held-out counterpart to this correlation delta')
-                _series('AD_corr_delta', ds_name, delta_ad, _ARM_NO_SELECTION,
+                    's06 stores no fold_reselection block, so this correlation '
+                    'delta has no held-out counterpart')
+                _series('AD_corr_delta', ds_name, delta_ad, _arm6,
                         _src6)
                 print(f"    AD corr (mean over {len(per_k_deltas)} k) "
-                      f"[{_ARM_NO_SELECTION}]: "
+                      f"[{_arm6}]: "
                       f"hybrid_weighted={hw_mean:.4f}, "
                       f"{baseline_label}={base_mean:.4f} "
                       f"(delta={delta_ad:+.4f})")
@@ -736,9 +794,10 @@ def run(all_dataset_results):
             # NO MEAN ACROSS DATASETS. Averaging a delta over datasets that
             # differ in size, domain, task and metric produces a headline
             # number that describes none of them; the project bans it. The
-            # per-dataset values are the result. The paired Wilcoxon below
-            # stays: it is a sign test over the per-dataset values, not a
-            # summary statistic, and the roadmap asks for it by name.
+            # per-dataset values are the result. The Wilcoxon below stays
+            # because the roadmap asks for it by name. It is a signed-RANK
+            # test, not a sign test: it ranks the per-dataset magnitudes
+            # against each other, so it assumes they are on one scale.
             results['summary'][name] = {
                 'n_datasets': len(arr),
                 'arm': _arm,
