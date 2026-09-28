@@ -1637,10 +1637,15 @@ def _emit(results, cost_rows, reselection_ens_candidates, model_key, method,
     # What the PROCESS itself burns to make its choices, per fold. A plain mean
     # over all reps needs no selection signal at all -> 0 fits. That zero-search
     # ensemble is the honest competitor to beat.
+    #
+    # ensemble_s2 ('optimal') always selects: _select picks each
+    # representation's downstream model on the inner CV even under 'all' with
+    # a fixed rule such as the mean, so its selection fits are never 0.
     n_probe_models = len(all_models) if model_key == 'optimal' else 1
     J = int(np.mean([len(x) for x in inner_folds])) if inner_folds else 0
     sel_fits = (J * len(general_reps) * n_probe_models
-                if (rep_set == 'auto' or _needs_selection(rep_set, agg_name))
+                if (model_key == 'optimal' or rep_set == 'auto'
+                    or _needs_selection(rep_set, agg_name))
                 else 0)
 
     reselection_ens_candidates.setdefault(model_key, []).append(
