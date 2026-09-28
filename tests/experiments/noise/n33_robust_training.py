@@ -42,8 +42,9 @@ features fitted on the noisy labels as they are.
   Label and weight arms, every downstream model:
   yeo_johnson             the training labels put through a Yeo-Johnson power
                           transform (sklearn PowerTransformer, fitted on this
-                          fold's noisy training labels), the model fitted on
-                          that, its predictions transformed back. The report
+                          fold's noisy training labels) and put back on their
+                          mean and SD, the model fitted on that, its
+                          predictions transformed back. The report
                           asked for log or Box-Cox; both are undefined on
                           negative labels, and logd's are negative.
   invvar_ngboost          weight 1 / sigma(x)^2, sigma from an out-of-fold
@@ -461,10 +462,32 @@ def _fit_predict(model, X_tr, y_tr, X_va, metric_name, sample_weight=None):
 def label_arm_predict(arm, factory, X_tr, y0, X_va, metric_name, ctx, rng):
     """Held-out predictions for one label/weight arm with one downstream model."""
     if arm == 'yeo_johnson':
+        # The transformed labels are put back on the noisy labels' own mean and
+        # SD before the fit, so the pair against `noisy` differs in the shape of
+        # the labels and not in their scale. Until 2026-09-28 the model was fitted
+        # on standardised labels. SVR's epsilon (0.1) and C (1) are in label
+        # units, so for svm that also changed the fit's scale: on synthetic data
+        # with a label SD of 27, SVR's error fell from 19.5 to 10.4 from
+        # standardising alone and to 10.2 with the transform. rf and lightgbm
+        # are unaffected by an affine change of the labels.
+        y0 = np.asarray(y0, dtype=float)
+        mu, sd = float(np.mean(y0)), float(np.std(y0))
+        sd = sd if sd > 0 else 1.0
         pt = PowerTransformer(method='yeo-johnson', standardize=True)
-        yt = pt.fit_transform(np.asarray(y0, dtype=float).reshape(-1, 1)).ravel()
+        yt = pt.fit_transform(y0.reshape(-1, 1)).ravel() * sd + mu
         pred = _fit_predict(factory(), X_tr, yt, X_va, metric_name)
-        return pt.inverse_transform(pred.reshape(-1, 1)).ravel()
+        out = pt.inverse_transform(((pred - mu) / sd).reshape(-1, 1)).ravel()
+        # With a negative lambda the inverse is undefined past a finite bound,
+        # and a prediction beyond it comes back NaN. Raised, so the error is
+        # recorded under every metric; spearman would otherwise score it NaN
+        # and the pairing would drop the pass without saying so.
+        bad = int(np.sum(~np.isfinite(out)))
+        if bad:
+            raise ValueError(
+                f'yeo_johnson: {bad} of {out.size} held-out predictions fell '
+                f'outside the inverse transform (lambda '
+                f'{float(pt.lambdas_[0]):.3f})')
+        return out
     if arm == 'invvar_ngboost':
         return _fit_predict(factory(), X_tr, y0, X_va, metric_name,
                             sample_weight=ctx['invvar_w'])
