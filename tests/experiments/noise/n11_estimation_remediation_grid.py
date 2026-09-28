@@ -342,7 +342,8 @@ def _get_correction_target(estimator):
 def _build_estimation_spaces(train_reps, y_train, augmentations,
                              hybrid_recipes, base_spaces,
                              dataset_name=None, groups=None,
-                             build_errors=None, all_models=None):
+                             build_errors=None, all_models=None,
+                             binary_reps=None):
     """Build estimation spaces: each model's top-2 single representations,
     one hybrid per pool family, and every other representation.
 
@@ -357,6 +358,9 @@ def _build_estimation_spaces(train_reps, y_train, augmentations,
         base_spaces: {space name: (rep name, [models])}, one entry per
             (rank, representation) of the downstream models' top 2, as built in
             run(). Each is scaled on this fold's training rows and NOT capped.
+        binary_reps: names of the representations whose every value is 0 or
+            1. These are left raw in every space, as the evaluation features
+            are (noise_cache.cached_scaled).
 
     Returns (spaces_dict, models_by_space). models_by_space names, for every
     space that is not open to the whole roster, the models whose rows are
@@ -371,12 +375,23 @@ def _build_estimation_spaces(train_reps, y_train, augmentations,
     """
     spaces = {}
     models_by_space = {}
+    binary_reps = set(binary_reps or ())
+
+    def _scaled(rn, X):
+        # 2026-09-28: an all-binary representation is left raw, the rule
+        # noise_cache.cached_scaled applies to the evaluation features and the
+        # search applies to its baselines. Standardising the bits weighted each
+        # one by 1/its spread, so a neighbour estimator's manhattan distance in
+        # 'base_1_ecfp4' was not the Hamming distance the unit's own features
+        # and the similarity sweep's model_input rows use.
+        if rn in binary_reps:
+            return np.asarray(X, dtype=float)
+        return StandardScaler().fit_transform(X)
 
     # Each model's own top-2 single representations, one space per (rank,
     # representation), shared by the models that rank it there. Uncapped.
     for _sp, (_rn, _ms) in base_spaces.items():
-        scaler = StandardScaler()
-        spaces[_sp] = scaler.fit_transform(train_reps[_rn])
+        spaces[_sp] = _scaled(_rn, train_reps[_rn])
         models_by_space[_sp] = list(_ms)
 
     # One hybrid space per family the pool holds. The space name carries the
@@ -436,8 +451,7 @@ def _build_estimation_spaces(train_reps, y_train, augmentations,
                    for m in _ms}
         if _models_all and _has_it >= set(_models_all):
             continue
-        scaler = StandardScaler()
-        spaces[rep_name] = cap_dimensions(scaler.fit_transform(X_rep))[0]
+        spaces[rep_name] = cap_dimensions(_scaled(rep_name, X_rep))[0]
         if _has_it:
             models_by_space[rep_name] = [m for m in _models_all
                                          if m not in _has_it]
@@ -823,6 +837,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     noise_groups, _n_ng, _lg = noise_groups_for(data)
     noise_provenance = {}
     sample_X = next(iter(reps.values()))
+    # The representations noise_cache.cached_scaled leaves raw: uint8, or every
+    # value 0 or 1, judged over the whole matrix exactly as it judges it, so a
+    # detection space and the evaluation features of one representation are
+    # scaled by one rule.
+    binary_reps = set()
+    for _rn, _X in reps.items():
+        _A = np.asarray(_X)
+        _u = np.unique(_A)
+        if _A.dtype == np.uint8 or (
+                len(_u) <= 2 and set(_u.tolist()).issubset({0, 0.0, 1, 1.0})):
+            binary_reps.add(_rn)
 
     available_estimators = _resolve_estimators()
     # FIX 4f: on a classification dataset, the model-based regression estimators
@@ -1047,6 +1072,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             "remediation key is keyed by it."),
         'base_detection_spaces': {sp: {'representation': rn, 'models': ms}
                                   for sp, (rn, ms) in base_spaces.items()},
+        # Left raw in every detection space, as in the evaluation features.
+        'binary_representations_unscaled': sorted(binary_reps),
         'estimators': available_estimators,
         # 2026-09-17: the smoothing targets that do not come from an estimator.
         # Each one is swept over the same methods and alphas as the estimator's
@@ -1228,6 +1255,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     groups=(groups[train_idx] if groups is not None else None),
                     build_errors=hybrid_build_errors,
                     all_models=eval_models,
+                    binary_reps=binary_reps,
                 )
 
                 for _u in eval_units:
