@@ -172,8 +172,8 @@ def expected_improvement(mu, sigma, y_best, xi=0.01):
 # is below every one of them, and the fitted value on caco2 ECFP4 comes out at
 # 3.6e-4, at which every molecule in the pool is effectively infinitely far from
 # every labelled one. The posterior is then the prior everywhere, Expected
-# Improvement is flat, and np.argmax picks the lowest row number among the ties
-# — the pick is made by dataset row order, not by the surrogate. The loop
+# Improvement is flat, and the pick is a random draw among the ties (it was the
+# lowest row number until 2026-09-28) — not the surrogate's choice. The loop
 # already counts those iterations as flat_acquisition_iters and nothing acted
 # on the count.
 #
@@ -553,6 +553,25 @@ def compute_combined_objective(y, qed_scores, lower_is_better=False):
 # SINGLE BO RUN
 # =============================================================================
 
+def _pick_max_ei(ei, rng):
+    """(position of the pick, number of molecules tied at the maximum).
+
+    Ties at the maximum are broken at random with the seed's generator.
+    np.argmax took the lowest row number, so a flat surrogate searched the
+    pool in file order, and file order is not neutral: on logd the first 20
+    pool rows average logD 2.95 to 3.05 against a dataset mean of 2.11 (SD
+    1.18), the wrong end for a low hunt; on herg_ki they average pKi 5.37 to
+    5.57 against 5.71, the right end. A flat surrogate is now random search,
+    which is what the hypothesis says it degenerates to.
+    """
+    _ei_max = ei.max()
+    tied = np.flatnonzero(np.isclose(ei, _ei_max, rtol=1e-9,
+                                     atol=1e-12 * max(abs(_ei_max), 1.0)))
+    if tied.size <= 1:
+        return int(np.argmax(ei)), int(tied.size)
+    return int(tied[rng.randint(tied.size)]), int(tied.size)
+
+
 def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
                 max_iterations, refit_interval=10, rng=None,
                 kernel_type='rbf', surrogate='gp'):
@@ -573,9 +592,9 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
         surrogate_failures: number of surrogate fitting failures
         flat_acquisition_iters: iterations on which Expected Improvement took
             its maximum value on more than half the molecules still in the
-            pool. On those iterations `np.argmax` returns the lowest row number
-            among the tied molecules, so the pick is made by dataset row order
-            and not by the surrogate. Measured because a surrogate whose fit
+            pool. On those iterations the pick is a random draw among the tied
+            molecules (_pick_max_ei), not the surrogate's choice; before
+            2026-09-28 it was the lowest row number, i.e. dataset row order. Measured because a surrogate whose fit
             RAISES is already counted (surrogate_failures) while one that fits
             and then returns the prior is not: on caco2 ECFP4 the fitted RBF
             length_scale comes out at 3.6e-4, every pool molecule is then
@@ -625,16 +644,13 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
             # How many of the molecules still in the pool carry the maximum
             # Expected Improvement. One is the normal case. A count above half
             # the pool means the surrogate separates almost nothing and the
-            # pick below falls to whichever tied molecule has the lowest row
-            # number. Compared with np.isclose so a tie that differs only in
+            # pick below is a random draw among the tied molecules.
+            # Compared with np.isclose so a tie that differs only in
             # the last bits of the float still counts as one.
-            _ei_max = ei.max()
-            _n_tied = int(np.isclose(ei, _ei_max, rtol=1e-9,
-                                     atol=1e-12 * max(abs(_ei_max), 1.0)).sum())
+            best_ei_idx, _n_tied = _pick_max_ei(ei, rng)
             if _n_tied > 0.5 * ei.size:
                 flat_acquisition_iters += 1
 
-            best_ei_idx = np.argmax(ei)
             available = np.where(pool_mask)[0]
             selected_pool_idx = available[best_ei_idx]
 
@@ -1304,8 +1320,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # it hold caco2 areas with the opposite sign and are not resumed.
     # 'storage': 3 is the Gauche GP fitted on the standardised label; a
     # hybrid_gauche_gp condition from before it is not resumed.
+    # 'storage': 4 breaks ties at the Expected Improvement maximum at random
+    # instead of by row order, which moves every flat condition's curve.
     _ckpt_key = {
-        'storage': 3, 'hunt': _hunt, 'lengthscale': LENGTH_SCALE_INIT,
+        'storage': 4, 'hunt': _hunt, 'lengthscale': LENGTH_SCALE_INIT,
         'max_iterations': int(max_iterations), 'n_seeds': int(n_seeds),
         'rebuild_interval': int(rebuild_interval),
         'hybrid_budget': int(hybrid_budget), 'target_dim': int(target_dim),
@@ -1724,9 +1742,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # above counts fits that RAISED. This counts picks made while Expected
         # Improvement was tied at its maximum across more than half the
         # remaining pool -- the surrogate fitted, and then separated nothing,
-        # so np.argmax handed back the lowest row number among the tied
-        # molecules. Those picks are dataset row order, not acquisition, and
-        # not random either.
+        # so the pick was a random draw among the tied molecules. Those picks
+        # are random search, not acquisition. (The key keeps its old name; the
+        # picks were dataset row order before 2026-09-28.)
         _successful_picks = max(0, _picks_made - total_gp_failures)
         degenerate_row_order = (
             not _is_random_only
@@ -1782,7 +1800,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    [flag] {condition}: Expected Improvement was tied at "
                   f"its maximum across more than half the pool on "
                   f"{total_flat_acq} of {_successful_picks} picks -> those "
-                  f"molecules were taken in dataset row order, not chosen.")
+                  f"molecules were drawn at random among the ties, not chosen.")
 
         # Print summary for this condition
         for bk in budget_checkpoints:
@@ -2031,12 +2049,9 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
             mu, sigma = gp.predict(X_pool_available, return_std=True)
             y_best = float(np.max(y_lab))
             ei = expected_improvement(mu, sigma, y_best)
-            _ei_max = ei.max()
-            _n_tied = int(np.isclose(ei, _ei_max, rtol=1e-9,
-                                     atol=1e-12 * max(abs(_ei_max), 1.0)).sum())
+            best_ei_idx, _n_tied = _pick_max_ei(ei, rng)
             if _n_tied > 0.5 * ei.size:
                 flat_acquisition_iters += 1
-            best_ei_idx = np.argmax(ei)
             available = np.where(pool_mask)[0]
             selected_pool_idx = available[best_ei_idx]
 
