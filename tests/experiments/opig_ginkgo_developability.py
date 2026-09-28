@@ -242,6 +242,20 @@ def evaluate_rep_reg(X, labels, groups, prebuilt_splits, model,
     return result
 
 
+def _rho_key(res):
+    """Spearman mean for picking a best model, with NaN ranked last.
+
+    max() with a NaN key keeps whichever entry came first, so one model whose
+    folds gave a constant prediction could hide the real best model.
+    """
+    v = res.get('spearman', {}).get('mean', float('nan'))
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return float('-inf')
+    return v if np.isfinite(v) else float('-inf')
+
+
 def _is_binary_hybrid(X):
     """True if X is a 0/1 (or uint8) matrix — skip StandardScaler if so."""
     if X.dtype == np.uint8:
@@ -746,7 +760,7 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
         if rep_results:
             # Find best model by Spearman
             best_model = max(rep_results.items(),
-                             key=lambda kv: kv[1]['spearman']['mean'])
+                             key=lambda kv: _rho_key(kv[1]))
             best_rho = best_model[1]['spearman']['mean']
             best_r2 = best_model[1]['r2']['mean']
             print(f"    {rep_name:25s} best={best_model[0]:6s}  "
@@ -855,7 +869,7 @@ def print_analysis(all_results):
 
         for rep_name, rep_data in results.items():
             best_model_res = max(rep_data['models'].values(),
-                                  key=lambda v: v['spearman']['mean'])
+                                  key=_rho_key)
             rho = best_model_res['spearman']['mean']
             if rep_name == 'kirby_hybrid':
                 hybrid_rho = rho
