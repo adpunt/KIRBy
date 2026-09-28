@@ -619,9 +619,18 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
                 for i in range(NFOLDS):
                     w = wl[i]
                     tot = sum(w.values())
+                    # Every weight zero: the engine splits the candidate pool
+                    # equally (allocate_weighted_global). Before 2026-09-28
+                    # this gave every rep zero slots, and the arm was scored as
+                    # a model predicting the training mean.
+                    degenerate = not (np.isfinite(tot) and tot > 0)
+                    n_rep = max(1, len(P_by_fold[i]))
                     slots = {}
                     for rn in P_by_fold[i]:
-                        s = int(round((w[rn] / tot) * POOL_TOTAL)) if tot > 0 else 0
+                        if degenerate:
+                            s = int(round(POOL_TOTAL / n_rep))
+                        else:
+                            s = int(round((w[rn] / tot) * POOL_TOTAL))
                         slots[rn] = min(max(s, 0), rep_width[rn])
                     slots_by_fold[i] = slots
                 per_fold_sel_g, oc = global_sel(P_by_fold, slots_by_fold, B)
