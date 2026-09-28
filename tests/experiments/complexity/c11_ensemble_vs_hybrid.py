@@ -731,6 +731,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'total_fit_time_s': bs['fit_time_s'],
             'total_predict_time_s': bs['predict_time_s'],
             'fold_scores': bs['fold_scores'],
+            # best_rep is the representation with the best mean over the SAME
+            # held-out folds this row reports, so this row is optimistic. The
+            # held-out version is best_single_reselected in head_to_head.
+            'best_rep_chosen_on': 'the held-out folds reported here (optimistic)',
             'detail': {'best_rep': best_rep, 'all_reps': single_results},
             'cost': _cost_row(1, bs['dim'], 1, bs['dim'], bs['model_bytes'],
                               bs['fit_time_s'], bs['predict_time_s'], bs['dim']),
