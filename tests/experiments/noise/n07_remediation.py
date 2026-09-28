@@ -664,6 +664,64 @@ def correction_targets(X_tr_s, y_tr, groups=None, want=None):
     return out
 
 
+def _cached_target(dataset_name, kind, X_tr_s, y_tr, groups):
+    """One model-based cleanup target, read from noise_cache when the same
+    (features, labels, groups) were fitted before. DIRTY-LOCAL 2026-09-28.
+
+    n07 passes no `targets` to cleaned_training_set, so every call refitted
+    the out-of-fold LightGBM (oof_smooth and js_shrink), the Gaussian process
+    (gp_smooth) and the quantile forest (quantile_clip) from scratch. Per
+    (downstream model, fold, draw) that is four calls on two feature sets
+    that are fitted identically: the legacy block and the D-versus-D' rows
+    each score the noisy-label and the clean-label hybrid. On the local
+    herg_ki run the two top-model passes took about an hour per fold against
+    about four minutes for rf, which never runs these three.
+
+    All three fits are deterministic (GroupKFold, fixed LightGBM parameters,
+    random_state=42 for the process and the forest), so a stored copy is the
+    same number. The key carries the estimator's source hash, so an edit to
+    the estimator is a miss, not a stale read. dataset_name None, or the cache
+    switched off, computes as before.
+    """
+    from experiments.noise import noise_cache as _nc
+    n_splits = min(REPAIR_OOF_SPLITS, len(y_tr))
+    if kind == 'oof':
+        if dataset_name is None:
+            return oof_predict(X_tr_s, y_tr, groups, n_splits=n_splits)
+        return _nc.cached_oof_predict(dataset_name, X_tr_s, y_tr, groups,
+                                      n_splits=n_splits)
+    if kind == 'gp':
+        def _compute():
+            est = GaussianProcessEstimator(n_folds=REPAIR_OOF_SPLITS,
+                                           groups=groups)
+            est.estimate(X_tr_s, y_tr)
+            return np.asarray(est.predictions_, dtype=float)
+        cls = GaussianProcessEstimator
+    elif kind == 'quantile':
+        def _compute():
+            est = QuantileForestEstimator(n_folds=REPAIR_OOF_SPLITS,
+                                          groups=groups)
+            est.estimate(X_tr_s, y_tr)
+            return (np.asarray(est.quantile_lo_, dtype=float),
+                    np.asarray(est.quantile_hi_, dtype=float))
+        cls = QuantileForestEstimator
+    else:
+        raise ValueError(f'_cached_target: unknown kind {kind!r}')
+    if dataset_name is None:
+        return _compute()
+    import hashlib
+    import inspect
+    try:
+        _src = hashlib.sha1(inspect.getsource(cls).encode()).hexdigest()
+    except (OSError, TypeError):
+        _src = 'unknown'
+    key = {'X': _nc.array_hash(X_tr_s), 'y': _nc.array_hash(y_tr),
+           'groups': _nc.array_hash(groups), 'n_folds': int(REPAIR_OOF_SPLITS),
+           'estimator': cls.__name__, 'estimator_source': _src}
+    return _nc.cached(dataset_name, f'n07_target_{kind}', key, _compute,
+                      store_if=lambda v: v is not None)
+
+
 def measurement_counts_for_rows(data):
     """How many times each row's molecule was measured, one entry per ROW.
 
@@ -953,8 +1011,7 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         oof = (targets or {}).get('oof')
         if oof is None:
             try:
-                oof = oof_predict(X_tr_s, y_tr, groups,
-                                  n_splits=min(REPAIR_OOF_SPLITS, len(y_tr)))
+                oof = _cached_target(dataset_name, 'oof', X_tr_s, y_tr, groups)
             except Exception as exc:
                 print(f"      js_shrink: could not build an out-of-fold "
                       f"prediction ({type(exc).__name__}: {exc}); skipping "
@@ -1101,8 +1158,7 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # (kirby/utils/noisy_labels/core.py:127).
         target = (targets or {}).get('oof')
         if target is None:
-            target = oof_predict(X_tr_s, y_tr, groups,
-                                 n_splits=min(REPAIR_OOF_SPLITS, len(y_tr)))
+            target = _cached_target(dataset_name, 'oof', X_tr_s, y_tr, groups)
         y_smoothed = smooth_by_scores(
             y_tr, noise_scores, target,
             alpha=0.5 if strength is None else float(strength),
@@ -1175,10 +1231,7 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
                       f"{GP_SMOOTH_MAX_ROWS}; a Gaussian process is cubic in "
                       f"the rows and this one has no cap.")
                 return None
-            est = GaussianProcessEstimator(n_folds=REPAIR_OOF_SPLITS,
-                                           groups=groups)
-            est.estimate(X_tr_s, y_tr)
-            target = np.asarray(est.predictions_, dtype=float)
+            target = _cached_target(dataset_name, 'gp', X_tr_s, y_tr, groups)
         y_smoothed = smooth_by_scores(
             y_tr, noise_scores, target,
             alpha=0.5 if strength is None else float(strength),
@@ -1196,10 +1249,7 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         # molecule like them carries, and the rest of the column is untouched.
         _q = (targets or {}).get('quantile')
         if _q is None:
-            est = QuantileForestEstimator(n_folds=REPAIR_OOF_SPLITS,
-                                          groups=groups)
-            est.estimate(X_tr_s, y_tr)
-            _q = (est.quantile_lo_, est.quantile_hi_)
+            _q = _cached_target(dataset_name, 'quantile', X_tr_s, y_tr, groups)
         y_clipped = clip_to_range(y_tr, _q[0], _q[1], alpha=1.0)
         return {'X': X_tr_s, 'y': y_clipped, 'sample_weight': None,
                 'keep': None, 'label_column': y_clipped}
