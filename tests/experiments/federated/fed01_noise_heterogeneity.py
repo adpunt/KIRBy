@@ -348,11 +348,11 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 sigma_results = {'n_flipped': n_flipped}
 
                 # Rebuild training cluster_data with noisy labels.
-                # FLuID's cluster_data[1..K] are smoothed views (k-NN bleed across
-                # clusters when smooth_factor>0). Re-slicing by CLUSTER would drop
-                # those smoothed rows — instead, copy each existing view and overwrite
-                # CLASS/ACTIVITY for the rows whose index appears in our noise table
-                # (P1-8 fix).
+                # FLuID's smoothing moves a random fraction of rows to a random
+                # cluster (FLuID.py:515-524), then slices by CLUSTER, so the
+                # views are still a partition of the training rows. Copy each
+                # view and overwrite CLASS/ACTIVITY from the noisy table by
+                # index.
                 train_df_noisy = cluster_data[0].copy()
                 train_df_noisy['CLASS'] = train_labels_noisy
                 train_df_noisy['ACTIVITY'] = np.where(
@@ -559,6 +559,10 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         prob_pos = pred_prob[:, 1] if pred_prob.shape[1] == 2 else None
                         c5 = compute_clf_metrics(
                             test_labels_clean, pred_cls, prob_pos)
+                        # Features actually built. The silo shares are
+                        # truncated to whole numbers and deduplicated, so this
+                        # can sit below BUDGET, where C0 builds all of it.
+                        c5['n_features'] = int(X_hybrid_train.shape[1])
                     else:
                         c5 = {'error': 'no valid silo selections'}
 
@@ -638,8 +642,15 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                             vote_count >= 2)[0]
                         flagged_train = s_idx[flagged_local]
                         cleaned_train_mask[flagged_train] = False
+                        # How many of the removed rows really had their label
+                        # flipped. Without it a C6 gain or loss cannot be put
+                        # down to removing flipped rows rather than clean ones.
                         detection_results[f'silo_{s}'] = {
                             'n_flagged': int(len(flagged_local)),
+                            'n_flagged_truly_flipped': int(
+                                noise_mask_global[flagged_train].sum()),
+                            'n_truly_flipped': int(
+                                noise_mask_global[s_idx].sum()),
                             'n_total': int(len(s_idx)),
                             'detectors_used': C6_DETECTORS,
                         }
@@ -708,6 +719,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                                             if pred_prob.shape[1] == 2 else None)
                                 c6 = compute_clf_metrics(
                                     test_labels_clean, pred_cls, prob_pos)
+                                c6['n_features'] = int(X_c6_tr.shape[1])
                             else:
                                 c6 = {'error': 'no valid silo selections'}
                             c6['silo_budgets'] = convert_numpy(sb_c6)
@@ -724,6 +736,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         c6 = {'error': 'too few samples after cleaning'}
 
                     c6['n_excluded'] = n_excluded
+                    c6['n_excluded_truly_flipped'] = int(
+                        noise_mask_global[~cleaned_train_mask].sum())
                     c6['detection_results'] = convert_numpy(detection_results)
                     sigma_results['c6_kirby_noise_detect'] = c6
                     mcc_str = f"MCC={c6['mcc']:.3f}" if 'mcc' in c6 else 'N/A'
@@ -799,6 +813,34 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         'spearman_score_r': float(r_score),
                         'spearman_score_p': float(p_score),
                     }
+                    # The same silos with no flips. Each silo is a different
+                    # chemical cluster, so its budget at 0.2 also carries how
+                    # hard that cluster is. The change from flip fraction 0 to
+                    # 0.2 on the same fold, silos and split removes that.
+                    c5_zero = primary_sweep.get('0', {}).get(
+                        'c5_kirby_federated', {})
+                    if ('silo_budgets' in c5_zero
+                            and 'error' not in c5_zero):
+                        b0 = [c5_zero['silo_budgets'].get(str(s), 0)
+                              for s in range(1, K + 1)]
+                        s0 = [c5_zero.get('silo_scores', {}).get(str(s), 0)
+                              for s in range(1, K + 1)]
+                        d_budget = [a - b for a, b in zip(silo_budget_vals, b0)]
+                        d_score = [a - b for a, b in zip(silo_score_vals, s0)]
+                        r_db, p_db = spearmanr(silo_noise, d_budget)
+                        r_ds, p_ds = spearmanr(silo_noise, d_score)
+                        importance_correlation.update({
+                            'budgets_at_zero_flips': b0,
+                            'scores_at_zero_flips': s0,
+                            'budget_change_from_zero': d_budget,
+                            'score_change_from_zero': d_score,
+                            'spearman_budget_change_r': float(r_db),
+                            'spearman_budget_change_p': float(p_db),
+                            'spearman_score_change_r': float(r_ds),
+                            'spearman_score_change_p': float(p_ds),
+                        })
+                        print(f"  Budget change from 0 flips vs noise: "
+                              f"r={r_db:.3f}, p={p_db:.3f}")
                     print(f"  Budget-noise correlation: r={r_budget:.3f}, p={p_budget:.3f}")
                     print(f"  Score-noise correlation:  r={r_score:.3f}, p={p_score:.3f}")
                     if r_budget < 0:
