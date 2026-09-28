@@ -422,6 +422,14 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         allocation_method=_alloc,
                         importance_method=_imp,
                         internal_evaluator=_int_eval,
+                        # The metric each representation's share of the budget
+                        # is scored on. C5 and C6 pass AUC into every silo's
+                        # create_hybrid, and the search ranked on AUC. Without
+                        # it C0 fell to the internal evaluator's own score,
+                        # which is accuracy for a classifier, so C0 and C5
+                        # split the budget by different quantities.
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better,
                         augmentations=train_augs,
                         augmentation_strategy=aug_cond)
                     X_h_test = apply_feature_selection(
