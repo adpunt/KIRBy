@@ -772,9 +772,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     ekey = f'{condition}|{lvl_key}|{_ekey}|{pass_key}'
                     try:
                         # noise_cache.cached_oof_predict since 2026-09-25:
-                        # the same calls (seed 0), stored. p_clean depends
-                        # on the fold alone, so it is computed once for every
-                        # condition, level and draw.
+                        # the same calls (seed 0), stored. In base_1 and
+                        # base_2 p_clean depends on the fold alone, so it is
+                        # computed once for every condition, level and draw.
+                        # In a hybrid space the matrix was built from this
+                        # pass's NOISY labels, so p_clean is recomputed per
+                        # pass (the cache key holds the matrix) and its
+                        # features were chosen with the moved labels.
                         p_clean = nc.cached_oof_predict(
                             dataset_name, X_tr_s, y_clean_tr, g_tr,
                             n_splits=oof_splits)
