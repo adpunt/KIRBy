@@ -82,7 +82,14 @@ def _compute_reliability_scores(X, y, importance_weights, k=10):
 
     reliability = np.zeros(len(y))
     for i in range(len(y)):
-        nbr_idx = indices[i, 1:]  # exclude self
+        # Exclude the molecule itself by index. Dropping column 0 assumed the
+        # first neighbour returned is the molecule itself, which fails when
+        # another training molecule has the identical feature row: at distance
+        # 0 either can come first. On synthetic exact duplicates the molecule's
+        # own index stayed among its neighbours in 50 of 100 rows, so its own
+        # label entered the mean it is compared with.
+        row = indices[i]
+        nbr_idx = row[row != i][:k_actual]
         nbr_mean = np.mean(y[nbr_idx])
         reliability[i] = 1.0 - abs(y[i] - nbr_mean) / y_range
 
