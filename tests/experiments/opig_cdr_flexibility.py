@@ -521,6 +521,24 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
                         'no hybrid delta: %s: %s' % (type(_e).__name__, _e))
             if _deltas:
                 top2_block['hybrid_deltas_by_model'] = _deltas
+                # ⛔ THESE TWO DELTAS ARE NOT HELD-OUT NUMBERS, and they print
+                # three lines under a block that is. hybrid_score here is the
+                # winning configuration's own mean over the folds that scored
+                # it — a maximum over every configuration the search ran —
+                # while each base representation's score is one value that was
+                # never picked over anything. The held-out comparison is
+                # reselected_comparison, which re-picks the winner for each
+                # held-out fold from the other folds. Said in the saved block
+                # as well as in the print, because the saved block travels.
+                top2_block['hybrid_deltas_note'] = (
+                    'NOT held out. hybrid_score is the best score over all '
+                    'searched configurations, taken on the folds that scored '
+                    'them; the base representations it is compared against '
+                    'were not selected over anything. The held-out '
+                    'hybrid-versus-best-representation comparison is in '
+                    'reselected_comparison.')
+                print("  deltas below are NOT held out: the hybrid number is "
+                      "the best of every searched configuration")
                 # delta_vs_best_rep is None when no base representation
                 # carries a score for that downstream model, so it is
                 # formatted only after the None test — a format spec on None
