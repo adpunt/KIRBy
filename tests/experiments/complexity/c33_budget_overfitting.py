@@ -984,6 +984,9 @@ def run(data, config, output_dir, dataset_name):
         },
         'by_model_budget': by_model_budget,
         'summary': summary,
+        # False when no 'linear' row was scored: then no double_descent shape
+        # in this file is from a model whose threshold is budget = rows.
+        'linear_in_run': 'linear' in by_model_budget,
     }
 
     # ---- printed table: one row is one (model, budget) --------------------
@@ -1108,6 +1111,11 @@ def run(data, config, output_dir, dataset_name):
           "their own")
     print("  threshold at every budget here, so a flat shape from them says "
           "nothing about it.")
+    if 'linear' not in by_model_budget:
+        print("  ⛔ THIS RUN HAS NO 'linear' ROW (KIRBY_C33_EXTRA_MODELS / "
+              "--models), so no shape above")
+        print("  answers the double-descent question. Every shape label "
+              "above is from a model past its own threshold.")
 
     return results
 
