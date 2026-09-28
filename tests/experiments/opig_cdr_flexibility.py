@@ -603,7 +603,14 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
                 'search_budget': _meta.get('budget'),
                 'search_tier': _meta.get('tier'),
                 'search_aug_condition': _meta.get('aug_condition'),
-                'search_metric': 'auc',
+                # Read off the search, not written here as a literal. It was
+                # the literal 'auc' until 2026-09-28, which happens to be what
+                # the registry resolves for cdr_flexibility today (checked in
+                # this session) — but the saved block would have gone on saying
+                # 'auc' whatever the search had actually optimised, and that
+                # string is the only record of which metric every score in the
+                # block is in.
+                'search_metric': getattr(search, 'metric_name', None),
                 'note': ('search_best_score_mean is NOT a held-out score. The '
                          'hybrid number for this experiment is in '
                          'reselected_comparison.'),
