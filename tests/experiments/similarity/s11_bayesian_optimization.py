@@ -341,7 +341,17 @@ def fit_gauche_gp(X_train, y_train, **kwargs):
 
             def fit(self, X, y):
                 self.train_x = torch.tensor(X, dtype=torch.float64)
-                train_y = torch.tensor(y, dtype=torch.float64)
+                # Standardise the label, as the scikit-learn GP does with
+                # normalize_y=True. Unstandardised, the constant mean starts
+                # at 0 and 50 Adam steps at lr 0.1 move it at most about 5:
+                # on labels near -6.3 it stopped at -3.4, 95% of a synthetic
+                # pool was predicted above the best labelled value, and
+                # Expected Improvement ranked on that offset, not on the data.
+                y = np.asarray(y, dtype=np.float64)
+                self.y_mean = float(y.mean())
+                self.y_sd = float(y.std()) if y.std() > 0 else 1.0
+                train_y = torch.tensor((y - self.y_mean) / self.y_sd,
+                                       dtype=torch.float64)
                 self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
 
                 class _ExactGP(gpytorch.models.ExactGP):
@@ -373,9 +383,9 @@ def fit_gauche_gp(X_train, y_train, **kwargs):
                 with torch.no_grad(), gpytorch.settings.fast_pred_var():
                     test_x = torch.tensor(X, dtype=torch.float64)
                     pred = self.likelihood(self.model(test_x))
-                mu = pred.mean.numpy()
+                mu = pred.mean.numpy() * self.y_sd + self.y_mean
                 if return_std:
-                    return mu, pred.stddev.numpy()
+                    return mu, pred.stddev.numpy() * self.y_sd
                 return mu
 
         model = _GaucheGPModel()
@@ -1285,8 +1295,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # What the checkpoint's conditions must have been computed under.
     # 'storage': 2 is the hunt-oriented AUC storage; checkpoints from before
     # it hold caco2 areas with the opposite sign and are not resumed.
+    # 'storage': 3 is the Gauche GP fitted on the standardised label; a
+    # hybrid_gauche_gp condition from before it is not resumed.
     _ckpt_key = {
-        'storage': 2, 'hunt': _hunt, 'lengthscale': LENGTH_SCALE_INIT,
+        'storage': 3, 'hunt': _hunt, 'lengthscale': LENGTH_SCALE_INIT,
         'max_iterations': int(max_iterations), 'n_seeds': int(n_seeds),
         'rebuild_interval': int(rebuild_interval),
         'hybrid_budget': int(hybrid_budget), 'target_dim': int(target_dim),
