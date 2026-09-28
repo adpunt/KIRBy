@@ -484,9 +484,19 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 # Pass train-only cluster data for cross-val MCC (no test leakage)
                 print("    C3: FLuID quality...", end=' ')
                 try:
+                    # Each silo's MCC weight is cross-validated on its own
+                    # training rows split by scaffold group. Without groups
+                    # the helper uses a shuffled KFold, which puts one
+                    # scaffold on both sides. fed02 and fed03 already pass
+                    # them. cluster_data_train[t] holds the rows of
+                    # train_silo_indices[t], in the same order.
+                    _teacher_groups = [None] + [
+                        groups[train_idx][train_silo_indices[s]]
+                        for s in range(1, K + 1)]
                     pred_cls, pred_prob, mcc_weights = \
                         predict_fluid_quality_ensemble(
-                            teacher_models, cluster_data_train, test_fps, K)
+                            teacher_models, cluster_data_train, test_fps, K,
+                            groups=_teacher_groups)
                     c3 = compute_clf_metrics(test_labels_clean, pred_cls, pred_prob)
                     c3['mcc_weights'] = convert_numpy(mcc_weights)
                     sigma_results['c3_fluid_quality'] = c3
