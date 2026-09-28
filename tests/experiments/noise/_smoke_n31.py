@@ -204,6 +204,13 @@ def test_break_even():
     be3, why3 = n31.break_even_precision([0, 0.5, 1.0], [0.01, 0.02, 0.03])
     check('5c. a gain already positive at precision 0 is refused',
           be3 is None and why3, why3)
+    # Two asked-for precisions that land on one realised precision (a flag
+    # share larger than the moved share) are one point, their gains averaged
+    # by passes; sorting them by gain used to invent a crossing there.
+    be4, why4 = n31.break_even_precision([0, 0.25, 0.25],
+                                         [-0.05, 0.02, -0.03], [3, 3, 3])
+    check('5d. tied realised precisions are averaged, not sorted by gain',
+          be4 is None and why4, why4)
 
 
 def test_shift_injector():
@@ -214,9 +221,11 @@ def test_shift_injector():
                                             condition='shift_only_p10',
                                             delta_sd=1.0, seed=4)
     d = y0 - y[tr]
-    check('6. a tenth of the training labels moved, up by one label SD, '
-          'the rest untouched',
-          int(m.sum()) == 25 and np.allclose(d[m], np.std(y))
+    # One SD of the clean TRAINING labels (noise_helpers 620308e), not of
+    # the whole column: held-out rows no longer set the shift.
+    check('6. a tenth of the training labels moved, up by one training '
+          'label SD, the rest untouched',
+          int(m.sum()) == 25 and np.allclose(d[m], np.std(y[tr]))
           and np.all(d[~m] == 0), f'{int(m.sum())} moved')
 
 
