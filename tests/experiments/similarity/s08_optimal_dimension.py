@@ -190,6 +190,62 @@ def _drop_blueprint(obj):
     return obj
 
 
+def _fold_local_rep_subset(train_reps, y_train, groups_train, blueprint,
+                           metric_fn, lower_is_better, is_clf):
+    """The representations a recipe keeps, ranked on this fold's training rows.
+
+    Added dirty-local 2026-09-28, the same fix s06 received (commit 3a8cfb2).
+    The local recipe asks for 5 representations (blueprint.rep_count). On a
+    pool of 6 (logd, buchwald_hartwig), build_fold_hybrid cuts to 5 by
+    blueprint.rep_scores when it is given no fold scores. Those are the
+    search's scores over EVERY molecule, this fold's held-out ones included,
+    so held-out labels chose which representation was left out of every
+    held-out SAC and every held-out model score in this file.
+
+    The search ranks on each fold's own training rows (find_best_hybrid.py,
+    the rep_count block): a prediction score under objective='predictive', the
+    neighbour read-across score under objective='similarity'. This does the
+    same on create_hybrid's own carve (internal_holdout_split), through the
+    function the budget split uses (_score_rep_for_budget). Unlike s06's copy
+    it covers the similarity family too, because s08 builds both.
+
+    Returns (subset dict, sorted kept names), or (train_reps, None) when no cut
+    applies, or when the recipe's evaluator is 'match' or its objective is a
+    blend -- those are left to build_fold_hybrid, which then ranks on the
+    whole-dataset scores and the row says so.
+    """
+    rep_count = getattr(blueprint, 'rep_count', None)
+    if rep_count is None or int(rep_count) >= len(train_reps):
+        return train_reps, None
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or isinstance(objective, dict)):
+        return train_reps, None
+    from kirby.hybrid import (_score_rep_for_budget, internal_holdout_split,
+                              OBJECTIVE_PREDICTIVE)
+    inner_tr, inner_va = internal_holdout_split(len(y_train), y_train,
+                                                groups_train)
+    groups_va = (np.asarray(groups_train)[inner_va]
+                 if groups_train is not None else None)
+    scores = {}
+    for name, X in train_reps.items():
+        X = np.asarray(X)
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        s = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lower_is_better,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=bool(is_clf),
+            groups_val=groups_va))
+        scores[name] = s if np.isfinite(s) else float('-inf')
+    keep = sorted(train_reps, key=lambda r: (-scores[r], r))[:int(rep_count)]
+    return {k: v for k, v in train_reps.items() if k in keep}, sorted(keep)
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """The optimal hybrid dimension may differ for prediction vs similarity.
     Similarity may peak at lower dim than prediction (curse of dimensionality)."""
@@ -303,7 +359,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         experiment_sidecar(output_dir, 's08_optimal_dimension', dataset_name),
         run_identity('s08_optimal_dimension', dataset_name, data, config,
                      kwargs=kwargs, budgets=list(budgets),
-                     families=list(families), n_sample=n_sample))
+                     families=list(families), n_sample=n_sample,
+                     # dirty-local 2026-09-28: the recipe's representations are
+                     # ranked on each fold's training rows, so a sidecar written
+                     # before that is not read back.
+                     rep_ranking='fold_local'))
 
     for budget, family in [(_b, _f) for _b in budgets for _f in families]:
         print(f"\n  Budget={budget}, {family} family:")
@@ -547,11 +607,51 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # old full-data best_sac_budget leak with a cross-validated statistic.
         sac_fold_scores = []
         sac_fold_scores_unweighted = []  # same folds, no importance weights
+        # Per fold, the representations each recipe was rebuilt on and what
+        # ranked them. dirty-local 2026-09-28, with _fold_local_rep_subset.
+        reps_kept_per_fold = []
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
-            train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
-            val_reps_fold = {name: rep[val_idx] for name, rep in reps.items()}
+            _train_reps_all = {name: rep[train_idx] for name, rep in reps.items()}
+            _val_reps_all = {name: rep[val_idx] for name, rep in reps.items()}
+            _groups_tr = groups[train_idx] if groups is not None else None
+            # One ranking per (objective, evaluator, count) on this fold,
+            # shared by every recipe that asks for the same one.
+            _subset_by_rank_key = {}
+
+            def _fold_reps(_b):
+                _k = (repr(getattr(_b, 'objective', None)),
+                      getattr(_b, 'internal_evaluator', None),
+                      getattr(_b, 'rep_count', None))
+                if _k not in _subset_by_rank_key:
+                    _sub, _kept = _fold_local_rep_subset(
+                        _train_reps_all, y_train, _groups_tr, _b,
+                        metric_fn, lower_is_better, is_clf)
+                    _subset_by_rank_key[_k] = (
+                        _sub, {n: _val_reps_all[n] for n in _sub}, _kept)
+                return _subset_by_rank_key[_k]
+
+            try:
+                train_reps_fold, val_reps_fold, _kept_sim = _fold_reps(bp)
+            except Exception as _exc:
+                print(f"    fold representation ranking failed: "
+                      f"{type(_exc).__name__}: {_exc}")
+                reps_kept_per_fold.append({'error': f'{type(_exc).__name__}: {_exc}'})
+                sac_fold_scores.append(float('nan'))
+                sac_fold_scores_unweighted.append(float('nan'))
+                continue
+            _rc_sim = getattr(bp, 'rep_count', None)
+            if _kept_sim is not None:
+                _ranked_by = "this fold's training rows"
+            elif _rc_sim is None or int(_rc_sim) >= len(_train_reps_all):
+                _ranked_by = 'no cut: the recipe uses every representation'
+            else:
+                _ranked_by = ('blueprint.rep_scores, measured on the whole '
+                              'dataset (evaluator or objective not rankable '
+                              'here)')
+            reps_kept_per_fold.append({'kept': _kept_sim,
+                                       'ranked_by': _ranked_by})
             # Skip augmentations when winning condition is 'none' — the
             # pool-fitted X_hybrid was built without them, mismatch otherwise.
             if aug_cond == 'none' or not augmentations:
@@ -621,8 +721,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             # The same recipe the similarity side above built.
                             _Xtr_m, _Xva_m = X_tr_h, X_va_h
                         else:
+                            # This recipe's own representations, ranked on
+                            # this fold's training rows (dirty-local
+                            # 2026-09-28).
+                            _tr_m_reps, _va_m_reps, _ = _fold_reps(_bp_m)
                             _Xtr_m, _Xva_m, _ = build_fold_hybrid(
-                                train_reps_fold, val_reps_fold, y_train, _bp_m,
+                                _tr_m_reps, _va_m_reps, y_train, _bp_m,
                                 augmentations_train=aug_tr,
                                 augmentations_val=aug_va,
                                 groups=(groups[train_idx]
@@ -789,6 +893,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'sac_fold_scores': sac_fold_scores,  # held-out SAC per fold, importance-weighted
             # held-out SAC per fold, unweighted (same statistic as per_rep)
             'sac_fold_scores_unweighted': sac_fold_scores_unweighted,
+            # Per fold: which representations the knn recipe was rebuilt on,
+            # and what ranked them (dirty-local 2026-09-28).
+            'hybrid_reps_kept_per_fold': reps_kept_per_fold,
             'violation_rate': viol,
             'dist_corr_with_full': dist_corr,
             'time_seconds': elapsed,
