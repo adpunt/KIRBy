@@ -330,11 +330,18 @@ def mode_representations(ctx):
             r = dict(rep=name, metric=metric)
             basis = REP_BASIS[name]
             # An undefined correlation stays NaN, as score_subset does. It was
-            # written as 0.0, which reads as a measured zero. On a single-
-            # mutation library MutID under cosine is 1 for every pair of
-            # distinct variants, so its correlation is undefined. BaseDelta
-            # under euclidean is sqrt(2 x differing positions), so its count-
-            # controlled score is 0 up to rounding (about 1e-8).
+            # written as 0.0, which reads as a measured zero. Measured on a
+            # synthetic library of every distinct single mutant (2026-09-28):
+            # MutID is the SAME distance for every pair of distinct single
+            # mutants under BOTH metrics (1.0 cosine, sqrt(2) euclidean), so
+            # both of its correlations are undefined. BaseDelta's euclidean
+            # distance is exactly sqrt(2 x differing positions) on any library,
+            # so its count-controlled score is undefined there too, and on a
+            # single-mutation library its cosine distance is a function of the
+            # same count, so that one is undefined as well. On koenig this
+            # leaves dPhysChem and dPhysChem_pos as the only representations
+            # with a count-controlled number, and SubScore is excluded from
+            # both rich graders by C1.
             cleans = []
             for g in GRADERS:
                 raw = spearmanr(d, ctx['truth'][g])[0]
