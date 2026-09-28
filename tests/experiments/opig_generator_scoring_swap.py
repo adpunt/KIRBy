@@ -711,6 +711,7 @@ def stage_fit(args):
             + [('D', b) for b in budgets])
     c_widths = {}
     c_reps = {}
+    arm_fingerprints = {}
     commands = []
     for arm, budget in plan:
         name = arm if budget is None else f'{arm}_b{budget}'
@@ -750,15 +751,36 @@ def stage_fit(args):
                          float(np.percentile(y, 10)),
                          float(np.percentile(y, 90)),
                          out_dir, args.seed)
+        # Which columns of which representations this arm's predictor sees.
+        # Two arms holding the same one are the same predictor under two
+        # names: arm E is arm B whenever ecfp4 wins _best_single_rep on the
+        # steering molecules, and nothing else in this file would say so. The
+        # oracle already refuses to fit a second copy of itself for the same
+        # reason (best_oracle_rep != ORACLE_FIXED_REP above).
+        fingerprint = tuple(sorted(
+            (r, tuple(np.asarray(e['selected_indices']).ravel().tolist()))
+            for r, e in info.items()
+            if isinstance(e, dict) and 'selected_indices' in e))
+        same_as = sorted(n for n, f in arm_fingerprints.items()
+                         if f == fingerprint)
+        arm_fingerprints[name] = fingerprint
+
         manifest['arms'][name] = {
             'features_the_predictor_sees': int(X.shape[1]),
             'representations_used': rep_names,
             'note': note,
             'bundle': bundle,
             'config': toml,
+            # Empty for an arm whose feature set no earlier arm already has.
+            'arms_this_one_is_feature_identical_to': same_as,
         }
         commands.append(f'reinvent -l {name}.log {os.path.basename(toml)}')
         print(f"  arm {name}: {X.shape[1]} features — {note}")
+        if same_as:
+            print(f"    ⛔ arm {name} sees exactly the features arm "
+                  f"{', '.join(same_as)} sees, so the two are one condition "
+                  f"under two names and their difference is REINVENT's own "
+                  f"sampling, not the features")
 
     with open(os.path.join(out_dir, 'manifest.json'), 'w') as fh:
         json.dump(convert_numpy(manifest), fh, indent=2)
