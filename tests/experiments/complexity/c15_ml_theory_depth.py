@@ -365,8 +365,10 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
     """Compute distance concentration metrics for a feature matrix.
 
     Returns dict with:
-    - beyer_ratio: (max_dist - min_dist) / min_dist (→ 0 means concentrated)
-    - relative_contrast: (max_dist - min_dist) / mean_dist
+    - beyer_ratio: median over query points of (DMAX - DMIN) / DMIN, each
+      point's distances to all others (→ 0 means concentrated)
+    - beyer_ratio_global_pairs: the same ratio over every pair at once
+    - relative_contrast: (max_dist - min_dist) / mean_dist over every pair
     - distance_cv: std(dists) / mean(dists)
     - distance_iqr_ratio: IQR / median
     - hubness_skewness: skewness of k-occurrence counts (Radovanovic 2010)
@@ -388,7 +390,10 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
 
     if len(dists) == 0:
         return {
-            'beyer_ratio': float('nan'), 'relative_contrast': float('nan'),
+            'beyer_ratio': float('nan'),
+            'beyer_ratio_mean_over_queries': float('nan'),
+            'beyer_ratio_global_pairs': float('nan'),
+            'relative_contrast': float('nan'),
             'distance_cv': float('nan'), 'distance_iqr_ratio': float('nan'),
             'hubness_skewness': float('nan'), 'hubness_robin_hood': float('nan'),
         }
@@ -400,7 +405,27 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
     median_d = np.median(dists)
     q25, q75 = np.percentile(dists, [25, 75])
 
-    beyer = (max_d - min_d) / min_d if min_d > 0 else float('inf')
+    # 2026-09-28. Beyer et al. (1999) define the ratio PER QUERY POINT: the
+    # distances from one point to every other, (DMAX - DMIN) / DMIN. The
+    # global version below takes the smallest distance over every pair in the
+    # sample, so one near-duplicate pair sets it for the whole space. It is
+    # kept under beyer_ratio_global_pairs. beyer_ratio is now the median over
+    # query points of the per-query ratio; the mean is kept beside it.
+    beyer_global = (max_d - min_d) / min_d if min_d > 0 else float('inf')
+    D = squareform(dists)
+    np.fill_diagonal(D, np.nan)
+    Dpos = np.where(D > 0, D, np.nan)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        q_min = np.nanmin(Dpos, axis=1)
+        q_max = np.nanmax(D, axis=1)
+        q_ratio = (q_max - q_min) / q_min
+    q_ratio = q_ratio[np.isfinite(q_ratio)]
+    beyer = float(np.median(q_ratio)) if q_ratio.size else float('nan')
+    beyer_mean = float(np.mean(q_ratio)) if q_ratio.size else float('nan')
+    del D, Dpos
+    # Not Aggarwal et al.'s relative contrast, which is (DMAX - DMIN) / DMIN
+    # per query -- that is the Beyer ratio above. This is the spread of ALL
+    # pairwise distances over their mean, across the whole sample.
     contrast = (max_d - min_d) / mean_d if mean_d > 0 else 0
     cv = std_d / mean_d if mean_d > 0 else 0
     iqr_ratio = (q75 - q25) / median_d if median_d > 0 else 0
@@ -427,6 +452,8 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
 
     return {
         'beyer_ratio': float(beyer),
+        'beyer_ratio_mean_over_queries': beyer_mean,
+        'beyer_ratio_global_pairs': float(beyer_global),
         'relative_contrast': float(contrast),
         'distance_cv': float(cv),
         'distance_iqr_ratio': float(iqr_ratio),
