@@ -100,8 +100,11 @@ def _family_evaluators(fam_name):
     """Internal evaluator names searched for one family, 'match' resolved here.
 
     Returns the speed tier's own evaluator list with 'match' replaced by the
-    family's plain model name. Fast is ['rf', 'match'], so the SVM family
-    searches ['rf', 'svm'] and the RF family searches ['rf'] alone.
+    family's plain model name. Fast is ['rf', 'match', 'dnn', 'lightgbm']
+    (find_best_hybrid.py:3039), so the SVM family searches
+    ['rf', 'svm', 'dnn', 'lightgbm'] and the RF family ['rf', 'dnn',
+    'lightgbm']. Under the local grid KIRBY_LOCAL_EVALUATORS replaces the fast
+    list outright; with it set to 'rf' every family searches ['rf'] alone.
     """
     base = (FAST_INTERNAL_EVALUATORS if _C06_SPEED == 'fast'
             else INTERNAL_EVALUATORS)
@@ -173,7 +176,7 @@ def _keep_variant_k(est):
     """Stamp a kNN variant so the search fits it at its own n_neighbors.
 
     FIXED 2026-09-28 (dirty local). find_best_hybrid calls _set_knn_k on every
-    downstream model just before the fit (find_best_hybrid.py:5244). Unstamped,
+    downstream model just before the fit (find_best_hybrid.py:5256). Unstamped,
     that sets n_neighbors = min(5, sqrt(n_train)), which is 5 on any fold of 25
     rows or more. So k=20, k=10, k=5 and k=1 were all fitted at k=5, and the
     kNN family's four capacity settings were one model. The stamp is the
