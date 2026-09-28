@@ -287,9 +287,17 @@ def residual_sd(y, p, at):
 
 
 def mills_ratio(limit, p, sd):
-    """phi(a) / (1 - Phi(a)) with a = (limit - p) / sd, per row."""
+    """phi(a) / (1 - Phi(a)) with a = (limit - p) / sd, per row.
+
+    Computed as exp(logpdf(a) - logsf(a)), which is exact for every a.
+    Until 2026-09-28 it was pdf(a) / clip(1 - cdf(a), 1e-9), the probe's form.
+    Past a = 6 the clip bit: at a = 7 it gave 0.009 where the ratio is 7.14.
+    So a molecule predicted more than six sd below the limit got almost no
+    lift, the opposite of what the formula says. The clip was a guard against
+    dividing by zero, not part of the formula.
+    """
     a = (float(limit) - np.asarray(p, dtype=float)) / max(float(sd), 1e-9)
-    return norm.pdf(a) / np.clip(1.0 - norm.cdf(a), 1e-9, None)
+    return np.exp(norm.logpdf(a) - norm.logsf(a))
 
 
 def lift_columns(y_clipped, p, at, limit, sd, shuffle_seeds, seed_key):
