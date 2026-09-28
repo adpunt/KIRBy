@@ -1110,7 +1110,11 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
             'mcc_std': float(np.std(vals)) if vals else float('nan'),
             'mcc_per_fold': [float(v) for v in vals],
             'n_folds_completed': len(vals),
-            'per_fold': [fr.get(ck, {}) for fr in per_fold_results],
+            # The ceiling row has no per-fold entry of its own: it is a second
+            # pick off c1_single_silo, so read that, as _agg_mcc does.
+            'per_fold': [fr.get('c1_single_silo'
+                                if ck == 'c1_single_silo_ceiling' else ck, {})
+                         for fr in per_fold_results],
         }
 
     # Summary
