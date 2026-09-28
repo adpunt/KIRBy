@@ -453,23 +453,36 @@ def run(all_dataset_results):
             _best = min if _exp5_lib else max
 
             # Collect hybrid_weighted scores across all budgets
+            # Finite scores only, on both sides. min()/max() over a list holding
+            # a NaN return whatever they met first, so a NaN cell could be
+            # named best by position, and a NaN delta makes the whole series'
+            # signed-rank p NaN. (dirty-local 2026-09-28)
             hw_scores = []
             for b_res in exp5['per_budget'].values():
                 for k, v in b_res.items():
-                    if 'hybrid_weighted' in k:
-                        hw_scores.append(v['score_mean'])
+                    if 'hybrid_weighted' in k and _is_number(v.get('score_mean')):
+                        hw_scores.append(float(v['score_mean']))
+            rep_scores = [float(v['score_mean']) for v in per_rep.values()
+                          if _is_number(v.get('score_mean'))]
+            if not (hw_scores and rep_scores):
+                _record_absent(
+                    ds_summary, 'knn_delta',
+                    's05 per_budget[*][*hybrid_weighted*] vs per_rep_baselines',
+                    f"{len(hw_scores)} finite hybrid_weighted cell(s), "
+                    f"{len(rep_scores)} finite single-representation baseline(s)")
             # Compare against best individual rep kNN baseline
-            if hw_scores and per_rep:
-                best_rep_knn = _best(v['score_mean'] for v in per_rep.values())
+            if hw_scores and rep_scores:
+                best_rep_knn = _best(rep_scores)
                 best_hybrid_knn = _best(hw_scores)
                 # Delta should always be positive = improvement
                 if _exp5_lib:  # lower is better
                     delta_knn = best_rep_knn - best_hybrid_knn
                 else:
                     delta_knn = best_hybrid_knn - best_rep_knn
-                _src5 = ('s05 per_budget[*][*hybrid_weighted*].score_mean, MAX '
-                         'over budgets x conditions x k, vs the best '
-                         'per_rep_baselines score')
+                _src5 = ('s05 per_budget[*][*hybrid_weighted*].score_mean, best '
+                         'over budgets x pool families x ranks x k (weighted '
+                         'condition only), vs the best per_rep_baselines score '
+                         '(itself best over k)')
                 _record(ds_summary, 'knn_delta', delta_knn, _ARM_OPTIMISTIC,
                         _src5)
                 _series('kNN_delta', ds_name, delta_knn, _ARM_OPTIMISTIC, _src5)
