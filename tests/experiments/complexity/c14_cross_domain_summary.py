@@ -287,15 +287,44 @@ def _evaluate_task(task_name, rep_preset, config):
         print(f"    WARNING: nested_cv_evaluate produced no model for {task_name}")
         return None
 
-    # Headline model: the one whose held-out hybrid mean is best. Both arms
-    # range over the same DOWNSTREAM_MODELS, so neither side gains from this.
-    def _hyb_mean(m):
-        v = ncv.by_model[m].get('hybrid_mean')
-        if v is None or np.isnan(v):
-            return np.inf if lower_is_better else -np.inf
-        return v
-    best_model_name = (min(ncv.by_model, key=_hyb_mean) if lower_is_better
-                       else max(ncv.by_model, key=_hyb_mean))
+    # Headline model. Fixed 2026-09-28 (dirty local run): it used to be the
+    # model whose HELD-OUT hybrid mean was best, i.e. picked on the outer folds
+    # the delta is then reported on. Only the hybrid side gets that maximum
+    # (the single side is whatever that model scores), so the pick favoured
+    # the hybrid by up to a maximum over three models. Now the pick reads
+    # search_mean: the inner search's own score, computed on outer-training
+    # rows only. A model is eligible only if its hybrid scored on some outer
+    # fold; that is a check that a number exists, not a read of its value.
+    # The old pick is kept under 'hybrid_model_by_outer_score'.
+    def _finite(v):
+        return v is not None and np.isfinite(v)
+
+    _worst = np.inf if lower_is_better else -np.inf
+
+    def _key_on(field):
+        def _k(m):
+            v = ncv.by_model[m].get(field)
+            return float(v) if _finite(v) else _worst
+        return _k
+
+    def _pick(cands, field):
+        return (min(cands, key=_key_on(field)) if lower_is_better
+                else max(cands, key=_key_on(field)))
+
+    _eligible = [m for m in ncv.by_model
+                 if _finite(ncv.by_model[m].get('hybrid_mean'))]
+    if not _eligible:
+        print(f"    WARNING: no outer-fold hybrid score for {task_name}")
+        return None
+    model_by_outer_score = _pick(_eligible, 'hybrid_mean')
+    if any(_finite(ncv.by_model[m].get('search_mean')) for m in _eligible):
+        best_model_name = _pick(_eligible, 'search_mean')
+        model_selected_on = ('search_mean: the inner search score on '
+                             'outer-training rows')
+    else:
+        best_model_name = model_by_outer_score
+        model_selected_on = ('hybrid_mean on the outer folds (no model had a '
+                             'finite search_mean); optimistic for the hybrid')
     ncv_best = ncv.by_model[best_model_name]
 
     top3 = extract_top3_base_reps(ncv)
@@ -472,6 +501,10 @@ def _evaluate_task(task_name, rep_preset, config):
         'hybrid_score': hybrid_score,
         'hybrid_fold_scores': hybrid_fold_scores,
         'hybrid_model': best_model_name,
+        'hybrid_model_selected_on': model_selected_on,
+        # The model the old rule picked: best hybrid mean on the outer folds
+        # the delta is reported on. Kept for comparison only.
+        'hybrid_model_by_outer_score': model_by_outer_score,
         # The single-representation arm of the delta, also scored on outer
         # folds, with its winner picked on each fold's training rows.
         'reselected_best_single_score': reselected_best_single,
