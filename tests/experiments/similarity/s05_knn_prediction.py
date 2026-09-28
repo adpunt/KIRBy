@@ -782,7 +782,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             baseline_candidates[f"{rep_name}|k{k_candidate}"] = [
                 float(s) for s in fold_scores_uw]
             sc_mean = float(np.mean(fold_scores_uw))
-            if best_k_score is None or (sc_mean < best_k_score if lower_is_better else sc_mean > best_k_score):
+            # A NaN mean (a fold whose metric was undefined) never beats a
+            # finite one; comparisons with NaN are always False, so without
+            # this a NaN at the first k would be kept over a finite second k.
+            if best_k_score is None or (
+                    not np.isfinite(best_k_score) and np.isfinite(sc_mean)) or (
+                    sc_mean < best_k_score if lower_is_better
+                    else sc_mean > best_k_score):
                 best_k_score = sc_mean
                 best_k_used = k_candidate
                 best_k_std = float(np.std(fold_scores_uw))
@@ -896,7 +902,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Summary ──
     print(f"\n  Summary (best per budget):")
     for b in sorted(results['per_budget'].keys()):
-        budget_res = results['per_budget'][b]
+        # Cells with a NaN mean are left out of the pick: min/max compare NaN
+        # as neither larger nor smaller, so a NaN cell seen first would win.
+        budget_res = {_k: _v for _k, _v in results['per_budget'][b].items()
+                      if np.isfinite(_v['score_mean'])}
         if budget_res:
             best_key = (min if lower_is_better else max)(
                 budget_res, key=lambda k: budget_res[k]['score_mean'])
@@ -1098,8 +1107,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             }
         return out
 
+    # Finite means only, for the same reason as the per-budget pick above.
     all_hybrid_scores = [v for b_res in results['per_budget'].values()
-                         for v in b_res.values()]
+                         for v in b_res.values()
+                         if np.isfinite(v['score_mean'])]
     if reference_score is not None and all_hybrid_scores:
         sign = -1 if lower_is_better else 1
         best_hybrid = (min if lower_is_better else max)(
