@@ -151,6 +151,7 @@ from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, violation_rate,
 )
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
+from kirby.find_best_hybrid import _predict_for_metric
 from experiments.similarity._summary_keys import (
     SELECTION_RULE as _SELECTION_RULE)
 
@@ -631,7 +632,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     m = mfactory()
                     m.fit(X_tr_s, y_train)
-                    model_scores[mname].append(metric_fn(y_val, m.predict(X_va_s)))
+                    # Class-1 probabilities when the metric is AUC. m.predict
+                    # handed AUC hard 0/1 labels, which scores a ranking of
+                    # two values. (dirty-local 2026-09-28)
+                    model_scores[mname].append(metric_fn(
+                        y_val, _predict_for_metric(m, X_va_s, metric_fn)))
                 except Exception:
                     pass
 
@@ -905,7 +910,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     m = mfactory()
                     m.fit(X_tr, y_train)
-                    rep_model_scores[mname].append(metric_fn(y_val, m.predict(X_va)))
+                    # Probabilities for AUC, as in the hybrid arm above.
+                    rep_model_scores[mname].append(metric_fn(
+                        y_val, _predict_for_metric(m, X_va, metric_fn)))
                 except Exception:
                     pass
 
