@@ -507,6 +507,9 @@ def report(path, p):
     if not checked and not thin:
         print("  SELF-COMPARISON: no base-arm cells, so nothing to check. The "
               "hybrid tables below stand on their own counts.")
+    elif not checked:
+        print("  SELF-COMPARISON: every base-arm cell is too thin to carry a "
+              "Spearman, so nothing was checked.")
     elif bad:
         print(f"  SELF-COMPARISON FAILED on {len(bad)} cells. Level 0.0 against "
               f"itself must give Spearman 1.0 and retain every top-k feature, so "
