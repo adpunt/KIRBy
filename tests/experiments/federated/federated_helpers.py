@@ -1142,8 +1142,9 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
     Matches FLuID's published protocol:
     1. Each teacher predicts on public pool with similarity-weighted vote
        (FLuID's federate_labels uses W-T weights, not equal weights)
-    2. Student data selected via FLuID's 'balanced' mode: sort by confidence
-       descending, pick student_size/2 per class
+    2. Student data: student_size/2 per class, highest federated confidence
+       first. That is FLuID's 'best' mode (FLuID.py:1181-1184). FLuID's
+       'balanced' mode shuffles at random instead (FLuID.py:1170-1173).
     3. Student RF trained on federated pseudo-labels
 
     Privacy: only predictions on shared public molecules are exchanged.
@@ -1240,9 +1241,9 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
     fed_classes = (fed_probs[:, 1] > fed_probs[:, 0]).astype(int)
     fed_confidence = np.maximum(fed_probs[:, 0], fed_probs[:, 1])
 
-    # ── Step 2: Balanced selection by confidence (matches FLuID's 'balanced' mode)
-    # FLuID's select_student_data: shuffle, then pick student_size/2 per class
-    # sorted by federated confidence (highest first)
+    # ── Step 2: student_size/2 per class, most confident first. This is
+    # FLuID's 'best' mode, not its 'balanced' mode, which takes a random
+    # shuffle (FLuID.py:1170-1184).
     half = student_size // 2
     active_idx = np.where(fed_classes == 1)[0]
     inactive_idx = np.where(fed_classes == 0)[0]
