@@ -109,7 +109,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     a single search. Each reported fold is then read with the recipe that scored
     best on the other folds, for the hybrid and for the representation arm
     alike. Fold 0 contributes no term to either arm — the search filters its own
-    recipe list using fold 0's scores — so four folds are reported, not five.
+    recipe list using fold 0's scores — so n_folds - 1 folds are reported.
 
     Robustness is summarised by robustness_metrics(levels, scores): auc_norm
     (PRIMARY, higher = more robust) plus the supplementary Weibull tau/beta shape
@@ -341,7 +341,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         folds. Fold 0 contributes no term to either arm: the search filters its
         own recipe list using fold 0's scores, so fold 0's hybrid score would be
         read off recipes fold 0 helped keep while the representations passed
-        through no such filter. Four folds are reported, not five.
+        through no such filter. n_folds - 1 folds are reported in that case.
 
         Returns per_budget (one fold_reselection entry per budget, the hybrid arm
         restricted to that budget's recipes), per_rep (each representation's own
@@ -461,11 +461,18 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
     # in the prelim sweep, and with which searches, is the owner's call.
     _any_cell = next(iter(cells.values()), None)
     results['excluded_folds'] = _any_cell['excluded_folds'] if _any_cell else None
+    # The count was hard-coded as "four" until 2026-09-28. It is n_folds minus
+    # the excluded folds, and whether fold 0 is excluded depends on whether the
+    # search pruned on it, so it is computed here.
+    _n_reported = (n_folds - len(results['excluded_folds'])
+                   if results['excluded_folds'] is not None else None)
+    results['n_folds_reported'] = _n_reported
     results['scores_are'] = (
         "held out, leave-one-fold-out: each reported fold is read with the "
         "recipe that scored best on the other folds, for the hybrid and for "
         "the representation arm alike. The folds in 'excluded_folds' "
-        "contribute no term to either arm, so four folds are reported.")
+        f"contribute no term to either arm, so {_n_reported} of {n_folds} "
+        "folds are reported.")
 
     def _curve(level_scores, _levels):
         """auc_norm, Weibull shape and retention for one score-against-level curve.
@@ -936,11 +943,10 @@ if __name__ == '__main__':
     parser = create_experiment_parser('C10: Noise Robustness & Feature Stability',
                                      has_delta=True, has_augment=True)
     parser.add_argument('--levels', type=float, nargs='+', default=None,
-                        help='Noise levels. Default is the grid for this dataset in '
-                             'experiments.dataset_policy: anchored to the published '
-                             'assay error in the label\'s own units for herg_ki, '
-                             'caco2 and logd, a fraction of the label SD otherwise, '
-                             'and the censored fraction for censoring.')
+                        help='Noise levels. Default is the grid in '
+                             'experiments.dataset_policy: a fraction of the clean '
+                             'training label SD for every dataset, and the censored '
+                             'fraction for censoring.')
     parser.add_argument('--strategies', type=str, nargs='+', default=None,
                         choices=list(REGRESSION_STRATEGIES),
                         help='Noise conditions (default: all eleven).')
