@@ -315,10 +315,28 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         for fold_i, (train_idx, val_idx) in enumerate(
                 _cv_split(groups, n_folds, sample_X, labels,
                           task_type=task_type)):
-            train_reps = {k: v[train_idx] for k, v in reps.items()}
+            # ⛔ THE CALIBRATION ROWS ARE CUT BEFORE ANYTHING IS FITTED. Split
+            # conformal is valid only if the calibration rows are as unseen as
+            # the held-out fold. The hybrid used to be built on the whole
+            # training fold, calibration rows included, so the features were
+            # chosen with the calibration labels and the calibration residuals
+            # came out smaller than the held-out ones. The amount of that
+            # advantage differs by budget, so it also differed by condition.
+            # Now the hybrid, the scaler and the model see the proper-training
+            # rows only.
+            _n_fold_train = len(train_idx)
+            _ptrain_rel, _cal_rel = _cal_split(
+                groups[train_idx], _n_fold_train,
+                max(20, int(_n_fold_train * 0.2)), fold_i)
+            ptrain_abs = train_idx[_ptrain_rel]
+            cal_abs = train_idx[_cal_rel]
+            train_reps = {k: v[ptrain_abs] for k, v in reps.items()}
+            cal_reps = {k: v[cal_abs] for k, v in reps.items()}
             val_reps = {k: v[val_idx] for k, v in reps.items()}
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+            y_train, y_cal, y_val = (labels[ptrain_abs], labels[cal_abs],
+                                     labels[val_idx])
+            train_augs = {k: v[ptrain_abs] for k, v in augs.items()} if augs else None
+            cal_augs = {k: v[cal_abs] for k, v in augs.items()} if augs else None
             val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
 
             try:
@@ -333,7 +351,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 # the same way build_fold_hybrid does it (_shared.py:5096):
                 # rank by the blueprint's own rep_scores, break ties by name so
                 # two runs resolve identically.
-                _tr_reps, _va_reps = train_reps, val_reps
+                _tr_reps, _ca_reps, _va_reps = train_reps, cal_reps, val_reps
                 if (optimal_rep_count is not None
                         and int(optimal_rep_count) < len(train_reps)):
                     if not optimal_rep_scores:
@@ -349,9 +367,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                         key=lambda r: (-optimal_rep_scores.get(r, float('-inf')), r))
                     _keep = set(_ranked[:int(optimal_rep_count)])
                     _tr_reps = {k: v for k, v in train_reps.items() if k in _keep}
+                    _ca_reps = {k: v for k, v in cal_reps.items() if k in _keep}
                     _va_reps = {k: v for k, v in val_reps.items() if k in _keep}
                 X_train, feature_info = create_hybrid(
-                    _tr_reps, y_train, groups=groups[train_idx],
+                    _tr_reps, y_train, groups=groups[ptrain_abs],
                     allocation_method=alloc,
                     budget=budget,
                     importance_method=imp,
@@ -378,41 +397,35 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 # _va_reps, not val_reps: the same representations the hybrid
                 # was built from, or the column order will not line up.
                 X_val = apply_feature_selection(_va_reps, feature_info)
+                X_cal_raw = apply_feature_selection(_ca_reps, feature_info)
                 aug_info = feature_info.get('augmentation_info')
                 if aug_info and val_augs:
                     X_val_aug = apply_augmentation_selection(val_augs, aug_info)
                     if X_val_aug is not None:
                         X_val = np.hstack([X_val, X_val_aug])
+                    X_cal_aug = apply_augmentation_selection(cal_augs, aug_info)
+                    if X_cal_aug is not None:
+                        X_cal_raw = np.hstack([X_cal_raw, X_cal_aug])
             except Exception as e:
                 _fold_errors.setdefault(cond_name, []).append(
                     f'fold {fold_i}: {type(e).__name__}: {e}')
                 print(f"    fold {fold_i}: hybrid creation failed - {e}")
                 continue
 
+            # Scaler fitted on the proper-training rows only, like the hybrid.
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
+            X_cal = scaler.transform(X_cal_raw)
             X_val_s = scaler.transform(X_val)
 
-            # Train base model
-            model = model_factory()
-            model.fit(X_train_s, y_train)
+            # One model per fold, fitted on the proper-training rows. The
+            # performance number and the calibration numbers both come from
+            # it. (A second model on the whole training fold used to be fitted
+            # here and never used.)
+            model_conf = model_factory()
+            model_conf.fit(X_train_s, y_train)
 
             if is_classification:
-                # Conformal classification: split train into proper-train + cal
-                n_train = len(y_train)
-                n_cal = max(20, int(n_train * 0.2))
-                # The calibration rows are cut on scaffold groups, not at
-                # random. A random 20% puts molecules from the same scaffold on
-                # both sides, so the residuals the interval is calibrated from
-                # are easier than the held-out fold the coverage is reported on.
-                ptrain_idx, cal_idx = _cal_split(
-                    groups[train_idx], n_train, n_cal, fold_i)
-
-                X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
-                X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
-
-                model_conf = model_factory()
-                model_conf.fit(X_ptrain, y_ptrain)
 
                 # Compute val_score from model_conf so the performance number
                 # and the calibration metrics come from the SAME model (was a
@@ -536,21 +549,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 # val_r2 must come from model_conf (not `model` trained on full
                 # y_train) so the reported performance number and the
                 # calibration metrics (PICP/MPIW) are from the same model.
-                n_train = len(y_train)
-                n_cal = max(20, int(n_train * 0.2))
-                # The calibration rows are cut on scaffold groups, not at
-                # random. A random 20% puts molecules from the same scaffold on
-                # both sides, so the residuals the interval is calibrated from
-                # are easier than the held-out fold the coverage is reported on.
-                ptrain_idx, cal_idx = _cal_split(
-                    groups[train_idx], n_train, n_cal, fold_i)
-
-                X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
-                X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
-
-                model_conf = model_factory()
-                model_conf.fit(X_ptrain, y_ptrain)
-
+                # The calibration rows were cut on scaffold groups at the top
+                # of the fold, before the hybrid was built.
                 y_pred_val = model_conf.predict(X_val_s)
                 val_r2 = metric_fn(y_val, y_pred_val)
 
