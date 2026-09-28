@@ -807,7 +807,10 @@ def run(data, config, output_dir, dataset_name):
             'search_budgets': list(C24_BUDGETS),
             'search_budgets_source': C24_BUDGETS_SOURCE,
             'reuse_fold_importance': _C24_REUSE_FOLD_WORK,
-            'n_outer_folds_requested': int(n_folds),
+            # n_folds is cut to the number of distinct groups above, so it was
+            # the count USED stored under the name "requested".
+            'n_outer_folds_requested': int(config['n_splits']),
+            'n_outer_folds_used': int(n_folds),
         },
         'features_transferred': True,
         'delta_meaning': (
