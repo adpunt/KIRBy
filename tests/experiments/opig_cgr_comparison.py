@@ -205,16 +205,30 @@ def load_cgr_comparison_data(dataset_name):
         _smoke_skip = {'reactiont5', 'chytorch_graphormer', 'cgr_smiles_lm'}
         _smoke_skip |= {n for n in _generators if 'mordred' in n}
 
-    # Generate all reps with caching
+    # Generate all reps with caching.
+    # identity= is the reaction SMILES in row order, as load_data's reaction
+    # path passes it (_shared.py:4362). Without it _cache_rep skips the check
+    # that the cached arrays were built from these rows in this order, and a
+    # cache built from a different load would be paired with these labels
+    # silently. Checked 2026-09-28: buchwald_hartwig's stamp (3,955 rows,
+    # sha1 06fb7f10) equals what load_buchwald_hartwig returns.
     reps = {}
+    _row_identity = list(rxn_smiles)
     for name, gen_fn in _generators.items():
         if name in _smoke_skip:
             print(f"  [SMOKE] skipping neural rep {name} (KIRBY_SMOKE_N set)")
             continue
         try:
-            reps[name] = _cache_rep(cache_key, name, gen_fn)
+            reps[name] = _cache_rep(cache_key, name, gen_fn,
+                                    identity=_row_identity)
         except ImportError as e:
             print(f"  WARNING: {name} skipped (missing dep): {e}")
+        except ValueError as e:
+            # A row-identity mismatch is not a missing representation: every
+            # array in that directory belongs to other rows. Stop.
+            if 'DIFFERENT' in str(e):
+                raise
+            print(f"  WARNING: {name} failed: {e}")
         except Exception as e:
             print(f"  WARNING: {name} failed: {e}")
 
