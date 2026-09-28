@@ -193,12 +193,20 @@ def _silo_baseline(sd, shared_reps, seed=42,
     # this carve is inside the training rows and the test rows were cut
     # group-aware first. Fixed 2026-09-18.
     _sb_groups = sd.get('groups')
+    # Each representation's share of the budget is sized on the silo's own
+    # metric (spearman on all three antibody silos), the metric the recipe
+    # search scored the same allocation with. With no metric_fn create_hybrid
+    # sizes the shares on the internal evaluator's R^2 instead
+    # (_score_rep_for_budget, src/kirby/hybrid.py), so the recipe the search
+    # chose was rebuilt on a different quantity. C4 already passed spearman.
+    _, _sb_mfn, _sb_lib = get_domain_metric(sd)
     X_h, fi = create_hybrid(
         rep_tr, y_tr,
         groups=(np.asarray(_sb_groups)[tr] if _sb_groups is not None else None),
         allocation_method=alloc,
         importance_method=imp,
         internal_evaluator=int_eval,
+        metric_fn=_sb_mfn, lower_is_better=_sb_lib,
         budget=budget,
         augmentations=tr_augs,
         augmentation_strategy=s_aug_cond)
@@ -584,6 +592,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         allocation_method=c3_alloc,
                         importance_method=c3_imp,
                         internal_evaluator=c3_int_eval,
+                        metric_fn=get_domain_metric(sd)[1],
+                        lower_is_better=get_domain_metric(sd)[2],
                         budget=c_budget,
                         augmentations=c_augs,
                         augmentation_strategy=s_aug_cond)
@@ -832,6 +842,10 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     allocation_method=_alloc,
                     importance_method=_imp,
                     internal_evaluator=_int_eval,
+                    # Labels are z-scored per silo before pooling; spearman
+                    # is the scale-free metric both silos resolve to (as C4).
+                    metric_fn=BUILTIN_METRICS['spearman'][0],
+                    lower_is_better=BUILTIN_METRICS['spearman'][1],
                     augmentation_strategy='none')
                 X_h_te = apply_feature_selection(rep_te, fi)
 
@@ -969,6 +983,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 allocation_method=_alloc,
                 importance_method=_imp,
                 internal_evaluator=_int_eval,
+                metric_fn=get_domain_metric(sd_lead)[1],
+                lower_is_better=get_domain_metric(sd_lead)[2],
                 augmentations=lead_tr_augs,
                 augmentation_strategy=lead_aug_cond)
             X_h_te = apply_feature_selection(all_div_reps_te, fi_h)
