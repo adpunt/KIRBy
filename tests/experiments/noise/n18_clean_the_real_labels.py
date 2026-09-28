@@ -160,12 +160,27 @@ _CACHED_FIT_MODELS = sx.CACHEABLE_MODELS
 # All three are REGRESSION ONLY -- none is defined on a nominal class label --
 # and n07 gates them the same way (REGRESSION_ONLY_CLEANUPS). `cleanups_run`
 # on the result file says which ones this run actually scored.
+#
+# ⛔ THE LIST DRIFTED FROM n07's A SECOND TIME. n07 added huber_weight,
+# js_shrink and prox_smooth on 2026-09-23 and none reached this tuple, so n18
+# ran seven of n07's ten score-driven cleanups while its docstring says it
+# runs n07's. Added 2026-09-28:
+#   huber_weight  Huber's weight min(1, c*s/r) on the suspicion score, flat at 1
+#                 inside the scale. Reads no quantile; run once at c = 1.345.
+#   js_shrink     shrink toward the out-of-fold prediction by a variance ratio.
+#                 Reads no quantile; run once at its default.
+#   prox_smooth   knn_smooth with neighbours from forest proximity. Thresholds
+#                 at the flag rate, so it is swept over FLAG_RATES.
+# invvar_weight is left out: it needs a measurement count per molecule, and
+# none of the datasets this file runs on keeps one.
 ALL_CLEANUPS = ('remove', 'downweight', 'label_smooth', 'knn_smooth',
-                'oof_smooth', 'gp_smooth', 'quantile_clip')
+                'oof_smooth', 'gp_smooth', 'quantile_clip',
+                'huber_weight', 'js_shrink', 'prox_smooth')
 
 # Not defined on a nominal class label, so they are dropped on a
-# classification dataset rather than writing NaN rows. Same tuple as n07's.
-REGRESSION_ONLY_CLEANUPS = ('oof_smooth', 'gp_smooth', 'quantile_clip')
+# classification dataset rather than writing NaN rows. n07's own tuple,
+# imported: the copy this file kept lacked js_shrink.
+from experiments.noise.n07_remediation import REGRESSION_ONLY_CLEANUPS
 
 
 def cleanups_for(is_clf):
@@ -223,9 +238,10 @@ FLAG_RATES = (0.01, 0.05, 0.20)
 # absent rather than duplicated.
 def reads_flag_rate(cleanup, is_clf):
     """Does this cleanup's cleaned training set depend on the flag rate?"""
-    if cleanup in ('remove', 'knn_smooth'):
+    if cleanup in ('remove', 'knn_smooth', 'prox_smooth'):
         return True
-    if cleanup == 'downweight':
+    if cleanup in ('downweight', 'huber_weight', 'js_shrink'):
+        # Each reads the score as a continuous amount, never as a quantile.
         return False
     if cleanup in ('label_smooth', 'oof_smooth', 'gp_smooth'):
         # All three smooth every row in proportion to its score on a regression
