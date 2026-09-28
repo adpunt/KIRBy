@@ -311,10 +311,21 @@ def cached_scaled(dataset, X, train_idx, val_idx, *, dtype=None):
     A = np.asarray(X) if dtype is None else np.asarray(X, dtype=dtype)
     tr = np.asarray(train_idx)
     va = np.asarray(val_idx)
+    # Same rule as the search's baselines (find_best_hybrid.py, 'Only scale
+    # continuous features; leave binary (ECFP, MACCS, etc.) raw'): a matrix
+    # whose every value is 0 or 1 is passed through unscaled. Standardising
+    # the bits cost svm about 0.07 RMSE on herg_ki ecfp4 against the search's
+    # own number on the same folds. The key carries the rule so no entry
+    # written under the old one is served.
+    _u = np.unique(A)
+    binary = (A.dtype == np.uint8 or
+              (len(_u) <= 2 and set(_u.tolist()).issubset({0, 0.0, 1, 1.0})))
     key = {'X': array_hash(A), 'train_idx': array_hash(tr),
-           'val_idx': array_hash(va)}
+           'val_idx': array_hash(va), 'binary_raw': bool(binary)}
 
     def _compute():
+        if binary:
+            return (A[tr].astype(float), A[va].astype(float))
         sc = StandardScaler()
         return (sc.fit_transform(A[tr]), sc.transform(A[va]))
     return cached(dataset, 'scaled', key, _compute)
