@@ -329,7 +329,15 @@ def _arm_features(arm, budget, data, rep_names, metric_fn, lower_is_better,
     raise ValueError(f'unknown arm {arm!r}')
 
 
-def _write_bundle(path, model, scaler, feature_info, rep_names, rep_spec):
+def _write_bundle(path, model, scaler, feature_info, rep_names, rep_spec,
+                  rep_widths):
+    """Write everything kirby_reinvent_score.py needs to score a new molecule.
+
+    rep_widths is how many features each representation held when the
+    predictor was fitted. The scorer refuses a batch whose representation
+    comes back a different width, because the stored column numbers would
+    then point at different features.
+    """
     with open(path, 'wb') as fh:
         pickle.dump({
             'model': model,
@@ -337,6 +345,7 @@ def _write_bundle(path, model, scaler, feature_info, rep_names, rep_spec):
             'feature_info': feature_info,
             'rep_names': rep_names,
             'rep_spec': rep_spec,
+            'rep_widths': rep_widths,
         }, fh)
 
 
@@ -661,7 +670,9 @@ def stage_fit(args):
 
         bundle = os.path.join(out_dir, f'{name}_bundle.pkl')
         _write_bundle(bundle, model, scaler, info, rep_names,
-                      ','.join(rep_names))
+                      ','.join(rep_names),
+                      {r: int(np.asarray(steer['reps'][r]).shape[1])
+                       for r in rep_names})
         toml = _arm_toml(name, bundle, python_exe,
                          float(np.percentile(y, 10)),
                          float(np.percentile(y, 90)),

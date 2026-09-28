@@ -69,6 +69,28 @@ def _score(smiles, bundle):
             f"representations the fit used are absent for this batch: "
             f"{sorted(missing)}; got {sorted(reps)}")
 
+    # The columns the fit chose are replayed by position, so a representation
+    # whose width here differs from its width at fit time means the indices
+    # point at different features. Two ways that happens: a builder whose
+    # column space is derived from the molecules it is handed (graph_kernel
+    # builds its Weisfeiler-Lehman vocabulary from the batch), and a width cap
+    # applied when the training matrices were loaded. Neither shows up as an
+    # error unless an index runs off the end, so check the widths outright.
+    widths = bundle.get('rep_widths') or {}
+    for r in bundle['rep_names']:
+        got = np.asarray(reps[r])
+        if got.shape[0] != n:
+            raise RuntimeError(
+                f"representation '{r}' came back with {got.shape[0]} rows for "
+                f"{n} molecules, so its rows cannot be matched to the batch")
+        want = widths.get(r)
+        if want is not None and got.shape[1] != want:
+            raise RuntimeError(
+                f"representation '{r}' is {got.shape[1]} features wide for "
+                f"this batch and was {want} wide when the predictor was "
+                f"fitted; the stored column numbers do not mean the same "
+                f"features, so this batch cannot be scored")
+
     # Rows RDKit could not parse come back as all-zero or non-finite. Find them
     # before selection so a bad molecule cannot move a scaler statistic.
     stacked = np.hstack([np.asarray(reps[r], dtype=float)
@@ -94,10 +116,20 @@ def main():
     args = ap.parse_args()
 
     smiles = [line.strip() for line in sys.stdin.read().splitlines()]
-    smiles = [s for s in smiles if s]
 
     bundle = _load_bundle(args.bundle)
-    scores, n_failed = _score(smiles, bundle)
+
+    # Every line keeps its place. Dropping the blank ones returned a shorter
+    # list than the batch, and REINVENT zips the scores against its own
+    # molecules, so one blank line shifted every score after it onto the wrong
+    # molecule. A blank line is scored FAILED_SCORE and counted, like any
+    # molecule that cannot be featurised.
+    kept = [i for i, s in enumerate(smiles) if s]
+    scores = np.full(len(smiles), FAILED_SCORE, dtype=float)
+    sub_scores, n_failed = _score([smiles[i] for i in kept], bundle)
+    if len(kept):
+        scores[kept] = sub_scores
+    n_failed += len(smiles) - len(kept)
 
     payload = {
         args.property: [float(v) for v in scores],
