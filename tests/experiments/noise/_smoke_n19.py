@@ -382,12 +382,16 @@ def test_end_to_end():
               np.isfinite(c['mean']) and c['n_folds'] > 0,
               f"{c['mean']:.4f} over {c['n_folds']} folds")
 
-    blk = r2['per_draw']['0']['per_label_build']['averaged']
+    # Fitted per outer fold on its training molecules since 2026-09-28; the
+    # first fold's curve is read here.
+    def _first_fit(res):
+        per_fold = res['per_draw']['0']['per_label_build']['averaged'][
+            'variance_fit_per_fold']
+        return per_fold[sorted(per_fold)[0]][
+            'fitted_variance_by_measurement_count']
     check('the fitted noise function is written out',
-          bool(blk['fitted_variance_by_measurement_count']),
-          str(blk['fitted_variance_by_measurement_count']))
-    fitc = r['per_draw']['0']['per_label_build']['averaged'][
-        'fitted_variance_by_measurement_count']
+          bool(_first_fit(r2)), str(_first_fit(r2)))
+    fitc = _first_fit(r)
     check('the noise function is flat in the count when the scatter is flat',
           max(fitc.values()) < 2.0 * min(fitc.values()),
           str({k: round(v, 2) for k, v in fitc.items()}))

@@ -484,7 +484,8 @@ def fit_interval_aft_predict(X_tr, lower, upper, X_va, sd):
     return np.log(np.clip(t, 1e-300, None)) + centre
 
 
-def label_variance(stats, n_behind, floor_share=VARIANCE_FLOOR_SHARE):
+def label_variance(stats, n_behind, floor_share=VARIANCE_FLOOR_SHARE,
+                   fit_on=None):
     """The error variance of each molecule's TRAINING label, and where it came from.
 
     A molecule's measurements disagree by `var_all`. A label resting on
@@ -497,23 +498,45 @@ def label_variance(stats, n_behind, floor_share=VARIANCE_FLOOR_SHARE):
     nothing to do with the question). How many were filled that way is returned
     and written to the result file.
 
+    `fit_on` is a boolean mask or index array of the molecules the fill value
+    and the floor are computed from. The caller passes the outer fold's
+    training molecules, so no held-out molecule's measurements set a training
+    weight. None uses every molecule (the unit tests only). A variance is
+    still returned for every molecule; `n_filled` counts those in `fit_on`.
+
     Returns (variance, n_filled, floor).
     """
     var = np.asarray(stats['var_all'], dtype=np.float64).copy()
+    use = _as_mask(fit_on, var.size)
     known = np.isfinite(var)
-    if not known.any():
+    if not (known & use).any():
         raise RuntimeError(
             "no molecule in this dataset was measured more than once, so no "
             "measurement variance exists and n19 has nothing to weight by.")
-    median_var = float(np.median(var[known]))
+    median_var = float(np.median(var[known & use]))
     floor = max(floor_share * median_var, 1e-12)
     var[~known] = median_var
     var = np.maximum(var, floor)
-    return var / np.maximum(n_behind, 1.0), int((~known).sum()), float(floor)
+    return (var / np.maximum(n_behind, 1.0), int((~known & use).sum()),
+            float(floor))
+
+
+def _as_mask(fit_on, n):
+    """A boolean mask of length n from None (all), a mask, or indices."""
+    if fit_on is None:
+        return np.ones(n, dtype=bool)
+    a = np.asarray(fit_on)
+    if a.dtype == bool:
+        if a.size != n:
+            raise ValueError(f"fit_on mask has {a.size} entries, expected {n}")
+        return a
+    m = np.zeros(n, dtype=bool)
+    m[a.astype(np.int64)] = True
+    return m
 
 
 def calibrated_variance(stats, n_behind, trusted_min=MIN_MEASUREMENTS,
-                        floor_share=VARIANCE_FLOOR_SHARE):
+                        floor_share=VARIANCE_FLOOR_SHARE, fit_on=None):
     """The error variance read off a curve fitted on the well-measured molecules.
 
     The trusted subset is the molecules measured `trusted_min` or more times --
@@ -527,13 +550,17 @@ def calibrated_variance(stats, n_behind, trusted_min=MIN_MEASUREMENTS,
     This uses a variance estimated across every molecule measured that many
     times.
 
+    `fit_on` restricts the curve and the floor to those molecules, as in
+    `label_variance`. The caller passes the outer fold's training molecules.
+
     Returns (variance, fit, n_trusted). `fit` is {count: variance} and is
     written to the result file, because it IS the noise function and a reader
     should be able to see whether it falls with the count or is flat.
     """
     var = np.asarray(stats['var_all'], dtype=np.float64)
     k = np.asarray(stats['n_measurements'], dtype=np.int64)
-    trusted = np.isfinite(var) & (k >= int(trusted_min))
+    use = _as_mask(fit_on, var.size)
+    trusted = np.isfinite(var) & (k >= int(trusted_min)) & use
     if not trusted.any():
         raise RuntimeError(
             f"no molecule was measured {trusted_min} or more times, so there "
@@ -544,7 +571,7 @@ def calibrated_variance(stats, n_behind, trusted_min=MIN_MEASUREMENTS,
     counts = np.array(sorted(fit), dtype=np.int64)
     values = np.array([fit[int(c)] for c in counts], dtype=np.float64)
 
-    median_var = float(np.median(var[np.isfinite(var)]))
+    median_var = float(np.median(var[np.isfinite(var) & use]))
     floor = max(floor_share * median_var, 1e-12)
     # Nearest count the trusted subset actually saw. A molecule measured once
     # takes the smallest fitted count, which is the most pessimistic of them.
@@ -1294,27 +1321,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_train_all, n_behind = training_labels(ent, stats, build)
             aft_lo_all, aft_hi_all = interval_bounds(ent, stats, build,
                                                      y_train_all)
-            var_own, n_filled, var_floor = label_variance(stats, n_behind)
-            var_cal, noise_fit, n_trusted = calibrated_variance(stats, n_behind)
-
+            # The fill value, the floor and the variance-by-count curve are
+            # fitted per outer fold on its training molecules (below). Until
+            # 2026-09-28 they were fitted once on every molecule, so each
+            # held-out molecule's own measurements entered the weights and the
+            # shrinkage of the training molecules it was then graded against.
             build_block = {
-                'n_molecules_with_no_variance_of_their_own': n_filled,
-                'variance_floor_label_units_squared': var_floor,
-                'n_molecules_in_trusted_subset': n_trusted,
                 # How many molecules give xgboost_interval_aft an interval of
                 # non-zero width. The rest enter it exactly as they enter
                 # xgboost_aft_point.
                 'n_molecules_with_interval_width_above_zero': int(
                     (aft_hi_all > aft_lo_all).sum()),
-                # The noise function itself: measurement count -> the mean
-                # variance of the molecules measured that many times. A reader
-                # should be able to see whether it falls with the count.
-                'fitted_variance_by_measurement_count': noise_fit,
                 'per_space': {},
             }
-            print(f"    label build {build!r}: "
-                  f"{n_filled} molecules have no variance of their own, "
-                  f"trusted subset {n_trusted}")
+            print(f"    label build {build!r}")
 
             # {space: {condition: {model: {fold key: score}}}}
             #
@@ -1340,11 +1360,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # {model arm: {fold key: skip record}}. The same in every space:
             # the interval bounds do not depend on the space.
             arm_skips = {}
+            # {fold key: the fill value, floor and variance-by-count curve
+            # fitted on that fold's training molecules}
+            var_fits = {}
             folds_scored = 0
             if _st0.get('draw') == draw and _st0.get('build') == build:
                 # This label build was part-way through when the run stopped.
                 (acc, errors, tau2_seen, shrink_seen, noise_fits, arm_acc,
-                 arm_skips, folds_scored) = _st0['build_acc']
+                 arm_skips, folds_scored, var_fits) = _st0['build_acc']
 
             splits = list(cv_split(ent_groups, n_folds,
                                    next(iter(ent_reps.values())),
@@ -1363,6 +1386,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"molecules held out, skipped")
                     continue
                 folds_scored += 1
+                # Fitted on this fold's training molecules only. The arrays
+                # cover every molecule and are read at `tr` below.
+                var_own, n_filled, var_floor = label_variance(
+                    stats, n_behind, fit_on=tr)
+                var_cal, noise_fit, n_trusted = calibrated_variance(
+                    stats, n_behind, fit_on=tr)
+                var_fits[fold_key] = {
+                    'n_training_molecules_with_no_variance_of_their_own':
+                        n_filled,
+                    'variance_floor_label_units_squared': var_floor,
+                    'n_training_molecules_in_trusted_subset': n_trusted,
+                    # The noise function itself: measurement count -> the mean
+                    # variance of the training molecules measured that many
+                    # times. A reader should be able to see whether it falls
+                    # with the count.
+                    'fitted_variance_by_measurement_count': noise_fit,
+                }
                 y_tr = y_train_all[tr]
                 y_va = y_grade_all[va_graded]
                 g_tr = ent_groups[tr] if ent_groups is not None else None
@@ -1703,7 +1743,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'draw': draw, 'build': build, 'draw_block': draw_block,
                     'build_acc': (acc, errors, tau2_seen, shrink_seen,
                                   noise_fits, arm_acc, arm_skips,
-                                  folds_scored)})
+                                  folds_scored, var_fits)})
 
             for space in spaces:
                 _t_all = [v for vs in tau2_seen[space].values() for v in vs]
@@ -1744,6 +1784,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         for c in CONDITIONS},
                 }
             build_block['n_folds_scored'] = folds_scored
+            build_block['variance_fit_per_fold'] = var_fits
             build_block['model_arm_skips'] = arm_skips
             if errors:
                 build_block['_errors'] = errors
