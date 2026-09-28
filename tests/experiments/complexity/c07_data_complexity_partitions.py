@@ -301,6 +301,10 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # raised. Today it's guarded by the `if best_config` short-circuit,
             # but None is the safe default. (CXA-17)
             search = None
+            # Bound before the try as well: when find_best_hybrid raised, `sel`
+            # was never assigned and the part_result dict below crashed the
+            # whole run with UnboundLocalError instead of recording the failure.
+            sel = None
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
