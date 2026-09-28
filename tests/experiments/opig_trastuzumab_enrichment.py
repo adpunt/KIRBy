@@ -1099,16 +1099,27 @@ def print_analysis(ds_results):
     # binders. EF is that fraction divided by the same fold's own binder
     # fraction, so EF=1 is a random ranking on every fold and the three folds
     # can be averaged without their different binder rates moving the number.
+    #
+    # Chance and Folds are per row, not per table. A row whose model failed to
+    # fit on a fold, and a kirby_hybrid row on a fold where the search stored
+    # no recipe for that model, are means over FEWER folds than the rest. Those
+    # folds are edit-distance shells with binder fractions from 0.181 to 0.385,
+    # so a row that is missing one has a different random level from the row
+    # beside it. Chance is that row's own level (the mean binder fraction of
+    # the folds it was scored on, already stored as its 'base_rate'), and Folds
+    # says how many of the attempted folds it covers.
     header = (f"  {'Method':30s} {'E@1%':>8s} {'E@5%':>8s} {'E@10%':>8s} "
               f"{'EF@1%':>8s} {'EF@5%':>8s} {'EF@10%':>8s} "
-              f"{'AUROC':>8s} {'Acc':>8s}")
+              f"{'AUROC':>8s} {'Acc':>8s} {'Chance':>8s} {'Folds':>7s}")
     print(header)
-    print(f"  {'-'*30}" + f" {'-'*8}" * 8)
+    print(f"  {'-'*30}" + f" {'-'*8}" * 9 + f" {'-'*7}")
 
     # Random baseline
+    _n_folds_total = len(fold_rates)
+    _folds_all = f"{_n_folds_total}/{_n_folds_total}" if _n_folds_total else "—"
     print(f"  {'Random baseline':30s} {chance:8.4f} {chance:8.4f} "
           f"{chance:8.4f} {1.0:8.4f} {1.0:8.4f} {1.0:8.4f} "
-          f"{'0.5000':>8s} {'—':>8s}")
+          f"{'0.5000':>8s} {'—':>8s} {chance:8.4f} {_folds_all:>7s}")
 
     # Paper baselines. These are the fraction of a DESIGNED library that a CNN
     # called a binder, not the top-K count of a held-out fold, so they belong to
@@ -1117,7 +1128,8 @@ def print_analysis(ds_results):
     for method, metrics in PAPER_BASELINES.items():
         pct = metrics.get('predicted_binder_pct', float('nan'))
         pct_s = f"{pct:.4f}" if not np.isnan(pct) else "—"
-        print(f"  {method:30s} {pct_s:>8s}" + f" {'—':>8s}" * 7)
+        print(f"  {method:30s} {pct_s:>8s}" + f" {'—':>8s}" * 8
+              + f" {'—':>7s}")
 
     print(f"  {'. . .':30s}")
 
@@ -1135,21 +1147,46 @@ def print_analysis(ds_results):
             f10 = metrics.get('ef_0.1', {}).get('mean', float('nan'))
             auroc = metrics.get('auroc', {}).get('mean', float('nan'))
             acc = metrics.get('accuracy', {}).get('mean', float('nan'))
+            # This row's own random level and fold coverage. base_rate is the
+            # mean binder fraction of the folds this row scored, which is the
+            # level its E columns are to be read against; the table-wide
+            # `chance` above is the mean over ALL folds and is that level only
+            # for a row that covers all of them.
+            row_chance = metrics.get('base_rate', float('nan'))
+            row_done = metrics.get('n_folds_completed')
+            row_tried = metrics.get('n_folds_attempted')
             rows.append((rep_name, model_name, e1, e5, e10, f1, f5, f10,
-                         auroc, acc))
+                         auroc, acc, row_chance, row_done, row_tried))
 
     rows.sort(key=lambda r: (r[2] if not np.isnan(r[2]) else 0), reverse=True)
 
     def _f(v):
         return f"{v:.4f}" if not np.isnan(v) else "—"
 
+    short_rows = []
     for (rep_name, model_name, e1, e5, e10, f1, f5, f10,
-         auroc, acc) in rows:
+         auroc, acc, row_chance, row_done, row_tried) in rows:
         label = f"{rep_name} ({model_name})"
         tag = ' ***' if rep_name == 'kirby_hybrid' else ''
+        if row_done is None or row_tried is None:
+            folds_s = "—"
+        else:
+            folds_s = f"{row_done}/{row_tried}"
+            if row_done < row_tried:
+                short_rows.append(f"{label} on {folds_s} folds")
+                tag += ' [fewer folds]'
         print(f"  {label:30s} {_f(e1):>8s} {_f(e5):>8s} {_f(e10):>8s} "
               f"{_f(f1):>8s} {_f(f5):>8s} {_f(f10):>8s} "
-              f"{_f(auroc):>8s} {_f(acc):>8s}{tag}")
+              f"{_f(auroc):>8s} {_f(acc):>8s} {_f(row_chance):>8s} "
+              f"{folds_s:>7s}{tag}")
+
+    if short_rows:
+        print(f"\n  These rows are means over fewer held-out folds than the "
+              f"rest, so their E columns are counted on a different set of "
+              f"molecules with a different binder fraction: "
+              f"{'; '.join(short_rows)}. Read their EF columns, which divide "
+              f"by each fold's own binder fraction, rather than their E "
+              f"columns.")
 
     # Summary
     best_indiv = [r for r in rows if r[0] != 'kirby_hybrid']
