@@ -928,8 +928,8 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
     # the training rows hold 3 and 2 components and the recipe is picked on 3
     # or 2 inner folds, not 5. Nothing written to the split's JSON said which,
     # and the warning that says so is swallowed by the blanket
-    # filterwarnings('ignore') below the imports unless the 'always' filter after
-    # it    # keeps it. Recorded 2026-09-18, split audit section D,
+    # filterwarnings('ignore') below the imports unless the 'always' filter
+    # after it keeps it. Recorded 2026-09-18, split audit section D,
     # opig_kingsmith_component_splits.py:422. One count per outer fold, in fold
     # order; None where the training rows hold a single component, because
     # _make_cv_splitter raises there and no search runs. Bookkeeping only: this
