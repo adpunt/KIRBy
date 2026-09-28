@@ -312,6 +312,11 @@ def _search(reps, labels, groups, is_clf, objective, tier, seed,
         importance_methods=['lightgbm_gain'],
         augmentation_strategy='none', adaptive_pruning=ADAPTIVE_PRUNING,
         seed=seed, verbose=False, return_fitted=False,
+        # The search's own fold count. Left unset it fell to
+        # find_best_hybrid.DEFAULT_N_FOLDS (5 on the cluster), while Payoff 1
+        # and 2 score on N_FOLDS=3 folds and the result says they are the same
+        # folds the search selected on. cv_splitter_id below already claimed 3.
+        n_folds=N_FOLDS,
         cache=use_cache, cache_dir=cache_dir, dataset_name=dataset_name,
         cv_splitter_id=(f'k{N_FOLDS}s{seed}' if use_cache else None),
     )
