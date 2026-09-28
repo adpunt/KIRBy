@@ -1721,13 +1721,31 @@ def _summarise(results, models, spaces, metric_name, lower_is_better,
                 f = _gain(floor_for[arm])
                 row['gain_over_its_own_floor'][arm] = (
                     float(g - f) if np.isfinite(g) and np.isfinite(f) else float('nan'))
+            # ⛔ THE DENOMINATOR IS THIS ARM'S OWN FLOOR TO THE CEILING. Fixed
+            # 2026-09-28. The numerator was measured from `floor_any` and the
+            # denominator was `span`, which runs from `floor_measured`. So 1.0
+            # sat at floor_any + (ceiling - floor_measured), not at the
+            # ceiling, although the docstring and 'claim_scope' both say 1.0
+            # is level with the ceiling and the distance runs from floor_any.
+            # The same two guards as `span` apply to this distance: it must be
+            # above zero and above SPAN_MIN_FRAC of the no-cleaning score. The
+            # guards on `span` itself still apply as well: when the ceiling
+            # does not beat its own random floor, its lead over floor_any is
+            # which entities it could reach, not the ranking, and an exhausted
+            # pool means the ceiling removed fewer entities than the arm did.
             for arm in REMOVING_CORRECTIONS:
                 if arm not in floor_for:
                     continue
                 g = _gain(_mean(arm))
+                g_floor = _gain(floor_for[arm])
+                span_arm = _gain(ceil) - g_floor
+                ok = bool(span_is_real and np.isfinite(span_arm)
+                          and span_arm > span_floor)
+                row.setdefault('removal_span', {})[arm] = (
+                    float(span_arm) if np.isfinite(span_arm) else float('nan'))
                 row.setdefault('removal_position', {})[arm] = (
-                    float((g - _gain(floor_for[arm])) / span)
-                    if span_is_real and np.isfinite(g) else float('nan'))
+                    float((g - g_floor) / span_arm)
+                    if ok and np.isfinite(g) else float('nan'))
             per_model[m] = row
         out['per_space'][space] = {'per_model': per_model}
 
