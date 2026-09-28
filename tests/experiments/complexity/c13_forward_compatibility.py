@@ -311,6 +311,76 @@ def _c13_fold_importance(cache, train_reps, y_train, groups_train, blueprint):
 
 
 # =============================================================================
+# WHICH REPRESENTATIONS A FOLD KEEPS WHEN THE RECIPE USES FEWER THAN IT IS GIVEN
+# =============================================================================
+# Added 2026-09-28. A recipe carries rep_count, the number of representations
+# it may use. When a condition hands build_fold_hybrid more representations
+# than that, it keeps the best rep_count of them. Without scores passed in it
+# ranks them by blueprint.rep_scores, which the search measured over EVERY row
+# (find_best_hybrid.py:9492-9522), so the held-out fold's own labels chose
+# which representations that fold's hybrid was built from. The search itself
+# ranks on the fold's internal carve instead (find_best_hybrid.py:4719-4725).
+#
+# This computes those fold-local scores the way create_hybrid would for the
+# budget split: the same internal carve, the internal evaluator, the dataset's
+# metric, higher is better (hybrid.py:1602-1735, 3213-3269). It returns None
+# whenever the recipe keeps every representation it is given, so a condition
+# where nothing is cut builds exactly as before.
+#
+# Where it bites under the local grid: the pools of logd and buchwald_hartwig
+# hold 6 representations and rep_count is 5, so side 1's with-side and
+# random-Gaussian condition are both cut to 5 per fold.
+
+def _c13_fold_alloc_scores(cache, train_reps, y_train, groups_train,
+                           blueprint, metric_fn):
+    """{rep: fold-local budget score} when rep_count cuts this fold, else None."""
+    rep_count = getattr(blueprint, 'rep_count', None)
+    if rep_count is None or int(rep_count) >= len(train_reps):
+        return None
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    from kirby.find_best_hybrid import (OBJECTIVE_PREDICTIVE,
+                                        _is_geometry_objective)
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or (objective is not None and (isinstance(objective, dict)
+                                           or _is_geometry_objective(objective)))):
+        print(f"      fold-local representation ranking not computed "
+              f"(evaluator={evaluator!r}, objective={objective!r}); "
+              f"build_fold_hybrid ranks on the whole-dataset rep_scores")
+        return None
+    from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
+    from experiments._shared import object_direction
+    lib = object_direction(blueprint, 'the c13 recipe')
+    inner_tr, inner_va = internal_holdout_split(
+        len(y_train), y_train, groups_train)
+    out = {}
+    for name, X in train_reps.items():
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        key = None
+        if cache is not None:
+            key = ('alloc', evaluator, bool(lib),
+                   _c13_rep_key(name, evaluator, Xtr)[2:],
+                   _c13_rep_key(name, evaluator, Xva)[2:],
+                   _c13_rep_key('y', evaluator,
+                                np.asarray(y_train, dtype=float))[2:])
+            if key in cache:
+                out[name] = cache[key]
+                continue
+        s = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lib,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=False))
+        out[name] = s
+        if key is not None:
+            cache[key] = s
+    return out
+
+
+# =============================================================================
 # WHICH OF THE DATASET'S OWN REPRESENTATIONS c13 IS ABOUT
 # =============================================================================
 # DECIDED 2026-09-12, owner. c13's subject is a newly published embedding model —
@@ -633,6 +703,30 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
     return scores
 
 
+def _fold_mean(scores):
+    """Mean over the folds that produced a score; NaN when none did."""
+    a = np.asarray(scores, dtype=float)
+    a = a[np.isfinite(a)]
+    return float(a.mean()) if a.size else float('nan')
+
+
+def _fold_std(scores):
+    a = np.asarray(scores, dtype=float)
+    a = a[np.isfinite(a)]
+    return float(a.std()) if a.size else float('nan')
+
+
+def _paired_delta(first, second):
+    """Mean over folds scored in BOTH of (first - second). NaN when the two
+    lists are not fold-aligned or share no scored fold."""
+    if not first or not second or len(first) != len(second):
+        return float('nan')
+    a = np.asarray(first, dtype=float)
+    b = np.asarray(second, dtype=float)
+    ok = np.isfinite(a) & np.isfinite(b)
+    return float((a[ok] - b[ok]).mean()) if ok.any() else float('nan')
+
+
 def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                            metric_fn, augmentations=None,
                            metric_name='r2', dataset_name=None,
@@ -819,14 +913,24 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             importance_cache, train_reps, y_train, groups_train, blueprint)
 
         try:
+            _fold_alloc = _c13_fold_alloc_scores(
+                importance_cache, train_reps, y_train, groups_train,
+                blueprint, metric_fn)
             X_train, X_val, feature_info = build_fold_hybrid(
                 train_reps, val_reps, y_train, blueprint,
                 augmentations_train=train_augs, augmentations_val=val_augs,
                 groups=groups_train,
                 model=model_factory(),
                 metric_fn=metric_fn,
-                precomputed_importance=_precomp_imp)
-        except Exception:
+                precomputed_importance=_precomp_imp,
+                precomputed_alloc_scores=_fold_alloc)
+        except Exception as e:
+            # A fold that cannot be built is NaN in its own position, never
+            # dropped. Dropping it let two conditions average different folds
+            # and then be subtracted from each other.
+            print(f"      fold {len(scores) + 1}: hybrid could not be built "
+                  f"({type(e).__name__}: {e}); scored NaN")
+            scores.append(float('nan'))
             continue
 
         # Extract allocation from feature_info
@@ -1300,6 +1404,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         ]
 
         side_means = {}
+        side_folds = {}
         for side in sides:
             c_key, d_key, dr_key = side['keys']
             without_reps = side['without']
@@ -1321,6 +1426,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                         'reps_searched': [],
                     }
                     side_means[k] = float('nan')
+                    side_folds[k] = []
                 continue
 
             # A one-representation without-side is scored as that representation,
@@ -1333,8 +1439,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
 
             c_scores, c_info = _hybrid(without_reps, model_factory,
                                        best_b_model, without_suffix)
-            c_mean_side = float(np.mean(c_scores)) if c_scores else float('nan')
-            c_std_side = float(np.std(c_scores)) if c_scores else float('nan')
+            c_mean_side = _fold_mean(c_scores)
+            c_std_side = _fold_std(c_scores)
             rep_result['conditions'][c_key] = {
                 'description': (f'hybrid over {side["label"]} '
                                 f'({len(without_reps)} reps), {rep_name} left out'),
@@ -1346,6 +1452,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'is_hybrid': is_hybrid,
             }
             side_means[c_key] = c_mean_side
+            side_folds[c_key] = list(c_scores)
             print(f"    {metric_name} = {c_mean_side:.4f} +/- {c_std_side:.4f}")
             if c_info.get('allocation'):
                 print(f"    Allocation: {c_info['allocation']}")
@@ -1356,8 +1463,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                   f"{rep_name}")
             d_scores, d_info = _hybrid(with_reps, model_factory,
                                        best_b_model, with_suffix)
-            d_mean_side = float(np.mean(d_scores)) if d_scores else float('nan')
-            d_std_side = float(np.std(d_scores)) if d_scores else float('nan')
+            d_mean_side = _fold_mean(d_scores)
+            d_std_side = _fold_std(d_scores)
             alloc = d_info.get('allocation', {})
             total_budget = sum(alloc.values()) if alloc else 1
             alloc_share = (alloc.get(rep_name, 0) / total_budget
@@ -1376,6 +1483,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                     without_reps),
             }
             side_means[d_key] = d_mean_side
+            side_folds[d_key] = list(d_scores)
             print(f"    {metric_name} = {d_mean_side:.4f} +/- {d_std_side:.4f}")
             if alloc:
                 print(f"    Allocation: {alloc}")
@@ -1399,8 +1507,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                   f"width as {rep_name}")
             dr_scores, dr_info = _hybrid(null_reps, model_factory,
                                          best_b_model, null_suffix)
-            dr_mean_side = float(np.mean(dr_scores)) if dr_scores else float('nan')
-            dr_std_side = float(np.std(dr_scores)) if dr_scores else float('nan')
+            dr_mean_side = _fold_mean(dr_scores)
+            dr_std_side = _fold_std(dr_scores)
             dr_alloc = dr_info.get('allocation', {})
             dr_total = sum(dr_alloc.values()) if dr_alloc else 1
             dr_share = (dr_alloc.get(rep_name, 0) / dr_total
@@ -1415,6 +1523,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'allocation_share': float(dr_share),
             }
             side_means[dr_key] = dr_mean_side
+            side_folds[dr_key] = list(dr_scores)
             print(f"    {metric_name} = {dr_mean_side:.4f} +/- {dr_std_side:.4f}")
             print(f"    The Gaussian matrix took {dr_share:.1%} of the budget")
 
@@ -1428,18 +1537,27 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         # =================================================================
         # Compute deltas (all sign-normalised: positive = improvement)
         # =================================================================
+        # Every delta is PAIRED by fold: the mean over the folds both
+        # conditions scored of (first - second). All conditions use the same
+        # folds (cv_split is deterministic on groups and labels), so with no
+        # failed fold this equals the difference of the two means. With one,
+        # the two sides are still compared on the same molecules.
         sign = -1 if lower_is_better else 1
-        delta_dc = sign * (d_mean - c_mean)               # in-sample upper bound
-        delta_drc = sign * (d_random_mean - c_mean)       # selection-bias null
-        delta_ddr = sign * (d_mean - d_random_mean)       # DEBIASED contribution
-        delta_db = sign * (d_mean - best_b_mean) if not np.isinf(best_b_mean) else float('nan')
+        _f = side_folds
+        _b = list(best_b_scores)
+        delta_dc = sign * _paired_delta(_f.get('D'), _f.get('C'))       # in-sample upper bound
+        delta_drc = sign * _paired_delta(_f.get('D_random'), _f.get('C'))  # selection-bias null
+        delta_ddr = sign * _paired_delta(_f.get('D'), _f.get('D_random'))  # DEBIASED contribution
+        delta_db = sign * _paired_delta(_f.get('D'), _b)
         # The same three subtractions on side 2 (decided 2026-09-12): every
         # other embedding model is out of the without-side.
-        delta_dc_est = sign * (d_est_mean - c_est_mean)
-        delta_drc_est = sign * (dr_est_mean - c_est_mean)
-        delta_ddr_est = sign * (d_est_mean - dr_est_mean)
-        delta_db_est = (sign * (d_est_mean - best_b_mean)
-                        if not np.isinf(best_b_mean) else float('nan'))
+        delta_dc_est = sign * _paired_delta(_f.get('D_established'),
+                                            _f.get('C_established'))
+        delta_drc_est = sign * _paired_delta(_f.get('D_random_established'),
+                                             _f.get('C_established'))
+        delta_ddr_est = sign * _paired_delta(_f.get('D_established'),
+                                             _f.get('D_random_established'))
+        delta_db_est = sign * _paired_delta(_f.get('D_established'), _b)
 
         def _interp(delta, pos, neg):
             if np.isnan(delta):
@@ -1571,6 +1689,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     win_count_db = 0
     win_count_ddr_est = 0
     win_count_db_est = 0
+    n_scored_ddr = 0
+    n_scored_db = 0
     n_scored_ddr_est = 0
     n_scored_db_est = 0
     total_reps_tested = 0
@@ -1596,10 +1716,17 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         # sign-normalised (positive = improvement, any metric direction), so
         # re-applying lower_is_better would invert RMSE/MAE/logloss domains.
         total_reps_tested += 1
-        if not np.isnan(ddr) and ddr > 0:
-            win_count_ddr += 1
-        if not np.isnan(db) and db > 0:
-            win_count_db += 1
+        # A NaN delta (a condition that produced no score) is left out of the
+        # bottom of the fraction, the same as side 2 below. Counting it as a
+        # loss would read as a result.
+        if not np.isnan(ddr):
+            n_scored_ddr += 1
+            if ddr > 0:
+                win_count_ddr += 1
+        if not np.isnan(db):
+            n_scored_db += 1
+            if db > 0:
+                win_count_db += 1
         # Side 2 has its own denominators: on a dataset whose representations
         # are all embedding models the side-2 without-side is empty and these
         # are NaN, and counting those as losses would read as a result.
@@ -1645,10 +1772,12 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
               f"bottom of each fraction counts the embedding models tested on "
               f"this dataset.")
         print(f"    Side 1, against the dataset's other representations:")
-        print(f"      D > D_random (rep beats same-dim noise): {win_count_ddr}/{total_reps_tested} "
-              f"({win_count_ddr/total_reps_tested:.0%})")
-        print(f"      D > B (hybrid helps the new rep):        {win_count_db}/{total_reps_tested} "
-              f"({win_count_db/total_reps_tested:.0%})")
+        print(f"      D > D_random (rep beats same-dim noise): {win_count_ddr}/{n_scored_ddr} "
+              f"embedding models with both scored"
+              + (f" ({win_count_ddr/n_scored_ddr:.0%})" if n_scored_ddr else ''))
+        print(f"      D > B (hybrid helps the new rep):        {win_count_db}/{n_scored_db} "
+              f"embedding models with both scored"
+              + (f" ({win_count_db/n_scored_db:.0%})" if n_scored_db else ''))
         print(f"    Side 2, against the established representations only. The "
               f"bottom counts the embedding models this side produced a score "
               f"for, which is 0 when the dataset has no established "
@@ -1717,8 +1846,10 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'candidates_requested': len(candidate_reps) + len(missing_candidates),
                 # Headline win rates are on the DEBIASED effect. D-C is retained
                 # per-rep in deltas as an in-sample upper bound only.
-                'win_rate_D_vs_D_random': win_count_ddr / total_reps_tested if total_reps_tested > 0 else None,
-                'win_rate_D_vs_B': win_count_db / total_reps_tested if total_reps_tested > 0 else None,
+                'win_rate_D_vs_D_random': win_count_ddr / n_scored_ddr if n_scored_ddr > 0 else None,
+                'win_rate_D_vs_B': win_count_db / n_scored_db if n_scored_db > 0 else None,
+                'n_scored_D_vs_D_random': n_scored_ddr,
+                'n_scored_D_vs_B': n_scored_db,
                 'win_rate_D_established_vs_D_random_established': (
                     win_count_ddr_est / n_scored_ddr_est if n_scored_ddr_est > 0 else None),
                 'win_rate_D_established_vs_B': (
