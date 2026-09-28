@@ -122,7 +122,7 @@ Building on these findings, I began exploring techniques involving learning with
 % TODO: how do I end this? Check other theses
 
 
-\section{The questions this thesis asks}
+\section{The questions this thesis asks}\label{sec:intro:questions}
 
 % ---- from THESIS_OUTLINE.md :: 1.3  The questions this thesis asks (quoted; long bullets condensed) ----
 %   Under label noise, which matters more for robustness, the representation or the model
@@ -132,7 +132,18 @@ Building on these findings, I began exploring techniques involving learning with
 %     more robust, and to make molecular similarity and noise estimation more reliable?
 % ---- end outline extract ----
 
-This research addresses three main aspects of the robustness of QSAR models under label noise. First, we investigate the contributions of molecular representation and model architecture on both overall predictive performance and, more specifically, noise robustness. Second, we compare how noise-robust probabilistic models perform versus their deterministic counterparts, and whether their uncertainty estimates correlate with prediction error or label noise under noisy conditions. Third, we assess the generalizability of noise-robustness patterns across different noise-injection mechanisms and molecular properties. Together, these questions aim to identify what, if anything, makes a QSAR model robust to noise. Finally, we introduce NoiseInject, an open-source Python package for benchmarking noise robustness and uncertainty quantification in machine learning models.
+The first half of this thesis addresses four questions about the behavior of QSAR models under label noise. First, how does the choice of molecular representation and model architecture explain the variance in predictive performance, and does that division change when you instead consider how much performance a QSAR model is able to retain under increasing label noise? Second, what does the choice of model provide with label noise? Within this question we compare the effects of deterministic and probabilistic modeling. Third, does the type of label noise matter, or just the quantity of it? We explore different techniques of generating and adding label noise to both clean data, as well as data with inherent experimental noise. Fourth, what is the impact of artificial label noise on a model's uncertainty estimation? Does the estimated uncertainty rise with increased label noise and can these uncertainty values point to which labels are corrupted? Together, these questions aim to identify what, if anything, makes a QSAR model robust to noise. Finally, we introduce NoiseInject, an open-source Python package for benchmarking noise robustness and uncertainty quantification in machine learning models.
+
+% TODO: the outline answers the noise-robustness and importance-weighting questions in Chapter 5, and the
+% distance-based mitigation and weighting/smoothing questions in Chapter 6. Say so here once chapters are final.
+The second half asks whether the representation itself can be adapted to the task:
+\begin{enumerate}
+    \item How do you select the best set of features for a given prediction task?
+    \item Do hybrid representations achieve higher noise robustness (retention percentage) than their base representations?
+    \item Do the selected hybrid features help stabilize distance-based noise mitigation?
+    \item Does feature importance weighting improve effectiveness of hybrid representation creation, model training, and noise mitigation tasks?
+    \item When sample removal is suboptimal, can sample weighting or label smoothing provide superior noise handling under Gaussian corruption?
+\end{enumerate}
 
 \section{From noise robustness to adaptive representations}
 
@@ -633,7 +644,7 @@ For probabilistic models, empirical coverage at $1\sigma$ and $2\sigma$ and the 
 
 While there have been many investigations into the effect of noise on molecular property prediction, direction comparisons between how different molecular representations responds to label noise remains limited. The choice of molecular representation certainly affects predictive performance. \cite{Deng2023} evaluated 62,820 models and found that extended-connectivity fingerprints (ECFP) fingerprints frequently outperform learned graph embeddings across models. Whether these conclusions translate to noise robustness is our question. Between different types of label noise, \cite{Heid2023} found no difference in model performance between error distributions with the same mean and standard deviation. We expand on this by considering alternative patterns of noise, namely noise concentrated in structural groups or on a sparse subset of samples.
 
-This research addresses four questions about the behavior of QSAR models under label noise. First, how does the choice of molecular representation and model architecture explain the variance in predictive performance, and does that division change when you instead consider how much performance a QSAR model is able to retain under increasing label noise? Second, what does the choice of model provide with label noise? Within this question we compare the effects of deterministic and probabilistic modeling. Third, does the type of label noise matter, or just the quantity of it? We explore different techniques of generating and adding label noise to both clean data, as well as data with inherent experimental noise. Fourth, what is the impact of artificial label noise on a model's uncertainty estimation? Does the estimated uncertainty rise with increased label noise and can these uncertainty values point to which labels are corrupted? 
+This chapter answers the first four questions set out in Section~\ref{sec:intro:questions}: how representation and model architecture divide the variance in predictive performance and in noise robustness, what probabilistic models add, whether the type of label noise matters, and whether uncertainty estimates track label noise.
 
 % TODO: Outline Sec 3.1 also names Cortes-Ciriano, Bender and Malliavin 2015 and Jorner et al.
 % TODO: 2021 in the review-of-existing-approaches paragraph. Both are cited elsewhere; pull them in.
@@ -1009,6 +1020,7 @@ Samples containing label noise tend to produce large residuals in training, and 
 % TODO: -- it only reports that for VBLL both components rise [NI 540, Fig 5b]. Either the result
 % TODO: exists elsewhere and must be pulled in, or the outline claim needs revising.
 \todo[inline, color=yellow!40]{MISSING RESULT: the GP uncertainty decomposition by representation.}
+% TODO(check): Table tab:top_unc_noise gives the GP the highest uncertainty--noise correlation (0.56 on SNS), and the next subsection says GPs can separate noise-induced residuals. The GP code (qsar_qm_models/models/models.py, gauche fit) uses one GaussianLikelihood noise for the whole fit, and its posterior variance does not depend on the labels. The current analysis (scripts/uncertainty_stats.py, _stat_unc_noise_spearman) calls this correlation 'near zero by design'. Check which analysis produced the 0.56 before keeping the table and those two sentences.
 
 \subsection{Fingerprint representations carry the usable uncertainty signal}
 
@@ -1026,7 +1038,7 @@ Threshold and value-proportional noise produce the widest spread of NDS across m
 % TODO: models can at least sense the noise they cannot resist.'
 
 The second conclusion concerns whether a model's uncertainty estimates track per-sample label noise. Some models struggle, particularly those like BNNs whose uncertainty comes from a posterior over weights or QRF which does produce a full quantile, but is unable to successfully track noise. 
-Models that fit a separate, per-sample scale or observation-noise parameter during training are able to track that label noise more effectively. NGBoost identifies noisy labels through a per-sample predicted scale that absorbs large residuals. Similarly, the GP absorbs these larger residuals with a per-sample posterior variance. Among representations, uncertainty tracking collapses with the learned embeddings MHG-GNN and mol2vec, while fingerprints and descriptors produce a viable signal. Neither strong predictive performance nor noise robustness implies noise tracking; again it is up to the model's architecture and how it handles loss. 
+Models that fit a separate, per-sample scale or observation-noise parameter during training are able to track that label noise more effectively. NGBoost identifies noisy labels through a per-sample predicted scale that absorbs large residuals. The GP does not: it has a single global observation noise term, so its per-sample uncertainty comes from the posterior variance, which depends on where a molecule sits relative to the training molecules and not on its label. Among representations, uncertainty tracking collapses with the learned embeddings MHG-GNN and mol2vec, while fingerprints and descriptors produce a viable signal. Neither strong predictive performance nor noise robustness implies noise tracking; again it is up to the model's architecture and how it handles loss. 
 
 Although the choice of representation carries less weight than that of models, we observed an interesting phenomenon. PDVs produce the strongest predictive performance on clean data, but are the least noise-resistant. Embeddings, particularly mol2vec, are the most robust to noise yet perform the worst noise tracking. At the end of the day, the choice of both model and representation comes down to your problem, including the amount of noise in your data, your objectives, and your compute limits. 
 
@@ -1578,15 +1590,7 @@ Here, we present KIRBy (Knowledge Integration by Representation), a framework th
 
 But as important as the selection of useful features is, it is also important to filter out the useless features. We could throw the kitchen sink at the models and pool together features across a wide array of representations. Not only would that pose computational challenges, but it also introduces a huge set of irrelevant features that function as noise in downstream applications (Chapter~\ref{chap:flaws}). With all of that in mind, I decided to develop a method that selects the best features for a given data set and model. In theory, it should effectively filter out noisy features and isolate the feature which carry the most relevant information. 
 
-% TODO: the outline redistributes these -- Q1 and Q3 -> ch.5, Q2 and Q4 -> ch.6. Decide
-% whether they stay here as a roadmap or move.
-This research aims to address the following questions: 
-\begin{enumerate}
-    \item Do hybrid representations achieve higher noise robustness (retention percentage) than their base representations?
-    \item Do the selected hybrid features help stabilize distance-based noise mitigation?
-    \item Does feature importance weighting improve effectiveness of hybrid representation creation, model training, and noise mitigation tasks?
-    \item When sample removal is suboptimal, can sample weighting or label smoothing provide superior noise handling under Gaussian corruption?
-\end{enumerate}
+The questions this chapter and Chapter~\ref{chap:similarity} address are set out in Section~\ref{sec:intro:questions}.
 % TODO: Outline: 'This is the motivation for the method; it is exploratory, not a reported result,
 % TODO: and the noisy-label question is measured properly in Chapter 6.' Say so explicitly.
 
@@ -2979,8 +2983,8 @@ We want to be clear about KIRBy's limitations. For small datasets (below about 2
 % ---- NOTES 5.11 (2026-09-28, bullets for writing; comment only) ----
 % Before writing:
 % - This section is empty in thesis.tex. Only the outline line exists: one paragraph per research question, then a bridge to Chapter 6.
-% - The research questions are not in the Introduction chapter. They sit in this chapter's introduction as a list of four, carried over from the confirmation report.
-%   - A comment there says the outline moves two of them into this chapter (noise robustness of hybrids against their base representations; whether importance weighting helps) and the other two into Chapter 6.
+% - The research questions are asked formally in Section 1.1 (\ref{sec:intro:questions}); this chapter's introduction only points there.
+%   - The outline answers two of the second-half questions here (noise robustness of hybrids against their base representations; whether importance weighting helps) and two in Chapter 6.
 %   - TODO(author): settle that list first, then match this section to it one to one.
 %   - The groups below follow the chapter's results sections. Rename them to the final questions.
 % - Already in prose: the overfitting argument (Discussion) and the limitations paragraph. Refer to them here; do not repeat them. The method itself is defined in 5.2.1; do not restate it here.
