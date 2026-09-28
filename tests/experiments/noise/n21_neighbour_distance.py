@@ -1020,9 +1020,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'weight_method': WEIGHT_METHOD,
         'evaluation_features': (
             'every space is scored after repair on the SAME features -- the '
-            'plain single representation its key starts with, z-scored. Only '
-            'the weights differ, so the difference between two spaces under '
-            'one prefix is the distance and nothing else.'),
+            'plain single representation its key starts with, z-scored, or '
+            'unscaled when every value in it is 0 or 1 (the search\'s rule; '
+            'dirty-local 2026-09-28). Only the weights differ, so the '
+            'difference between two spaces under one prefix is the distance '
+            'and nothing else.'),
         'exclude_groups': (
             'not used, matching n12, so a molecule may take a repeat '
             'measurement of itself as a neighbour on any dataset that holds '
@@ -1078,6 +1080,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     if _st0:
         results['per_level'] = _st0['per_level']
     _row_mi = {b: f'{b}:{rn}' for b, rn in base_used.items()}
+    # {representation: True when every value is 0 or 1}; see fit_mats below.
+    _rep_is_binary = {}
 
     def _n21_ident(detector, sim, base, level, seed, fold_i):
         return sx.identity(
@@ -1096,7 +1100,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         setting and k, per single representation. The spaces are the first
         downstream model's (rank_owner), as the rest of this file's are."""
         smiles_tr = sx.smiles_for(data, train_idx)
-        for _b, (_raw, X_base_std, X_eval_std) in base_mats.items():
+        # base_mats here is the caller's fit_mats: what the models are
+        # fitted on (raw bits for an all-binary representation), which is
+        # also the model-input space n01 hands the sweep since 27b880d.
+        for _b, (X_base_std, X_eval_std) in base_mats.items():
             sp_tr, _sp_va, unav = sx.build_spaces(
                 dataset_name, sweep, X_model_tr=X_base_std,
                 train_reps=train_reps, val_reps=val_reps, train_idx=train_idx,
@@ -1249,6 +1256,31 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     scaler.fit_transform(np.asarray(_raw, dtype=np.float64)),
                     scaler.transform(np.asarray(reps[_rn][val_idx],
                                                 dtype=np.float64)))
+            # DIRTY-LOCAL 2026-09-28. What every MODEL is fitted and scored on,
+            # beside the z-scored matrices the distances are built from. A
+            # representation whose every value is 0 or 1 (ECFP4, Avalon, atom
+            # pairs) is fitted unscaled: the rule of the search's own
+            # baselines (find_best_hybrid, 'leave binary raw'), of
+            # noise_cache.cached_scaled since 808df51 and of n01 since
+            # 27b880d. Standardised bits cost svm 0.0719 RMSE on herg_ki ECFP4
+            # in n01, and ECFP4 is rf's rank-1 single representation on
+            # herg_ki here. The distances are unchanged: the plain space is
+            # still the z-scored representation, as the docstring defines it.
+            fit_mats = {}
+            for _b, _rn in base_used.items():
+                if _rn not in _rep_is_binary:
+                    _A = np.asarray(reps[_rn])
+                    _u = np.unique(_A)
+                    _rep_is_binary[_rn] = bool(
+                        _A.dtype == np.uint8 or
+                        (len(_u) <= 2
+                         and set(_u.tolist()).issubset({0, 0.0, 1, 1.0})))
+                if _rep_is_binary[_rn]:
+                    fit_mats[_b] = (
+                        np.asarray(reps[_rn][train_idx], dtype=np.float64),
+                        np.asarray(reps[_rn][val_idx], dtype=np.float64))
+                else:
+                    fit_mats[_b] = base_mats[_b][1:]
 
             train_reps = {k: v[train_idx] for k, v in reps.items()}
             val_reps = {k: v[val_idx] for k, v in reps.items()}
@@ -1261,13 +1293,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             # The clean reference has no noise in it, so it is the same on all
             # three draws of a fold. Fitted once.
             fold_key0 = f'f{fold_i}'
-            for _b, (_raw, X_base_std, X_eval_std) in base_mats.items():
+            for _b, (X_fit_tr, X_fit_va) in fit_mats.items():
                 for mn in downstream_models:
                     try:
                         mdl = model_factories[mn]()
-                        mdl.fit(X_base_std, labels[train_idx])
+                        mdl.fit(X_fit_tr, labels[train_idx])
                         clean[_b][mn][fold_key0] = float(metric_fn(
-                            y_val, _predict_for_metric(mdl, X_eval_std,
+                            y_val, _predict_for_metric(mdl, X_fit_va,
                                                        metric_name)))
                     except Exception as exc:
                         errors[f'{_b}|{fold_key0}|clean|{mn}'] = \
@@ -1286,13 +1318,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 counts['n_corrupted'].append(int(np.sum(cmask)))
                 counts['n_training'].append(int(cmask.size))
 
-                for _b, (_raw, X_base_std, X_eval_std) in base_mats.items():
+                for _b, (X_fit_tr, X_fit_va) in fit_mats.items():
                     for mn in downstream_models:
                         try:
                             mdl = model_factories[mn]()
-                            mdl.fit(X_base_std, y_noisy)
+                            mdl.fit(X_fit_tr, y_noisy)
                             noisy[_b][mn][pass_key] = float(metric_fn(
-                                y_val, _predict_for_metric(mdl, X_eval_std,
+                                y_val, _predict_for_metric(mdl, X_fit_va,
                                                            metric_name)))
                         except Exception as exc:
                             errors[f'{_b}|{pass_key}|noisy|{mn}'] = \
@@ -1411,12 +1443,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                     cell = f'{mn}|{est_key}|{pass_key}'
                                     try:
                                         mdl = model_factories[mn]()
-                                        mdl.fit(X_base_std, y_noisy,
+                                        mdl.fit(fit_mats[_b][0], y_noisy,
                                                 sample_weight=weights)
                                         rep_score[space_key][cell] = float(
                                             metric_fn(y_val,
                                                       _predict_for_metric(
-                                                          mdl, X_eval_std,
+                                                          mdl,
+                                                          fit_mats[_b][1],
                                                           metric_name)))
                                         fold_rows.append(sx.row(
                                             _n21_ident(
@@ -1434,7 +1467,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
                 if sweep:
                     _sweep_pass(level, seed, fold_i, pass_key, fold_key0,
-                                base_mats, train_reps, val_reps, train_augs,
+                                fit_mats, train_reps, val_reps, train_augs,
                                 val_augs, train_idx, g_train, y_noisy, cmask,
                                 y_val, hybrid_X is not None or bp is None,
                                 noisy, clean, sim_ap, sim_unavailable)
