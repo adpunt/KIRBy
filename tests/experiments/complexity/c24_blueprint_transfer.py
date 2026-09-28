@@ -493,6 +493,11 @@ def run(data, config, output_dir, dataset_name):
     # Which rows each cell's recipe was searched on, so the size difference
     # between the diagonal and the off-diagonal is on the record.
     cell_recipe_provenance = {}
+    # One pair search per UNORDERED pair of folds. A->B and B->A drop the same
+    # two folds, so they are the same rows, labels, groups and budgets, and the
+    # same search. It used to run twice in memory whenever the disk cache did
+    # not hit (it did not in a synthetic check on 2026-09-28).
+    _pair_search_memo = {}
 
     for src_fold in list(fold_blueprints):
         for tgt_fold, (train_idx, val_idx) in enumerate(folds):
@@ -533,32 +538,36 @@ def run(data, config, output_dir, dataset_name):
                 _pair_augs = ({k: v[_pair_idx] for k, v in augs.items()}
                               if augs else None)
                 _tp = _time.time()
-                _pair_search = find_best_hybrid(
-                    _pair_reps, labels[_pair_idx], groups=groups[_pair_idx],
-                    budgets=list(C24_BUDGETS),
-                    augmentations=_pair_augs,
-                    augmentation_strategy='uncapped' if _pair_augs else 'none',
-                    internal_evaluators=INTERNAL_EVALUATORS,
-                    metric=metric_name,
-                    task_type=task_type,
-                    verbose=False,
-                    cache=True,
-                    dataset_name=dataset_name,
-                    # SORTED, so the two ordered pairs that drop the SAME two
-                    # folds share one cache key. _pair_idx is the rows left
-                    # after dropping src_fold AND tgt_fold, which is identical
-                    # for (A,B) and (B,A): same rows, same labels, same groups,
-                    # same budgets, one search. condition_suffix rides on `tier`
-                    # and so enters the key, so c24_drop1_3 and c24_drop3_1 were
-                    # two keys for one search and each was computed cold. Ten of
-                    # the twenty pair searches were duplicates -- flagged in the
-                    # 2026-09-18 compute audit and never acted on. Sorting takes
-                    # c24 from 25 searches per dataset to 15 with no axis cut
-                    # and no reported number changed.
-                    condition_suffix=(
-                        "c24_drop%d_%d" % tuple(sorted((src_fold, tgt_fold)))),
-                    tier='general',
-                )
+                _memo_key = tuple(sorted((src_fold, tgt_fold)))
+                _pair_search = _pair_search_memo.get(_memo_key)
+                if _pair_search is None:
+                    _pair_search = find_best_hybrid(
+                        _pair_reps, labels[_pair_idx], groups=groups[_pair_idx],
+                        budgets=list(C24_BUDGETS),
+                        augmentations=_pair_augs,
+                        augmentation_strategy='uncapped' if _pair_augs else 'none',
+                        internal_evaluators=INTERNAL_EVALUATORS,
+                        metric=metric_name,
+                        task_type=task_type,
+                        verbose=False,
+                        cache=True,
+                        dataset_name=dataset_name,
+                        # SORTED, so the two ordered pairs that drop the SAME two
+                        # folds share one cache key. _pair_idx is the rows left
+                        # after dropping src_fold AND tgt_fold, which is identical
+                        # for (A,B) and (B,A): same rows, same labels, same groups,
+                        # same budgets, one search. condition_suffix rides on `tier`
+                        # and so enters the key, so c24_drop1_3 and c24_drop3_1 were
+                        # two keys for one search and each was computed cold. Ten of
+                        # the twenty pair searches were duplicates -- flagged in the
+                        # 2026-09-18 compute audit and never acted on. Sorting takes
+                        # c24 from 25 searches per dataset to 15 with no axis cut
+                        # and no reported number changed.
+                        condition_suffix=(
+                            "c24_drop%d_%d" % tuple(sorted((src_fold, tgt_fold)))),
+                        tier='general',
+                    )
+                    _pair_search_memo[_memo_key] = _pair_search
                 print(f"    [t={_el():.0f}s] pair search dropping folds "
                       f"{sorted((src_fold, tgt_fold))} done in "
                       f"{_time.time() - _tp:.0f}s")
