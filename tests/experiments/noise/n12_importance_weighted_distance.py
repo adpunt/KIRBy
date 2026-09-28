@@ -102,6 +102,9 @@ from experiments.noise.n07_remediation import (
     detector_scores_with, cleaned_from_weights, similarity_record,
 )
 from experiments.noise import noise_cache as _nc
+# DIRTY-LOCAL 2026-09-28: the representations the stored search built each
+# outer fold's hybrid on (n02, commit 736ec93; n37 uses it the same way).
+from experiments.noise.n02_sample_weighting import search_fold_reps
 
 
 # Noise levels. `None` means the grid this dataset is anchored to in
@@ -342,7 +345,8 @@ def _weight_features(X_standardized, importance):
 
 def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
                        groups=None, val_reps=None, augmentations_val=None,
-                       model=None, metric_fn=None, lower_is_better=None):
+                       model=None, metric_fn=None, lower_is_better=None,
+                       fold_idx=None, n_folds=None):
     """Build the pieces that don't depend on imp_method, ONCE per fold.
 
     val_reps / augmentations_val: this fold's held-out rows. build_fold_hybrid
@@ -396,6 +400,26 @@ def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
             train_reps_for_bp = train_reps
     else:
         train_reps_for_bp = train_reps
+
+    # DIRTY-LOCAL 2026-09-28. A recipe with rep_count below the pool size keeps,
+    # in the search, the representations THIS fold's training rows rank highest.
+    # Handed the whole pool and no per-fold scores, build_fold_hybrid ranks by
+    # Blueprint.rep_scores instead (_shared.py:5270-5300), a score over every
+    # molecule, this fold's held-out ones included. On herg_ki that built a
+    # different hybrid from the one the search scored (n02: rf 0.6152 RMSE
+    # against the search's 0.6058 on the same folds). So the fold's own list
+    # from the recipe's allocation_per_fold is passed; with no such record the
+    # old behaviour stands and the source says so.
+    shared['hybrid_fold_reps'] = {'reps': None, 'source': 'fold not given'}
+    if fold_idx is not None and n_folds is not None:
+        _keep, _keep_src = search_fold_reps(bp, fold_idx, n_folds,
+                                            list(train_reps_for_bp))
+        if _keep is not None:
+            train_reps_for_bp = {r: train_reps_for_bp[r]
+                                 for r in train_reps_for_bp if r in _keep}
+        shared['hybrid_fold_reps'] = {
+            'reps': sorted(_keep) if _keep is not None else None,
+            'source': _keep_src}
 
     # The same subset for the held-out rows. build_fold_hybrid applies the
     # selection to them; nothing here reads the result.
@@ -1251,7 +1275,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     # feature space to be compared in.
                     model=model_factories[downstream_models[0]](),
                     metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
+                    lower_is_better=lower_is_better,
+                    fold_idx=fold_idx, n_folds=n_folds)
+                _hfr = fold_shared_by_space[_r['space']]['hybrid_fold_reps']
+                results.setdefault('hybrid_fold_reps', {}).setdefault(
+                    _r['space'], {})[str(fold_idx)] = _hfr
+                print(f"    fold {fold_idx} {_r['space']}: built on "
+                      f"{_hfr['reps'] if _hfr['reps'] is not None else 'the pool'}"
+                      f" ({_hfr['source']})")
                 results['n_hybrid_builds_by_space'][_r['space']] = (
                     results['n_hybrid_builds_by_space'].get(_r['space'], 0) + 1)
             # Unchanged in meaning: one per (noise level, fold), counted once
