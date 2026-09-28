@@ -1185,7 +1185,8 @@ def _summarise_replicate(rep_block, rep_order, imp_methods, levels, n_folds,
 
 
 def _summarise(results, levels, imp_methods, rep_order, arm):
-    """The one screen a reader needs: what moved, per scoring method, per level.
+    """The one screen a reader needs: what moved, per scoring method, per
+    representation, per level.
 
     Never pooled across datasets and never averaged with another dataset's numbers —
     a Spearman on rmse-scored logd and on spearman-scored flab are not the same
@@ -1194,35 +1195,51 @@ def _summarise(results, levels, imp_methods, rep_order, arm):
     summary = {'base': {}, 'hybrid': {}, 'hybrid_importance': {}}
     reps_per_rep = results['per_replicate']
 
+    # ONE ROW PER REPRESENTATION. Until 2026-09-28 the base table and the
+    # selection table took one median over every (representation, replicate)
+    # cell, so a 167-feature fingerprint and a 2048-feature one landed in one
+    # number. The median here is across noise replicates only.
+    def _med(xs):
+        a = np.asarray(xs, dtype=float)
+        a = a[np.isfinite(a)]
+        return float(np.median(a)) if a.size else float('nan')
+
+    def _rng(xs, fn):
+        a = np.asarray(xs, dtype=float)
+        a = a[np.isfinite(a)]
+        return float(fn(a)) if a.size else float('nan')
+
     if arm in ('base', 'both'):
         for method in imp_methods:
-            per_level = {}
-            for lv in levels:
-                rhos, scored, retained = [], [], []
-                for block in reps_per_rep.values():
-                    for rname, cells in block.get('base', {}).get(method, {}).items():
-                        c = cells.get(f'{lv:g}')
+            by_rep = {}
+            for rname in rep_order:
+                per_level = {}
+                for lv in levels:
+                    rhos, scored, retained = [], [], []
+                    for block in reps_per_rep.values():
+                        c = (block.get('base', {}).get(method, {})
+                             .get(rname, {}).get(f'{lv:g}'))
                         if c is None:
                             continue
                         rhos.append(c['mean_spearman_both_scored'])
                         scored.append(c['mean_n_scored_features'])
-                        # The effective one: capped at how many features the scorer
-                        # actually ranked, so the set holds no tied zeros.
-                        retained.append(
-                            c['mean_topk_effective_retained_fraction'])
-                if not rhos:
-                    continue
-                per_level[f'{lv:g}'] = {
-                    'n_cells': len(rhos),
-                    'median_spearman_vs_level_zero': float(np.median(rhos)),
-                    'min_spearman_vs_level_zero': float(np.min(rhos)),
-                    'max_spearman_vs_level_zero': float(np.max(rhos)),
-                    'median_n_scored_features': float(np.median(scored)),
-                    'median_topk_effective_retained_fraction': float(
-                        np.median(retained)),
-                }
-            if per_level:
-                summary['base'][method] = per_level
+                        # The effective one: capped at how many features the
+                        # scorer actually ranked, so the set holds no tied zeros.
+                        retained.append(c['mean_topk_effective_retained_fraction'])
+                    if not rhos:
+                        continue
+                    per_level[f'{lv:g}'] = {
+                        'n_replicates': len(rhos),
+                        'median_spearman_vs_level_zero': _med(rhos),
+                        'min_spearman_vs_level_zero': _rng(rhos, np.min),
+                        'max_spearman_vs_level_zero': _rng(rhos, np.max),
+                        'median_n_scored_features': _med(scored),
+                        'median_topk_effective_retained_fraction': _med(retained),
+                    }
+                if per_level:
+                    by_rep[rname] = per_level
+            if by_rep:
+                summary['base'][method] = by_rep
 
     if arm in ('hybrid', 'both'):
         # The hybrid's own feature ranking, the counterpart of the base table above.
@@ -1259,25 +1276,25 @@ def _summarise(results, levels, imp_methods, rep_order, arm):
             if per_level:
                 summary['hybrid_importance'][method] = per_level
 
-        per_level = {}
-        for lv in levels:
-            kept, nsel = [], []
-            for block in reps_per_rep.values():
-                for rname, cells in block.get('hybrid', {}).items():
-                    c = cells.get(f'{lv:g}')
+        for rname in rep_order:
+            per_level = {}
+            for lv in levels:
+                kept, nsel = [], []
+                for block in reps_per_rep.values():
+                    c = block.get('hybrid', {}).get(rname, {}).get(f'{lv:g}')
                     if c is None:
                         continue
                     kept.append(c['mean_retained_fraction_of_level_zero'])
                     nsel.append(c['mean_n_selected_features'])
-            if not kept:
-                continue
-            per_level[f'{lv:g}'] = {
-                'n_cells': len(kept),
-                'median_retained_fraction_of_level_zero': float(np.median(kept)),
-                'median_n_selected_features': float(np.median(nsel)),
-            }
-        if per_level:
-            summary['hybrid'] = per_level
+                if not nsel:
+                    continue
+                per_level[f'{lv:g}'] = {
+                    'n_replicates': len(nsel),
+                    'median_retained_fraction_of_level_zero': _med(kept),
+                    'median_n_selected_features': _med(nsel),
+                }
+            if per_level:
+                summary['hybrid'][rname] = per_level
 
     return summary
 
