@@ -325,6 +325,11 @@ def run_dataset(name, rep_filter=None, models=DEFAULT_MODELS, ks=DEFAULT_KS,
         "n_folds": n_folds, "ks_requested": list(ks),
         "reps_available": all_names, "reps_used": used,
         "reps_requested_missing": dropped,
+        # A local run cuts the pool before load_data returns it (cut_pool in
+        # _local_grid.py), so reps_available is the cut pool, not every staged
+        # representation. The tolerance is a mean over reps_used, so it moves
+        # with this cut. None means no cut was set.
+        "local_pool_cut_KIRBY_LOCAL_REPS": os.environ.get("KIRBY_LOCAL_REPS"),
         "models": {},
         "plateau_tol_by_model": {},
         "plateau_definition": (
