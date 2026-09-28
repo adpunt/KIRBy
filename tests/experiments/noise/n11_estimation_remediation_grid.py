@@ -481,8 +481,11 @@ def _mean_detection(rows):
     """
     if not rows:
         return None
+    # detection_auroc added 2026-09-28: detection_scores has returned it since
+    # 2026-09-24 and this list dropped it, so n11 wrote no AUROC at all.
     keys = ('detection_average_precision', 'detection_precision_at_k',
-            'detection_recall_at_k', 'detection_n_corrupted', 'detection_n_training')
+            'detection_recall_at_k', 'detection_auroc',
+            'detection_n_corrupted', 'detection_n_training')
     out = {}
     for k in keys:
         vals = [float(r[k]) for r in rows if r.get(k) is not None
@@ -1189,9 +1192,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
 
             for noise_seed in NOISE_SEEDS:
-                # Per-(fold, seed) noise realization. Combining fold_idx and
-                # noise_seed into the seed keeps every (fold, seed) draw
-                # distinct without collisions.
+                # One realisation per draw index, drawn over the whole label
+                # column. The fold is deliberately NOT in the seed
+                # (noise_spec_for's docstring): a molecule carries the same
+                # error in every fold it trains in.
                 _spec = noise_spec_for(dataset_name, noise_condition, sigma,
                                        noise_seed=noise_seed,
                                        is_clf=is_clf)
