@@ -1167,6 +1167,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 base_names = list(base_by_model.get(m, []))
 
                 for mi in mis:
+                    # Each unit's own time; the first also carries the spaces
+                    # build above. Until 2026-09-28 t0 was set once per model,
+                    # so every later unit's seconds included the earlier ones.
+                    if mi != mis[0]:
+                        t0 = time.time()
                     ukey = [fold_i, float(level), int(draw), m, mi]
                     X_tr = sp_tr.get(mi)
                     if X_tr is None:
