@@ -1290,9 +1290,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  [warn] fold_reselection ({axis}) failed: "
                   f"{type(e).__name__}: {e}")
 
-        # The same re-pick against the PCA control of the hybrid's own width,
-        # in place of the single representations. Positive still means the
-        # hybrid won.
+        # The same re-pick against the PCA controls, in place of the single
+        # representations. Positive still means the hybrid won. The control
+        # arm here is EVERY PCA space: the width-matched ones (pca_for_<slot>)
+        # and the fixed-width 'pca_matched' at `budget` components, so the
+        # control picked per fold need not be the hybrid's own width. The
+        # width-matched-only re-pick is written just below as
+        # fold_reselection_<axis>_vs_width_matched_pca_result.
         ctrls = block.get('controls_by_model') or {}
         if ctrls and block['candidates_by_model']:
             try:
@@ -1312,6 +1316,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception as e:
                 print(f"  [warn] fold_reselection vs PCA ({axis}) failed: "
                       f"{type(e).__name__}: {e}")
+
+            # Width-matched controls only: each pca_for_<slot> space has the
+            # same number of features as that hybrid slot on that fold. The
+            # fixed-width 'pca_matched' is left out of this one. Added
+            # 2026-09-28; the result above is unchanged.
+            wm = {mk_: {c: v for c, v in cells.items()
+                        if c.startswith('pca_for_')}
+                  for mk_, cells in ctrls.items()}
+            wm = {mk_: cells for mk_, cells in wm.items() if cells}
+            if wm:
+                try:
+                    hrw = fold_reselection(
+                        block['candidates_by_model'], wm,
+                        block['lower_is_better'],
+                        exclude_folds=hr_exclude_folds(block),
+                        recipe_selection=block['recipe_selection'])
+                    results[f'fold_reselection_{axis}_vs_width_matched_pca_'
+                            f'result'] = hrw
+                    mw = hrw.get(next(iter(wm)))
+                    if mw is not None:
+                        print(f"  Honest LOFO re-score ({axis}) against the "
+                              f"width-matched PCA controls only: "
+                              f"hybrid={mw['hybrid_reselected']:.4f}, "
+                              f"best_pca={mw['best_single_reselected']:.4f}, "
+                              f"delta={mw['delta']:+.4f} on "
+                              f"{mw.get('n_paired_folds')} paired folds")
+                except Exception as e:
+                    print(f"  [warn] fold_reselection vs width-matched PCA "
+                          f"({axis}) failed: {type(e).__name__}: {e}")
 
     # ── Retrieval with the hybrid held to unweighted distance ─────────────
     # The retrieval block above lets the hybrid arm pick, per fold, between
