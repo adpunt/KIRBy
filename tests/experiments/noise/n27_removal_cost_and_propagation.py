@@ -322,6 +322,23 @@ def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
     return out
 
 
+def _models_without_matrix(built, spaces, recipe_for_space_by_model,
+                           downstream_models):
+    """[(hybrid space, model)] for a model that holds a recipe for a space
+    which DID build for other models, yet sits in none of its cells. A space
+    that built for nobody is recorded by the caller on its own."""
+    out = []
+    for sp in spaces:
+        if sp in BASE_SPACES or sp not in built:
+            continue
+        have = {m for _xt, _xv, ms in built[sp] for m in ms}
+        for m in downstream_models:
+            if (recipe_for_space_by_model.get(m, {}).get(sp) is not None
+                    and m not in have):
+                out.append((sp, m))
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """N27: the cost of fewer training molecules, and how label error propagates."""
     print("\n" + "=" * 70)
@@ -586,6 +603,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 errors[f'{sp}|{fkey}|build'] = (
                     'no feature matrix could be built for this space on this '
                     'fold')
+        # A space with two recipes keeps the one that built and used to drop
+        # the models of the one that did not, with nothing recorded.
+        for sp, m in _models_without_matrix(clean_spaces, spaces,
+                                            recipe_for_space_by_model,
+                                            downstream_models):
+            errors[f'{sp}|{m}|{fkey}|build'] = (
+                "no feature matrix could be built for this model's recipe on "
+                "this fold")
 
         for space, cells in clean_spaces.items():
             for X_tr_s, X_va_s, cell_models in cells:
@@ -768,6 +793,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     errors[f'{sp}|{pkey}|build'] = (
                         'no feature matrix could be built for this space on '
                         'the injected labels of this pass')
+            for sp, m in _models_without_matrix(noisy_spaces, spaces,
+                                                recipe_for_space_by_model,
+                                                downstream_models):
+                errors[f'{sp}|{m}|{pkey}|build'] = (
+                    "no feature matrix could be built for this model's recipe "
+                    "on the injected labels of this pass")
             for space, cells in noisy_spaces.items():
                 for X_tr_s, X_va_s, cell_models in cells:
                     for mname in cell_models:
