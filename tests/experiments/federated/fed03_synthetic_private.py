@@ -1365,7 +1365,12 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 # create_hybrid call. Without this, _int_eval='match' + no model=
                 # arg makes create_hybrid silently fall back to 'ridge'
                 # (hybrid.py:3354-3355), which is forbidden (feedback_no_ridge.md).
-                _resolved_eval = _resolve_match(_int_eval, 'rf')
+                # DIRTY-LOCAL 2026-09-28: was _resolve_match(_int_eval, 'rf'),
+                # so under 'match' C3 used an rf evaluator for every fed_model
+                # while C2's create_hybrid matched the downstream model
+                # (xgboost for 'xgb'). Both now resolve to the same family.
+                _resolved_eval = _resolve_match(
+                    _int_eval, fed_to_kirby_model(fed_model))
                 _silo_model_c3 = (
                     make_fed_classifier(fed_model, seed=fed_seed) if is_clf
                     else make_fed_regressor(fed_model, seed=fed_seed))
@@ -1417,7 +1422,9 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                             importance_method=_imp,
                             internal_evaluator=_resolved_eval,
                             budget=min(_per_family_budget, len(tr)),
-                            model=_silo_model_c3)
+                            model=_silo_model_c3,
+                            metric_fn=metric_fn_b,
+                            lower_is_better=lower_is_better_b)
                         X_probe_tr = apply_feature_selection(
                             {r: arr[tr] for r, arr in silo_rep_tr.items()},
                             fi_probe)
@@ -1444,7 +1451,13 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                             importance_method=_imp,
                             internal_evaluator=_resolved_eval,
                             budget=_per_family_budget,
-                            model=_silo_model_c3)
+                            model=_silo_model_c3,
+                            # DIRTY-LOCAL 2026-09-28: C2 passes the dataset's
+                            # metric and C3 did not, so C3 split each family's
+                            # share across its representations by r2 while C2
+                            # split by the dataset metric (rmse here).
+                            metric_fn=metric_fn_b,
+                            lower_is_better=lower_is_better_b)
                         silo_fis[i] = fi_s
                     except Exception:
                         silo_fis[i] = None
@@ -1484,6 +1497,11 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name,
                 else:
                     c3 = {'error': 'no valid silo selections'}
                 c3['silo_scores'] = convert_numpy(silo_scores)
+                # These scores are recorded only; the budget split above is
+                # equal across families and does not read them.
+                c3['silo_score_metric'] = (
+                    'evaluator.score clipped at 0: accuracy (classification) '
+                    'or r2 (regression); not used to allocate')
                 c3['budget_total'] = int(_pb_budget)
                 c3['budget_per_family'] = _per_family_budget
                 results['c3_federated_fs'] = convert_numpy(c3)
