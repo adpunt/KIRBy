@@ -856,7 +856,7 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                 bp = Blueprint(
                     reps=[base_name],
                     allocation_method='performance_weighted',  # 1 rep -> 100%
-                    importance_method='lightgbm_gain',         # inert at full budget
+                    importance_method='lightgbm_gain',         # overridden: precomputed_importance below keeps every base column
                     internal_evaluator='match',                # inert (no search)
                     budget=base_dim,                           # keep all base features
                     step_size=5,
@@ -967,7 +967,19 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                             # below have five or ten representations and the
                             # score decides how the budget splits between them,
                             # so they must measure it.
-                            precomputed_alloc_scores={base_name: 1.0})
+                            precomputed_alloc_scores={base_name: 1.0},
+                            # KEEP THE BASE WHOLE, IN ITS OWN COLUMN ORDER.
+                            # Left to lightgbm_gain, concatenate_features drops
+                            # every base feature with zero gain (the budget is a
+                            # maximum) and returns the rest sorted by gain. A
+                            # synthetic check on 2026-09-28 kept 28 of 30 base
+                            # features, reordered. A_baseline scores all of
+                            # them in file order, so the delta mixed that
+                            # pruning and reordering with the effect of the
+                            # extras. A strictly decreasing score keeps every
+                            # column and argsort returns them in file order.
+                            precomputed_importance={
+                                base_name: np.linspace(2.0, 1.0, base_dim)})
 
                         scaler_h = StandardScaler()
                         Xtr_h = scaler_h.fit_transform(Xtr_h)
