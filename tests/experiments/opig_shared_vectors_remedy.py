@@ -225,6 +225,18 @@ def point_slug(point):
     return '_'.join(str(p).replace('.', 'p') for p in parts)
 
 
+def _content_fingerprint(mats):
+    """One short hash over the names and bytes of every matrix, in name order."""
+    h = hashlib.blake2b(digest_size=12)
+    for name in sorted(mats):
+        A = np.ascontiguousarray(mats[name])
+        h.update(name.encode())
+        h.update(str(A.dtype).encode())
+        h.update(str(A.shape).encode())
+        h.update(A.tobytes())
+    return h.hexdigest()
+
+
 def engine_kwargs(point):
     """The sweep point with this script's own bookkeeping keys removed."""
     return {k: v for k, v in point.items()
@@ -846,9 +858,19 @@ def main():
             for i, point in enumerate(points):
                 print(f'  {which} point {i + 1}/{len(points)}: '
                       f'{point_slug(point)} ({time.time() - t0:.0f}s)', flush=True)
+                # The unit also depends on the donor (chosen by measurement, not
+                # an argument), the margin unit (spread) and the matrices'
+                # CONTENT. None of those was in the key or the header, so after
+                # a representation was rebuilt at the same width -- the fix for
+                # the stale chemberta this file warns about -- the old rows were
+                # read back as if they described the new matrix.
                 _pkey = dict(dataset=ds, comparison=which,
                              point=point_slug(point),
-                             reps=sorted(which_reps))
+                             reps=sorted(which_reps),
+                             target=target, donor=donor,
+                             spread=spread,
+                             content=_content_fingerprint(
+                                 {**which_reps, **donor_reps}))
                 if _ck.done(**_pkey):
                     all_rows.extend(_ck.get(**_pkey))
                     print('    finished in an earlier attempt, read back',
