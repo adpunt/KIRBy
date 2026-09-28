@@ -460,56 +460,57 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
         print(f"  Silo {i} ({sname}): {n_s} mols "
               f"({n_act} active, {n_s - n_act} inactive)")
 
-    # Compute representations for ALL molecules (pooled)
-    # For ChEMBL molecules, we already have reps; for Lhasa we need to compute
-    print("\nComputing representations for Lhasa molecules...")
+    # Representations for ALL pooled molecules, built in ONE call.
+    #
+    # DIRTY-LOCAL 2026-09-28. This used to take the ChEMBL rows from the
+    # dataset's cache, build the Lhasa rows in a second call, and stack the
+    # two. graph_kernel cannot be stacked that way: create_graph_kernel finds
+    # its WL-label vocabulary in the molecules it is given and then drops
+    # labels that are zero in more than 95% of them, so column j meant a
+    # different label in the ChEMBL block than in the Lhasa block. When the
+    # widths differed the representation was dropped with a warning; when
+    # they matched it would have been stacked with its columns misaligned.
+    # One call over the pooled SMILES gives every row the same columns. The
+    # vocabulary uses no labels, which is how every cached graph_kernel in
+    # the project is built (whole dataset, label-free).
+    #
+    # It also retires a row-alignment risk. The old ChEMBL keep-mask kept
+    # every row whose InChIKey survived dedup, so two ChEMBL rows sharing a
+    # key would both stay while dedup kept one, shifting every row after it.
+    print("\nComputing representations for all pooled molecules...")
     from find_best_hybrid_molecular import get_representations as get_molecular_representations
     rep_names = list(reps_chembl.keys())
-
-    # Filter ChEMBL reps to match deduped molecule count.
-    # dedup_across_silos may have removed UNKNOWN-keyed ChEMBL mols.
-    n_chembl_orig = len(smiles_chembl)
-    n_chembl_deduped = len(deduped_smiles['chembl'])
-    if n_chembl_deduped < n_chembl_orig:
-        # Build keep mask: which original ChEMBL indices survived dedup
-        deduped_chembl_set = set(deduped_keys['chembl'])
-        chembl_keep = np.array([
-            k in deduped_chembl_set
-            for k in chembl_inchikeys], dtype=bool)
-        reps_chembl = {r: arr[chembl_keep] for r, arr in reps_chembl.items()}
-        print(f"  ChEMBL filtered: {n_chembl_orig} → {n_chembl_deduped} "
-              f"(matched dedup)")
-
-    n_chembl = n_chembl_deduped
+    n_chembl = len(deduped_smiles['chembl'])
     n_lhasa_tr = len(deduped_smiles['lhasa_train'])
     n_lhasa_te = len(deduped_smiles['lhasa_test'])
 
-    # Get reps for Lhasa molecules. Use the SAME rep set as the ChEMBL silo
-    # (rep_names) rather than the hardcoded 'all' preset: 'all' forces every
-    # foundation-model rep even though only rep_names are consumed below (the
-    # combine loop iterates rep_names), wasting compute and making this path
-    # un-runnable where those models are unavailable. get_representations takes
-    # a comma-separated rep list as its second argument.
-    lhasa_all_smiles = (deduped_smiles['lhasa_train'] +
-                        deduped_smiles['lhasa_test'])
-    lhasa_reps = get_molecular_representations(lhasa_all_smiles, ','.join(rep_names))
+    # create_graph_kernel skips a molecule RDKit cannot parse and so returns
+    # its rows shifted. Refuse graph_kernel rather than stack shifted rows.
+    _n_unparsed = sum(1 for _s in all_smiles if Chem.MolFromSmiles(_s) is None)
+    _rep_request = list(rep_names)
+    if _n_unparsed and 'graph_kernel' in _rep_request:
+        print(f"  graph_kernel dropped: {_n_unparsed} pooled SMILES do not "
+              f"parse, and create_graph_kernel would shift every row after "
+              f"them.")
+        _rep_request.remove('graph_kernel')
+    pooled_reps = get_molecular_representations(
+        all_smiles, ','.join(_rep_request))
 
-    # Combine: ChEMBL reps + Lhasa reps
     combined_reps = {}
     for rname in rep_names:
-        chembl_arr = reps_chembl[rname]
-        if rname in lhasa_reps:
-            lhasa_arr = lhasa_reps[rname]
-            if chembl_arr.shape[1] != lhasa_arr.shape[1]:
-                warnings.warn(
-                    f"Rep {rname}: ChEMBL has {chembl_arr.shape[1]}D, "
-                    f"Lhasa has {lhasa_arr.shape[1]}D — skipping")
-                continue
-            combined_reps[rname] = np.vstack([chembl_arr, lhasa_arr])
-        else:
-            warnings.warn(f"Rep {rname} not available for Lhasa molecules")
+        arr = pooled_reps.get(rname)
+        if arr is None:
+            warnings.warn(f"Rep {rname} could not be built for the pooled "
+                          f"molecules; Part A runs without it")
+            continue
+        if arr.shape[0] != n_total:
+            raise RuntimeError(
+                f"Rep {rname}: {arr.shape[0]} rows for {n_total} pooled "
+                f"molecules, so its rows are not the pooled molecules.")
+        combined_reps[rname] = arr
 
-    print(f"  Combined reps: {len(combined_reps)} reps, "
+    print(f"  Combined reps: {len(combined_reps)} reps "
+          f"({', '.join(f'{k}={v.shape[1]}' for k, v in combined_reps.items())}), "
           f"{n_total} molecules")
 
     # Train/test split: scaffold-group-aware for molecular datasets.
