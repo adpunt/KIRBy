@@ -378,7 +378,14 @@ def _process_skempi_entries(df: pd.DataFrame) -> List[Dict]:
             ab_chain_ids.add(l_chain)
 
         ab_muts = [m for m in parsed_muts if m['chain'] in ab_chain_ids]
-        if not ab_muts:
+        # Every mutation must sit on the heavy or light chain. A row that also
+        # mutates the antigen carries the DDG of the whole multi-point mutant,
+        # but only its antibody half reaches the sequence, and its dedup key
+        # is the antibody half alone, so it replaced the measured single
+        # mutant with the same key: 66 of 1,231 SKEMPI antibody-antigen rows,
+        # 33 of the 34 keys they share with a pure antibody row (1DVF YA32A
+        # kept 4.65 kcal/mol from YA32A,RD106A instead of the measured 2.03).
+        if not ab_muts or len(ab_muts) != len(parsed_muts):
             n_skipped += 1
             continue
 
@@ -688,7 +695,11 @@ def _process_abbind_entries() -> List[Dict]:
         ab_chains, ag_chains = _identify_ab_chains(row.get('Partners(A_B)', ''))
 
         ab_muts = [m for m in parsed_muts if m['chain'] in ab_chains]
-        if not ab_muts:
+        # Same rule as the SKEMPI path: a row that also mutates the antigen
+        # is dropped, because its label is the whole mutant's DDG and the
+        # sequence and dedup key carry only the antibody half. 66 of the 754
+        # antibody-antigen AB-Bind rows.
+        if not ab_muts or len(ab_muts) != len(parsed_muts):
             n_skipped += 1
             continue
 
