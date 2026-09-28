@@ -787,14 +787,22 @@ def _summarise(ref, removal, injected, relabelled, lower_is_better,
                 if not rows:
                     continue
                 means = [r['mean_loss_over_folds'] for r in rows.values()]
+                # A NaN score (spearman on a constant prediction) makes a
+                # draw's mean NaN. Python's min/max then depend on where the
+                # NaN sits in the list, so the best and worst draw are taken
+                # over the finite means and the NaN draws are counted.
+                finite = [x for x in means if np.isfinite(x)]
                 out['removal_cost'].setdefault(space, {}).setdefault(
                     share, {})[m] = {
                     'per_draw': rows,
                     'draws_read': len(rows),
-                    'best_draw_mean_loss': float(min(means)),
-                    'worst_draw_mean_loss': float(max(means)),
+                    'draws_with_nan_loss': int(len(means) - len(finite)),
+                    'best_draw_mean_loss': (float(min(finite)) if finite
+                                            else float('nan')),
+                    'worst_draw_mean_loss': (float(max(finite)) if finite
+                                             else float('nan')),
                     'draws_worse_than_every_molecule': int(
-                        sum(x > 0 for x in means)),
+                        sum(x > 0 for x in finite)),
                     'share_1_mean_score': float(np.mean(
                         [v['score'] for v in base.values()])),
                 }
