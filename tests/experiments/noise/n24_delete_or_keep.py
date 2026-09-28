@@ -1459,7 +1459,14 @@ def _paired(base, got, lower_is_better):
     gains = np.array([(base[k] - got[k]) if lower_is_better
                       else (got[k] - base[k]) for k in shared], dtype=float)
     gains = gains[np.isfinite(gains)]
-    scale = max(abs(float(np.mean(list(base.values())))) if base else 1.0, 1.0)
+    # dirty-local 2026-09-28: the scale from the FINITE base scores only. One
+    # NaN base score (a constant prediction under spearman, one class under
+    # auc) made the mean NaN, max(nan, 1.0) returns nan, and every comparison
+    # against a NaN tolerance is False -- so every pass of that comparison was
+    # counted as neither won, lost nor tied while n_passes_paired said it ran.
+    _fin = [float(v) for v in base.values()
+            if v is not None and np.isfinite(float(v))]
+    scale = max(abs(float(np.mean(_fin))) if _fin else 1.0, 1.0)
     tol = 1e-9 * scale
     return {
         'n_passes_paired': int(gains.size),
