@@ -263,6 +263,14 @@ FEATURE_NAME_REGISTRY = [
     ('protein_kmer',         'named', get_protein_kmer_names),
     # concat_ecfp4 before 'ecfp' (contains 'ecfp' as substring)
     ('concat_ecfp4', 'named', get_concat_ecfp4_names),
+    # Reaction reps whose names contain 'morgan' or 'onehot' but are not the
+    # molecular or antibody encodings those substrings resolve to below. Added
+    # 2026-09-28 (c22 verification). cgr_morgan hashes the condensed graph of
+    # the reaction, so a molecular Morgan bit's substructure is not its meaning.
+    # onehot_components is one column per reaction component value; below it
+    # would be named as an antibody heavy/light chain position ("H_pos0_A").
+    ('cgr_morgan',        'fingerprint_bit', None),
+    ('onehot_components', 'fingerprint_bit', None),
     # Molecular fingerprints (keep existing special handling)
     ('ecfp',      'ecfp_bit',        None),
     ('morgan',    'ecfp_bit',        None),
