@@ -38,11 +38,14 @@ WHAT IT OUTPUTS, per molecular regression dataset:
      classifier calibrate); has_replicates (reuse n06's builder); has_multi_assay
      (can cross_source_consistency run).
   5. Housing STAGE-0 diagnostics (via from_linear): log-residual kurtosis,
-     U-shape heteroscedasticity, segment bias, residual SD vs the Kramer floor.
+     U-shape heteroscedasticity, segment bias, residual SD vs the dataset's
+     published assay error (assay_noise_floor: herg_ki 0.54, caco2 0.35,
+     logd 0.48, in label units; none elsewhere).
      from_linear divides labels by their own standard deviation, so everything
-     the diagnostics return is in standard deviations of the label. The Kramer
-     floor is 0.54 pKi. Every residual quantity therefore also appears in label
-     units, under a *_label_units name, and only those may be compared with it.
+     the diagnostics return is in standard deviations of the label. The assay
+     floor is in label units. Every residual quantity therefore also appears in
+     label units, under a *_label_units name, and only those may be compared
+     with it.
 
 SCOPE: molecular regression only. Cliffs are a molecular concept, and the
 log-price <-> pActivity mapping breaks on nominal labels (n01 already found ~0
@@ -93,13 +96,32 @@ PU_MIN_CLIFFS = 5
 # not in standard deviations of the label.
 KRAMER_NOISE_FLOOR_PKI = 0.54
 
+
+def assay_noise_floor(dataset_name):
+    """(floor in the label's own units, source) for this dataset, or (None, why).
+
+    Until 2026-09-28 every dataset was compared with Kramer's 0.54 pKi, so logd
+    and caco2 were held to a hERG-binding figure in the wrong units. The
+    per-dataset figures are the settled table in
+    dataset_policy.REFERENCE_ERROR_LABEL_UNITS (herg_ki 0.54 Kramer 2012,
+    caco2 0.35 Bentz 2013, logd 0.48 Niu 2024). A dataset with no published
+    assay error gets no floor and no comparison.
+    """
+    from experiments.dataset_policy import REFERENCE_ERROR_LABEL_UNITS
+    tau = REFERENCE_ERROR_LABEL_UNITS.get(dataset_name)
+    if tau is None:
+        return None, ('no published assay error for this dataset in '
+                      'dataset_policy.REFERENCE_ERROR_LABEL_UNITS')
+    return float(tau), (f'dataset_policy.REFERENCE_ERROR_LABEL_UNITS'
+                        f'[{dataset_name!r}]')
+
 # stage0_diagnostics' bias cutoff, applied to the residual mean. The library
 # applies it to the standardized residual; the label-units flag below applies it
 # to the same quantity after rescaling.
 BIAS_MAGNITUDE_CUTOFF = 0.005
 
 
-def _rescale_stage0(stage0, params):
+def _rescale_stage0(stage0, params, dataset_name=None):
     """Add label-units copies of every residual quantity stage0_diagnostics
     returns, and say which scale each one is on.
 
@@ -107,18 +129,21 @@ def _rescale_stage0(stage0, params):
     so log(y_pos) is the label divided by its own standard deviation. Every
     residual the diagnostics compute is therefore in standard deviations of the
     label. Multiplying by label_sd puts them back into the label's own units,
-    which is the only scale the Kramer floor can be compared against.
+    which is the only scale the assay floor can be compared against.
 
     Spread and bias rescale; kurtosis, the fraction beyond 3 SD, the two
     residual correlations and the p-value are scale-free and are left alone.
     """
     label_sd = float(params[1])
+    floor, floor_source = assay_noise_floor(dataset_name)
     out = dict(stage0)
     out['label_sd'] = label_sd
     out['residual_scale'] = 'standardized_label_sd'
     out['residual_scale_label_units'] = 'label'
-    out['kramer_noise_floor_pki'] = KRAMER_NOISE_FLOOR_PKI
-    out['kramer_floor_scale'] = 'label (pKi); compare against the *_label_units fields'
+    out['assay_noise_floor_label_units'] = floor
+    out['assay_noise_floor_source'] = floor_source
+    out['assay_floor_scale'] = ("the label's own units; compare against the "
+                                "*_label_units fields")
 
     out['resid_sd_label_units'] = float(stage0['log_resid_sd']) * label_sd
     out['tier_sd_label_units'] = {
@@ -131,10 +156,12 @@ def _rescale_stage0(stage0, params):
     out['bias_flag_label_units'] = bool(
         stage0['bias_pvalue'] < 0.01
         and abs(out['overall_bias_label_units']) > BIAS_MAGNITUDE_CUTOFF)
-    out['resid_sd_over_kramer_floor'] = (
-        out['resid_sd_label_units'] / KRAMER_NOISE_FLOOR_PKI)
-    out['resid_sd_at_or_below_kramer_floor'] = bool(
-        out['resid_sd_label_units'] <= KRAMER_NOISE_FLOOR_PKI)
+    # The residual spread is model error plus label noise, so it is an upper
+    # bound on the noise: above the floor says nothing about the labels alone.
+    out['resid_sd_over_assay_floor'] = (
+        None if floor is None else out['resid_sd_label_units'] / floor)
+    out['resid_sd_at_or_below_assay_floor'] = (
+        None if floor is None else bool(out['resid_sd_label_units'] <= floor))
     return out
 
 
@@ -556,13 +583,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                        'input': input_fingerprint(data, config),
                                        'n_splits': int(n_splits),
                                        'width': _w})
-            stage0 = _s0ck.cached(['stage0'], lambda: _rescale_stage0(
-                stage0_diagnostics(X_concat, y_pos, groups, n_splits=n_splits,
-                                   splitter=cv_split), _params))
+            # The checkpoint holds the raw diagnostics only (key 'stage0_raw',
+            # 2026-09-28). The rescale and the assay floor are applied after,
+            # so a change to either never serves a stale cached value. Lines
+            # under the old key 'stage0' held the rescaled dict and are ignored.
+            _raw = _s0ck.cached(['stage0_raw'], lambda: stage0_diagnostics(
+                X_concat, y_pos, groups, n_splits=n_splits,
+                splitter=cv_split))
+            stage0 = _rescale_stage0(_raw, _params, dataset_name)
+            _floor = stage0['assay_noise_floor_label_units']
             print(f"  Stage-0: resid_sd={stage0['resid_sd_label_units']:.3f} "
                   f"label units (={stage0['log_resid_sd']:.3f} SDs of a "
                   f"{_label_sd:.3f}-SD label), "
-                  f"Kramer floor {KRAMER_NOISE_FLOOR_PKI} pKi, "
+                  f"assay floor {_floor} label units, "
                   f"kurtosis={stage0['excess_kurtosis']:.2f}, "
                   f"U-shape={stage0['u_shaped_heteroscedasticity']}, "
                   f"bias_flag={stage0['bias_flag_label_units']}")
