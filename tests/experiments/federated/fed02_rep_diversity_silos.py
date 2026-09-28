@@ -188,54 +188,55 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     is_clf = task_type == 'classification'
 
-    # ── Get optimal hybrid config from precomputed search ──
+    # ── The recipe, read once per budget ──
     augs = data.get('augmentations')
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    # The SearchResult itself, kept for the top-2 rows and the two hybrid
-    # deltas assembled after the folds. Bound to None first because the except
-    # clause below leaves _search unbound, and reading an unbound local raises
-    # NameError -- which would end a run that today survives a failed lookup.
-    _top2_search = None
-    try:
-        _search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model=fed_to_kirby_model(fed_model), budget=BUDGET,
-            augmentations=augs,
-            metric=metric_name,
-            task_type=data['task_type'],
-            domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name,
-            data=data,
-            **smoke_search_kwargs(config),
-        )
-        bp = meta['best_config']['blueprint'] if meta else None
-        _top2_search = _search
-    except Exception:
-        meta = None
-        bp = None
-    # Pull from meta['aug_condition'] (set at _shared.py:2747) — the
-    # authoritative winning condition. bp.augmentation_strategy is a
-    # coincidence-of-construction and can be stale (2026-04-21 cache bug).
-    # Same for alloc/imp/int_eval: prefer meta['best_config']['blueprint']
-    # when present, fall back to bp attributes, then hard defaults.
-    if meta is not None:
-        aug_cond = meta.get('aug_condition',
-                            bp.augmentation_strategy if bp else
-                            ('uncapped' if augs else 'none'))
-        _bp_meta = meta.get('best_config', {}).get('blueprint') if meta else None
-        _alloc = _bp_meta.allocation_method if _bp_meta else (
-            bp.allocation_method if bp else 'performance_weighted')
-        _imp = _bp_meta.importance_method if _bp_meta else (
-            bp.importance_method if bp else 'treeshap')
-        _int_eval = _bp_meta.internal_evaluator if _bp_meta else (
-            bp.internal_evaluator if bp else 'match')
-    else:
-        aug_cond = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
-        _alloc = bp.allocation_method if bp else 'performance_weighted'
-        _imp = bp.importance_method if bp else 'treeshap'
-        _int_eval = bp.internal_evaluator if bp else 'match'
 
-    # ── Phase 1: Setup ───────────────────────────────────────────────────
+    # ⛔ THIS USED TO ASK FOR A BUDGET THAT DID NOT EXIST YET, FIXED 2026-09-28.
+    # Two things disagreed. This lookup ran once, here, and asked for
+    # `budget=BUDGET`. BUDGET is a local of this function and the only place it
+    # is assigned is the `for BUDGET in BUDGETS:` loop 330 lines below, added by
+    # commit c495942 on 2026-09-23 when the budget stopped being one value for
+    # the whole file and became a swept one. So this line read a name that was
+    # not bound yet, raised, and the except clause below set the recipe to
+    # nothing -- which means C4 and C5 have used the hard defaults
+    # (performance_weighted, treeshap, match) and not a searched recipe on every
+    # run since that date. The line the file printed said the lookup "returned
+    # no search", which is not what happened.
+    #
+    # What it does now: one lookup per budget, inside the loop, so each budget
+    # gets the recipe searched for it. That is what a file whose whole point is
+    # the budget sweep should do -- asking once with no budget would give every
+    # budget one recipe chosen at a different width.
+    #
+    # The top-2 rows and the two hybrid deltas have no budget of their own, so
+    # they still read one search, fetched with no budget named, which means the
+    # best recipe across every budget the search holds.
+    def _recipe_for(_budget):
+        """(search, meta, blueprint, aug condition, allocation, importance,
+        internal evaluator) for one budget. The last four fall back to the hard
+        defaults when no recipe is stored, exactly as before, and the caller is
+        told which happened."""
+        try:
+            _s, _m = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=fed_to_kirby_model(fed_model), budget=_budget,
+                augmentations=augs,
+                metric=metric_name,
+                task_type=data['task_type'],
+                domain=data.get('domain', 'molecular'),
+                dataset_name=dataset_name,
+                data=data,
+                **smoke_search_kwargs(config),
+            )
+        except Exception as _e:
+            # Print the reason. This branch used to swallow it.
+            print(f"  the stored-search lookup for budget={_budget} raised "
+                  f"{type(_e).__name__}: {_e} -- the hard defaults are used for "
+                  f"this budget and it is recorded as unsearched")
+            _s, _m = None, None
+        _b = _m['best_config']['blueprint'] if _m else None
+        # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")
 
     # Resolve silo reps
@@ -515,6 +516,17 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             # ── Phase 4: KIRBy hybrid (C4, C5) ───────────────────────────
             print("\n--- Phase 4: KIRBy hybrid conditions ---")
 
+            # This budget's own recipe. Before 2026-09-28 every budget used one
+            # recipe, and because the lookup asked for an unbound name that
+            # recipe was the hard defaults.
+            (_bsearch, _bmeta, _bbp, aug_cond, _alloc, _imp,
+             _int_eval) = _recipe_for(BUDGET)
+            recipe_source_by_budget[BUDGET] = (
+                'searched' if _bmeta is not None else 'hard_defaults')
+            print(f"  budget={BUDGET}: allocation={_alloc} importance={_imp} "
+                  f"internal evaluator={_int_eval} augmentation={aug_cond} "
+                  f"({recipe_source_by_budget[BUDGET]})")
+
             # Build silo-only rep dicts
             kirby_train = {silo_reps[s]: train_reps[silo_reps[s]]
                            for s in silo_letters}
@@ -682,6 +694,12 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             'c4_kirby_hybrid': c4_by_budget,
             'c5_kirby_top_tier': c5_by_budget,
             'c6_fluid_within_kirby_across': c6_by_budget,
+            # {budget: 'searched' or 'hard_defaults'}. Before 2026-09-28 every
+            # budget on every fold would have read 'hard_defaults', because the
+            # one recipe lookup asked for a budget that was not assigned yet and
+            # raised. Recorded per fold so a run that finds no stored recipe for
+            # some budgets cannot be read as one that found them all.
+            'recipe_source_by_budget': dict(recipe_source_by_budget),
         })
 
     # ── Phase 6: Aggregate per-fold metrics → mean ± std ─────────────────
@@ -884,39 +902,86 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     # score of either. A reader could not tell a clear winner from two
     # configurations sitting a thousandth of an RMSE apart.
     if _top2_search is not None:
+        # ⛔ ONE try PER CALL, changed 2026-09-28. Everything below used to sit
+        # in a single try block. The two halves of the comparison are the top 2
+        # base representations and the top 2 hybrid configurations, so a raise
+        # in the base half took the hybrid half, the per-model grid and every
+        # delta with it, and the one printed line named a single reason for four
+        # missing keys.
+        from experiments._shared import (
+            top_base_reps, top_hybrids, select_model_rep_pairs,
+            hybrid_deltas, resolve_comparison_models)
+        _kirby_model = fed_to_kirby_model(fed_model)
+        # require_full=False everywhere: a downstream model the search
+        # never scored comes back as a short list carrying its own reason
+        # instead of raising, so it cannot end a run that has already paid
+        # for 5 folds of all six conditions.
         try:
-            from experiments._shared import (
-                top_base_reps, top_hybrids, select_model_rep_pairs,
-                hybrid_deltas, DOWNSTREAM_MODELS)
-            _kirby_model = fed_to_kirby_model(fed_model)
-            # require_full=False everywhere: a downstream model the search
-            # never scored comes back as a short list carrying its own reason
-            # instead of raising, so it cannot end a run that has already paid
-            # for 5 folds of all six conditions.
             results['top2_base_reps'] = convert_numpy(top_base_reps(
                 _top2_search, _kirby_model, n=2, require_full=False,
                 context=f'fed02 {dataset_name} top-2 base representations'))
+        except Exception as e:
+            print(f"  top2_base_reps not added: {type(e).__name__}: {e}")
+        try:
+            # ⛔ NO budget= FILTER, changed 2026-09-28. It used to be
+            # budget=BUDGET while top_base_reps above took no budget at all, so
+            # the two halves of one comparison were filtered differently: the
+            # hybrid half was cut to one number of features and the base half
+            # ranked every representation at its own native width. Which way
+            # they were made consistent, and why this way:
+            #
+            # A base representation has no budget to be filtered by -- its width
+            # is whatever the builder produced. Cutting the base half to BUDGET
+            # features would change which representations this file reports. So
+            # the filter comes off the hybrid half, and both halves now rank
+            # over every row the search stored. Every returned hybrid entry
+            # carries its own 'budget' -- the number of features it was searched
+            # at -- so the widths stay readable. Same as
+            # s08_optimal_dimension.py:566-576 and
+            # s10_importance_downstream.py:2353-2361.
             results['top2_hybrids'] = convert_numpy(top_hybrids(
-                _top2_search, _kirby_model, n=2, budget=BUDGET,
+                _top2_search, _kirby_model, n=2,
                 require_full=False,
                 context=f'fed02 {dataset_name} top-2 hybrids'))
-            # The same two slots for each of the 5 downstream models in
-            # DOWNSTREAM_MODELS, not only the one this run's FLuID model
-            # translates to: 5 downstream models x (2 representations + 2
-            # hybrids) = 20 rows, from stored scores.
+        except Exception as e:
+            print(f"  top2_hybrids not added: {type(e).__name__}: {e}")
+        try:
+            # The same two slots for each downstream model the search scored,
+            # not only the one this run's FLuID model translates to.
+            # select_model_rep_pairs calls resolve_comparison_models itself, so
+            # models= is left off and it loops what the search scored.
+            #
+            # No budget= here either: select_model_rep_pairs passes budget only
+            # to its top_hybrids half and never to its top_base_reps half
+            # (_shared.py:8021-8027), so budget= filtered one half of every
+            # model's row and not the other.
             results['top2_pairs_by_model'] = convert_numpy(
                 select_model_rep_pairs(
-                    _top2_search, n_base=2, n_hybrids=2, budget=BUDGET,
+                    _top2_search, n_base=2, n_hybrids=2,
                     require_full=False,
                     context=f'fed02 {dataset_name} top-2 grid'))
+        except Exception as e:
+            print(f"  top2_pairs_by_model not added: {type(e).__name__}: {e}")
+        try:
             # Two reference numbers for the best hybrid, per downstream model:
             # against the mean of the representations the budget actually gave
             # features to, and against the best single representation. Keys
             # are downstream model names, strings; the only thing that reads
             # this dict is a JSON dump and aggregate_seed_runs, which walks it
             # by key and never by position or by int.
+            #
+            # The names to loop come off the search. This used to be
+            # DOWNSTREAM_MODELS, a fixed list of five names in _shared.py, while
+            # the search scores whatever list it was given -- which can be
+            # shorter, since a dataset's skip policy drops svm and svm drops
+            # itself above 10,000 rows. requested=None asks for every model the
+            # search scored, and nothing is substituted for one it did not.
             _deltas = {}
-            for _m in DOWNSTREAM_MODELS:
+            _delta_models, _delta_dropped = resolve_comparison_models(
+                _top2_search, None)
+            for _name, _why in _delta_dropped:
+                _deltas[_name] = {'error': _why}
+            for _m in _delta_models:
                 try:
                     # The hybrid is passed by hand. Called without it,
                     # hybrid_deltas reads _picked['selected'][0]['row']
@@ -928,27 +993,31 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     # session, 2026-09-18; opig_humanness.py:363 and
                     # opig_graphinity_ddg.py:545 pass the hybrid for the same
                     # reason.
+                    # No budget= filter, for the same reason top2_hybrids above
+                    # dropped it. It also keeps the rank-1 hybrid the deltas are
+                    # computed from and the rank-1 row in top2_hybrids the same
+                    # configuration; with the filter on one and not the other
+                    # they could be two different recipes.
                     _top1 = top_hybrids(
-                        _top2_search, _m, 1, budget=BUDGET,
+                        _top2_search, _m, 1,
                         require_full=False,
                         context=f'fed02 {dataset_name} deltas/{_m}')
                     if not _top1['selected']:
                         _deltas[_m] = {
                             'error': 'no hybrid configuration stored for this '
-                                     'downstream model at budget '
-                                     f'{BUDGET}: '
+                                     'downstream model: '
                                      f"{_top1['shortfall_reason']}"}
                         continue
                     _deltas[_m] = hybrid_deltas(
                         _top2_search, _m, hybrid=_top1['selected'][0],
                         context=f'fed02 {dataset_name} hybrid deltas')
                 except Exception as _e:
-                    # One downstream model with no stored hybrid at budget 100
-                    # must not cost the other 4 their deltas.
+                    # One downstream model with no stored hybrid must not cost
+                    # the others their deltas.
                     _deltas[_m] = {'error': f'{type(_e).__name__}: {_e}'}
             results['hybrid_deltas_by_model'] = convert_numpy(_deltas)
         except Exception as e:
-            print(f"  top-2 rows / hybrid deltas FAILED: {e}")
+            print(f"  hybrid deltas FAILED: {e}")
             traceback.print_exc()
     else:
         print("  top-2 rows / hybrid deltas skipped: "

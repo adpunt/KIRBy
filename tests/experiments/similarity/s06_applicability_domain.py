@@ -106,6 +106,7 @@ from experiments._shared import (
     fold_hybrid_scoring_kwargs,
     get_best_for_downstream, extract_top3_base_reps,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
     # One sentence saying what a search family chose its features for. Added
     # 2026-09-19 with the second hybrid arm.
@@ -447,17 +448,54 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # require_full=False on every call: a downstream model this search never
     # scored comes back as a short list carrying its own 'shortfall_reason'
     # instead of raising and taking the run with it.
+    #
+    # ⛔ ONE try PER CALL, changed 2026-09-28. All three used to sit in a single
+    # try block. The two halves of the comparison are the top 2 base
+    # representations and the top 2 hybrid configurations, and a raise in the
+    # first one skipped both the second one and the per-model grid, so a reader
+    # lost the hybrid half over a failure in the base half and the printed
+    # warning named only one reason for three missing keys.
     try:
         results['top2_base_reps'] = top_base_reps(
             search, 'knn', 2, require_full=False,
             context='s06 top-2 base representations for knn')
+    except Exception as _e:
+        print(f"  [warn] top2_base_reps not added: "
+              f"{type(_e).__name__}: {_e}")
+    try:
         results['top2_hybrids'] = top_hybrids(
             search, 'knn', 2, require_full=False,
             context='s06 top-2 hybrid configurations for knn')
+    except Exception as _e:
+        print(f"  [warn] top2_hybrids not added: {type(_e).__name__}: {_e}")
+    # WHICH DOWNSTREAM MODELS THE ROWS BELOW COVER, resolved 2026-09-28.
+    # DISTANCE_MODELS is a fixed list of six names in _shared.py:568 -- rf,
+    # xgboost, svm, dnn, lightgbm, knn. The distance search on disk scored
+    # whatever it scored, and the two disagree whenever a name fell out: svm
+    # drops itself above 10,000 molecules, and a dataset's skip policy can drop
+    # one. The loops below then asked for a model with no stored rows.
+    #
+    # The six names stay what this file ASKS for, so the set of models it reports
+    # does not change: DISTANCE_MODELS goes in as `requested`, not None. A name
+    # the search never scored is dropped and named, never swapped for another
+    # model's rows.
+    _cmp_models, _cmp_dropped = resolve_comparison_models(
+        search, DISTANCE_MODELS)
+    results['top2_models_compared'] = list(_cmp_models)
+    results['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
+    for _n, _w in _cmp_dropped:
+        print(f"  [warn] downstream model {_n} not compared: {_w}")
+    try:
         results['top2_pairs_by_model'] = select_model_rep_pairs(
-            search, models=DISTANCE_MODELS, n_base=2, n_hybrids=2,
+            search, models=_cmp_models, n_base=2, n_hybrids=2,
             require_full=False, context='s06 top-2 grid')
+    except Exception as _e:
+        print(f"  [warn] top2_pairs_by_model not added: "
+              f"{type(_e).__name__}: {_e}")
+        results['top2_pairs_by_model_absent_reason'] = \
+            f"{type(_e).__name__}: {_e}"
 
+    try:
         # The two deltas, one entry per downstream model.
         #   delta_vs_source_mean -- the hybrid against the MEAN of the base
         #     representations the budget split actually gave features to, read
@@ -474,7 +512,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # entry passed instead carries 'score_mean' and 'blueprint', which are
         # the only two keys hybrid_deltas reads off it (_shared.py:7435, :7444).
         _deltas = {}
-        for _m in DISTANCE_MODELS:
+        for _m in _cmp_models:
             try:
                 _top1 = top_hybrids(search, _m, 1, require_full=False,
                                     context=f's06 hybrid deltas ({_m})')
@@ -513,7 +551,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"{_kd['delta_vs_best_rep']:+.4f} {_sm} "
                   f"(positive = the hybrid is better)")
     except Exception as _e:
-        print(f"  [warn] the top-2 rows and the hybrid deltas were not added: "
+        print(f"  [warn] the hybrid deltas were not added: "
               f"{type(_e).__name__}: {_e}")
 
     splitter, use_groups = make_cv_splitter(n_folds, groups,

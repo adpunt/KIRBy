@@ -45,6 +45,7 @@ from experiments._shared import (
     cv_split, fold_reselection, build_fold_hybrid,
     hr_exclude_folds, MAIN_MODELS_WITH_KNN, FULL_BUDGETS,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
@@ -443,24 +444,73 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
     except Exception as e:
         print(f"    top2_base_reps not added: {type(e).__name__}: {e}")
     try:
-        # budget=budget, so these are the best two configurations at THIS
-        # cell's budget in features and not the best two across all eight
-        # budgets — which is a different pair, and the cell is one budget.
+        # ⛔ NO budget= FILTER, changed 2026-09-28. It used to be
+        # budget=budget while top_base_reps above took no budget at all, so the
+        # two halves of one comparison were filtered differently: the hybrid
+        # half was cut to this cell's number of features and the base half
+        # ranked every representation at its own native width. Which way they
+        # were made consistent, and why it is this way and not the other:
+        #
+        # A base representation has no budget to be filtered by -- its width is
+        # whatever the builder produced -- and every other number in this cell,
+        # best_rep_sac included, is measured on representations at their native
+        # widths. Cutting the base half to `budget` features would change what
+        # this file reports. So the filter comes off the hybrid half instead,
+        # and both halves now rank over every row the search stored.
+        #
+        # There is a second reason it has to come off. get_fitted_pool_hybrid
+        # above resolves the cell's recipe through get_best_for_downstream
+        # (_shared.py:7184-7225), which falls back to the best recipe across all
+        # budgets when it holds none at the budget asked for. So the hybrid this
+        # cell actually scored need not be stored at `budget` at all, and
+        # filtering these rows to `budget` could name a pair the cell never used
+        # or return nothing.
+        #
+        # Every returned entry carries its own 'budget' -- the number of
+        # features that configuration was searched at -- so the widths stay
+        # readable rather than assumed. This matches
+        # s08_optimal_dimension.py:566-576 and
+        # s10_importance_downstream.py:2353-2361.
         cell['top2_hybrids'] = top_hybrids(
-            search, _SAC_MODEL_KEY, 2, budget=budget, require_full=False,
+            search, _SAC_MODEL_KEY, 2, require_full=False,
             context=_sel_ctx)
     except Exception as e:
         print(f"    top2_hybrids not added: {type(e).__name__}: {e}")
+    # WHICH DOWNSTREAM MODELS THE ROWS BELOW COVER, resolved 2026-09-28.
+    # MAIN_MODELS_WITH_KNN is a fixed list of six names in _shared.py:586 --
+    # rf, xgboost, svm, dnn, lightgbm, knn. The search on disk scored whatever
+    # it scored: svm drops itself above 10,000 molecules, and a dataset's skip
+    # policy can drop a name too. The two lists disagree whenever that happened,
+    # and the loops below then asked for a model with no stored rows and wrote
+    # nothing down.
+    #
+    # The six names are still what this file ASKS for, so the set of models it
+    # reports does not change: MAIN_MODELS_WITH_KNN goes in as `requested`, not
+    # None. A name the search never scored is dropped and named, never swapped
+    # for another model's rows.
+    _cmp_models, _cmp_dropped = resolve_comparison_models(
+        search, MAIN_MODELS_WITH_KNN)
+    cell['top2_models_compared'] = list(_cmp_models)
+    # {downstream model: why it is not in the rows below}. Until now this was
+    # printed to the terminal only and the saved result said nothing.
+    cell['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
+    for _n, _w in _cmp_dropped:
+        print(f"    downstream model {_n} not compared: {_w}")
     try:
-        # All six downstream models the pool search scored, not knn alone:
-        # MAIN_MODELS_WITH_KNN is what get_fitted_pool_hybrid was given above,
-        # so the models axis is reported at the width it was searched at.
-        # 6 downstream models * (2 representations + 2 hybrids) = 24 rows.
+        # Every downstream model the search scored out of the six this file
+        # asks for, not knn alone. 2 representations + 2 hybrids per model, so
+        # six models is 24 rows.
+        # No budget= here either, for the same reason as top2_hybrids above:
+        # select_model_rep_pairs passes budget only to its top_hybrids half and
+        # never to its top_base_reps half (_shared.py:8021-8027), so budget=
+        # filtered one half of every model's row and not the other.
         cell['top2_pairs_by_model'] = select_model_rep_pairs(
-            search, models=MAIN_MODELS_WITH_KNN, n_base=2, n_hybrids=2,
-            budget=budget, require_full=False, context=_sel_ctx)
+            search, models=_cmp_models, n_base=2, n_hybrids=2,
+            require_full=False, context=_sel_ctx)
     except Exception as e:
         print(f"    top2_pairs_by_model not added: {type(e).__name__}: {e}")
+        cell['top2_pairs_by_model_absent_reason'] = \
+            f"{type(e).__name__}: {e}"
     # The hybrid against TWO reference numbers rather than one, per downstream
     # model: the mean of the representations that actually fed it — read off
     # allocation_per_fold, so a representation given 0 features is excluded —
@@ -478,21 +528,45 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
     # One try per downstream model, so a model with no stored hybrid does not
     # cost the other five their entry. The keys are downstream model names; this
     # dict is new and nothing iterates it.
+    #
+    # ⛔ NO budget= ON EITHER CALL, changed 2026-09-28. Two calls in this cell
+    # ranked the same thing under two different filters. 'top2_hybrids' above
+    # ranks every hybrid configuration the search stored, at any number of
+    # features. The top_hybrids call below used to be filtered to `budget`
+    # features, so the rank-1 configuration it handed to hybrid_deltas could be
+    # a different configuration from rank 1 in 'top2_hybrids'.
+    #
+    # Which way they were made consistent: the filter comes off this call, so
+    # both rank over every stored row. The other direction -- putting budget=
+    # back on 'top2_hybrids' -- would cut the base-representation half of the
+    # same comparison differently, since a base representation has no budget to
+    # be filtered by. Each returned entry carries its own 'budget', the number
+    # of features that configuration was searched at, so the widths stay
+    # readable.
+    #
+    # budget= came off the hybrid_deltas call as well. hybrid_deltas reads
+    # budget only when hybrid= is None (_shared.py:8133-8135) and hybrid= is
+    # named here, so that one was inert either way; it goes for consistency,
+    # not because it changed a number.
     _deltas = {}
-    for _m in MAIN_MODELS_WITH_KNN:
+    for _m in _cmp_models:
         try:
-            _top1 = top_hybrids(search, _m, 1, budget=budget,
+            _top1 = top_hybrids(search, _m, 1,
                                 require_full=False, context=_sel_ctx)
             if not _top1['selected']:
                 print(f"    hybrid_deltas for downstream model {_m} not added: "
                       f"{_top1['shortfall_reason']}")
+                cell['top2_models_dropped'][_m] = (
+                    'no hybrid delta: %s' % _top1['shortfall_reason'])
                 continue
             _deltas[_m] = hybrid_deltas(search, _m,
                                         hybrid=_top1['selected'][0],
-                                        budget=budget, context=_sel_ctx)
+                                        context=_sel_ctx)
         except Exception as e:
             print(f"    hybrid_deltas for downstream model {_m} not added: "
                   f"{type(e).__name__}: {e}")
+            cell['top2_models_dropped'][_m] = (
+                'no hybrid delta: %s: %s' % (type(e).__name__, e))
     if _deltas:
         cell['hybrid_deltas_by_model'] = _deltas
 

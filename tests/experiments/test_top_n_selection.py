@@ -20,7 +20,8 @@ from kirby.find_best_hybrid import SearchResult, Blueprint, PRUNED_FOLD0_SUBSET
 from _shared import (DOWNSTREAM_MODELS, top_base_reps, top_hybrids,
                      rank_downstream_models_by_base_reps,
                      select_model_rep_pairs, selection_diff,
-                     hybrid_deltas)
+                     hybrid_deltas, searched_models,
+                     resolve_comparison_models)
 
 
 # =============================================================================
@@ -633,3 +634,97 @@ def test_a_model_the_search_never_scored_raises_rather_than_returning_zero():
     s = _S(base, [_row(0.40, bp)], 'rmse', True)
     with pytest.raises(ValueError, match='absent, not beaten'):
         hybrid_deltas(s, 'svm')
+
+
+# ===========================================================================
+# The comparison asks for the models the search SCORED — 2026-09-28
+# ===========================================================================
+#
+# Every one of these covers a defect that was live in the repo and that no test
+# caught, which is why the same problem was reported five times before it was
+# found: nineteen experiment files looped a fixed list of five model names while
+# the search underneath had scored three, and hybrid_deltas' own default path
+# raised on a key that does not exist.
+
+class _SM:
+    """A search that scored only the models named, and nothing else."""
+    def __init__(self, models, rows=None):
+        self.best_by_model_budget = {m: {100: {'score_mean': 0.5}}
+                                     for m in models}
+        self.best_by_model = {}
+        self.all_results = rows or []
+        self.baselines = {}
+        self.metric_name = 'rmse'
+        self.lower_is_better = True
+        self.dataset_name = 'unit'
+
+
+def test_searched_models_reads_what_the_search_scored():
+    assert searched_models(_SM(['rf', 'lightgbm', 'dnn'])) == \
+        ['dnn', 'lightgbm', 'rf']
+
+
+def test_searched_models_falls_back_to_the_rows():
+    s = _SM([])
+    s.best_by_model_budget = {}
+    s.all_results = [{'downstream_model': 'svm'}, {'downstream_model': 'rf'}]
+    assert searched_models(s) == ['rf', 'svm']
+
+
+def test_a_model_the_search_never_scored_is_dropped_and_named():
+    """The fast tier scores rf, lightgbm and dnn. Asking for five must not
+    silently return five."""
+    keep, dropped = resolve_comparison_models(
+        _SM(['rf', 'lightgbm', 'dnn']), DOWNSTREAM_MODELS)
+    assert keep == ['rf', 'dnn', 'lightgbm']
+    assert [name for name, _why in dropped] == ['xgboost', 'svm']
+    for _name, why in dropped:
+        assert 'the search scored' in why
+
+
+def test_no_request_means_every_model_the_search_scored():
+    """This is what makes a distance search put knn in the table without the
+    caller naming it."""
+    keep, dropped = resolve_comparison_models(
+        _SM(['rf', 'xgboost', 'svm', 'dnn', 'lightgbm', 'knn']))
+    assert keep == ['dnn', 'knn', 'lightgbm', 'rf', 'svm', 'xgboost']
+    assert dropped == []
+
+
+def test_an_unreadable_search_keeps_the_request_rather_than_emptying_it():
+    s = _SM([])
+    s.best_by_model_budget = {}
+    keep, dropped = resolve_comparison_models(s, ['rf', 'svm'])
+    assert keep == ['rf', 'svm']
+    assert dropped == []
+
+
+def test_no_model_is_ever_substituted_for_another():
+    """There is no fallback anywhere in resolve_comparison_models. A request for
+    a model the search did not score comes back short, never filled in with a
+    different model's name."""
+    keep, _dropped = resolve_comparison_models(_SM(['rf']), ['svm', 'dnn'])
+    assert keep == []
+
+
+def test_select_model_rep_pairs_records_the_models_it_dropped():
+    s = make_rmse_search()
+    s.best_by_model_budget = {'rf': {100: {'score_mean': 0.5}}}
+    out = select_model_rep_pairs(s, models=['rf', 'svm'], n_base=2,
+                                 n_hybrids=2, require_full=False)
+    assert out['models'] == ['rf']
+    assert [d['model'] for d in out['models_dropped']] == ['svm']
+    assert any('svm' in sf for sf in out['shortfalls'])
+
+
+def test_hybrid_deltas_works_without_being_handed_a_hybrid():
+    """The default path read entry['row'], which top_hybrids never sets, so every
+    call that left hybrid= unset raised KeyError. Four of the five keys the
+    entries carry are the same ones a row carries; the two this function reads
+    are score_mean and blueprint."""
+    base = {'ecfp4': {'rf': 0.50}, 'maccs': {'rf': 0.70}}
+    bp = _BP(['ecfp4', 'maccs'], {0: {'ecfp4': 60, 'maccs': 40}})
+    r = _row(0.40, bp)
+    out = hybrid_deltas(_S(base, [r], 'rmse', True), 'rf')
+    assert out['delta_vs_source_mean'] == pytest.approx(0.20)
+    assert out['source_reps'] == ['ecfp4', 'maccs']

@@ -83,6 +83,7 @@ from experiments._shared import (
     DOWNSTREAM_MODELS,
     FULL_BUDGETS, INTERNAL_EVALUATORS,
     select_model_rep_pairs, hybrid_deltas, top_hybrids,
+    resolve_comparison_models,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 from kirby.hybrid import create_hybrid, apply_feature_selection
@@ -755,11 +756,36 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     def _top2_for(search_obj, which, ds_name):
         """The top-2 grid and the two deltas for one of the two searches.
 
-        Returns None when nothing could be read, so a key is either a full
-        block or absent — never half of one.
+        Always returns a block. Until 2026-09-28 it returned None when only
+        'dataset' and 'which_search' got in; it now always carries
+        'top2_models_compared' and 'top2_models_dropped' as well, which name the
+        downstream models asked for and why each missing one is missing, and
+        those reasons used to exist only in the printed log.
         """
         block = {'dataset': ds_name, 'which_search': which}
         ctx = f'opig_blueprint_transfer/{which}={ds_name}'
+        # WHICH DOWNSTREAM MODELS THIS BLOCK COVERS, resolved 2026-09-28.
+        # `model_names` is the list both searches were given (line 224). What a
+        # search on disk actually scored can be shorter: svm drops itself above
+        # 10,000 rows, and a dataset's skip policy can drop a name -- and the two
+        # searches here are on two different datasets, so one can be missing a
+        # model the other has. The loops below then asked for a model with no
+        # stored rows.
+        #
+        # `model_names` stays what this file ASKS for, so the set of models it
+        # reports does not change: it goes in as `requested`, not None. A name
+        # this search never scored is dropped and named, never swapped for
+        # another model's rows.
+        #
+        # Both lists are SAVED, not only printed. Until now every reason below
+        # went to the terminal alone, so a block holding three models read the
+        # same as a run configured for three.
+        cmp_models, cmp_dropped = resolve_comparison_models(
+            search_obj, model_names)
+        block['top2_models_compared'] = list(cmp_models)
+        block['top2_models_dropped'] = {n: w for n, w in cmp_dropped}
+        for n, w in cmp_dropped:
+            print(f"    {which}: downstream model {n} not compared: {w}")
         try:
             # models=model_names, the list both searches scored (line 224),
             # not _shared.py's 5-name default: a downstream model the two
@@ -769,11 +795,13 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             # model's own top_base_reps and top_hybrids return, so the two
             # halves are recorded here and not as separate keys.
             block['top2_pairs_by_model'] = select_model_rep_pairs(
-                search_obj, models=model_names, n_base=2, n_hybrids=2,
+                search_obj, models=cmp_models, n_base=2, n_hybrids=2,
                 require_full=False, context=ctx)
         except Exception as _e:
             print(f"    top2_pairs_by_model ({which}) not added: "
                   f"{type(_e).__name__}: {_e}")
+            block['top2_pairs_by_model_absent_reason'] = \
+                f"{type(_e).__name__}: {_e}"
 
         # The rank-1 hybrid against TWO reference numbers rather than one:
         #   delta_vs_source_mean — against the MEAN of the base
@@ -799,13 +827,15 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         # not cost the others their entry. Keys are downstream model names;
         # this dict is new and nothing iterates it.
         deltas = {}
-        for mn in model_names:
+        for mn in cmp_models:
             try:
                 top1 = top_hybrids(search_obj, mn, 1, require_full=False,
                                    context=f'{ctx}/deltas/{mn}')
                 if not top1['selected']:
                     print(f"    hybrid_deltas ({which}) for downstream model "
                           f"{mn} not added: {top1['shortfall_reason']}")
+                    block['top2_models_dropped'][mn] = (
+                        'no hybrid delta: %s' % top1['shortfall_reason'])
                     continue
                 deltas[mn] = hybrid_deltas(
                     search_obj, mn, hybrid=top1['selected'][0],
@@ -813,10 +843,14 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             except Exception as _e:
                 print(f"    hybrid_deltas ({which}) for downstream model {mn} "
                       f"not added: {type(_e).__name__}: {_e}")
+                block['top2_models_dropped'][mn] = (
+                    'no hybrid delta: %s: %s' % (type(_e).__name__, _e))
         if deltas:
             block['hybrid_deltas_by_model'] = deltas
-        if len(block) == 2:      # only 'dataset' and 'which_search' got in
-            return None
+        # The block is always returned since 2026-09-28. It now always carries
+        # 'top2_models_compared' and 'top2_models_dropped', which name the
+        # downstream models asked for and why each missing one is missing, so
+        # returning None would throw away the only record of that.
         return block
 
     # Keyed 'source' and 'target', so the two searches' rows can never be read

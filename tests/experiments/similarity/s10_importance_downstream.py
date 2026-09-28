@@ -51,7 +51,27 @@ all four tasks run once per space. The four task keys — weighted_knn,
 weighted_gp, weighted_svr and qrasar — hold the predictive space and are
 unchanged; every space is under results['by_hybrid_space'][space], with its own
 recipes in results['hybrid_space_recipes'] and its per-fold read failures in
-results['hybrid_space_errors'].
+results['hybrid_space_errors']. Both spaces are built and scored on every run
+where the pool holds both families; a family the pool has nothing for on this
+dataset is named in results['hybrid_space_errors'] instead.
+
+ONE RECIPE PER TASK (2026-09-28). All four tasks were built from one recipe, the
+one the pool ranked on the stored rows of 'knn'. Task 1 fits a
+k-nearest-neighbours model, so that was its own. Task 2 fits a Gaussian process,
+Task 3 a support vector regressor and Task 4 a random forest on four
+neighbour-derived features, and all three were scored on features chosen for a
+k-nearest-neighbours fit while their rows were written under their own names.
+Each task now gets the recipe ranked on the rows of the model it fits, inside
+each family, on the other folds as before. A Gaussian process is not one of the
+six models any search in this lineage scores (rf, xgboost, svm, dnn, lightgbm,
+knn), so it gets the best configuration over every model the search did score
+and results['task_recipe_chosen_by'] names the model whose score put it there.
+results['task_downstream_model'] names the model per task,
+results['task_recipes'] holds one recipe per (space, task, fold) and
+results['task_recipe_source'] says own_rows or across_models for each. Task 1's
+recipe is the same entry as before, so its numbers do not move. This costs no
+extra model fit: each task already built its own hybrid matrix per (space,
+width, fold) and only which recipe it builds changes.
 
 The weighted GP arm was a constant predictor (2026-09-20). The weight vector
 this file built was rescaled to SUM to 1. normalise_weights in
@@ -138,6 +158,12 @@ from experiments._shared import (
     # 2026-09-19 with the second hybrid space.
     describe_pool_family,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    # Ranks every model's stored hybrid configurations together and returns the
+    # best. Added 2026-09-28 for the Gaussian process, which no stored search
+    # names, so it has no configuration of its own to rank.
+    top_hybrids_across_models,
+    resolve_comparison_models,
+    POOL_SUBSETS,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS, FULL_BUDGETS,
     flatten_fold_weights,
     fold_reselection, build_fold_reselection_input,
@@ -171,6 +197,38 @@ _POOL_SUBSET = 'predictive_and_similarity'
 _SPACE_FOR_FAMILY = {
     'predictive': 'hybrid',
     'similarity': 'hybrid_similarity',
+}
+
+# The families the subset above admits, in the order POOL_SUBSETS names them.
+_POOL_FAMILIES = POOL_SUBSETS[_POOL_SUBSET]
+
+# The downstream model each of the four tasks FITS, and so the model whose
+# stored rows that task's recipe is ranked on.
+#
+# Until 2026-09-28 all four tasks were built from one recipe, ranked on the
+# stored rows of 'knn'. Task 1 does fit a k-nearest-neighbours model. Task 2 fits
+# a Gaussian process, Task 3 a support vector regressor and Task 4 a random
+# forest on four neighbour-derived features, and those three were scored on
+# features chosen for a k-nearest-neighbours fit while the rows were written
+# under their own names.
+#
+# ⛔ 'gp' IS NOT A NAME ANY STORED SEARCH HOLDS. DISTANCE_MODELS is rf, xgboost,
+# svm, dnn, lightgbm and knn, and a search under a geometry objective scores the
+# same six. So the Gaussian process has no configuration of its own at all and
+# takes the best configuration over every model the search scored
+# (top_hybrids_across_models). results['task_recipe_source'] says which of the
+# two every task got, per hybrid space.
+#
+# 'svm' in a stored search is this repository's support vector regressor and
+# Task 3 fits sklearn's SVR at gamma='scale' directly, so the recipe is ranked on
+# the rows of the same kind of model but not of the identical settings. Task 1's
+# k-nearest-neighbours model and Task 4's random forest are the same model the
+# search scored under those names.
+_MODEL_FOR_TASK = {
+    'weighted_knn': 'knn',
+    'weighted_gp': 'gp',
+    'weighted_svr': 'svm',
+    'qrasar': 'rf',
 }
 
 # One recipe per held-out fold: the pool's rank-1 hybrid for that fold.
@@ -1894,6 +1952,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # predictive one, so nothing they feed moves. Added 2026-09-19.
     fold_blueprints_by_space = {}
     fold_recipes_by_space = {}
+    # {space: {fold: the pool's rank-1 entry}} for the k-nearest-neighbours read
+    # below, kept so the per-task resolution further down reuses it instead of
+    # reading the pool for 'knn' a second time.
+    fold_entries_by_space = {}
     pool_family_errors = {}
     pool_fold_errors = {}
     pool_fold_warnings = {}
@@ -1963,6 +2025,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     f'objective={_fam} on the other folds')
                 continue
             _ftop = _fam_hybrids[0]
+            fold_entries_by_space.setdefault(_space, {})[fold_i] = _ftop
             fold_blueprints_by_space.setdefault(_space, {})[fold_i] = \
                 _ftop['blueprint']
             (fold_recipes_by_space.setdefault(_space, {}))[fold_i] = {
@@ -2008,6 +2071,206 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         hybrid_status = 'no_blueprint'
         print("  WARNING: the pool gave no recipe on any fold -- all hybrid "
               "branches (Tasks 1-4) will be SKIPPED (per-rep baselines only).")
+
+    # ── One recipe per (hybrid space, task, held-out fold) ───────────────────
+    # Every one of the four tasks was built from the recipe above, which the pool
+    # ranked on the stored rows of 'knn'. Task 1 fits a k-nearest-neighbours
+    # model; Task 2 fits a Gaussian process, Task 3 a support vector regressor
+    # and Task 4 a random forest on four neighbour-derived features. Those three
+    # were scored on features chosen for a k-nearest-neighbours fit, under their
+    # own names.
+    #
+    # Each task now gets the recipe ranked on ITS OWN model's stored rows, inside
+    # each family, on the other folds exactly as the loop above ranks the
+    # k-nearest-neighbours one. Task 1's recipe is the very entry that loop
+    # already chose, so every number Task 1 reports is unchanged.
+    #
+    # This costs no model fit and no extra hybrid build: each task already called
+    # build_fold_hybrid once per (space, width, fold) of its own, so only WHICH
+    # recipe it builds changes. What it costs is one more read of stored rows per
+    # (model, fold), which fits nothing.
+    _task_models = sorted(set(_MODEL_FOR_TASK.values()))
+    # {model: {space: {fold: the pool's rank-1 entry}}}
+    _by_model_space = {'knn': fold_entries_by_space}
+    task_recipe_errors = {}
+    for _model in _task_models:
+        if _model in _by_model_space:
+            continue
+        for fold_i in range(len(fold_splits)):
+            try:
+                _pm = get_fold_pool_recipes(
+                    reps, labels, groups,
+                    fold_i=fold_i, n_outer_folds=len(fold_splits),
+                    downstream_model=_model, budget=requested_budget,
+                    dataset_name=dataset_name,
+                    augmentations=data.get('augmentations'),
+                    distance=True, data=data,
+                    metric=metric_name, task_type=task_type, domain=domain,
+                    pool_subset=_POOL_SUBSET,
+                    n_hybrids=_N_POOL_HYBRIDS)
+            except Exception as e:
+                (task_recipe_errors.setdefault(f'model:{_model}', {})
+                 )[f'fold{fold_i}'] = f'{type(e).__name__}: {e}'
+                continue
+            for _fam, _blk in (_pm.get('by_objective') or {}).items():
+                _fh = (_blk or {}).get('hybrids') or []
+                if not _fh:
+                    continue
+                _sp = _SPACE_FOR_FAMILY.get(_fam, f'hybrid_{_fam}')
+                (_by_model_space.setdefault(_model, {})
+                 .setdefault(_sp, {}))[fold_i] = _fh[0]
+
+    # One stored search per family, read once, for a model the search never
+    # scored. top_hybrids_across_models needs the SearchResult itself, which
+    # get_fold_pool_recipes does not hand back.
+    #
+    # ⛔ WHICH POOL MEMBER THIS IS. get_best_search_for_downstream picks one
+    # (tier, augmentation condition) member per model, and the model named here is
+    # 'knn', the same as the whole-dataset read above. So the configurations
+    # ranked across models below come from the member knn's score preferred. The
+    # member is recorded per family in
+    # results['cross_model_family_member'].
+    family_search = {}
+    family_member = {}
+    for _fam in _POOL_FAMILIES:
+        try:
+            _sf, _mf = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model='knn', budget=requested_budget,
+                augmentations=data.get('augmentations'),
+                metric=metric_name, task_type=task_type, domain=domain,
+                dataset_name=dataset_name, data=data,
+                distance=True, objective=_fam)
+        except Exception as e:
+            family_member[_fam] = {'absent_reason': f'{type(e).__name__}: {e}'}
+            continue
+        if _sf is None or _mf is None:
+            family_member[_fam] = {
+                'absent_reason': 'the pool holds no search of this family'}
+            continue
+        family_search[_fam] = _sf
+        family_member[_fam] = {
+            'tier': _mf['tier'],
+            'aug_condition': _mf['aug_condition'],
+            'metric_name': _mf['metric_name'],
+            'member_chosen_for_model': 'knn',
+            'models_the_search_scored': sorted(
+                (getattr(_sf, 'best_by_model', None) or {}).keys()),
+        }
+
+    # {space: {task: {fold: blueprint}}} and the recipe beside it.
+    fold_bps_by_space_task = {}
+    fold_recipes_by_space_task = {}
+    # {space: {task: 'own_rows' | 'across_models' | 'unavailable'}}
+    task_recipe_source = {}
+    # {space: {task: {fold: the model whose score chose that fold's recipe}}}
+    task_recipe_chosen_by = {}
+    for _task_name, _model in sorted(_MODEL_FOR_TASK.items()):
+        for _fam in _POOL_FAMILIES:
+            _sp = _SPACE_FOR_FAMILY.get(_fam, f'hybrid_{_fam}')
+            _own = ((_by_model_space.get(_model) or {}).get(_sp)) or {}
+            if _own:
+                for _f, _e in _own.items():
+                    (fold_bps_by_space_task.setdefault(_sp, {})
+                     .setdefault(_task_name, {}))[_f] = _e['blueprint']
+                    (fold_recipes_by_space_task.setdefault(_sp, {})
+                     .setdefault(_task_name, {}))[_f] = {
+                        'objective': _e['objective'],
+                        'tier': _e['tier'],
+                        'aug_condition': _e['aug_condition'],
+                        'allocation_method': _e['allocation_method'],
+                        'importance_method': _e['importance_method'],
+                        'internal_evaluator': _e['internal_evaluator'],
+                        'budget': _e['budget'],
+                        'metric_name': _e['metric_name'],
+                        'lower_is_better': _e['lower_is_better'],
+                        'score_other_folds': _e['score_other_folds'],
+                        'n_other_folds': _e['n_other_folds'],
+                        'ranked_on_rows_of_model': _model,
+                    }
+                task_recipe_source.setdefault(_sp, {})[_task_name] = 'own_rows'
+                print(f"  {_sp}/{_task_name}: recipe ranked on {_model}'s own "
+                      f"stored rows, per fold, on the other folds")
+                continue
+            # No stored row for this model in this family. Rank every model's
+            # rows together instead, still leaving the held-out fold out.
+            _sf = family_search.get(_fam)
+            if _sf is None:
+                task_recipe_source.setdefault(_sp, {})[_task_name] = 'unavailable'
+                (task_recipe_errors.setdefault(_sp, {}))[_task_name] = (
+                    f'no stored row for {_model} in the {_fam} family, and that '
+                    f'family\'s search could not be read either, so nothing '
+                    f'could be ranked over the other models: '
+                    f'{family_member.get(_fam, {}).get("absent_reason")}')
+                print(f"  {_sp}/{_task_name}: no hybrid space here -- "
+                      f"{task_recipe_errors[_sp][_task_name]}")
+                continue
+            _n_filled = 0
+            for fold_i in range(len(fold_splits)):
+                try:
+                    _xm = top_hybrids_across_models(
+                        _sf, n=_N_POOL_HYBRIDS, rule='other_folds',
+                        held_out_fold=fold_i)
+                except Exception as e:
+                    (task_recipe_errors.setdefault(_sp, {})
+                     )[f'{_task_name}/fold{fold_i}'] = \
+                        f'{type(e).__name__}: {e}'
+                    continue
+                _cand = next((_e for _e in (_xm.get('selected') or [])
+                              if _e.get('blueprint') is not None), None)
+                if _cand is None:
+                    (task_recipe_errors.setdefault(_sp, {})
+                     )[f'{_task_name}/fold{fold_i}'] = (
+                        _xm.get('shortfall_reason')
+                        or 'no configuration over any model carries a '
+                           'blueprint on the other folds')
+                    continue
+                _bpx = copy.deepcopy(_cand['blueprint'])
+                # Trust the condition the search was loaded under over the
+                # blueprint's own field, the same way get_fold_pool_recipes does.
+                _bpx.augmentation_strategy = family_member[_fam].get(
+                    'aug_condition')
+                (fold_bps_by_space_task.setdefault(_sp, {})
+                 .setdefault(_task_name, {}))[fold_i] = _bpx
+                (fold_recipes_by_space_task.setdefault(_sp, {})
+                 .setdefault(_task_name, {}))[fold_i] = {
+                    'objective': _fam,
+                    'tier': family_member[_fam].get('tier'),
+                    'aug_condition': family_member[_fam].get('aug_condition'),
+                    'allocation_method': _cand.get('allocation_method'),
+                    'importance_method': _cand.get('importance_method'),
+                    'internal_evaluator': _cand.get('internal_evaluator'),
+                    'budget': _cand.get('budget'),
+                    'metric_name': getattr(_sf, 'metric_name', None),
+                    'lower_is_better': bool(getattr(_sf, 'lower_is_better',
+                                                    False)),
+                    'score_other_folds': _cand.get('score_mean'),
+                    'n_other_folds': _cand.get('n_folds_used'),
+                    'ranked_on_rows_of_model': 'every model the search scored',
+                    'recipe_chosen_by': _cand.get('recipe_chosen_by'),
+                    'models_ranked_over': list(
+                        _xm.get('models_ranked_over') or []),
+                    'score_was_produced_by': (
+                        f"{_cand.get('recipe_chosen_by')}, not by {_model}"),
+                }
+                (task_recipe_chosen_by.setdefault(_sp, {})
+                 .setdefault(_task_name, {}))[fold_i] = \
+                    _cand.get('recipe_chosen_by')
+                _n_filled += 1
+            if _n_filled:
+                task_recipe_source.setdefault(_sp, {})[_task_name] = \
+                    'across_models'
+                _who = sorted(set(
+                    (task_recipe_chosen_by.get(_sp, {}).get(_task_name) or {})
+                    .values()))
+                print(f"  {_sp}/{_task_name}: no stored row for {_model}, so "
+                      f"the recipe is the best configuration over every model "
+                      f"the search scored, on {_n_filled} of "
+                      f"{len(fold_splits)} folds; the scores that chose them "
+                      f"were produced by {', '.join(_who)}")
+            else:
+                task_recipe_source.setdefault(_sp, {})[_task_name] = \
+                    'unavailable'
 
     # ── How many features every hybrid arm below is built with ───────────────
     # Owner's decision: s10 sweeps the canonical eight — 10, 25, 50, 100, 250,
@@ -2147,10 +2410,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # are what differ.
     _spaces_to_run = [sp for sp in (_SPACE_FOR_FAMILY.get('predictive'),
                                     _SPACE_FOR_FAMILY.get('similarity'))
-                      if fold_blueprints_by_space.get(sp)]
+                      if (fold_blueprints_by_space.get(sp)
+                          or fold_bps_by_space_task.get(sp))]
     results['hybrid_spaces_scored'] = list(_spaces_to_run)
     results['hybrid_space_recipes'] = convert_numpy(fold_recipes_by_space)
     results['hybrid_space_errors'] = pool_family_errors
+    # ── The recipe each TASK is built from, per hybrid space ─────────────────
+    # 'hybrid_space_recipes' above is the k-nearest-neighbours recipe, which is
+    # what all four tasks were built from until 2026-09-28. These four keys say
+    # what each task is built from now, one recipe per (space, task, fold).
+    results['task_downstream_model'] = dict(_MODEL_FOR_TASK)
+    results['task_recipes'] = convert_numpy(fold_recipes_by_space_task)
+    results['task_recipe_source'] = task_recipe_source
+    results['task_recipe_chosen_by'] = task_recipe_chosen_by
+    results['task_recipe_errors'] = task_recipe_errors
+    results['cross_model_family_member'] = convert_numpy(family_member)
+    results['task_recipe_note'] = (
+        "'task_downstream_model' names the model each task fits. Its recipe is "
+        "ranked on that model's own stored rows where the search holds any, "
+        "which 'task_recipe_source' reports as own_rows. A Gaussian process is "
+        'not a model any search in this lineage scored, so its recipe is the '
+        'best configuration over every model the search did score, reported as '
+        "across_models, and 'task_recipe_chosen_by' names the model whose score "
+        'put that configuration on top for each fold. That score was produced by '
+        "that model and not by the one it is handed to. Task 1's recipe is the "
+        'same entry as in hybrid_space_recipes, so its numbers are unchanged.')
     results['hybrid_spaces_note'] = (
         'One hybrid space per family of stored search. A predictive search '
         "chose its features to predict the label; a similarity search chose "
@@ -2192,7 +2476,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         run_identity('s10_importance_downstream', dataset_name, data, config,
                      kwargs=kwargs, sweep_budgets=list(sweep_budgets),
                      spaces=list(_spaces_to_run),
-                     recipes=results['hybrid_space_recipes']))
+                     recipes=results['hybrid_space_recipes'],
+                     # Each task's own recipe is part of what a stored block
+                     # holds, so a block written before 2026-09-28 -- when all
+                     # four tasks were built from the k-nearest-neighbours one --
+                     # must not be read back into this run.
+                     task_recipes=results['task_recipes']))
 
     def _had_build_failure(obj):
         if isinstance(obj, dict):
@@ -2218,14 +2507,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return out
 
     for _space in _spaces_to_run:
-        _fold_bps = fold_blueprints_by_space[_space]
+        # One recipe per task now, each ranked on the rows of the model that task
+        # fits. `_bps_for(task)` is empty when neither that model's own rows nor
+        # the ranking over every model produced one for this space, and the task's
+        # hybrid space is then absent rather than built from another model's recipe;
+        # results['task_recipe_errors'] says why.
+        _by_task = fold_bps_by_space_task.get(_space) or {}
+
+        def _bps_for(task, _by_task=_by_task):
+            return _by_task.get(task) or {}
+
         _space_out = {}
         print(f"\n  ===== hybrid space {_space} =====")
 
         # Task 1: Weighted kNN
         t0 = time.time()
         _space_out['weighted_knn'] = _task(_space, 'weighted_knn', lambda: _run_weighted_knn(
-            reps, labels, groups, config, _fold_bps,
+            reps, labels, groups, config, _bps_for('weighted_knn'),
             metric_fn, metric_name, lower_is_better,
             augmentations=augmentations, task_type=task_type,
             fold_splits=fold_splits, fold_importance=fold_importance,
@@ -2240,7 +2538,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         else:
             t0 = time.time()
             _space_out['weighted_gp'] = _task(_space, 'weighted_gp', lambda: _run_weighted_gp(
-                reps, labels, groups, config, _fold_bps,
+                reps, labels, groups, config, _bps_for('weighted_gp'),
                 metric_fn, metric_name, n_samples,
                 lower_is_better=lower_is_better,
                 augmentations=augmentations,
@@ -2256,7 +2554,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         else:
             t0 = time.time()
             _space_out['weighted_svr'] = _task(_space, 'weighted_svr', lambda: _run_weighted_svr(
-                reps, labels, groups, config, _fold_bps,
+                reps, labels, groups, config, _bps_for('weighted_svr'),
                 metric_fn, metric_name, n_samples,
                 lower_is_better=lower_is_better,
                 augmentations=augmentations,
@@ -2267,7 +2565,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Task 4: q-RASAR similarity-augmented features
         t0 = time.time()
         _space_out['qrasar'] = _task(_space, 'qrasar', lambda: _run_qrasar(
-            reps, labels, groups, config, _fold_bps,
+            reps, labels, groups, config, _bps_for('qrasar'),
             metric_fn, metric_name, task_type=task_type,
             lower_is_better=lower_is_better,
             augmentations=augmentations,
@@ -2279,6 +2577,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'predictive' if _space == _primary_space else 'similarity')
         _space_out['features_chosen_by'] = describe_pool_family(
             _space_out['built_under_objective'])
+        # Repeated inside the space so a reader of one block can see which model's
+        # rows chose each task's recipe without opening the top level.
+        _space_out['task_recipe_source'] = task_recipe_source.get(_space, {})
+        _space_out['task_recipe_chosen_by'] = task_recipe_chosen_by.get(
+            _space, {})
         results['by_hybrid_space'][_space] = _space_out
         if _space == _primary_space:
             for _k in ('weighted_knn', 'weighted_gp', 'weighted_svr', 'qrasar'):
@@ -2342,13 +2645,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # back as a short list carrying its own shortfall_reason, instead of raising
     # and losing the four tasks' results after every fit has been paid for.
     if search is not None:
+        # WHICH MODEL THIS ONE SEARCH WAS FETCHED FOR, recorded 2026-09-28.
+        # get_best_search_for_downstream above was called with
+        # downstream_model='knn', and all six downstream models' rows are read
+        # out of that one SearchResult. That is defensible for these rankings --
+        # search.baselines and search.all_results carry a score under every
+        # model the search scored -- but the saved result did not say which model
+        # the search was fetched for, so a reader could not tell. Written under
+        # the same key name n18, n21, n22 and n25 use.
+        results['top2_pairs_search_of_model'] = 'knn'
+        # WHICH DOWNSTREAM MODELS THE ROWS BELOW COVER, resolved 2026-09-28.
+        # DISTANCE_MODELS is a fixed list of six names. The search on disk scored
+        # whatever it scored: svm drops itself above 10,000 molecules, and a
+        # dataset's skip policy can drop a name. The two disagree whenever that
+        # happened, and the loops below then asked for a model with no stored
+        # rows.
+        #
+        # The six names stay what this file ASKS for, so the set of models it
+        # reports does not change: DISTANCE_MODELS goes in as `requested`, not
+        # None. A name the search never scored is dropped and named, never
+        # swapped for another model's rows.
+        _cmp_models, _cmp_dropped = resolve_comparison_models(
+            search, DISTANCE_MODELS)
+        results['top2_models_compared'] = list(_cmp_models)
+        # {downstream model: why it is not in the rows below}. These reasons were
+        # printed to the terminal and saved nowhere until now.
+        results['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
+        for _n, _w in _cmp_dropped:
+            print(f"  downstream model {_n} not compared: {_w}")
         _top2_base, _top2_hyb, _hyb_deltas = {}, {}, {}
-        for _m in DISTANCE_MODELS:
+        for _m in _cmp_models:
             try:
                 _top2_base[_m] = top_base_reps(search, _m, 2,
                                                require_full=False)
             except Exception as _e:
                 print(f"  top-2 base representations for {_m} unavailable: {_e}")
+                results['top2_models_dropped'][_m] = (
+                    'no top-2 base representations: %s: %s'
+                    % (type(_e).__name__, _e))
             _th = None
             try:
                 # No budget= filter. This file asks the pool for a recipe at
@@ -2362,6 +2696,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _top2_hyb[_m] = _drop_blueprint(_th)
             except Exception as _e:
                 print(f"  top-2 hybrid configurations for {_m} unavailable: {_e}")
+                results['top2_models_dropped'][_m] = (
+                    'no top-2 hybrid configurations: %s: %s'
+                    % (type(_e).__name__, _e))
             # The rank-1 hybrid is handed to hybrid_deltas explicitly. Left to
             # pick its own it reads _picked['selected'][0]['row']
             # (_shared.py:7432), and a top_hybrids entry has no 'row' key, so
@@ -2374,6 +2711,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         search, _m, hybrid=_th['selected'][0])
                 except Exception as _e:
                     print(f"  hybrid deltas for {_m} unavailable: {_e}")
+                    results['top2_models_dropped'][_m] = (
+                        'no hybrid deltas: %s: %s' % (type(_e).__name__, _e))
         _top2_pairs = {}
         try:
             # The same 2-and-2 grid in one block: per downstream model the 2
@@ -2381,11 +2720,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # how many separate things would have to be BUILT once one
             # representation picked by several downstream models counts once.
             _top2_pairs = _drop_blueprint(
-                select_model_rep_pairs(search, models=list(DISTANCE_MODELS),
+                select_model_rep_pairs(search, models=list(_cmp_models),
                                        n_base=2, n_hybrids=2,
                                        require_full=False))
         except Exception as _e:
             print(f"  top-2 model-and-representation grid unavailable: {_e}")
+            results['top2_pairs_by_model_absent_reason'] = \
+                f"{type(_e).__name__}: {_e}"
 
         # Added 2026-09-18, additive. Four new top-level keys; no key set above
         # changes value -- 'top3_base_reps', 'fold_recipes', 'budget',
@@ -2410,7 +2751,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"\n  TOP HYBRID vs TWO REFERENCE NUMBERS "
                   f"({getattr(search, 'metric_name', None) or metric_name}, "
                   f"+ means the hybrid won):")
-            for _m in DISTANCE_MODELS:
+            for _m in _cmp_models:
                 _hd = _hyb_deltas.get(_m)
                 if not _hd:
                     continue

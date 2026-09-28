@@ -74,6 +74,7 @@ from experiments._shared import (
     fold_reselection, build_fold_reselection_input,
     hr_exclude_folds,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
 )
 
 # =============================================================================
@@ -374,27 +375,61 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     if top3:
         print(f"    Top-3 base: {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
-    # Extract hybrid features from RF fitted result
-    fitted = (search.fitted_results or {}).get('rf') if search is not None else None
+    _fitted_all = (search.fitted_results or {}) if search is not None else {}
     hybrid_eval = {}
+    # The random forest's recipe, as feature counts per representation. Kept
+    # under this name because extract_cgr_selection_info below reads it as
+    # {representation: number of features} and answers whether the reaction-graph
+    # representations were picked at all. Per-model counts are in
+    # 'selected_reps_by_model'.
     selected_reps = {}
+    selected_reps_by_model = {}
+    # One entry per downstream model the search stored no recipe for, and why.
+    unscored_models = {}
 
-    if fitted is not None:
-        fi = _fitted_to_feature_info(fitted)
-        X_hybrid = apply_feature_selection(all_reps, fi)
-        selected_reps = {
-            rep_name: len(indices)
-            for rep_name, indices in fitted.selected_indices.items()
-        }
-        print(f"    Hybrid: {X_hybrid.shape[1]}D from {list(selected_reps.keys())}")
+    if _fitted_all:
+        _rf_fitted = _fitted_all.get('rf')
+        if _rf_fitted is not None:
+            selected_reps = {
+                rep_name: len(indices)
+                for rep_name, indices in _rf_fitted.selected_indices.items()
+            }
 
-        # Evaluate hybrid with all models
+        # Evaluate the hybrid with each downstream model ON ITS OWN RECIPE.
+        #
+        # ⛔ What used to be here, changed 2026-09-28: one recipe was read from
+        # `search.fitted_results['rf']`, one feature matrix was assembled from
+        # it, and all five names in MODELS_LIST were scored on that matrix. The
+        # search stores one recipe per downstream model it scored -- which
+        # representations, how many features from each, how to rank them -- so
+        # four of the five rows held the random forest's features under another
+        # model's name.
+        #
+        # A model the search stored no recipe for is recorded in
+        # 'unscored_models' and gets no row. Nothing is substituted.
         n_groups = len(np.unique(groups))
         actual_folds = min(n_folds, n_groups)
         models = get_model_factories(MODELS_LIST, 'regression',
                                      n_samples=len(labels))
 
         for model_name, factory in models.items():
+            fitted = _fitted_all.get(model_name)
+            if fitted is None:
+                unscored_models[model_name] = (
+                    f'the search stored recipes for {sorted(_fitted_all)} and '
+                    f'none for {model_name!r}')
+                print(f"    hybrid × {model_name:8s}  no recipe of its own -- "
+                      f"{unscored_models[model_name]}")
+                continue
+            fi = _fitted_to_feature_info(fitted)
+            X_hybrid = apply_feature_selection(all_reps, fi)
+            selected_reps_by_model[model_name] = {
+                rep_name: len(indices)
+                for rep_name, indices in fitted.selected_indices.items()
+            }
+            print(f"    Hybrid for {model_name}: "
+                  f"{np.asarray(X_hybrid).shape[1]} features from "
+                  f"{list(selected_reps_by_model[model_name].keys())}")
             res = evaluate_rep(X_hybrid, labels, groups, factory(),
                                actual_folds)
             if res is not None:
@@ -403,7 +438,8 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
                       f"RMSE={res['rmse']['mean']:.2f}  "
                       f"R2={res['r2']['mean']:.4f}")
     else:
-        print(f"    WARNING: no fitted RF result for {pool_name}")
+        print(f"    WARNING: the search stored no recipe for any downstream "
+              f"model for {pool_name}")
 
     # HONEST per-model, held-out comparison (selection-optimism correction).
     # `hybrid_eval` above rebuilds ONE full-data hybrid (recipe selected on all
@@ -460,6 +496,8 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
                 search, 'rf', 2, require_full=False, context=_sel_ctx)
         except Exception as _e:
             print(f"    top2_base_reps not added: {type(_e).__name__}: {_e}")
+            top2_block['top2_base_reps_absent_reason'] = \
+                f"rf: {type(_e).__name__}: {_e}"
         try:
             # budget=None: the best 2 configurations over every budget the
             # search ran, not within one budget in features. The search above
@@ -469,17 +507,41 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
                 search, 'rf', 2, require_full=False, context=_sel_ctx)
         except Exception as _e:
             print(f"    top2_hybrids not added: {type(_e).__name__}: {_e}")
+            top2_block['top2_hybrids_absent_reason'] = \
+                f"rf: {type(_e).__name__}: {_e}"
+        # WHICH DOWNSTREAM MODELS THE ROWS BELOW COVER, resolved 2026-09-28.
+        # MODELS_LIST is a fixed list of five names written at
+        # opig_cgr_comparison.py:102. The search on disk scored whatever it
+        # scored: svm drops itself above 10,000 molecules, and a dataset's skip
+        # policy can drop a name. The two disagree whenever that happened, and
+        # the loop below then asked for a model with no stored rows.
+        #
+        # The five names stay what this file ASKS for, so the set of models it
+        # reports does not change: MODELS_LIST goes in as `requested`, not None.
+        # A name the search never scored is dropped and named, never swapped for
+        # another model's rows.
+        #
+        # Both lists are SAVED, not only printed. Until 2026-09-28 every reason
+        # below went to the terminal alone, so a saved block holding four models
+        # read the same as a run configured for four.
+        _cmp_models, _cmp_dropped = resolve_comparison_models(
+            search, MODELS_LIST)
+        top2_block['top2_models_compared'] = list(_cmp_models)
+        top2_block['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
+        for _n, _w in _cmp_dropped:
+            print(f"    downstream model {_n} not compared: {_w}")
         try:
-            # 5 downstream models in MODELS_LIST * (2 representations +
-            # 2 hybrids) = 20 rows per pool. models=MODELS_LIST rather than
-            # the default, so the models axis is reported at the width this
-            # file scores at.
+            # Every downstream model the search scored out of the five this file
+            # asks for * (2 representations + 2 hybrids), so five models is 20
+            # rows per pool.
             top2_block['top2_pairs_by_model'] = select_model_rep_pairs(
-                search, models=MODELS_LIST, n_base=2, n_hybrids=2,
+                search, models=_cmp_models, n_base=2, n_hybrids=2,
                 require_full=False, context=_sel_ctx)
         except Exception as _e:
             print(f"    top2_pairs_by_model not added: "
                   f"{type(_e).__name__}: {_e}")
+            top2_block['top2_pairs_by_model_absent_reason'] = \
+                f"{type(_e).__name__}: {_e}"
 
         # Two reference numbers for the rank-1 hybrid per downstream model,
         # not one:
@@ -505,13 +567,15 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         # configuration does not cost the other 4 their entry. The keys are
         # downstream model names; this dict is new and nothing iterates it.
         _deltas = {}
-        for _m in MODELS_LIST:
+        for _m in _cmp_models:
             try:
                 _top1 = top_hybrids(search, _m, 1, require_full=False,
                                     context=f'{_sel_ctx}/deltas/{_m}')
                 if not _top1['selected']:
                     print(f"    hybrid_deltas for downstream model {_m} not "
                           f"added: {_top1['shortfall_reason']}")
+                    top2_block['top2_models_dropped'][_m] = (
+                        'no hybrid delta: %s' % _top1['shortfall_reason'])
                     continue
                 _deltas[_m] = hybrid_deltas(
                     search, _m, hybrid=_top1['selected'][0],
@@ -519,6 +583,8 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
             except Exception as _e:
                 print(f"    hybrid_deltas for downstream model {_m} not "
                       f"added: {type(_e).__name__}: {_e}")
+                top2_block['top2_models_dropped'][_m] = (
+                    'no hybrid delta: %s: %s' % (type(_e).__name__, _e))
         if _deltas:
             top2_block['hybrid_deltas_by_model'] = _deltas
             # delta_vs_best_rep is None when no base representation carries a
@@ -540,7 +606,15 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         'rep_names': sorted(pool_reps.keys()),
         'top3_base': [[n, s] for n, s in (top3 or [])],
         'hybrid_eval': hybrid_eval,
+        # The random forest's recipe, as the number of features taken from each
+        # representation. extract_cgr_selection_info reads this one.
         'selected_reps': selected_reps,
+        # The same counts for every downstream model that had a recipe of its
+        # own, which is what each row of 'hybrid_eval' was scored on.
+        'selected_reps_by_model': selected_reps_by_model,
+        # Downstream models with no row in 'hybrid_eval' because the search
+        # stored no recipe for them, and why. Empty when every model has one.
+        'models_the_search_did_not_score': unscored_models,
         'baselines': {
             rep: {m: float(s) for m, s in scores.items()}
             for rep, scores in (getattr(search, 'baselines', {}) or {}).items()

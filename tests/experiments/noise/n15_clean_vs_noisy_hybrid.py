@@ -155,8 +155,31 @@ def _agreement(fp_clean, fp_noisy):
     }
 
 
-def _search_settings(n_samples):
+def _search_settings(n_samples, models):
     """The search settings BOTH arms run under. Owner's decision 2026-09-12.
+
+    ⛔ THE MODELS ARE NAMED, AND THIS IS THE SAME DEFECT c13 HAD.
+    Fixed 2026-09-28. The two things that disagree: the loop in run() asks
+    _fetch_bp for a recipe for each of the five downstream models in
+    DOWNSTREAM_MODELS_NOISE, and the search these settings describe fitted
+    three. speed='fast' arrives here from this function, and a caller-supplied
+    speed makes _shared._apply_dataset_search_speed return before it names the
+    models (_shared.py:1013-1016), so `models` stayed None and
+    find_best_hybrid applied its own fast-tier cut -- rf, lightgbm and dnn.
+    xgboost and svm were asked for and never fitted, so
+    get_best_search_for_downstream returned (None, None) for them and the loop
+    skipped both with no row written and nothing saying why. c13 was asking a
+    fast search for svm's recipe the same way (c13_forward_compatibility.py,
+    the note at _extra['models']).
+
+    `models` here is the list the loop will score, so the search fits exactly
+    the models that are then handed recipes. Nothing is substituted: a model
+    the search still does not fit is skipped and named by the caller.
+
+    ⛔ THIS CHANGES SERVER NUMBERS. xgboost and svm have no cells in n15 today
+    and will have them after this. rf, lightgbm and dnn are unaffected in what
+    is measured, but naming the models changes the search identity, so their
+    searches re-run.
 
     TODO(similarity-sweep 2026-09-25): the run instructions for the noise
     suite (owner, 2026-09-25) are the fast tier, --pruning-mode calibrated and
@@ -197,6 +220,9 @@ def _search_settings(n_samples):
         'tune': True,
         'tune_n_iter': 20,
         'tune_knn_k': True,
+        # The downstream models the search must fit, because the loop asks for
+        # a recipe for each of them. See the note above.
+        'models': list(models),
     }
     out.update(resolve_pruning_kwargs('aggressive_pruning', n_samples,
                                       dataset_label='n15'))
@@ -333,8 +359,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     sample_X = next(iter(reps.values()))
 
     specs = kwargs.get('noise_specs') or noisy_search_specs(task_type)
-    search_settings = _search_settings(len(labels))
+    # The models the search fits are the models this run will hand recipes to.
+    search_settings = _search_settings(len(labels), list(model_factories))
     print(f"  search settings, both arms: {search_settings.get('speed')} tier, "
+          f"models {search_settings.get('models')}, "
           f"tune={search_settings.get('tune')}, "
           f"tune_knn_k={search_settings.get('tune_knn_k')}, "
           f"adaptive pruning schedule "
@@ -359,7 +387,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                              if sp.target_effective_noise == lvl)
             for lvl in sorted({s.target_effective_noise for s in specs})},
         'search_settings': {k: v for k, v in search_settings.items()
-                            if k in ('speed', 'tune', 'tune_n_iter', 'tune_knn_k')},
+                            if k in ('speed', 'tune', 'tune_n_iter',
+                                     'tune_knn_k', 'models')},
+        # The downstream models this run asks for a recipe for, and, per spec
+        # id, any of them one of the two searches returned no recipe for. Such
+        # a model has no cell rather than a cell built from another model's
+        # recipe.
+        'models_requested': list(model_factories),
+        'models_unscored': {},
         'adaptive_pruning_schedule': search_settings.get(
             'adaptive_pruning_schedule'),
         # The level each spec id belongs to, so the per-level roll-up below can
@@ -534,9 +569,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _engine_id
 
             if clean_bp is None or noisy_bp is None:
-                print(f"  {model_name}: skipped "
-                      f"(clean_bp={'ok' if clean_bp else 'MISSING'}, "
-                      f"noisy_bp={'ok' if noisy_bp else 'MISSING'})")
+                # One of the two searches fitted this model and the other did
+                # not, or neither did. No other model's recipe is put in its
+                # place, so the cell is absent and says why.
+                _why = (f"no recipe of its own: clean arm "
+                        f"{'ok' if clean_bp else 'MISSING'}, noisy arm "
+                        f"{'ok' if noisy_bp else 'MISSING'}")
+                results['models_unscored'].setdefault(sid, {})[model_name] = _why
+                print(f"  {model_name}: skipped -- {_why}")
                 continue
 
             # Each arm reads its OWN search's stored per-fold numbers: the

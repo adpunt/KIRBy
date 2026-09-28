@@ -103,6 +103,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    searched_models, resolve_comparison_models,
     noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
 )
 # One per-fold hybrid build, shared with n17 and n19. It lived in n19 until
@@ -857,13 +858,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'there are no stored rows to rank. Every cleanup number in this '
             'file stands.')
     else:
-        for _m in downstream_models:
-            search = _searches.get(_m)
-            if search is None:
-                # No stored search was returned for this model, so there is
-                # nothing of its own to rank. Another model's rows would be
-                # another model's answer.
+        # WHICH DOWNSTREAM MODELS THIS TABLE COVERS. Two lists decide it and
+        # they can disagree. `downstream_models` is the list this run fits,
+        # taken from config['models'] or from DOWNSTREAM_MODELS when the runner
+        # named none. The other list is the models a stored search scored,
+        # which searched_models reads off that search. A model in the first and
+        # not in the second has no rows of its own to rank. Both kinds of
+        # missing model are now written to the result file: the model whose
+        # pool lookup returned no search at all, and the model whose own search
+        # scored other models and not it. Neither is read out of another
+        # model's search -- resolve_comparison_models never substitutes one
+        # model for another, and each model below is read out of its own.
+        _requested = list(downstream_models)
+        _compare, _model_dropped = [], {}
+        for _m in _requested:
+            _s_m = _searches.get(_m)
+            if _s_m is None:
+                _model_dropped[_m] = (
+                    'the pool returned no stored search for this downstream '
+                    'model, so there are no rows of its own to rank')
                 continue
+            _keep, _why = resolve_comparison_models(_s_m, [_m])
+            if not _keep:
+                _model_dropped[_m] = _why[0][1]
+                continue
+            _compare.append(_m)
+        results['top2_models_requested'] = _requested
+        results['top2_models_compared'] = list(_compare)
+        results['top2_models_dropped'] = _model_dropped
+        results['top2_models_scored_by_each_search'] = {
+            _m: searched_models(_s) for _m, _s in _searches.items()}
+        for _m, _why in _model_dropped.items():
+            print(f"  top-2 rows absent for {_m}: {_why}")
+        for _m in _compare:
+            search = _searches[_m]
             # require_full=False: a downstream model this search never scored
             # comes back a short list carrying its own shortfall_reason,
             # instead of raising and losing every cleanup number below it.

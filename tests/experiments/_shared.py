@@ -1012,9 +1012,11 @@ def _apply_dataset_search_speed(kwargs, dataset_name):
     decision and has not been taken.
     """
     if kwargs.get('speed') is not None:
+        _apply_small_dataset_models(kwargs, dataset_name)
         return kwargs
     speed = dataset_policy.dataset_search_speed(dataset_name)
     if speed == 'full':
+        _apply_small_dataset_models(kwargs, dataset_name)
         return kwargs
     kwargs['speed'] = speed
 
@@ -1043,6 +1045,52 @@ def _apply_dataset_search_speed(kwargs, dataset_name):
         kwargs['models'] = list(
             DISTANCE_MODELS if str(kwargs.get('tier') or '').startswith(
                 'general_distance') else DOWNSTREAM_MODELS)
+    _apply_small_dataset_models(kwargs, dataset_name)
+    return kwargs
+
+
+def _apply_small_dataset_models(kwargs, dataset_name):
+    """Add the extra-tier models a small dataset can afford to `models`.
+
+    ⛔ WHY IT IS NEEDED AT ALL. 'gp' carries tier 'extra' in DEFAULT_MODELS
+    (find_best_hybrid.py:2810) and AUTO_SELECTED_TIERS is {'fast', 'full'}
+    (find_best_hybrid.py:2927), so a search that passes models=None never
+    scores it, at either speed, on any dataset. Naming it is the only way it
+    runs.
+
+    ⛔ WHY ONLY UNDER 1,000 MOLECULES. A Gaussian process builds the full
+    molecule-by-molecule kernel and factorises it, so DEFAULT_MODELS['gp']
+    carries '_max_samples': 1000 and _check_max_samples drops it above that
+    with a printed skip (find_best_hybrid.py:3169-3179). Naming it on a bigger
+    dataset costs nothing and buys nothing; it is skipped either way. The cut
+    is the engine's, not a compute decision taken here.
+
+    WHAT IT MEANS FOR A SEARCH ALREADY ON DISK. model_names is recorded in the
+    search meta (_make_search_meta, find_best_hybrid.py:711), so a dataset that
+    used to pass models=None now sends a named list and its stored search
+    pickle stops matching -- the recipe search re-runs. The per-configuration
+    rows do NOT: IDENTITY_COLS (result_cache.py:46) holds tier, labels_hash,
+    groups_hash, n_folds, seed, cv_splitter_id, metric, task_type, objective
+    and the distance, and no model list, so every configuration already scored
+    is read back and only the gp ones are new fits.
+
+    A dataset with no recorded n_samples gets nothing added. 13 of the 38
+    datasets with a recorded count are under 1,000 molecules.
+    """
+    extra = dataset_policy.small_dataset_extra_models(dataset_name)
+    if not extra:
+        return kwargs
+    current = kwargs.get('models')
+    if current is None:
+        current = list(
+            DISTANCE_MODELS if str(kwargs.get('tier') or '').startswith(
+                'general_distance') else DOWNSTREAM_MODELS)
+    else:
+        current = list(current)
+    for name in extra:
+        if name not in current:
+            current.append(name)
+    kwargs['models'] = current
     return kwargs
 
 
@@ -3956,6 +4004,14 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
     **Do not call directly** — use `load_data()` so registry cross-checks
     and `dataset_name` injection happen.
     """
+    # An explicit comma-separated --reps IS an explicit list. Before 2026-09-28
+    # it went into rep_preset and the auto-filter below replaced it with the
+    # DATASET_REPS general list, so `--reps a,b,c` was silently ignored on every
+    # dataset DATASET_REPS names. Named presets ('fast', 'all', ...) carry no
+    # comma and are unaffected.
+    if rep_names is None and isinstance(rep_preset, str) and ',' in rep_preset:
+        rep_names = [r.strip() for r in rep_preset.split(',') if r.strip()]
+
     # Auto-filter to DATASET_REPS general reps when no explicit list given
     if rep_names is None:
         try:
@@ -5855,6 +5911,11 @@ def resolve_pool_subset(pool_subset):
     """
     from kirby.find_best_hybrid import _VALID_OBJECTIVES as _OBJS
     name = DEFAULT_POOL_SUBSET if pool_subset is None else pool_subset
+    # KIRBY_POOL_SUBSET overrides every caller's choice, for local runs that
+    # must read only the families already on disk (added 2026-09-28: logd has
+    # no similarity search locally, so 'predictive_and_similarity' built one
+    # live). Unset, nothing changes.
+    name = os.environ.get('KIRBY_POOL_SUBSET') or name
     if name not in POOL_SUBSETS:
         raise ValueError(
             f"pool_subset={pool_subset!r} is not a known subset. "
@@ -7872,6 +7933,127 @@ def rank_downstream_models_by_base_reps(search, n_models=2, *, top_k=3,
     return out
 
 
+def top_hybrids_across_models(search, n=2, **kwargs):
+    """Top `n` hybrid configurations over EVERY model the search scored.
+
+    Owner's decision 2026-09-28: when a stored search holds no configuration for
+    the model about to be scored, use the best hybrids anyone found rather than
+    one named model's.
+
+    ⛔ WHAT THIS IS FOR, AND WHAT IT IS NOT FOR. It exists to replace a
+    substitution. Several files used to reach for the random forest's recipe when
+    a model had none of its own, which silently reported one model's choice under
+    another model's name. Ranking every model's rows together at least says what
+    it is: the best configuration found for this dataset, by whichever model
+    found it. It is still not that model's own recipe, and every entry carries
+    'recipe_chosen_by' naming the model whose score put it at that rank.
+
+    ⛔ THE SCORES BEING RANKED WERE PRODUCED BY DIFFERENT MODELS. They are in the
+    dataset's own metric on the same folds, so they are the same quantity, but a
+    configuration ranks high here because it suited the model that scored it.
+    Never present a number from this as the scored model's own.
+
+    Takes and forwards every keyword top_hybrids takes. The return adds
+    'models_ranked_over' and 'recipe_chosen_by' on each entry.
+    """
+    fitted = searched_models(search)
+    if not fitted:
+        return {'selected': [], 'ranked_over': {}, 'tie_at_cut': None,
+                'notes': ['the search names no model it scored, so there is '
+                          'nothing to rank'],
+                'shortfall_reason': 'no model on the search',
+                'kind': 'hybrid_across_models', 'models_ranked_over': []}
+    pooled = []
+    for m in fitted:
+        got = top_hybrids(search, m, n, require_full=False, **kwargs)
+        for e in got['selected']:
+            e = dict(e)
+            e['recipe_chosen_by'] = m
+            pooled.append(e)
+    lower = bool(getattr(search, 'lower_is_better', False))
+    pooled.sort(key=lambda e: e['score_mean'], reverse=not lower)
+    # One configuration can be the best for two models; keep its better rank.
+    seen, out = set(), []
+    for e in pooled:
+        key = e.get('label')
+        if key in seen:
+            continue
+        seen.add(key)
+        e['rank'] = len(out) + 1
+        out.append(e)
+        if len(out) == n:
+            break
+    return {'selected': out,
+            'ranked_over': {'n_models': len(fitted),
+                            'n_configurations_pooled': len(pooled)},
+            'tie_at_cut': None,
+            'notes': [],
+            'shortfall_reason': (
+                None if len(out) == n else
+                f'asked for {n} configurations and {len(out)} were stored '
+                f'across the {len(fitted)} models the search scored'),
+            'kind': 'hybrid_across_models',
+            'models_ranked_over': list(fitted)}
+
+
+def searched_models(search):
+    """The downstream models this SearchResult actually scored, sorted.
+
+    ⛔ WHY THIS EXISTS. Every comparison in this repo is meant to be, per
+    downstream model, that model's top base representations against its top
+    hybrids. Nineteen files used to loop DOWNSTREAM_MODELS -- a fixed list of
+    five names in this file -- rather than asking the search which models it
+    scored. The two disagree whenever the search named a shorter list: a
+    caller that passes its own speed='fast' with no models= gets rf, lightgbm
+    and dnn only, a dataset's skip policy can drop svm or gp, and svm drops
+    itself above 10,000 molecules. The models in the list that the search never
+    scored then fell out of the loop, mostly with nothing written down, so a
+    table of five models was really a table of three and said so nowhere.
+
+    Read from best_by_model_budget first (the primary selection unit,
+    find_best_hybrid.py:1596), then best_by_model, then the distinct
+    downstream_model values in all_results. Returns [] when none of the three
+    is populated, and the caller must then say so rather than guess.
+    """
+    for attr in ('best_by_model_budget', 'best_by_model'):
+        d = getattr(search, attr, None) or {}
+        names = [m for m, v in d.items() if v]
+        if names:
+            return sorted(names)
+    rows = getattr(search, 'all_results', None) or []
+    names = {r.get('downstream_model') or r.get('model') for r in rows}
+    return sorted(n for n in names if n)
+
+
+def resolve_comparison_models(search, requested=None):
+    """(models to compare, [(dropped name, why)]).
+
+    `requested` is what the experiment wants. Anything in it the search did not
+    score is dropped and named, never substituted: there is no fallback to
+    another model's rows anywhere in this function, because a row labelled for
+    one model that holds another model's configuration is the defect this
+    whole helper exists to stop.
+
+    requested=None means every model the search scored, which is the right
+    default for a comparison table -- it widens on its own when the search ran
+    a longer list, so a distance search that scored knn as well as the five
+    puts knn in the table without the caller naming it.
+    """
+    fitted = searched_models(search)
+    if requested is None:
+        return list(fitted), []
+    requested = list(requested)
+    if not fitted:
+        # Nothing readable on the search. Keep the request and let each
+        # top_base_reps / top_hybrids call report its own shortfall, rather
+        # than silently returning an empty comparison.
+        return requested, []
+    keep = [m for m in requested if m in fitted]
+    dropped = [(m, f'the search scored {fitted} and not {m!r}')
+               for m in requested if m not in fitted]
+    return keep, dropped
+
+
 def select_model_rep_pairs(search, models=None, n_base=2, n_hybrids=2, *,
                            budget=None, rule='whole_dataset',
                            held_out_fold=None, drop_folds=(),
@@ -7890,11 +8072,13 @@ def select_model_rep_pairs(search, models=None, n_base=2, n_hybrids=2, *,
     hybrids are in the same metric. Calling top_base_reps and top_hybrids
     separately on two different searches is possible and nothing checks it.
     """
-    models = list(models) if models is not None else list(DOWNSTREAM_MODELS)
+    models, _dropped = resolve_comparison_models(search, models)
     per_model = {}
     pairs = []
     shortfalls = []
     distinct = {}
+    for _name, _why in _dropped:
+        shortfalls.append(f"{_name}: not in the comparison -- {_why}")
 
     for m in models:
         base = top_base_reps(search, m, n_base, rule=rule,
@@ -7936,6 +8120,7 @@ def select_model_rep_pairs(search, models=None, n_base=2, n_hybrids=2, *,
         'dataset_name': getattr(search, 'dataset_name', None),
         'metric_name': getattr(search, 'metric_name', None),
         'models': models,
+        'models_dropped': [{'model': n, 'reason': w} for n, w in _dropped],
         'n_base': n_base,
         'n_hybrids': n_hybrids,
         'n_pairs_possible': n_possible,
@@ -8018,7 +8203,23 @@ def hybrid_deltas(search, downstream_model, hybrid=None, *,
                 + (f" at budget {budget}" if budget is not None else "")
                 + ". The search stored no configuration under that name — it is "
                   "absent, not beaten. Pass hybrid= to name one yourself.")
-        hybrid = _picked['selected'][0]['row']
+        # ⛔ WAS ['row'], WHICH IS NOT A KEY, FIXED 2026-09-28. Two things
+        # disagreed. top_hybrids builds each selected entry as a flat dict of
+        # score_mean, blueprint, budget, n_features and the rest (_shared.py:7693
+        # onwards) and never puts the underlying row under a 'row' key. This line
+        # asked for that key, so every call that left hybrid= unset raised
+        # KeyError before either delta was computed.
+        #
+        # The two things this function then reads off `hybrid` are score_mean and
+        # blueprint, and the entry carries both, so the entry is what it wants.
+        # opig_ginkgo_developability.py:367 already passes the entry itself.
+        #
+        # ⛔ SOME CALLERS PASS hybrid= BY HAND SPECIFICALLY TO AVOID THIS, and
+        # say so in a comment beside the call (opig_humanness.py:365,
+        # opig_kingsmith_component_splits.py:580,
+        # opig_trastuzumab_enrichment.py:762). Those calls keep working
+        # unchanged; what changes is that the default path works too.
+        hybrid = _picked['selected'][0]
 
     h_score = hybrid.get('score_mean')
     if h_score is None or not np.isfinite(h_score):

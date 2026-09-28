@@ -26,6 +26,7 @@ from experiments._shared import (
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    resolve_comparison_models,
     build_fold_reselection_input, fold_reselection,
     _build_rep_factories, parse_rep_args,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
@@ -383,13 +384,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if not _top_reps:
             _fallback = _info.get('best_single_rep')
             _top_reps = [_fallback] if _fallback in reps else []
+        # ── Two representations of the same WIDTH are one search ──────────
+        # The call below is restricted to this one downstream model and to
+        # budgets=[the representation's width]. Rank 1 and rank 2 differ in
+        # exactly one argument, condition_suffix, and condition_suffix reaches
+        # the cache filename, the tier label and the search meta and nothing
+        # else (find_best_hybrid.py:8859-8860, 8974-8976). So when the two
+        # representations are the same number of features wide, the second call
+        # recomputes a bit-identical SearchResult under a second cache key.
+        #
+        # MEASURED on flab_thermo_tresanco (672 molecules, whole dataset, no row
+        # dropped) on 2026-09-25, five representations, all 1000 features wide
+        # under KIRBY_LOCAL_MAX_FEATURES_PER_REP=1000:
+        #   rf  rank 1 saprot -> spearman 0.6258; rank 2 esmc -> spearman 0.6258
+        #   svm rank 1 saprot -> spearman 0.6297; rank 2 esmc -> spearman 0.6297
+        # Four searches here cost 198 s of c02's 298 s on that run and two of
+        # the four were these duplicates.
+        #
+        # Not only a local-run effect: in the shipped ten-representation flab
+        # pool, saprot, esm2_entropy_top20, esm2_cdr, esm2_early and
+        # esm2_wt_delta are all 1280 features wide, so the cluster pays for the
+        # same duplicate whenever two of those come first and second.
+        #
+        # ⛔ NOTHING IS CUT AND NO NUMBER CHANGES. The reused SearchResult is
+        # the object the second call would have built. Only rank 2's cache entry
+        # is not written, and the delta printed below is still taken against
+        # rank 2's OWN baseline representation, which is the one quantity that
+        # genuinely differs between the two ranks.
+        _search_by_width = {}
         for _rank, _top_rep in enumerate(_top_reps, start=1):
             _top_dim = reps[_top_rep].shape[1]
             if _top_dim in skipped_already_tested:
                 # Main search already covers this budget for this model.
                 continue
+            _reused = _search_by_width.get(_top_dim)
             try:
-                _s = find_best_hybrid(
+                _s = _reused if _reused is not None else find_best_hybrid(
                     base_reps=reps,
                     labels=labels,
                     groups=groups,
@@ -412,6 +442,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     condition_suffix=f'top_rep_dim_{_model_name}_{_top_rep}',
                     allow_budget_exceeds_n=True,
                 )
+                _search_by_width.setdefault(_top_dim, _s)
                 search_per_model_top_rep[f'{_model_name}__{_top_rep}'] = _s
                 if _rank == 1:
                     # Keep the old key so every existing reader still finds the
@@ -434,11 +465,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # as well as on r2/spearman/auc.
                     _delta = ((_baseline - _r['score_mean']) if lower_is_better
                               else (_r['score_mean'] - _baseline))
+                    # Says so when the search was not run again, so a reader
+                    # of the log can see why two ranks carry the same score.
+                    _same = ('' if _reused is None else
+                             f' [same {_top_dim}-feature search as an earlier '
+                             f'representation of this model, not re-run]')
                     print(f"    {_model_name}: hybrid@{_top_dim}D "
                           f"(rank {_rank}: {_top_rep}) -> "
                           f"{metric_label}={_r['score_mean']:.4f} "
                           f"(vs {_top_rep} {_baseline:.4f}, "
-                          f"delta={_delta:+.4f})")
+                          f"delta={_delta:+.4f}){_same}")
             except Exception as _e:
                 print(f"    {_model_name}: rank-{_rank} rep {_top_rep} "
                       f"failed — {_e}")
@@ -780,20 +816,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             return [_no_blueprint(v) for v in obj]
         return obj
 
+    # `models` (line 45) is get_model_factories(config['models']) -- the model
+    # names this file was asked for. The three searches above pass models=None,
+    # so the search scores whatever the speed setting names, and under 'fast'
+    # that is rf and lightgbm only. The two lists disagree, and the comparison
+    # has to run over the models the search actually scored. Every name in
+    # config['models'] the search did not score is written into the results
+    # under 'models_dropped' with the reason; none is swapped for another
+    # model's rows.
+    comparison_models, models_dropped = resolve_comparison_models(
+        search, list(models))
+    if models_dropped:
+        for _name, _why in models_dropped:
+            print(f"  {_name} is not in the comparison: {_why}")
+
     top2_base_reps = {}
     top2_hybrids = {}
     hybrid_deltas_by_model = {}
-    for _m in models:
+    selection_failures = []
+    for _m in comparison_models:
         try:
             top2_base_reps[_m] = top_base_reps(search, _m, 2,
                                                require_full=False)
         except Exception as _e:
+            selection_failures.append(
+                {'downstream_model': _m, 'half': 'base_reps',
+                 'reason': f'{type(_e).__name__}: {_e}'})
             print(f"  top-2 base representations for {_m} unavailable: {_e}")
         _th = None
         try:
             _th = top_hybrids(search, _m, 2, require_full=False)
             top2_hybrids[_m] = _no_blueprint(_th)
         except Exception as _e:
+            selection_failures.append(
+                {'downstream_model': _m, 'half': 'hybrids',
+                 'reason': f'{type(_e).__name__}: {_e}'})
             print(f"  top-2 hybrid configurations for {_m} unavailable: {_e}")
         # The rank-1 hybrid is handed to hybrid_deltas explicitly. Called
         # without one it picks its own and reads it as
@@ -807,6 +864,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 hybrid_deltas_by_model[_m] = hybrid_deltas(
                     search, _m, hybrid=_th['selected'][0])
             except Exception as _e:
+                selection_failures.append(
+                    {'downstream_model': _m, 'half': 'hybrid_deltas',
+                     'reason': f'{type(_e).__name__}: {_e}'})
                 print(f"  hybrid deltas for {_m} unavailable: {_e}")
 
     # The same two-by-two grid in one block: per downstream model, the 2 base
@@ -816,10 +876,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     top2_pairs_by_model = {}
     try:
         top2_pairs_by_model = _no_blueprint(
-            select_model_rep_pairs(search, models=list(models),
+            select_model_rep_pairs(search, models=comparison_models,
                                    n_base=2, n_hybrids=2,
                                    require_full=False))
     except Exception as _e:
+        selection_failures.append(
+            {'downstream_model': None, 'half': 'model_rep_pairs',
+             'reason': f'{type(_e).__name__}: {_e}'})
         print(f"  top-2 model-and-representation grid unavailable: {_e}")
 
     # Printed because the two deltas answer different questions and a reader
@@ -832,7 +895,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if hybrid_deltas_by_model:
         print(f"\n  TOP HYBRID vs TWO REFERENCE NUMBERS ({metric_label}, "
               f"+ means the hybrid won):")
-        for _m in models:
+        for _m in comparison_models:
             _hd = hybrid_deltas_by_model.get(_m)
             if not _hd:
                 continue
@@ -884,6 +947,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'top2_hybrids': top2_hybrids,
         'top2_pairs_by_model': top2_pairs_by_model,
         'hybrid_deltas_by_model': hybrid_deltas_by_model,
+        # Which downstream models the two-against-two comparison above ran over,
+        # which of the ones asked for were not scored by the search, and any
+        # model whose half of the comparison raised. A reader who finds three
+        # models in 'top2_base_reps' and five in config['models'] gets the
+        # reason from here.
+        'comparison_models': comparison_models,
+        'models_dropped': [{'downstream_model': _n, 'reason': _w}
+                           for _n, _w in models_dropped],
+        'comparison_failures': selection_failures,
     }
 
 

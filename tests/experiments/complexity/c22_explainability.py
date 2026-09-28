@@ -9,10 +9,16 @@ Conclusion: The best hybrid is interpretable — we can trace every
 Dependencies: Precomputed search (from precompute step).
 
 Design:
-    1. Retrieve the best hybrid from precomputed search (best_by_model).
-    2. Build it on 80% of data (train), evaluate on 20% (val).
-    3. Train downstream models on the hybrid.
-    4. Run SHAP analysis on the best model → per-feature SHAP values.
+    1. Retrieve the best hybrid PER DOWNSTREAM MODEL from the precomputed
+       search (best_by_model), one recipe per model, never one model's recipe
+       read under another model's name. A model the pool holds no recipe for is
+       recorded in 'models_unscored' and is not trained at all.
+    2. Build each model's own features on 80% of data (train), evaluate on 20%
+       (val). The keep/drop test inside a model's build is run with that same
+       model and the dataset's own metric.
+    3. Train each downstream model on its own hybrid features.
+    4. Run SHAP analysis on the best model → per-feature SHAP values, read
+       against that model's own feature map.
     5. Use explain_hybrid to map hybrid features back to source reps
        with human-readable names where possible.
     6. Aggregate importance by rep → shows which reps contribute most.
@@ -100,38 +106,75 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                  n_samples=n_samples)
     print(f"  Models: {list(models.keys())}")
 
-    # The model handed to each fold's build. The recipe below is fetched for a
-    # random forest downstream, so the keep/drop test inside the build is run
-    # with a random forest too; both downstream models are then scored on the
-    # features that chose.
-    build_model_name = 'rf' if 'rf' in models else next(iter(models))
-    build_model_factory = models[build_model_name]
-
-    # ── Get best hybrid via pool helper (rf at budget=None = best across budgets) ──
-    search, meta = get_best_search_for_downstream(
-        reps, labels, groups,
-        downstream_model='rf', budget=None,
-        augmentations=augmentations,
-        dataset_name=dataset_name, task_type=task_type,
-        data=data,
-    )
-    if not meta:
-        print("  No hybrid search result available — skipping C22")
-        return {'error': 'no_search_result'}
-
-    best = meta['best_config']
-    bp = best['blueprint']
-    print(f"  Pool winner: tier={meta['tier']} aug={meta['aug_condition']}")
-    # The score the allocation method, importance method, internal evaluator
-    # and budget were CHOSEN by, computed over every row of the dataset —
-    # including the rows each fold below scores as validation. It is not
-    # performance on held-out rows; fold_results carries those, per fold and
-    # per model.
-    recipe_selection_score = best.get('score_mean', 0)
-    print(f"  Blueprint: alloc={bp.allocation_method}, imp={bp.importance_method}, "
-          f"eval={bp.internal_evaluator}, budget={bp.budget}")
-    print(f"  Recipe selection score (all rows, NOT held out): "
-          f"{recipe_selection_score:.4f}")
+    # ── One recipe per downstream model, and one feature build per recipe ──
+    #
+    # ⛔ WHAT THIS REPLACED, 2026-09-28. Until today one recipe was fetched,
+    # with downstream_model='rf', and one feature set was built from it per
+    # fold. Both rf and xgboost were then trained on that one feature set and
+    # both had their SHAP values read off it. The two things that disagree: the
+    # search chose those features by fitting a random forest and scoring it,
+    # and one of the two models whose attributions were reported is not a
+    # random forest. So xgboost's score and its per-representation SHAP share
+    # were produced on features selected for a different model, under a name
+    # that said they were xgboost's. Each model now gets the recipe the pool
+    # stored for itself and its own per-fold feature build, and the keep/drop
+    # test inside its build is run with that same model.
+    #
+    # A model the pool holds no recipe for is recorded in 'models_unscored'
+    # and is not trained at all. No other model's recipe is put in its place.
+    bp_by_model = {}
+    meta_by_model = {}
+    models_unscored = {}
+    for _mname in list(models):
+        try:
+            _search_m, _meta_m = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=_mname, budget=None,
+                augmentations=augmentations,
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+        except Exception as _exc:
+            models_unscored[_mname] = (
+                f'the pool lookup for this downstream model raised '
+                f'{type(_exc).__name__}: {_exc}')
+            continue
+        if not _meta_m:
+            models_unscored[_mname] = (
+                'the precomputed pool holds no search for this downstream '
+                'model, so it has no recipe of its own')
+            continue
+        _bp_m = _meta_m['best_config']['blueprint']
+        # The pool sets the augmentation strategy per slot; realign it so the
+        # rebuild happens under the condition that won (2026-04-21
+        # cache-collision pattern).
+        _aug_m = _meta_m.get('aug_condition', 'uncapped')
+        if getattr(_bp_m, 'augmentation_strategy', None) != _aug_m:
+            try:
+                _bp_m.augmentation_strategy = _aug_m
+            except Exception:
+                pass
+        bp_by_model[_mname] = _bp_m
+        meta_by_model[_mname] = _meta_m
+        print(f"  {_mname}: pool winner tier={_meta_m.get('tier')} "
+              f"aug={_aug_m}; alloc={_bp_m.allocation_method}, "
+              f"imp={_bp_m.importance_method}, "
+              f"eval={_bp_m.internal_evaluator}, budget={_bp_m.budget}")
+        # The score the allocation method, importance method, internal
+        # evaluator and budget were CHOSEN by, computed over every row of the
+        # dataset — including the rows each fold below scores as validation. It
+        # is not performance on held-out rows; fold_results carries those, per
+        # fold and per model.
+        print(f"    recipe selection score (all rows, NOT held out): "
+              f"{_meta_m['best_config'].get('score_mean', 0):.4f}")
+    for _mname, _why in models_unscored.items():
+        print(f"  {_mname}: unscored -- {_why}")
+        models.pop(_mname, None)
+    if not bp_by_model:
+        print("  No hybrid search result available for any downstream model "
+              "— skipping C22")
+        return {'error': 'no_search_result',
+                'models_unscored': models_unscored}
 
     # ── Per-fold hybrid construction + model evaluation ──
     fold_results = []
@@ -153,39 +196,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
         val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
 
-        try:
-            # The recipe was chosen for a random forest downstream, so the
-            # keep/drop test inside the build is given a random forest and the
-            # dataset's own metric. Without a model create_hybrid scores
-            # accept/reject with r2_score or accuracy_score instead of the
-            # metric this dataset is reported in (_shared.py:4442-4447), so the
-            # features being explained here were chosen under the wrong
-            # quantity.
-            X_train, X_val, feature_info = build_fold_hybrid(
-                train_reps, val_reps, y_train, bp,
-                augmentations_train=train_augs,
-                augmentations_val=val_augs,
-                groups=(groups[train_idx] if groups is not None else None),
-                model=build_model_factory(),
-                metric_fn=metric_fn,
-                lower_is_better=lower_is_better)
-        except Exception as e:
-            print(f"    Fold {fold_idx}: hybrid build failed — {e}")
-            continue
-
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train)
-        X_val_s = scaler.transform(X_val)
-
-        all_feature_infos.append((fold_idx, feature_info))
-
-        # Train each model, collect scores
+        # ── One build per model, from that model's own recipe ──
+        # The keep/drop test inside each build is given the same model the
+        # search that produced this recipe fitted, and the dataset's own
+        # metric. Without a model create_hybrid scores accept/reject with
+        # r2_score or accuracy_score instead of the metric this dataset is
+        # reported in (_shared.py:4442-4447).
         fold_model_scores = {}
+        fold_widths = {}
         best_model_name = None
         best_score = -np.inf if not lower_is_better else np.inf
-
         best_model_obj = None
+        # The feature map, the scaled validation features and the recipe of the
+        # model SHAP explains on this fold. They must all three come from the
+        # same build, because explain_hybrid zips a SHAP vector to a feature map
+        # by position.
+        best_feature_info = None
+        best_X_val_s = None
+        best_X_train_s = None
+        fold_build_failures = {}
         for model_name, model_factory in models.items():
+            _bp_m = bp_by_model.get(model_name)
+            if _bp_m is None:
+                continue
+            try:
+                X_train, X_val, feature_info = build_fold_hybrid(
+                    train_reps, val_reps, y_train, _bp_m,
+                    augmentations_train=train_augs,
+                    augmentations_val=val_augs,
+                    groups=(groups[train_idx] if groups is not None else None),
+                    model=model_factory(),
+                    metric_fn=metric_fn,
+                    lower_is_better=lower_is_better)
+            except Exception as e:
+                fold_build_failures[model_name] = f'{type(e).__name__}: {e}'
+                print(f"    Fold {fold_idx}: {model_name} hybrid build "
+                      f"failed — {e}")
+                continue
+
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+
             m = model_factory()
             m.fit(X_train_s, y_train)
             # OTHER-29: use _predict_for_metric so a binary-AUROC metric is
@@ -194,12 +246,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pred = _predict_for_metric(m, X_val_s, metric_fn)
             score = float(metric_fn(y_val, pred))
             fold_model_scores[model_name] = score
+            fold_widths[model_name] = int(X_train.shape[1])
 
             is_better = (score > best_score) if not lower_is_better else (score < best_score)
             if is_better:
                 best_score = score
                 best_model_name = model_name
                 best_model_obj = m  # retain the FITTED model for SHAP
+                best_feature_info = feature_info
+                best_X_val_s = X_val_s
+                best_X_train_s = X_train_s
+
+        if best_model_name is None:
+            print(f"    Fold {fold_idx}: no model both built and scored")
+            continue
+
+        # The feature map that pairs with this fold's SHAP vector is the
+        # explained model's own, built from the explained model's own recipe.
+        feature_info = best_feature_info
+        X_train_s, X_val_s = best_X_train_s, best_X_val_s
+        all_feature_infos.append((fold_idx, feature_info, best_model_name))
 
         # SHAP on the best model for this fold
         shap_info = None
@@ -284,12 +350,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'best_model': best_model_name,
             'n_train': len(y_train),
             'n_val': len(y_val),
-            'n_hybrid_features': X_train.shape[1],
+            # The width of the space the explained model was scored on. Each
+            # model has its own build now, so the widths are per model in
+            # 'n_hybrid_features_by_model' beside it.
+            'n_hybrid_features': int(X_train_s.shape[1]),
+            'n_hybrid_features_by_model': dict(fold_widths),
+            'build_failed_by_model': dict(fold_build_failures),
             'shap_available': shap_info is not None,
         })
 
-        print(f"    Fold {fold_idx}: {', '.join(f'{k}={v:.4f}' for k, v in fold_model_scores.items())} "
-              f"(hybrid={X_train.shape[1]}D, shap={'ok' if shap_info else 'fail'})")
+        print(f"    Fold {fold_idx}: "
+              f"{', '.join(f'{k}={v:.4f} ({fold_widths.get(k)}D)' for k, v in fold_model_scores.items())} "
+              f"(explained {best_model_name}, shap={'ok' if shap_info else 'fail'})")
 
     if not fold_results:
         return {'error': 'all_folds_failed'}
@@ -309,11 +381,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # which is the reason given a few lines above for not averaging across
     # folds in the first place. Both lists now carry their fold index and the
     # pair is chosen from the folds that have both.
+    #
+    # Since 2026-09-28 each entry also carries the model the map was built
+    # FOR, because there is now one build per model and the map that pairs
+    # with a SHAP vector is the explained model's own.
     _shap_folds = {f for f, _ in all_shap_values}
-    _paired = [f for f, _ in all_feature_infos if f in _shap_folds]
+    _paired = [f for f, _, _ in all_feature_infos if f in _shap_folds]
     _pair_fold = _paired[-1] if _paired else all_feature_infos[-1][0]
-    feature_info = next(fi for f, fi in all_feature_infos if f == _pair_fold)
+    feature_info, explained_model = next(
+        (fi, mn) for f, fi, mn in all_feature_infos if f == _pair_fold)
     top_feature_fold = int(_pair_fold)
+    # The recipe behind the feature map every per-representation number below
+    # is read against, and the model it was searched for.
+    bp = bp_by_model[explained_model]
+    recipe_selection_score = meta_by_model[explained_model][
+        'best_config'].get('score_mean', 0)
 
     # Which representations actually moved between folds. Two folds with
     # different allocations cannot share a feature-position map at all.
@@ -374,8 +456,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # whichever scores better on that fold's validation rows is the one SHAP
     # explains. A per-representation share averaged over folds is then a mean
     # of a forest's attributions and a boosted model's wherever the winner
-    # changed. fold_results carries best_model per fold, so it is recoverable —
-    # it just was not stated beside the number it affects.
+    # changed. Since 2026-09-28 each model also builds its features from its
+    # own recipe, so where the winner changed the recipe behind the feature map
+    # changed with it. fold_results carries best_model per fold, so both are
+    # recoverable — they just were not stated beside the number they affect.
     shap_by_rep = {}
     shap_share_by_rep = {}
     shap_by_rep_std = {}
@@ -405,8 +489,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"\n{'=' * 70}")
     print("EXPLAINABILITY SUMMARY")
     print(f"{'=' * 70}")
-    print(f"  Blueprint: {bp.allocation_method} / {bp.importance_method} / "
-          f"{bp.internal_evaluator} / budget={bp.budget}")
+    print(f"  Blueprint of the explained model ({explained_model}, fold "
+          f"{top_feature_fold}): {bp.allocation_method} / "
+          f"{bp.importance_method} / {bp.internal_evaluator} / "
+          f"budget={bp.budget}")
+    for _mname, _bp_m in bp_by_model.items():
+        if _mname == explained_model:
+            continue
+        print(f"  Blueprint of {_mname}: {_bp_m.allocation_method} / "
+              f"{_bp_m.importance_method} / {_bp_m.internal_evaluator} / "
+              f"budget={_bp_m.budget}")
 
     # Per-representation budget split. The count is the paired fold's; the
     # spread across folds is printed beside it when it moves.
@@ -477,10 +569,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'n_folds': n_folds,
         'n_samples': n_samples,
+        # The recipe behind the feature map every per-representation number in
+        # this file is read against: the explained model's own, on the fold
+        # named by 'top_feature_fold'. Every model's own recipe is in
+        # 'blueprint_by_model' beside it.
         'blueprint': bp.to_dict(),
+        'blueprint_by_model': {_m: _b.to_dict()
+                               for _m, _b in bp_by_model.items()},
+        'explained_model': explained_model,
+        # Downstream models the pool holds no recipe for. They are not trained
+        # and have no rows, because the only recipe on offer belonged to
+        # another model. Added 2026-09-28 with the per-model builds.
+        'models_unscored': models_unscored,
+        'models_scored': sorted(bp_by_model),
         # Renamed from 'search_score', which read as performance. It is the
-        # selection score of the recipe, measured over every row.
+        # selection score of the recipe, measured over every row. It is the
+        # explained model's recipe's score; every model's is beside it.
         'recipe_selection_score': recipe_selection_score,
+        'recipe_selection_score_by_model': {
+            _m: meta_by_model[_m]['best_config'].get('score_mean', 0)
+            for _m in bp_by_model},
         'recipe_selected_on': 'all rows',
         # Both meanings, side by side, so a reader never has to know which
         # allocation method wrote which. 'allocation' is the quota under the
@@ -531,9 +639,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # One fold's SHAP read against that same fold's feature map. No
         # cross-fold average is taken at any hybrid width.
         'top_features_basis': "the last fold's own SHAP vector",
-        # The model create_hybrid's keep/drop test was run with inside each
-        # fold's build, scored with the dataset's own metric.
-        'fold_build_model': build_model_name,
+        # The model create_hybrid's keep/drop test was run with inside the
+        # build behind the reported feature map, scored with the dataset's own
+        # metric. Since 2026-09-28 every model builds its own features from its
+        # own recipe and is the model its own keep/drop test is run with, so
+        # this is the explained model's name.
+        'fold_build_model': explained_model,
+        'fold_build_model_is_per_model': True,
         'fold_build_metric': metric_name,
         'fold_results': fold_results,
     })

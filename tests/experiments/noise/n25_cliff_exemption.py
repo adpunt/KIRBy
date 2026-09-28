@@ -194,6 +194,7 @@ from experiments._shared import (
     get_best_search_for_downstream,
     noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    searched_models, resolve_comparison_models,
 )
 from experiments.dataset_policy import (
     noise_groups_for, reference_noise_level,
@@ -975,8 +976,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     flag_rates = [float(x) for x in (kwargs.get('flag_rates') or FLAG_RATES)]
     detectors = list(kwargs.get('detectors') or DETECTORS)
     seeds = [int(s) for s in (kwargs.get('noise_seeds') or NOISE_SEEDS)]
+    # Level 0.0 is in the default since 2026-09-27 (owner's decision): nothing
+    # is injected there, so the cleanup, the cliff exemption and the random
+    # exemption are all applied to the labels as recorded, and each is scored
+    # against the fit on those same labels.
     levels = [float(x) for x in (kwargs.get('levels')
-                                 or [reference_noise_level(dataset_name)])]
+                                 or [0.0, reference_noise_level(dataset_name)])]
     CLEANUPS = cleanups_for(is_clf, kwargs.get('cleanups'))
     # {model: [rank-1 rep, rank-2 rep]} given directly (a smoke or a direct
     # caller). None means: rank them from the stored search, below.
@@ -1218,10 +1223,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'there are no stored rows to rank. Every number in this file '
             'stands.')
     else:
-        for _m in downstream_models:
-            search = _searches.get(_m)
-            if search is None:
+        # WHICH DOWNSTREAM MODELS THIS TABLE COVERS. Two lists decide it and
+        # they can disagree. `downstream_models` is the list this run fits,
+        # taken from config['models'] or from DOWNSTREAM_MODELS_NOISE when the
+        # runner named none, with rf and svm added by ensure_dprime_models. The
+        # other list is the models a stored search scored, which
+        # searched_models reads off that search. A model in the first and not
+        # in the second has no rows of its own to rank. Both kinds of missing
+        # model are now written to the result file: the model whose pool lookup
+        # returned no search at all, and the model whose own search scored
+        # other models and not it. Neither is read out of another model's
+        # search -- resolve_comparison_models never substitutes one model for
+        # another, and each model below is read out of its own.
+        _requested = list(downstream_models)
+        _compare, _model_dropped = [], {}
+        for _m in _requested:
+            _s_m = _searches.get(_m)
+            if _s_m is None:
+                _model_dropped[_m] = (
+                    'the pool returned no stored search for this downstream '
+                    'model, so there are no rows of its own to rank')
                 continue
+            _keep, _why = resolve_comparison_models(_s_m, [_m])
+            if not _keep:
+                _model_dropped[_m] = _why[0][1]
+                continue
+            _compare.append(_m)
+        results['top2_models_requested'] = _requested
+        results['top2_models_compared'] = list(_compare)
+        results['top2_models_dropped'] = _model_dropped
+        results['top2_models_scored_by_each_search'] = {
+            _m: searched_models(_s) for _m, _s in _searches.items()}
+        for _m, _why in _model_dropped.items():
+            print(f"  top-2 rows absent for {_m}: {_why}")
+        for _m in _compare:
+            search = _searches[_m]
             try:
                 results['top2_base_reps'][_m] = top_base_reps(
                     search, _m, 2, require_full=False)

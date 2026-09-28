@@ -307,6 +307,10 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     # absent from the saved dict rather than present and empty.
     top2_block = None
     hybrid_delta_block = None
+    # One entry per downstream model that has NO hybrid-versus-reference numbers,
+    # and the reason. Written so a table of three models cannot be read as a
+    # table of five.
+    hybrid_delta_unscored = {}
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -346,7 +350,8 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             # stored: 0 new model fits.
             try:
                 from experiments._shared import (select_model_rep_pairs,
-                                                  top_hybrids, hybrid_deltas)
+                                                  top_hybrids, hybrid_deltas,
+                                                  resolve_comparison_models)
                 top2_block = select_model_rep_pairs(
                     search, models=MODELS_LIST, n_base=2, n_hybrids=2,
                     # require_full=False: a downstream model this search never
@@ -359,8 +364,22 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
                 # model: the mean of the base representations that actually fed
                 # it, and the best single base representation. A hybrid can beat
                 # the first and lose to the second. 0 new model fits.
+                #
+                # MODELS_LIST is the five names written down in this file
+                # (opig_humanness.py:113). The search scores whatever list it
+                # was given, which can be shorter: a dataset's skip policy drops
+                # svm, and svm drops itself above 10,000 molecules. Asking for a
+                # model the search never scored used to give a bare failure line
+                # with no reason. resolve_comparison_models keeps the names the
+                # search has scores for and names every one it dropped. It never
+                # substitutes another model's rows.
                 hybrid_delta_block = {}
-                for _m in MODELS_LIST:
+                _delta_models, _delta_dropped = resolve_comparison_models(
+                    search, MODELS_LIST)
+                for _name, _why in _delta_dropped:
+                    hybrid_delta_unscored[_name] = _why
+                    print(f"  hybrid_deltas[{_name}]: not computed -- {_why}")
+                for _m in _delta_models:
                     try:
                         # hybrid= is passed by hand. hybrid_deltas(search, m)
                         # with no hybrid reads _picked['selected'][0]['row']
@@ -372,14 +391,18 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
                         _top1 = top_hybrids(search, _m, 1, require_full=False,
                                             context=f'{dataset_name}/{_m}')
                         if not _top1['selected']:
-                            print(f"  hybrid_deltas[{_m}]: the search stored no "
-                                  f"hybrid configuration for this downstream "
-                                  f"model")
+                            hybrid_delta_unscored[_m] = (
+                                _top1.get('shortfall_reason')
+                                or 'the search stored no hybrid configuration '
+                                   'for this downstream model')
+                            print(f"  hybrid_deltas[{_m}]: "
+                                  f"{hybrid_delta_unscored[_m]}")
                             continue
                         hybrid_delta_block[_m] = hybrid_deltas(
                             search, _m, hybrid=_top1['selected'][0],
                             context=f'{dataset_name}/{_m}')
                     except Exception as _e:
+                        hybrid_delta_unscored[_m] = (f'{type(_e).__name__}: {_e}')
                         print(f"  hybrid_deltas[{_m}] failed: {_e}")
 
                 # The Blueprint object off each selected hybrid: it is a recipe
@@ -462,6 +485,8 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         out['top2_pairs_by_model'] = top2_block
     if hybrid_delta_block:
         out['hybrid_deltas_by_model'] = hybrid_delta_block
+    if hybrid_delta_unscored:
+        out['hybrid_deltas_unscored_models'] = hybrid_delta_unscored
     return out
 
 

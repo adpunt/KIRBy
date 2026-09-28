@@ -111,6 +111,8 @@ from experiments._shared import (  # noqa: E402
     POOL_SUBSETS, DOWNSTREAM_MODELS,
     noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    get_best_search_for_downstream,
+    searched_models, resolve_comparison_models,
 )
 from kirby.utils.noise_estimation import get_noise_estimator  # noqa: E402
 # The shared similarity axis and the per-fold checkpoint, added 2026-09-25
@@ -538,17 +540,81 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     top2_base_reps, top2_hybrids = {}, {}
     hybrid_deltas_by_model, top2_pairs_by_model = {}, []
     if search is not None:
+        # ONE SEARCH PER DOWNSTREAM MODEL. `search` came back from a pool
+        # lookup that asked for rf, and every model's top 2 used to be read out
+        # of it. The pool picks the best stored configuration FOR the model it
+        # is asked about, so rf's search and lightgbm's can be different
+        # members of the pool. Each model is now asked for separately and read
+        # out of its own answer; there is no fallback to rf's, because a row
+        # labelled for one model that holds another model's configuration is
+        # the defect this loop is being fixed for. The lookups read the stored
+        # searches the rf lookup already loaded, so they cost 0 model fits.
+        _searches = {}
+        _search_lookup_failed = {}
         for _m in DOWNSTREAM_MODELS:
+            if _m == 'rf':
+                _searches[_m] = search
+                continue
+            try:
+                _s_m, _ = get_best_search_for_downstream(
+                    reps, labels, search_groups,
+                    downstream_model=_m, budget=budget,
+                    augmentations=augmentations,
+                    data=data,
+                    dataset_name=dataset_name,
+                    task_type=task_type,
+                    return_fitted=False,
+                    pool_subset=pool_subset,
+                )
+            except Exception as _e:
+                _search_lookup_failed[_m] = f'{type(_e).__name__}: {_e}'
+                continue
+            if _s_m is not None:
+                _searches[_m] = _s_m
+
+        # WHICH DOWNSTREAM MODELS THIS TABLE COVERS. Two lists decide it and
+        # they can disagree. DOWNSTREAM_MODELS (_shared.py) is the five names
+        # this file asks about. The other list is the models a stored search
+        # scored, which searched_models reads off that search: a dataset's skip
+        # policy can drop one, and svm drops itself above 10,000 molecules. A
+        # model in the first and not in the second has no rows of its own to
+        # rank, and until now it left the loop with nothing written down.
+        # resolve_comparison_models returns the overlap and the reason for
+        # every name it drops, and substitutes nothing.
+        _requested = list(DOWNSTREAM_MODELS)
+        _compare, _model_dropped = [], {}
+        for _m in _requested:
+            _s_m = _searches.get(_m)
+            if _s_m is None:
+                _model_dropped[_m] = _search_lookup_failed.get(_m) or (
+                    'the pool returned no stored search for this downstream '
+                    'model, so there are no rows of its own to rank')
+                continue
+            _keep, _why = resolve_comparison_models(_s_m, [_m])
+            if not _keep:
+                _model_dropped[_m] = _why[0][1]
+                continue
+            _compare.append(_m)
+        results['top2_models_requested'] = _requested
+        results['top2_models_compared'] = list(_compare)
+        results['top2_models_dropped'] = _model_dropped
+        results['top2_models_scored_by_each_search'] = {
+            _m: searched_models(_s) for _m, _s in _searches.items()}
+        for _m, _why in _model_dropped.items():
+            print(f"  top-2 rows absent for {_m}: {_why}")
+
+        for _m in _compare:
+            search_m = _searches[_m]
             _ctx = f'n22 {dataset_name}/{_m}'
             try:
-                # require_full=False: the pool lookup asked for rf, so a
-                # downstream model this search never scored comes back as a
-                # short list instead of raising and taking the run down.
-                _b = top_base_reps(search, _m, 2, require_full=False,
+                # require_full=False: a downstream model its own search never
+                # scored comes back as a short list carrying its own
+                # shortfall_reason instead of raising and taking the run down.
+                _b = top_base_reps(search_m, _m, 2, require_full=False,
                                    context=_ctx)
                 top2_base_reps[_m] = [(e['rep'], e['score'])
                                       for e in _b['selected']]
-                _h = top_hybrids(search, _m, 2, require_full=False,
+                _h = top_hybrids(search_m, _m, 2, require_full=False,
                                  context=_ctx)
                 # Scalars only. Each selected row also carries a Blueprint
                 # object and this dict is written to JSON. The recipe is named
@@ -567,22 +633,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # KeyError. The rank-1 entry carries 'score_mean' and
                     # 'blueprint', which is what hybrid_deltas reads.
                     hybrid_deltas_by_model[_m] = hybrid_deltas(
-                        search, _m, hybrid=_h['selected'][0], context=_ctx)
+                        search_m, _m, hybrid=_h['selected'][0], context=_ctx)
             except Exception as _e:
                 print(f"  {_m}: top-2 / hybrid deltas unavailable "
                       f"({type(_e).__name__}: {_e})")
+        # select_model_rep_pairs takes ONE SearchResult and walks every model in
+        # it, so it is given rf's and that is written down under
+        # 'top2_pairs_search_of_model'. It resolves the model list against that
+        # search itself and reports every name it drops under 'shortfalls'.
+        results['top2_pairs_search_of_model'] = 'rf'
         try:
             _sel = select_model_rep_pairs(
                 search, models=list(DOWNSTREAM_MODELS), n_base=2, n_hybrids=2,
                 require_full=False, context=f'n22 {dataset_name}')
             top2_pairs_by_model = _sel['pairs']
+            results['top2_pairs_shortfalls'] = list(_sel['shortfalls'])
         except Exception as _e:
             print(f"  top-2 pair grid unavailable "
                   f"({type(_e).__name__}: {_e})")
 
     # New keys, keyed by downstream model name, beside 'top3_base_reps' and not
-    # in place of it. A downstream model the search never scored gets an empty
-    # list and no entry in 'hybrid_deltas_by_model'. Nothing else reads them:
+    # in place of it. A downstream model whose own search never scored it, or
+    # whose pool lookup returned no search, is absent here and named in
+    # 'top2_models_dropped' with the reason. Nothing else reads them:
     # _smoke_n22.py indexes 'per_space', 'average_precision_ranking',
     # 'n_records_flagged' and 'n_records', and noise_ceiling_analyse lists n22
     # under NOT_A_SWEEP and reads no key of it.
@@ -597,9 +670,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # single best base representation for that model.
     results['hybrid_deltas_by_model'] = convert_numpy(hybrid_deltas_by_model)
     results['top2_read_from'] = (
-        'the pool search that chose the hybrid recipe, fetched for downstream '
-        'model rf. Its scores are in that search\'s own metric, not in average '
-        'precision against the curator flag.'
+        "one stored search per downstream model, each from a pool lookup that "
+        "asked about that model. rf's is the search that chose the hybrid "
+        "recipe. Every score is in its own search's metric, not in average "
+        "precision against the curator flag."
         if search is not None else
         'no search: the pool lookup returned none, so no ranking was read')
 

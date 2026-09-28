@@ -124,7 +124,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, run_nested_cv,
-    top_base_reps,
+    top_base_reps, top_hybrids,
     FULL_BUDGETS,
 )
 
@@ -200,7 +200,59 @@ def _outer_train_rows(reps, labels, groups, n_outer_folds, seed, task_type):
 # every local pool width; 8,000 is above tcga_brca_pam50's 4,732, where it
 # becomes the "use every feature" arm and is reported as SATURATED rather than
 # dropped. Owner decision 2026-09-10.
-C33_BUDGETS = list(FULL_BUDGETS) + [4000, 8000]
+C33_SHIPPED_EXTRA_BUDGETS = (4000, 8000)
+
+
+def _local_debug_run():
+    """True on a laptop run, i.e. when KIRBY_LOCAL_GRID is set.
+
+    The cluster never sets it, so every default that differs below is taken
+    only locally and the server run is byte-for-byte the shipped one.
+    """
+    return bool(os.environ.get('KIRBY_LOCAL_GRID'))
+
+
+def _env_list(var, default, cast):
+    """A comma list from the environment, or `default`. 'none' means empty."""
+    raw = os.environ.get(var)
+    if raw is None:
+        return [cast(v) for v in default]
+    raw = raw.strip()
+    if raw == '' or raw.lower() == 'none':
+        return []
+    return [cast(p.strip()) for p in raw.split(',') if p.strip()]
+
+
+# ⛔ LOCAL COMPUTE CUT, NEVER A FINDING. KIRBY_C33_EXTRA_BUDGETS names the
+# budgets c33 adds on top of FULL_BUDGETS. It defaults to the shipped 4,000 and
+# 8,000 on the cluster and to none under KIRBY_LOCAL_GRID.
+#
+# WHY, MEASURED 2026-09-25 on flab_thermo_tresanco (672 antibodies — every one
+# of them; no row is cut here or anywhere else in this file). The local grid in
+# env.sh asks for 2 budgets x 2 models x 3 allocation methods = 12
+# configurations per inner search. c33 printed this instead:
+#     budgets [100, 224, 250, 336, 448, 560, 672, 896, 4000, 8000]
+#     models  ['rf', 'svm', 'linear']
+#     Evaluating 90 configs (all 3 folds)
+# 90 configurations, 7.5x what the grid asked for, and the run died there
+# without reaching configuration 1 of 90.
+#
+# WHAT DROPPING 4,000 AND 8,000 COSTS. The pool on this dataset is 5 000
+# features wide after the local per-representation width cap, so 8,000 was
+# already flagged SATURATED — at or above the pool width create_hybrid takes
+# min(budget, n_features) and the arm stops selecting. Both of those budgets
+# build a hybrid 4,000-5,000 features wide against 448 training rows. Losing
+# them loses the top of the curve: the 2026-09-10 humanness_therapeutic
+# question of whether the best honest score still sits at the largest budget
+# tested cannot be asked locally. The largest budget left is 2x the training
+# rows, which is the top of the over-parameterised region the ratios below
+# already cover. Restore them with
+#     KIRBY_C33_EXTRA_BUDGETS=4000,8000
+C33_EXTRA_BUDGETS = _env_list(
+    'KIRBY_C33_EXTRA_BUDGETS',
+    () if _local_debug_run() else C33_SHIPPED_EXTRA_BUDGETS,
+    int)
+C33_BUDGETS = list(FULL_BUDGETS) + list(C33_EXTRA_BUDGETS)
 
 # The five default models plus 'linear'. 'linear' is the only one whose fitted
 # parameter count equals the budget, so it is the only one for which
@@ -209,7 +261,71 @@ C33_BUDGETS = list(FULL_BUDGETS) + [4000, 8000]
 # already does not, because the interpolation budgets are in that key too.
 C33_MODELS = ['rf', 'xgboost', 'lightgbm', 'svm', 'dnn', 'linear']
 
-DEFAULT_INTERPOLATION_RATIOS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+# ⛔ LOCAL COMPUTE CUT, NEVER A FINDING. The models c33 ADDS to whatever
+# config['models'] already holds. 'linear' on the cluster, none under
+# KIRBY_LOCAL_GRID.
+#
+# WHAT DROPPING 'linear' COSTS, AND IT IS THE WHOLE DOUBLE-DESCENT QUESTION.
+# 'linear' is the only model on the grid whose fitted parameter count equals
+# the feature budget, so budget = training rows is its real interpolation
+# threshold and its shape column is the only one that can mean what it says.
+# The dnn carries 41,024 hidden weights at any budget, the svm at most one
+# coefficient per training molecule, and an rf one leaf per training row: all
+# of them sit past their own threshold at every budget here, so their shape
+# column says nothing about double descent whether it is flat or not. Without
+# 'linear' a local run answers only the CAP question — which budget each outer
+# fold picked, and whether the honest curve keeps climbing past the molecule
+# count.
+#
+# WHY IT WAS CUT, MEASURED 2026-09-25 on flab_thermo_tresanco. 'linear' is a
+# third of the inner search: with it the grid is 4 budgets x 3 models x 3
+# allocation methods = 36 configurations per outer fold, without it 24. At the
+# 78 s per configuration measured on this laptop that is 47 minutes against 31
+# minutes for the three outer folds' searches, before the per-budget rebuilds.
+# Restore it with
+#     KIRBY_C33_EXTRA_MODELS=linear
+C33_EXTRA_MODELS = _env_list(
+    'KIRBY_C33_EXTRA_MODELS',
+    () if _local_debug_run() else ('linear',),
+    str)
+
+C33_SHIPPED_INTERPOLATION_RATIOS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+
+# ⛔ LOCAL COMPUTE CUT, NEVER A FINDING. Six ratios on the cluster, two under
+# KIRBY_LOCAL_GRID: 1.0x and 2.0x the training row count. Both are ratios the
+# shipped six already contains.
+#
+# WHY THESE TWO AND NOT ANY OTHER TWO. UNDER_MAX and INTERP_MAX below cut
+# under at < 0.75x rows, interpolation at 0.75-1.5x and over at > 1.5x. 1.5x is
+# INSIDE the interpolation band, not above it, so 1.5x cannot serve as the over
+# point: a set of 0.5/1.0/1.5 leaves the over region empty, _pick('over')
+# returns nothing, _double_descent's fall is None and the shape column reads
+# inconclusive whatever the curve did. 1.0x is the only ratio in the
+# interpolation band and 2.0x the only one above it, so these two are forced.
+# The under region needs no ratio of its own: the local grid's own budgets, 100
+# and 250 features against 448 training rows, are 0.22x and 0.56x, both under.
+# On flab_thermo_tresanco that gives budgets 100, 250, 448, 896 in place of
+# 100, 224, 250, 336, 448, 560, 672, 896, 4000, 8000.
+#
+# WHAT IT COSTS. The curve keeps one point in each of the three regions and
+# loses the second point in each: 0.5x, 0.75x, 1.25x and 1.5x of the training
+# rows are not scored. Rise and fall keep their sign, because each is read off
+# one budget per region. What goes is the resolution of WHERE the peak sits —
+# it is now located to within half the training row count instead of a quarter
+# — and any check that two budgets inside one region agree.
+#
+# WHY IT WAS CUT, MEASURED. See the extra-budget note above for the 90-config
+# starting point. At three ratios the search was still 45 configurations per
+# outer fold and ran at 78 s per configuration on this laptop (20 done in 26
+# minutes, 31% of one core, load average 437, 26 other python processes), so
+# outer fold 1 alone would have taken 58 minutes against a 40-minute cap. Two
+# ratios take it to 24 configurations per outer fold. Restore the shipped six
+# with
+#     KIRBY_C33_INTERPOLATION_RATIOS=0.5,0.75,1.0,1.25,1.5,2.0
+DEFAULT_INTERPOLATION_RATIOS = tuple(_env_list(
+    'KIRBY_C33_INTERPOLATION_RATIOS',
+    (1.0, 2.0) if _local_debug_run() else C33_SHIPPED_INTERPOLATION_RATIOS,
+    float))
 
 # How the three regions are cut, as multiples of the training row count. A
 # budget at 0.9x rows is not meaningfully under-parameterised, which is why the
@@ -491,8 +607,10 @@ def run(data, config, output_dir, dataset_name):
     # its threshold the real one (see the BUDGETS note above).
     budgets = sorted(set(config.get('budgets') or []) | set(C33_BUDGETS))
     models = list(config.get('models') or [])
-    for _m in C33_MODELS:
-        if _m == 'linear' and _m not in models:
+    # C33_EXTRA_MODELS is 'linear' as shipped and empty under KIRBY_LOCAL_GRID;
+    # see the note beside it for what the local run gives up.
+    for _m in C33_EXTRA_MODELS:
+        if _m not in models:
             models.append(_m)
     if not models:
         models = list(C33_MODELS)
@@ -624,7 +742,24 @@ def run(data, config, output_dir, dataset_name):
         # under a non-blend objective, which is every c33 run today, and
         # disagree under a blend. c33 runs no blend, so this is recorded rather
         # than guarded.
+        #
+        # ADDED 2026-09-28 -- the hybrid half of the same comparison.
+        # What was here: the top 2 base representations per outer fold and no
+        # hybrid ranking at all, so one side of the comparison named 2 things
+        # and the other named none. top_hybrids now names the top 2 hybrid
+        # configurations each outer fold's inner search ranked, for the same
+        # downstream model, from the same inner search. 0 new model fits.
+        #
+        # ⛔ The scores on the two halves come from different rows. The rank-2
+        # representation's number in 'delta_vs_rank2_single' is its score on the
+        # held-out outer fold, read from result.baselines_by_model. The hybrid
+        # configurations' 'score_mean' is the inner search's own CV score on the
+        # outer training rows, so it is a selection-side number and not a
+        # held-out one. The held-out hybrid number per (model, budget) is
+        # 'reselected_mean' in by_model_budget, which is untouched.
         rank2_folds, rank2_rep_per_fold = [], []
+        rank2_rep_failures = []
+        top2_hybrids_per_fold = []
         _inner = getattr(result, 'inner_searches', None) or []
         _bbm = (getattr(result, 'baselines_by_model', None) or {}).get(model, {})
         for i, _isearch in enumerate(_inner):
@@ -634,11 +769,41 @@ def run(data, config, output_dir, dataset_name):
                                      context=f'c33 {dataset_name} fold {i}')
                 if len(_sel['selected']) > 1:
                     _rep = _sel['selected'][1]['rep']
-            except Exception:
+                else:
+                    # A ranking that came back with fewer than 2 entries: the
+                    # helper says why in its own field.
+                    rank2_rep_failures.append(
+                        {'outer_fold': i,
+                         'reason': (_sel.get('shortfall_reason')
+                                    or f"the ranking returned "
+                                       f"{len(_sel['selected'])} representation"
+                                       f"(s) for {model}, so there is no rank 2")})
+            except Exception as _e:
                 _rep = None
+                rank2_rep_failures.append(
+                    {'outer_fold': i,
+                     'reason': f'{type(_e).__name__}: {_e}'})
             rank2_rep_per_fold.append(_rep)
             _fs = (_bbm.get(_rep) or {}).get('fold_scores') if _rep else None
             rank2_folds.append(_fs[i] if (_fs and i < len(_fs)) else None)
+
+            try:
+                _hyb = top_hybrids(_isearch, model, n=2, require_full=False,
+                                   context=f'c33 {dataset_name} fold {i}')
+                top2_hybrids_per_fold.append(
+                    {'outer_fold': i,
+                     'hybrids': [
+                         {'label': e['label'], 'score_mean': e['score_mean'],
+                          'budget': e['budget'],
+                          'n_features': e['n_features'],
+                          'rep_count': e['rep_count'],
+                          'n_folds_scored': e['n_folds_scored']}
+                         for e in _hyb['selected']],
+                     'shortfall_reason': _hyb.get('shortfall_reason')})
+            except Exception as _e:
+                top2_hybrids_per_fold.append(
+                    {'outer_fold': i, 'hybrids': [],
+                     'shortfall_reason': f'{type(_e).__name__}: {_e}'})
 
         if any(v is not None for v in rank2_folds):
             for b, r in rows.items():
@@ -688,6 +853,16 @@ def run(data, config, output_dir, dataset_name):
             # Which representation was second best on each outer fold, for the
             # delta_vs_rank2_single curve added beside the rank-1 one.
             'rank2_rep_per_fold': rank2_by_model.get(model),
+            # Every outer fold where no rank-2 representation could be named,
+            # with the reason. This used to be dropped silently.
+            'rank2_rep_failures': rank2_rep_failures,
+            # The hybrid half: the top 2 hybrid configurations each outer fold's
+            # inner search ranked for this downstream model.
+            'top2_hybrids_per_fold': top2_hybrids_per_fold,
+            'top2_hybrids_score_basis': (
+                "the inner search's own CV score on the outer training rows, "
+                "not a held-out score; the held-out number per budget is "
+                "'reselected_mean' in by_model_budget"),
             # The gap is only worth reading if it is bigger than the amount the
             # folds themselves move by at the picked budget.
             'picked_budget_per_fold_delta_std': (

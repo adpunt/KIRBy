@@ -43,6 +43,19 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import r2_score
 from experiments._shared import make_nearest_neighbors  # honours --distance-metric
 
+# Turns a fitted estimator into the vector the metric wants -- labels for an
+# accuracy-style metric, probabilities for a ranking one.
+#
+# At module scope since 2026-09-25. It was imported inside _run_double_descent
+# alone, which binds it as a local name of that function, while the three
+# functions that call it -- _eval_at_budget, _eval_at_budget_pca and
+# _eval_at_budget_random -- are module-level and saw no such global. Every fold
+# of every arm raised NameError, each fold's `except Exception` dropped it, and
+# 15c printed nan for the hybrid, the PCA arm, the random-feature arm and both
+# ridge arms. 15d's real_score_hybrid and real_score_pca came through the same
+# two functions and were nan for the same reason.
+from kirby.find_best_hybrid import _predict_for_metric
+
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -51,7 +64,139 @@ from experiments._shared import (
     get_fitted_hybrid, get_precomputed_search, build_fold_hybrid,
     get_best_for_downstream,
     get_best_search_for_downstream, get_fitted_pool_hybrid,
+    # 2026-09-28. c15 scores a Ridge on hybrid features, and 'ridge' carries
+    # tier 'off' in DEFAULT_MODELS, so a search that names no models scores no
+    # ridge and every ridge lookup here came back empty. RIDGE_MODELS is
+    # DOWNSTREAM_MODELS + ridge -- the same shape c16 uses, and the same named
+    # list the precompute's `ridge` pass writes -- so naming it is what makes
+    # the ridge rows exist. Ridge stays banned as a downstream evaluator
+    # everywhere else; c15 and c16 are the two approved exceptions.
+    RIDGE_MODELS,
 )
+
+
+# =========================================================================
+# Two things computed once instead of once per call. Neither is a cut.
+# =========================================================================
+
+# 1. Per-fold feature importance.
+#
+# Importance depends on the fold's training rows and on the importance method,
+# and on nothing else -- not the budget, not the downstream model, not the
+# allocation method. On the shipped settings c15 calls build_fold_hybrid 54
+# times on flab_thermo_tresanco: 15c runs 7 budgets x 2 models x 3 folds = 42,
+# and 15d runs 2 budgets x 2 paths x 3 folds = 12. Every one of them recomputed
+# importance from scratch, and there are only 3 distinct (fold, method) pairs
+# behind all 54 -- the three outer folds, all at lightgbm_gain.
+#
+# Measured 2026-09-24, recorded in tests/experiments/_local_grid.py: importance
+# is 62% of a create_hybrid call, 93s of 150s on this dataset.
+#
+# The rows below are the ones create_hybrid itself uses -- the training part of
+# internal_holdout_split over the fold's training rows (hybrid.py:5988, 6125).
+# f31's verify_defaults() checks this exact recipe against letting create_hybrid
+# compute it and reports an identical allocation and identical selected
+# features, so the numbers this file prints do not change.
+_IMPORTANCE_MEMO = {}
+
+
+def _fold_importance(train_idx, train_reps, y_train, groups_train, method,
+                     augs_train, space='reps'):
+    """Importance for one fold, computed once and kept.
+
+    `train_idx` is the fold's row numbers and, with `space`, is what the entry
+    is filed under, so two folds can never read each other's vector. `space`
+    names which matrices the row numbers index into: 15b reads its alignment
+    split off a subsample of the rows when a dataset has more than 1000, so its
+    row numbers are not the ones 15c and 15d use.
+
+    Returns None when augmentations are present: importance is then computed
+    over a different set of matrices and this shortcut has not been checked
+    against that path. A None return puts the caller back on create_hybrid's
+    own computation, which is what the server runs with augmentations on.
+    """
+    if augs_train:
+        return None
+    from kirby.hybrid import compute_feature_importance, internal_holdout_split
+    key = (space, np.asarray(train_idx, dtype=np.int64).tobytes(), method)
+    if key in _IMPORTANCE_MEMO:
+        return _IMPORTANCE_MEMO[key]
+    inner_tr, _inner_va = internal_holdout_split(
+        len(y_train), y_train, groups_train)
+    imp = compute_feature_importance(
+        {k: v[inner_tr] for k, v in train_reps.items()},
+        y_train[inner_tr], method=method)
+    _IMPORTANCE_MEMO[key] = imp
+    return imp
+
+
+# 2. The whole-dataset hybrid behind 15a's and 15b's budget sweeps.
+#
+# Both sub-analyses ask for the same thing: the pool's best recipe for
+# (rf, budget) rebuilt over every row. 15a asks at each budget, then 15b asks
+# again at the same budgets, and get_fitted_pool_hybrid rebuilds it from
+# nothing every time -- on flab_thermo_tresanco one rebuild did not finish
+# inside 20 minutes while the machine was carrying three other experiments.
+# Same arguments in, same matrix out, so the second ask is served from here.
+_POOL_HYBRID_MEMO = {}
+
+
+def _pool_hybrid_once(reps, labels, groups, *, downstream_model, budget,
+                      augmentations, dataset_name, task_type, data=None):
+    """The pool's best recipe for (model, budget), rebuilt over every row.
+
+    `data` is the loaded dataset dict and is what carries the searches the run
+    already precomputed at start-up. get_best_search_for_downstream reads them
+    from data['precomputed_searches'] (_shared.py:6191) and, without `data`,
+    sets that store to None and re-runs find_best_hybrid instead.
+
+    15a and 15b were the two callers in this file that left `data` out, and
+    every other caller in it passes it. Measured on flab_thermo_tresanco
+    2026-09-25, 672 rows, 5 representations, budgets 100 and 250: the two
+    budgets ran a search each, 12.9 minutes and 12.9 minutes, on top of 9.2
+    minutes of hybrid building apiece. Both searches reported 0 cache misses on
+    the per-representation scores, so what they spent was rebuilding the same
+    recipe the start-up precompute had already found in 3 seconds.
+    """
+    key = (downstream_model, int(budget))
+    if key not in _POOL_HYBRID_MEMO:
+        _POOL_HYBRID_MEMO[key] = get_fitted_pool_hybrid(
+            reps, labels, groups, downstream_model=downstream_model,
+            budget=budget, augmentations=augmentations,
+            dataset_name=dataset_name, task_type=task_type, data=data)
+    return _POOL_HYBRID_MEMO[key]
+
+
+def _env_floats(var, default, local_default=None):
+    """Comma-separated floats from the environment, else a default.
+
+    `local_default` is used when KIRBY_LOCAL_GRID is set, which is the flag
+    tests/experiments/_local_grid.py already uses to mean "this is a laptop
+    smoke run, the conditions are cut for compute and nothing measured under
+    them is a finding". The server never sets it and gets `default`.
+    """
+    raw = os.environ.get(var)
+    if raw:
+        return [float(p.strip()) for p in raw.split(',') if p.strip()]
+    if local_default is not None and os.environ.get('KIRBY_LOCAL_GRID'):
+        return list(local_default)
+    return list(default)
+
+
+def _env_int(var, default, local_default=None):
+    """One integer from the environment, else a default. See _env_floats."""
+    raw = os.environ.get(var)
+    if raw:
+        return int(raw)
+    if local_default is not None and os.environ.get('KIRBY_LOCAL_GRID'):
+        return int(local_default)
+    return int(default)
+
+
+def _stage(label, t0):
+    """Print how long a sub-analysis took, so a capped run says where it died."""
+    import time as _t
+    print(f"  [c15 timing] {label}: {_t.time() - t0:.0f}s", flush=True)
 
 
 # =========================================================================
@@ -102,10 +247,10 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
     print(f"\n    Budget sweep (hybrid):")
     for budget in sorted(budgets):
         try:
-            X_hybrid, _, _search, _meta = get_fitted_pool_hybrid(
+            X_hybrid, _, _search, _meta = _pool_hybrid_once(
                 reps, labels, groups, downstream_model='rf',
                 budget=budget, augmentations=data.get('augmentations'),
-                dataset_name=dataset_name, task_type=task_type)
+                dataset_name=dataset_name, task_type=task_type, data=data)
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
             metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
             results['per_budget'][budget] = {
@@ -340,10 +485,10 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     print(f"\n    Budget sweep (hybrid kernel):")
     for budget in sorted(budgets):
         try:
-            X_hybrid, _, _search, _meta = get_fitted_pool_hybrid(
+            X_hybrid, _, _search, _meta = _pool_hybrid_once(
                 reps, labels, groups, downstream_model='rf',
                 budget=budget, augmentations=data.get('augmentations'),
-                dataset_name=dataset_name, task_type=task_type)
+                dataset_name=dataset_name, task_type=task_type, data=data)
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid_sub)
@@ -371,7 +516,15 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                         augmentations_val=_te_augs,
                         groups=(sub_groups[_align_tr]
                                 if sub_groups is not None else None),
-                        budget_override=budget)
+                        budget_override=budget,
+                        # One alignment split, so one importance vector for
+                        # every budget that rebuilds on it.
+                        precomputed_importance=_fold_importance(
+                            _align_tr, _tr_reps, sub_labels[_align_tr],
+                            (sub_groups[_align_tr]
+                             if sub_groups is not None else None),
+                            bp_15b.importance_method, _tr_augs,
+                            space='15b_alignment'))
                     align_ho = _heldout_alignment(X_h_tr, X_h_te)
                 except Exception as _be:
                     print(f"      budget={budget}: held-out alignment "
@@ -413,10 +566,10 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                                          sub_reps[highest_rep][_align_te])
     if 50 in results['per_budget']:
         try:
-            X_h50, _, _search, _meta = get_fitted_pool_hybrid(
+            X_h50, _, _search, _meta = _pool_hybrid_once(
                 reps, labels, groups, downstream_model='rf',
                 budget=50, augmentations=data.get('augmentations'),
-                dataset_name=dataset_name, task_type=task_type)
+                dataset_name=dataset_name, task_type=task_type, data=data)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
             if _align_te is not None and _meta:
@@ -434,7 +587,13 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                     augmentations_train=_tr_a, augmentations_val=_te_a,
                     groups=(sub_groups[_align_tr]
                             if sub_groups is not None else None),
-                    budget_override=50)
+                    budget_override=50,
+                    precomputed_importance=_fold_importance(
+                        _align_tr, _tr_reps, sub_labels[_align_tr],
+                        (sub_groups[_align_tr]
+                         if sub_groups is not None else None),
+                        bp50.importance_method, _tr_a,
+                        space='15b_alignment'))
                 sweep_splits['hybrid_b50'] = (Xh_tr, Xh_te)
         except Exception:
             pass
@@ -611,7 +770,29 @@ def _run_double_descent(data, config, dataset_name=None):
     # 2026-09-12, owner's decision: 15c's budget list becomes 0.25, 0.8, 0.9,
     # 1.0, 1.1, 1.2 and 4.0 times the row count. 0.25 and 4.0 are added, one at
     # each end; the five in the middle are what this file already swept.
-    BUDGET_FACTORS = [0.25, 0.8, 0.9, 1.0, 1.1, 1.2, 4.0]
+    # KIRBY_C15_BUDGET_FACTORS overrides this list. Unset, it is the seven
+    # the owner decided on 2026-09-12 and the server is unchanged.
+    #
+    # Cut on the local grid 2026-09-25 to 0.25, 0.9, 1.1, 4.0 -- four budgets
+    # instead of seven.
+    #
+    # What one budget costs, measured on flab_thermo_tresanco (672 rows, 5
+    # representations capped at 1000 features each, 3 folds): the
+    # find_best_hybrid search the loop below prefetches for budget 168 took
+    # 28.4 minutes, and six build_fold_hybrid calls (2 downstream models x 3
+    # folds) follow it. The laptop was carrying four other experiments at the
+    # time, 8 cores at load 700, so that number is a wall time on a contended
+    # machine and not this budget's cost on an idle one.
+    #
+    # What the cut costs: the exact p = n point (factor 1.0) and the two
+    # shoulders at 0.8 and 1.2 are gone, so the curve is read at 0.9 and 1.1
+    # either side of the interpolation threshold and not at it. Both buckets
+    # the instability ratio needs still have two budgets each -- 0.9 and 1.1
+    # inside the 0.7-1.3 window, 0.25 and 4.0 outside it -- so the ratio is
+    # still computed rather than blanked.
+    BUDGET_FACTORS = _env_floats('KIRBY_C15_BUDGET_FACTORS',
+                                 [0.25, 0.8, 0.9, 1.0, 1.1, 1.2, 4.0],
+                                 local_default=[0.25, 0.9, 1.1, 4.0])
     all_budgets = sorted(set(
         int(n_samples * f) for f in BUDGET_FACTORS
     ))
@@ -641,7 +822,7 @@ def _run_double_descent(data, config, dataset_name=None):
     # Those three lists are in the search cache key, so a fast search files
     # separately from the full one; any c15c search already on disk is not
     # reused and is rebuilt fast.
-    from kirby.find_best_hybrid import _predict_for_metric, find_best_hybrid as _fbh
+    from kirby.find_best_hybrid import find_best_hybrid as _fbh
     from sklearn.ensemble import RandomForestRegressor as _RF15
     from sklearn.linear_model import Ridge as _Ridge15
     _augs = data.get('augmentations')
@@ -843,33 +1024,47 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         bp = best['blueprint']
     else:
         # Pool helper: pick best (tier, aug_cond) cache file for this (model, budget).
-        # Falls back to 'rf' if the requested model isn't in any pool candidate.
+        #
+        # ⛔ THE RANDOM-FOREST FALLBACK IS GONE, 2026-09-28. Two things used to
+        # disagree here. The recipe was asked for under `model_name`, and when
+        # that came back empty a second ask under 'rf' replaced it -- so the
+        # allocation method, the importance method and the internal evaluator
+        # that scored the Ridge cells had all been chosen for a RandomForest,
+        # and the number printed as a Ridge measurement.
+        #
+        # It fired on every Ridge cell, not occasionally: 'ridge' carries tier
+        # 'off' in DEFAULT_MODELS and AUTO_SELECTED_TIERS is {'fast','full'}, so
+        # a search that names no models never scores it and the first ask could
+        # never succeed. RIDGE_MODELS below is what makes the ridge rows exist.
+        #
+        # Write side, once per dataset, before c15 runs -- the precompute's
+        # `ridge` pass, which is in its default pass list:
+        #     python tests/precompute_hybrids.py <dataset> --with-ridge
+        # Without it this lookup builds that six-model search itself instead of
+        # reading it off disk.
         augs = data.get('augmentations') if data is not None else None
         _search, meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model=model_name, budget=budget,
             augmentations=augs, data=data,
             dataset_name=dataset_name, task_type=task_type,
+            models=list(RIDGE_MODELS),
         )
         if meta is None:
-            _search, meta = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model='rf', budget=budget,
-                augmentations=augs, data=data,
-                dataset_name=dataset_name, task_type=task_type,
-            )
-        if meta is None:
-            # Same small-data degeneracy as the prefetched path: no pool
-            # candidate produced a result. Degrade gracefully (return nan)
-            # so this budget drops out of the curve instead of crashing run().
-            print(f"    [c15] no pool config for model={model_name} at "
-                  f"budget={budget}; recording nan (skipped)")
+            # No recipe for the model that is about to be scored. Recording nan
+            # is the honest outcome: the alternative is another model's recipe
+            # wearing this model's name.
+            print(f"    [c15] no recipe searched for model={model_name} at "
+                  f"budget={budget} -- this cell is not scored (nan). If "
+                  f"model_name is 'ridge', the dataset needs the precompute's "
+                  f"--with-ridge pass.")
             return float('nan'), 0, 0
         best = meta['best_config']
         bp = best['blueprint']
 
     scores, widths = [], []
     n_folds_tried = 0
+    _first_err = None
     sample_X = next(iter(reps.values()))
     # Slice augmentations per-fold if present so build_fold_hybrid rebuilds
     # the same recipe the blueprint was scored under. Dropping augs here
@@ -899,7 +1094,13 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                 groups=(groups[train_idx] if groups is not None else None),
                 budget_override=budget,
                 model=make_model(),
-                metric_fn=metric_fn)
+                metric_fn=metric_fn,
+                # Same fold, same importance method, so the same vector every
+                # budget and every model asks for. See _fold_importance.
+                precomputed_importance=_fold_importance(
+                    train_idx, train_reps, y_train,
+                    groups[train_idx] if groups is not None else None,
+                    bp.importance_method, train_augs))
             widths.append(int(X_train.shape[1]))
 
             scaler = StandardScaler()
@@ -909,7 +1110,14 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
             model = make_model()
             model.fit(X_train_s, y_train)
             scores.append(metric_fn(y_val, _predict_for_metric(model, X_val_s, metric_fn)))
-        except Exception:
+        except Exception as _fe:
+            # Keep the first one. Until 2026-09-25 this counted the folds that
+            # raised and threw the reason away, so a budget that scored nan on
+            # every fold printed a count and nothing to act on.
+            if _first_err is None:
+                import traceback as _tb
+                _first_err = (f"{type(_fe).__name__}: {_fe}\n"
+                              + "".join(_tb.format_tb(_fe.__traceback__)[-3:]))
             continue
 
     if len(scores) < n_folds_tried:
@@ -917,6 +1125,8 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
               f"{n_folds_tried - len(scores)} of {n_folds_tried} folds raised "
               f"and were dropped; the score below is the mean over "
               f"{len(scores)}.")
+        print(f"    [c15] first fold error at budget={budget} "
+              f"model={model_name}: {_first_err}")
     return (float(np.mean(scores)) if scores else float('nan'),
             float(np.mean(widths)) if widths else 0.0,
             len(scores))
@@ -1041,7 +1251,17 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         'real_score_full': None,
     }
 
-    n_random_trials = 5
+    # KIRBY_C15_RADEMACHER_TRIALS overrides this. Unset it is 5, the shipped
+    # value, and the server is unchanged; under KIRBY_LOCAL_GRID it is 2.
+    # A trial is one label permutation. The features it is fitted on are
+    # identical across trials -- that is the dedupe in
+    # _estimate_rademacher_hybrid and, since 2026-09-25, in the other two
+    # estimators as well -- so cutting trials cuts only how many permutations
+    # the memorisation score is averaged over, and costs 2 Ridge fits per fold
+    # rather than 5. It does not change which rows or which features are used:
+    # every row is in every trial.
+    n_random_trials = _env_int('KIRBY_C15_RADEMACHER_TRIALS', 5,
+                               local_default=2)
 
     # --- Full-dimensional Rademacher ---
     # Use fresh RNG per condition for reproducibility across budgets
@@ -1133,14 +1353,27 @@ def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng,
     # Pre-compute fold assignments using real labels (consistent splitting)
     folds = list(cv_split(groups, n_folds, X, y, mode=mode))
 
+    # The standardiser depends on the fold's training rows and on nothing else.
+    # The trial index only draws a new label permutation, and the permuted
+    # labels are never handed to the scaler. Fitting it once per fold instead
+    # of once per fold per trial is the same dedupe already made in
+    # _estimate_rademacher_hybrid and returns the same numbers: the
+    # permutations are still drawn once per trial in the same order, and the
+    # Ridge fit below consumes no randomness.
+    fold_features = []
+    for train_idx, val_idx in folds:
+        try:
+            fold_features.append(
+                (train_idx, StandardScaler().fit_transform(X[train_idx])))
+        except Exception:
+            continue
+
     random_scores = []
     for t in range(n_trials):
         y_random = rng.permutation(y)
         scores = []
-        for train_idx, val_idx in folds:
+        for train_idx, X_train_s in fold_features:
             try:
-                scaler = StandardScaler()
-                X_train_s = scaler.fit_transform(X[train_idx])
                 cap = _fit_random_label_capacity(
                     X_train_s, y_random[train_idx], task_type)
                 scores.append(cap)
@@ -1160,23 +1393,25 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     Creates the hybrid per-fold on training data only, then measures how well
     a linear model can fit random labels on those features.
     """
-    # Pool helper: best (tier, aug_cond) cache file for (ridge, budget),
-    # falling back to rf if no ridge entry exists.
+    # Pool helper: best (tier, aug_cond) cache file for (ridge, budget).
+    #
+    # ⛔ THE RANDOM-FOREST FALLBACK IS GONE, 2026-09-28, same reason as the one
+    # in _eval_at_budget. This function fits a Ridge to random labels, so a
+    # recipe chosen for a RandomForest makes the Rademacher number it returns a
+    # number about a different model. RIDGE_MODELS names ridge into the search;
+    # without the precompute's --with-ridge pass this builds that search live.
     augs = data.get('augmentations') if data is not None else None
     _search, meta = get_best_search_for_downstream(
         reps, y, groups,
         downstream_model='ridge', budget=budget,
         augmentations=augs, data=data,
         dataset_name=dataset_name, task_type=task_type,
+        models=list(RIDGE_MODELS),
     )
     if meta is None:
-        _search, meta = get_best_search_for_downstream(
-            reps, y, groups,
-            downstream_model='rf', budget=budget,
-            augmentations=augs, data=data,
-            dataset_name=dataset_name, task_type=task_type,
-        )
-    if meta is None:
+        print(f"    [c15] no ridge recipe at budget={budget} -- Rademacher "
+              f"complexity not computed (nan). The dataset needs the "
+              f"precompute's --with-ridge pass.")
         return float('nan')
     bp = meta['best_config']['blueprint']
 
@@ -1212,12 +1447,19 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
                 augmentations_train=train_augs,
                 augmentations_val=train_augs,
                 budget_override=budget,
-                groups=(groups[train_idx] if groups is not None else None))
+                groups=(groups[train_idx] if groups is not None else None),
+                precomputed_importance=_fold_importance(
+                    train_idx, train_reps, y[train_idx],
+                    groups[train_idx] if groups is not None else None,
+                    bp.importance_method, train_augs))
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train_hyb)
-        except Exception:
+        except Exception as _fe:
             # A fold whose build raised was skipped in every trial before this
-            # change too, so it is still skipped in every trial.
+            # change too, so it is still skipped in every trial. The reason is
+            # printed now rather than dropped.
+            print(f"    [c15d] rademacher hybrid build raised at "
+                  f"budget={budget}: {type(_fe).__name__}: {_fe}")
             continue
         fold_features.append((train_idx, X_train_s))
 
@@ -1243,18 +1485,29 @@ def _estimate_rademacher_pca(X_concat, y, groups, n_folds, mode, n_trials, rng,
     """Estimate Rademacher complexity of PCA-reduced features."""
     folds = list(cv_split(groups, n_folds, X_concat, y, mode=mode))
 
+    # Scaler and PCA depend on the fold's training rows, not on the trial:
+    # the permuted labels are never handed to either. Fitting them once per
+    # fold instead of once per fold per trial is the same dedupe already made
+    # in _estimate_rademacher_hybrid and returns the same numbers. At 5 trials
+    # and 3 folds this is 3 PCA fits where it was 15, on a matrix that is
+    # every row of the dataset less one fold and every feature of the pool.
+    fold_features = []
+    for train_idx, val_idx in folds:
+        try:
+            X_train_s = StandardScaler().fit_transform(X_concat[train_idx])
+            n_comp = min(n_components, X_train_s.shape[0] - 1,
+                         X_train_s.shape[1])
+            X_train_pca = PCA(n_components=n_comp).fit_transform(X_train_s)
+        except Exception:
+            continue
+        fold_features.append((train_idx, X_train_pca))
+
     random_scores = []
     for t in range(n_trials):
         y_random = rng.permutation(y)
         scores = []
-        for train_idx, val_idx in folds:
+        for train_idx, X_train_pca in fold_features:
             try:
-                scaler = StandardScaler()
-                X_train_s = scaler.fit_transform(X_concat[train_idx])
-                n_comp = min(n_components, X_train_s.shape[0] - 1,
-                             X_train_s.shape[1])
-                pca = PCA(n_components=n_comp)
-                X_train_pca = pca.fit_transform(X_train_s)
                 cap = _fit_random_label_capacity(
                     X_train_pca, y_random[train_idx], task_type)
                 scores.append(cap)
@@ -1284,25 +1537,35 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None, **kwargs):
         return {'skipped': True, 'reason': 'regression_only',
                 'task_type': task_type}
 
+    import time as _time
+
     budgets = config['budgets']
     all_subs = sub_analyses or ['15a', '15b', '15c', '15d']
     results = {}
 
     if '15a' in all_subs:
+        _t0 = _time.time()
         results['distance_concentration'] = _run_distance_concentration(
             data, budgets, dataset_name=dataset_name)
+        _stage('15a', _t0)
 
     if '15b' in all_subs:
+        _t0 = _time.time()
         results['kernel_analysis'] = _run_kernel_analysis(
             data, budgets, dataset_name=dataset_name)
+        _stage('15b', _t0)
 
     if '15c' in all_subs:
+        _t0 = _time.time()
         results['double_descent'] = _run_double_descent(
             data, config, dataset_name=dataset_name)
+        _stage('15c', _t0)
 
     if '15d' in all_subs:
+        _t0 = _time.time()
         results['approximation_theory'] = _run_approximation_theory(
             data, budgets, config, dataset_name=dataset_name)
+        _stage('15d', _t0)
 
     return results
 
