@@ -479,6 +479,35 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             },
         }
 
+    # DIRTY-LOCAL 2026-09-28: a partial file after every search. c10 writes its
+    # result once, at the end, and the nine noisy searches on herg_ki took about
+    # 2.5 hours of a 3-hour cap in the first run. A run stopped by the cap left
+    # only the search caches and no c10 number. The partial file holds each
+    # finished (condition, level) cell's held-out scores, the same numbers the
+    # final file is built from. Nothing here changes a number; the final file
+    # is still written by the caller. Written atomically, and a failure to
+    # write is printed and ignored.
+    _partial_path = (None if output_dir is None else os.path.join(
+        str(output_dir), 'c10_noise_robustness', '_partial',
+        f'{dataset_name}.partial.json'))
+
+    def _write_partial(stage, payload):
+        if _partial_path is None:
+            return
+        try:
+            import json as _json
+            os.makedirs(os.path.dirname(_partial_path), exist_ok=True)
+            with open(_partial_path + '.tmp', 'w') as _fh:
+                _json.dump({'partial': True, 'stage': stage,
+                            'metric_name': metric_name,
+                            'lower_is_better': bool(lower_is_better),
+                            **convert_numpy(payload)},
+                           _fh, indent=1, default=str)
+            os.replace(_partial_path + '.tmp', _partial_path)
+            print(f"    partial result written ({stage}) -> {_partial_path}")
+        except Exception as _exc:
+            print(f"    partial result not written: {_exc!r}")
+
     cells = {}
     for strategy in strategies:
         for level in _levels_for(strategy):
@@ -486,6 +515,10 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             if s is None:
                 continue
             cells[(strategy, float(level))] = _reselected_cell(s)
+            _write_partial(
+                f'{len(cells)} cells searched',
+                {'cells': {f'{k[0]}|{k[1]:g}': v for k, v in cells.items()},
+                 'search_failures': search_failures})
 
     # ── THE TOP 2 BASE REPRESENTATIONS AND THE TOP 2 HYBRIDS ──────────────
     # Added 2026-09-18. Additive: every key below this block is untouched and
@@ -926,6 +959,10 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             print(f"    {strategy}: budget-auc_norm correlation={corr:.3f} "
                   f"({'higher budget = more robust' if corr > 0.3 else 'weak/no trend'})")
     results['noise_budget_interaction'] = noise_budget
+
+    # Every score-based number is in `results` by now; phase 3 adds feature
+    # identities only. Written so a cap reached during phase 3 keeps them.
+    _write_partial('before phase 3', results)
 
     # --- Phase 3: Feature stability across noise levels ---
     print("\n  Phase 3: Feature stability across noise")
