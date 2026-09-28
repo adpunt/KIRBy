@@ -866,8 +866,12 @@ def _run_double_descent(data, config, dataset_name=None):
     BUDGET_FACTORS = _env_floats('KIRBY_C15_BUDGET_FACTORS',
                                  [0.25, 0.8, 0.9, 1.0, 1.1, 1.2, 4.0],
                                  local_default=[0.25, 0.9, 1.1, 4.0])
+    # 2026-09-28: the factors multiply the training rows per fold, not the
+    # whole row count. See _median_train_rows. The factor list is unchanged.
+    n_train = _median_train_rows(groups, n_folds, next(iter(reps.values())),
+                                 labels)
     all_budgets = sorted(set(
-        int(n_samples * f) for f in BUDGET_FACTORS
+        int(n_train * f) for f in BUDGET_FACTORS
     ))
     # Same decision, the ceiling it forces. The ceiling was
     # min(total_dim, 3 x row count, 2048); 4.0 times the row count cannot
@@ -878,7 +882,8 @@ def _run_double_descent(data, config, dataset_name=None):
     # and a budget is not cut for compute.
     all_budgets = [b for b in all_budgets if 5 <= b <= total_dim]
 
-    print(f"    n_samples={n_samples}, total_dim={total_dim}")
+    print(f"    n_samples={n_samples}, training rows per fold "
+          f"(median)={n_train}, total_dim={total_dim}")
     print(f"    Budgets: {all_budgets}")
     print(f"    Metric: {metric_name} ({'lower is better' if lower_is_better else 'higher is better'})")
 
@@ -925,6 +930,9 @@ def _run_double_descent(data, config, dataset_name=None):
 
     results = {
         'n_samples': n_samples,
+        'n_train': n_train,
+        'budget_factor_base': 'median training rows per outer fold',
+        'budget_factors': list(BUDGET_FACTORS),
         'total_dim': total_dim,
         'metric': metric_name,
         'lower_is_better': lower_is_better,
@@ -992,20 +1000,20 @@ def _run_double_descent(data, config, dataset_name=None):
         results.setdefault('realised_width_ridge_hybrid', []).append(ridge_hybrid_w)
         results.setdefault('realised_width_ridge_pca', []).append(ridge_pca_w)
 
-        ratio = budget / n_samples
+        ratio = budget / n_train
         marker = " *** p ≈ n" if 0.8 <= ratio <= 1.2 else ""
-        print(f"    budget={budget:>5} (asked p/n={ratio:.2f})  "
+        print(f"    budget={budget:>5} (asked p/n_train={ratio:.2f})  "
               f"hybrid={hybrid_score:>7.4f} [{hybrid_w:.0f} feat, "
-              f"built p/n={hybrid_w / n_samples:.2f}]  "
+              f"built p/n_train={hybrid_w / n_train:.2f}]  "
               f"pca={pca_score:>7.4f} [{pca_w:.0f} feat]  "
               f"random={random_score:>7.4f} [{random_w:.0f} feat]  "
               f"ridge_hyb={ridge_hybrid:>7.4f}  "
               f"ridge_pca={ridge_pca:>7.4f}{marker}")
 
-    # Detect instability near p ≈ n
+    # Detect instability near p ≈ n (n = training rows per fold)
     scores_arr = np.array(results['pca_scores'])
     budget_arr = np.array(results['budgets'])
-    ratios = budget_arr / n_samples
+    ratios = budget_arr / n_train
 
     near_n_mask = (ratios >= 0.7) & (ratios <= 1.3)
     far_mask = ~near_n_mask
@@ -1041,6 +1049,20 @@ def _run_double_descent(data, config, dataset_name=None):
               f"({_stability_word(instability_hybrid)})")
 
     return results
+
+
+def _median_train_rows(groups, n_folds, X, labels):
+    """Median number of training rows per outer fold -- the n in p = n.
+
+    Added 2026-09-28. The interpolation threshold of double descent sits where
+    the number of features equals the number of rows the model is FITTED on.
+    Every arm here is fitted on one fold's training rows, which at 3 folds is
+    about two thirds of the dataset and at 5 folds four fifths. Measured
+    against the whole row count, the local sweep's 0.9 and 1.1 were 1.35 and
+    1.65 times the rows actually fitted, so the sweep never reached p = n.
+    """
+    sizes = [len(tr) for tr, _ in cv_split(groups, n_folds, X, labels)]
+    return int(np.median(sizes))
 
 
 def _stability_word(ratio):
