@@ -513,7 +513,11 @@ def compute_qed_scores(smiles_list):
 # and what it cost.
 LABEL_BETTER_WHEN = {
     'herg_ki':   'low',   # pKi against hERG: low pKi = weak binder = low cardiotoxicity
-    'caco2':     'high',  # apparent permeability: high = more permeable
+    # The caco2 label is NOT permeability. find_best_hybrid_molecular.load_dataset
+    # reads OpenADMET's Caco-2 EFFLUX column, log-transformed: the P-gp efflux
+    # ratio. Low is less effluxed, the same reading as adme_mdr1. This said
+    # 'high' ("more permeable") and hunted the most-effluxed molecules.
+    'caco2':     'low',   # log Caco-2 efflux ratio: low = less effluxed
     'adme_mdr1': 'low',   # MDR1/P-gp efflux ratio: low = less effluxed
     # Reaction yield, 0-100 (reaction_yields.load_buchwald_hartwig). A higher
     # yield is the reaction a chemist wants. Unlisted, it fell back to RMSE's
@@ -1166,7 +1170,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # the assay, not of the metric:
     #   herg_ki    pKi against hERG. A LOW pKi is a weak hERG binder, which is
     #              the low-cardiotoxicity molecule a project wants.
-    #   caco2      apparent permeability. HIGH is more permeable.
+    #   caco2      log Caco-2 efflux ratio (not permeability). LOW is less effluxed.
     #   adme_mdr1  MDR1/P-gp efflux ratio. LOW is less effluxed.
     # KIRBY_S11_HUNT overrides for one run ('low' or 'high'); an unlisted
     # dataset falls back to the old metric-direction behaviour and says so, so
@@ -1218,8 +1222,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 qed_scores = compute_qed_scores(smiles)
                 # The hunted end, not the scoring metric's direction: RMSE
-                # made this True on every local dataset, so caco2's combined
-                # objective rewarded LOW permeability.
+                # made this True on every local dataset, which only matched
+                # the hunted end where the low end is the one wanted.
                 y_multi = compute_combined_objective(
                     labels, qed_scores, _hunt == 'low')
                 print(f"  Multi-objective: label + QED geometric mean")
@@ -1659,7 +1663,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # The flip follows the END OF THE LABEL hunted, not the scoring metric.
         # It used to read lower_is_better (RMSE's direction), which is True on
         # every local dataset, so caco2 -- hunted HIGH, y_bo = labels -- was
-        # stored as minus its permeability area. After this, auc_mean is always
+        # stored as minus its label area. After this, auc_mean is always
         # the area under the best label found so far, in the label's own
         # units: lower is better when the low end is hunted, higher otherwise.
         if _hunt == 'low' and not condition.startswith('multi_obj_'):
