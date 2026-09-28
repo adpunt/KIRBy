@@ -349,6 +349,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # hybrid_eval cache, keyed by (subset_hash, alloc, imp, eval, budget,
     # fold, model, aug) — re-runs hit cache.
     search_per_model_top_rep = {}  # model_name -> SearchResult
+    # The same searches keyed {rank: {model: SearchResult}}, so the held-out
+    # re-pick below can keep rank 1 and rank 2 apart. Both ranks' searches are
+    # keyed by the bare model name inside a SearchResult, so merging them into
+    # one block let rank 2 overwrite rank 1.
+    search_per_model_by_rank = {}
+    per_model_rep_dim_ranks = {}  # model -> [{rank, rep, width, reused_search}]
     # Budgets the main search already evaluated for every model, so a per-model
     # top-rep-dim pass at one of these would be redundant: the explicit full
     # grid, and nothing else.
@@ -444,6 +450,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 )
                 _search_by_width.setdefault(_top_dim, _s)
                 search_per_model_top_rep[f'{_model_name}__{_top_rep}'] = _s
+                search_per_model_by_rank.setdefault(_rank, {})[_model_name] = _s
+                per_model_rep_dim_ranks.setdefault(_model_name, []).append(
+                    {'rank': _rank, 'rep': _top_rep, 'width': int(_top_dim),
+                     'reused_search': _reused is not None})
                 if _rank == 1:
                     # Keep the old key so every existing reader still finds the
                     # best representation's pass where it always was.
@@ -713,13 +723,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             fold_reselection_by_condition[_cond] = build_fold_reselection_input(_s)
         except Exception as e:
             print(f"  fold_reselection block for {_cond} unavailable: {e}")
-    if search_per_model_top_rep:
+    # ⛔ ONE BLOCK PER RANK, FIXED 2026-09-28. This loop used to walk
+    # search_per_model_top_rep, which holds rank 1 under 'rf' and
+    # 'rf__<rep1>' and rank 2 under 'rf__<rep2>'. Every one of those
+    # SearchResults files its rows under the bare model name 'rf', so the
+    # dict.update below let the rank-2 search replace the rank-1 search. The
+    # re-picked delta for 'per_model_top_rep_dim' was then measured at the
+    # SECOND representation's width while conditions['per_model_top_rep_dim']
+    # reported the first one's. Rank 1 keeps the old key; rank 2 gets its own.
+    _rank_cond = {1: 'per_model_top_rep_dim', 2: 'per_model_second_rep_dim'}
+    for _rank, _by_model in sorted(search_per_model_by_rank.items()):
+        _cond_key = _rank_cond.get(_rank, f'per_model_rank{_rank}_rep_dim')
         _merged = None
-        for _mname, _s in search_per_model_top_rep.items():
+        for _mname, _s in _by_model.items():
             try:
                 _blk = build_fold_reselection_input(_s)
             except Exception as e:
-                print(f"  fold_reselection block for per_model_top_rep_dim/"
+                print(f"  fold_reselection block for {_cond_key}/"
                       f"{_mname} unavailable: {e}")
                 continue
             if _merged is None:
@@ -736,7 +756,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 set(_merged.get('exclude_folds') or [])
                 | set(_blk.get('exclude_folds') or []))
         if _merged is not None:
-            fold_reselection_by_condition['per_model_top_rep_dim'] = _merged
+            fold_reselection_by_condition[_cond_key] = _merged
 
     # Compute the delta here rather than leaving it to whoever reads the file.
     # best_by_model and baselines below are both maxima taken on the folds they
@@ -937,6 +957,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'best_by_model': best_by_model,
         'baselines': baselines,
         'rep_dims': rep_dims,
+        # Which representation and width each per-model search ran at, by rank.
+        # Rank 1 is reselected under 'per_model_top_rep_dim', rank 2 under
+        # 'per_model_second_rep_dim'. Added 2026-09-28.
+        'per_model_rep_dim_ranks': per_model_rep_dim_ranks,
         'pca_baselines': pca_baselines,
         'heatmap': heatmap,
         'importance_wins': importance_wins,
