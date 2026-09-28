@@ -32,6 +32,8 @@ WHAT IS INJECTED. On the clean label column, before any fold is split:
     with u_i, v_is, and b_s / tau standard normal. sigma_e = level x the SD of
     the clean label column, the level taken from the suite's shared grid
     (`noise_levels`, 0 dropped). rho in RHOS, tau = TAU_FRACS x sigma_e.
+    The SD is that of the fold's clean TRAINING labels, so sigma_e is set per
+    fold (2026-09-28; it was the whole column's SD before).
     The offsets are not centred.
   * The training label of a molecule is the mean of its sources.
 
@@ -581,8 +583,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         'count_distribution_source': shares_src,
         'rhos': list(rhos),
         'tau_fracs_of_sigma_e': list(tau_fracs),
-        'sigma_e_units': 'level x the SD of the clean label column',
-        'clean_label_sd': label_sd,
+        'sigma_e_units': ('level x the SD of the fold\'s clean TRAINING '
+                          'labels (per fold, 2026-09-28)'),
+        'clean_label_sd_all_molecules': label_sd,
         'offset_method_asked': offset_method,
         'mixedlm_max_rows': MIXEDLM_MAX_ROWS,
         'oof_splits': oof_splits,
@@ -813,9 +816,6 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             structures[skey] = draw_structure(
                 n_ent, shares_by_cd[cd], pass_seed(dataset_name, cd, draw))
         st = structures[skey]
-        sigma_e = level * label_sd
-        tau = tf * sigma_e
-        val, y_mean, b_true = simulate(y_ent, st, sigma_e, rho, tau)
         ck, lk = cond_key(cd, rho, tf), f'{level:g}'
         cell = acc.setdefault(ck, {}).setdefault(lk, {})
         tcell = tails.setdefault(ck, {}).setdefault(lk, {})
@@ -826,6 +826,14 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             if ledger.pass_done(ledger_key):
                 continue
             pass_rows = []
+            # The level is a fraction of the SD of THIS fold's clean training
+            # labels, the suite's convention (dataset_policy's level grid;
+            # inject_shift_train_labels). Until 2026-09-28 it was the SD of
+            # the whole column, held-out molecules included. The standard
+            # normals are the same in every fold; only this scale differs.
+            sigma_e = level * float(np.std(y_ent[train_idx]))
+            tau = tf * sigma_e
+            val, y_mean, b_true = simulate(y_ent, st, sigma_e, rho, tau)
             y_va = y_ent[val_idx]
             y_cl = y_ent[train_idx]
             y_pl = y_mean[train_idx]
