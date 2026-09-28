@@ -83,6 +83,11 @@ def shrink(models=None, budgets=None, search_folds=None, augment=False):
         n_estimators=100, max_features='sqrt', random_state=42, n_jobs=_nj)
     F.DEFAULT_MODELS['rf']['classifier'] = lambda: _se.RandomForestClassifier(
         n_estimators=100, max_features='sqrt', random_state=42, n_jobs=_nj)
+    # rf_l1 (n30's swap) was left at n_jobs=-1 and took every core. Same
+    # settings as find_best_hybrid's entry otherwise; only the thread count.
+    F.DEFAULT_MODELS['rf_l1']['regressor'] = lambda: _se.RandomForestRegressor(
+        n_estimators=100, max_features='sqrt', criterion='absolute_error',
+        random_state=42, n_jobs=_nj)
     F.DEFAULT_MODELS['knn']['regressor'] = lambda: _sn.KNeighborsRegressor(
         n_neighbors=5, n_jobs=_nj)
     F.DEFAULT_MODELS['knn']['classifier'] = lambda: _sn.KNeighborsClassifier(
