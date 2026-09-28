@@ -802,9 +802,13 @@ def main():
         # every number here describe a representation the pipeline does not use.
         # herg_ki's cached chemberta says 0 molecules share a row and the
         # builder says 130, so this is not hypothetical. Checked, not assumed.
+        # Written into the result either way. The flag's own help says "say so
+        # on the result", and until 2026-09-28 nothing did.
+        cache_check = {'skipped': bool(args.skip_cache_check)}
         if not args.skip_cache_check and not args.count_only:
             fresh = census.freshness_check(data, sorted(reps_all),
                                            n_rows=args.cache_check_rows)
+            cache_check['result'] = fresh
             stale = [r for r, v in fresh.items()
                      if isinstance(v, dict) and v.get('matches') is False]
             if stale:
@@ -833,6 +837,17 @@ def main():
             print(f'  set {i}: {target} + {" + ".join(ps)}', flush=True)
         print(f'  {target} alone: {choice["target_molecules_sharing_a_row"]} of '
               f'{len(data["labels"])} molecules share a row', flush=True)
+        if choice['target_molecules_sharing_a_row'] == 0:
+            # A named target skips the "nothing merges" refusal the automatic
+            # pick has. The run still answers whether the score moves, but the
+            # tie count starts at zero, so the count half of the question
+            # cannot be asked. herg_ki's cached chemberta is this case.
+            print(f'  !! {target} gives every molecule its own row in the '
+                  f'matrix this run loaded, so no fix can lower the tie '
+                  f'count. Only the score half of the question is answered.'
+                  + ('  The cache check was skipped, so this may be a stale '
+                     'cached matrix.' if args.skip_cache_check else ''),
+                  flush=True)
         for p, n in choice['still_tied_target_plus_each_partner'].items():
             print(f'    with {p} beside it: {n} still share a row', flush=True)
         for name, n in choice['still_tied_with_each_whole_set'].items():
@@ -986,6 +1001,9 @@ def main():
                         if r.get('dataset') == ds and r.get('model') in common],
                        common)
         all_meta.append({'dataset': ds, 'choice': choice,
+                         'cache_check': cache_check,
+                         'tie_count_can_move': (
+                             choice['target_molecules_sharing_a_row'] > 0),
                          'fold_spread_used_for_margins': spread,
                          'n_sweep_points': len(points),
                          'models_in_all_four': sorted(common),
