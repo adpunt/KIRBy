@@ -515,14 +515,22 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     teacher_models, silo_train_features_qual,
                     silo_test_features_qual, K, groups=groups[train_idx])
                 c3 = _compute_metrics(y_test, y_pred_c3, y_prob=y_prob_c3)
-                c3['mcc_weights'] = convert_numpy(mcc_w_c3)
+                # The helper keys its weights by teacher position, 1 to K, in
+                # silo_letters order. Written by silo letter, as C2's weights
+                # are, so the file says which representation got which weight.
+                c3['mcc_weights'] = convert_numpy(
+                    {silo_letters[t - 1]: w for t, w in mcc_w_c3.items()})
                 print(f"MCC={c3['mcc']:.4f}")
             else:
                 y_pred_c3, rmse_w_c3 = predict_fluid_quality_ensemble_regression(
                     teacher_models, silo_train_features_qual,
                     silo_test_features_qual, K, groups=groups[train_idx])
                 c3 = _compute_metrics(y_test, y_pred_c3)
-                c3['rmse_weights'] = convert_numpy(rmse_w_c3)
+                # The helper keys its weights by teacher position, 1 to K, in
+                # silo_letters order. Written by silo letter, as C2's weights
+                # are, so the file says which representation got which weight.
+                c3['rmse_weights'] = convert_numpy(
+                    {silo_letters[t - 1]: w for t, w in rmse_w_c3.items()})
                 print(f"RMSE={c3['rmse']:.4f}")
         except Exception as e:
             c3 = {'error': str(e)}
