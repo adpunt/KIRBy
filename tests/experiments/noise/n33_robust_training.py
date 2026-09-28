@@ -72,7 +72,7 @@ features fitted on the noisy labels as they are.
                           absolute error)
   lightgbm_tukey          Tukey's biweight as a LightGBM custom objective, with
                           threshold TUKEY_K * s. See tukey_objective for why its
-                          second derivative is floored.
+                          second derivative is the IRLS weight.
   lightgbm_expectile_t<t> an asymmetric squared loss (expectile regression) as a
                           LightGBM custom objective, at t in EXPECTILE_TAUS. Added
                           2026-09-25 from the third research report (its B3),
@@ -185,13 +185,19 @@ HUBER_C = (0.5, 1.0, 1.5, 2.0)
 # gives 95% efficiency at the normal (Beaton & Tukey 1974).
 TUKEY_K = 4.685
 
-# Tukey's second derivative, (1 - u^2)(1 - 5u^2) with u = r / threshold, is
+# Tukey's true second derivative, (1 - u^2)(1 - 5u^2) with u = r / threshold, is
 # NEGATIVE for |u| between 1/sqrt(5) and 1 and zero beyond 1. A gradient booster
-# divides the gradient by the summed second derivative, so a leaf whose rows all
-# sit out there gets a negative or zero denominator. It is floored at this, which
-# makes the step for those leaves a small gradient step instead. Stated because it
-# is a choice: the loss being minimised is still Tukey's; only the step size is not
-# Newton's in those leaves.
+# divides the summed gradient by the summed second derivative, so it cannot be
+# used as it is. Until 2026-09-28 it was floored at 1e-2. That made the step in a
+# leaf of rows between 0.45 and 1 threshold about 100 times the gradient, not a
+# small step: on synthetic data with t(2) noise the fit's error against the true
+# function was 2.5 to 3.3 against 1.1 to 1.8 for plain squared loss. The
+# second derivative is now the IRLS weight (1 - u^2)^2, which is psi(r) / r, the
+# weight iteratively reweighted least squares gives Tukey's M-estimator. It is
+# positive inside the threshold, so a leaf steps to its weighted mean residual.
+# The same synthetic check gave 0.92 to 1.19. The loss minimised is unchanged.
+# The floor now only keeps a leaf of rows all past the threshold (gradient zero)
+# from a zero denominator.
 TUKEY_HESS_FLOOR = 1e-2
 
 # C-Mixup kernel bandwidth, in SDs of this fold's noisy training labels. Yao et al.
@@ -280,11 +286,12 @@ def tukey_objective(threshold, hess_floor=TUKEY_HESS_FLOOR):
 
     With r = prediction - label and u = r / threshold, for |u| < 1:
         gradient  = r (1 - u^2)^2
-        hessian   = (1 - u^2)(1 - 5 u^2), floored at hess_floor
-    and both are zero for |u| >= 1 (the hessian then takes the floor). A row whose
-    residual is past the threshold stops pulling the fit at all -- that is what a
-    redescending loss does, and why it has to start from a sensible prediction:
-    see fit_tukey, which fits around the median.
+        hessian   = (1 - u^2)^2, the IRLS weight, floored at hess_floor
+    and both are zero for |u| >= 1 (the hessian then takes the floor). The true
+    second derivative, (1 - u^2)(1 - 5 u^2), goes negative; see TUKEY_HESS_FLOOR.
+    A row whose residual is past the threshold stops pulling the fit at all --
+    that is what a redescending loss does, and why it has to start from a
+    sensible prediction: see _Centred, which fits around the median.
     """
     c = float(threshold)
 
@@ -294,7 +301,7 @@ def tukey_objective(threshold, hess_floor=TUKEY_HESS_FLOOR):
         inside = np.abs(u) < 1.0
         one_m = 1.0 - u * u
         grad = np.where(inside, r * one_m * one_m, 0.0)
-        hess = np.where(inside, one_m * (1.0 - 5.0 * u * u), 0.0)
+        hess = np.where(inside, one_m * one_m, 0.0)
         return grad, np.maximum(hess, hess_floor)
     return _obj
 
@@ -586,8 +593,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         },
         'settings_note': (
             'bw, the bag count, the bag noise and the teacher weight are fixed '
-            'defaults, not tuned. The Tukey hessian is floored where it is '
-            'negative or zero; see tukey_objective.'),
+            'defaults, not tuned. The Tukey step uses the IRLS weight '
+            '(1 - u^2)^2 as its second derivative, because the true one goes '
+            'negative; see tukey_objective.'),
         'gap_min_frac': GAP_MIN_FRAC,
         'features_are_fixed_note': (
             'Each feature space is built once per (level, draw, fold) from the '
