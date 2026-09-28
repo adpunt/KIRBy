@@ -143,6 +143,20 @@ def test_lifts_and_winsor():
     check('3b. the truncated-normal mean is floored at the limit and differs '
           'from the probe formula',
           np.all(tn[at] >= limit - 1e-12) and not np.allclose(tn[at], pm[at]))
+    tsh = cols['truncated_normal_mean_shuffled/seed0']
+    check('4b. the truncated-normal lifts shuffled are the same amounts on '
+          'other molecules',
+          np.allclose(np.sort(tn[at]), np.sort(tsh[at]))
+          and not np.allclose(tn[at], tsh[at])
+          and np.array_equal(tsh[~at], y0[~at]))
+    # The probe's per-molecule amount falls as p rises; the truncated-normal
+    # mean rises with it.
+    lp = pm[at] - limit
+    lt = tn[at] - limit
+    o = np.argsort(p[at])
+    check('4c. per_molecule_lift falls as p rises and truncated_normal_mean '
+          'rises',
+          np.all(np.diff(lp[o]) <= 1e-12) and np.all(np.diff(lt[o]) >= -1e-12))
 
     w, s, moved = n30.winsorise(y0, p, 1.0)
     r = y0 - p
