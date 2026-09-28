@@ -73,11 +73,16 @@ THE OTHER DETECTORS, graded against the mask with detection_scores beside the
 conformal score. None acts on the labels.
   rescaled_residual          the conformal score |r| / sigma itself.
   isolation_forest           on [the fold's features, r]. The residual is
-                             z-scored and multiplied by sqrt(number of features),
-                             so it carries as much variance as all the
-                             standardised features together; unscaled it would be
-                             one feature in thousands.
-  lof                        the same joined matrix, local outlier factor.
+                             z-scored and repeated once per feature, so it is
+                             the split feature at half the splits. Scaling it
+                             by sqrt(number of features), as LOF's matrix does,
+                             changes no isolation tree (2026-09-28).
+  lof                        [the fold's features, r], local outlier factor.
+                             The residual is z-scored and multiplied by
+                             sqrt(number of features), so it carries as much
+                             squared distance as all the standardised features
+                             together; unscaled it would be one feature in
+                             thousands.
   residual_low_disagreement  |mean of 5 seeds' out-of-fold predictions - y|
                              divided by (their SD across seeds + a floor). High
                              when the refits agree on a prediction far from the
@@ -351,8 +356,22 @@ def joined_matrix(X, r):
 
 
 def isolation_forest_suspicion(X, r, seed=0):
+    """Isolation forest on [X, r' repeated once per feature].
+
+    joined_matrix's sqrt(d) scaling does nothing here, 2026-09-28. An isolation
+    forest picks the feature for each split uniformly and splits uniformly
+    between that feature's min and max, so scaling one column changes no tree.
+    Measured: 600 molecules, 250 features, 30 labels moved by 5 SD; AUROC
+    0.553 with or without the scaling, 0.9998 for |r| alone. Repeating r once
+    per feature makes it the split feature at half the splits, which is what
+    "as much weight as all the features together" means for this detector.
+    """
     from sklearn.ensemble import IsolationForest
-    Z = joined_matrix(X, r)
+    X = np.asarray(X, dtype=float)
+    r = np.asarray(r, dtype=float)
+    sd = float(np.std(r))
+    rz = (r - float(np.mean(r))) / (sd if sd > 0 else 1.0)
+    Z = np.hstack([X, np.repeat(rz[:, None], X.shape[1], axis=1)])
     m = IsolationForest(n_estimators=IFOREST_TREES, random_state=int(seed))
     m.fit(Z)
     return -m.score_samples(Z)
@@ -624,9 +643,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'winsor_c': WINSOR_C,
         'random_seeds': seeds,
         'oof_splits': oof_splits,
-        'joined_matrix_note': ('isolation_forest and lof run on [features, r]; r '
-                               'z-scored and multiplied by sqrt(number of '
-                               'features)'),
+        'joined_matrix_note': ('isolation_forest and lof run on [features, r], '
+                               'r z-scored. lof: r multiplied by sqrt(number '
+                               'of features). isolation_forest: r repeated '
+                               'once per feature, since scaling a column '
+                               'changes no isolation tree (2026-09-28)'),
         'no_flag_note': ('When BH flags nothing the arm IS no_cleaning, and '
                          'no_cleaning\'s score is written for it on that pass.'),
         'claim_scope': (
