@@ -554,6 +554,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # cannot share the level axis. It gets its own level grid below.
         noise_types = (list(CLASSIFICATION_STRATEGIES) if is_clf
                        else list(DOSE_MATCHED_STRATEGIES) + list(CENSORING_STRATEGIES))
+    # A regression condition on a classification dataset is not a different
+    # shape: noise_spec_for replaces every one of them with the uniform flip,
+    # and seeds the draw from the replaced name, so they come out as identical
+    # copies of one flip. A caller-given list (the local runner sets four
+    # regression shapes) therefore keeps only its flip models, and when it
+    # names none this dataset sweeps the six flip models instead. 2026-09-28.
+    noise_types_requested = list(noise_types)
+    if is_clf:
+        _clf_kept = [c for c in noise_types if c in CLASSIFICATION_STRATEGIES]
+        if len(_clf_kept) < len(noise_types):
+            noise_types = _clf_kept or list(CLASSIFICATION_STRATEGIES)
+            print(f"  classification: the requested conditions "
+                  f"{noise_types_requested} would all run as one uniform flip, "
+                  f"so the flip models {noise_types} run instead")
     noise_groups, n_noise_groups, largest_group_share = noise_groups_for(data)
     if noise_groups is None:
         _dropped = [c for c in noise_types if c in GROUPED_STRATEGIES]
@@ -952,6 +966,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # amount of noise at a given level, so cells are comparable across the whole
         # grid. The old 'partial' track had an axis of its own that was not.
         'noise_types': noise_types,
+        'noise_types_requested': noise_types_requested,
         'noise_types_dropped': ['multiplicative', 'uniform'],
         'strengths': strengths,
         'dose_units': noise_dose_units(dataset_name),
