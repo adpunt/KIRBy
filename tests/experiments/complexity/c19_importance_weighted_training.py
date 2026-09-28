@@ -463,8 +463,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             condition_wins[best] = condition_wins.get(best, 0) + 1
 
+    # condition_wins above credits one condition per model, and on an exact tie
+    # that is the one listed first, unweighted. For lightgbm, feature_weighted
+    # and importance_pruned are the same fit whenever more than half the
+    # features score zero importance, and feature_weighted equals unweighted
+    # when none do. This count credits every condition tied for the best score
+    # of a model, so a tie is not read as a loss.
+    condition_wins_counting_ties = {c: 0 for c in conditions}
+    for space_res in results['per_space'].values():
+        for model_res in space_res.values():
+            for c in model_res.get('best_condition_ties') or []:
+                condition_wins_counting_ties[c] = (
+                    condition_wins_counting_ties.get(c, 0) + 1)
+
     results['summary'] = {
         'condition_wins': condition_wins,
+        'condition_wins_counting_ties': condition_wins_counting_ties,
         # CXA-16/OTHER-14: renamed from 'best_overall' — that name collides with
         # the removed internal-evaluator concept and was easy to misread. This is
         # simply the weighting condition that won the most (model x space) cells.
