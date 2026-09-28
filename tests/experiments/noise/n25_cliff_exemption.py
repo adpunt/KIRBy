@@ -1523,6 +1523,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # two is how much the answer sheet was worth.
                     'n_cliff_on_the_clean_labels':
                         int(np.asarray(cliff_mask)[train_idx].sum()),
+                    # The definition this pass's exempt set was built under.
+                    # It was computed and discarded until 2026-09-28, so a
+                    # result file could not show which structural cutoff
+                    # (Tanimoto 0.55 or a percentile of pairs) or which
+                    # activity gap chose the exempt molecules.
+                    'structure_reference':
+                        pass_cliff_info.get('structure_reference'),
+                    'sim_cutoff': pass_cliff_info.get('sim_cutoff'),
+                    'similar_percentile':
+                        pass_cliff_info.get('similar_percentile'),
+                    'activity_threshold':
+                        pass_cliff_info.get('activity_threshold'),
                 })
 
                 # ── The feature matrices for this pass ──────────────────────
