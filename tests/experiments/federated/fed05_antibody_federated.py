@@ -779,7 +779,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     if len(available_binding) >= 2:
         print(f"  Pooling: {available_binding} (z-score normalized)")
         try:
-            # Z-score normalize each silo's labels before pooling
+            # Each silo's labels are z-scored after the carve below, on its pooled training rows
             # The representations BOTH binding silos have. This used to be
             # shared_reps, the three-way intersection that also demands the
             # developability silo's representations, which this condition
@@ -798,10 +798,10 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             for sname in available_binding:
                 sd = silo_data[sname]
                 tr, _ = silo_splits[sname]
-                y_tr = sd['labels'][tr]
-                y_z = (zscore(y_tr) if len(y_tr) > 1 and np.std(y_tr) > 1e-12
-                       else np.zeros_like(y_tr))
-                pool_labels.append(y_z)
+                # Raw labels here. Each silo is z-scored below on the pooled
+                # TRAINING rows only, after the 80/20 carve, so the held-out
+                # rows' labels never set the mean and SD they are scaled by.
+                pool_labels.append(np.asarray(sd['labels'][tr], dtype=float))
                 pool_source.extend([sname] * len(tr))
                 for r in c5_reps:
                     if r in sd['reps']:
@@ -842,6 +842,35 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     pool_groups, 1, np.zeros(len(pool_labels)),
                     pool_labels, seed=fed_seed))
 
+                # Z-score each silo on its rows in the pooled TRAINING side.
+                # Until 2026-09-28 each silo was z-scored on all its rows
+                # before the carve, so the held-out rows' own labels set the
+                # mean and SD that scaled them. That moves RMSE, and it also
+                # moves the pooled spearman: shifting one silo's labels by a
+                # different amount from the other's changes how the two
+                # silos' held-out rows interleave in one ranking.
+                pool_source = np.asarray(pool_source)
+                c5_scaling = {}
+                pool_labels_z = np.empty_like(pool_labels)
+                for sname in available_binding:
+                    in_s = pool_source == sname
+                    tr_s_mask = np.zeros(len(pool_labels), dtype=bool)
+                    tr_s_mask[p_tr] = True
+                    tr_s_mask &= in_s
+                    if tr_s_mask.sum() < 2:
+                        raise ValueError(
+                            f'{sname} has {int(tr_s_mask.sum())} rows on the '
+                            f'pooled training side; cannot z-score it')
+                    mu = float(np.mean(pool_labels[tr_s_mask]))
+                    sd_ = float(np.std(pool_labels[tr_s_mask]))
+                    if sd_ <= 1e-12:
+                        raise ValueError(
+                            f'{sname} labels are constant on the pooled '
+                            f'training side')
+                    pool_labels_z[in_s] = (pool_labels[in_s] - mu) / sd_
+                    c5_scaling[sname] = {'mean': mu, 'sd': sd_}
+                pool_labels = pool_labels_z
+
                 rep_tr = {r: arr[p_tr] for r, arr in pool_valid_reps.items()}
                 rep_te = {r: arr[p_te] for r, arr in pool_valid_reps.items()}
 
@@ -877,6 +906,22 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 pooled_binding = compute_reg_metrics(pool_labels[p_te], y_pred)
                 pooled_binding['n_pooled'] = len(pool_labels)
                 pooled_binding['silos_pooled'] = available_binding
+                pooled_binding['zscore_from_training_rows'] = c5_scaling
+                # The pooled score mixes two silos' held-out rows. Each
+                # silo's share of them, and its own score on them, is
+                # written beside it, because one carve can put most of the
+                # held-out rows in one silo.
+                _src_te = pool_source[p_te]
+                pooled_binding['held_out_by_silo'] = {}
+                for sname in available_binding:
+                    _m = _src_te == sname
+                    _entry = {'n_held_out': int(_m.sum()),
+                              'n_groups_held_out': int(len(np.unique(
+                                  np.asarray(pool_groups)[p_te][_m])))}
+                    if _m.sum() >= 2:
+                        _entry.update(compute_reg_metrics(
+                            pool_labels[p_te][_m], y_pred[_m]))
+                    pooled_binding['held_out_by_silo'][sname] = _entry
                 _prho = pooled_binding.get('spearman_rho')
                 _prho_s = ('undefined (constant prediction)' if _prho is None
                            else f"{_prho:.4f}")
