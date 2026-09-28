@@ -70,11 +70,14 @@ needs neither gpboost nor merf (neither is installed):
   repeat up to EM_MAX_ROUNDS:
       p   = out-of-fold LightGBM on (y - b[g])
       r   = y - p                       residual including the offset
-      sigma^2 = mean of (r - b[g])^2     within-group spread
-      tau^2   = var over groups of mean_g(r) - sigma^2 * mean over groups of
-                1/n_g, floored at TAU2_FLOOR_FRAC * var(y)   (method of moments)
-      b_g = sum_g(r) / (n_g + sigma^2 / tau^2)
-  stop when no offset moved more than EM_TOL_FRAC * sd(y)
+      repeat on this r until no offset moves (up to EM_INNER_MAX):
+          sigma^2 = mean of (r - b[g])^2 + posterior variance of b_g
+                                         within-group spread
+          tau^2   = var over groups of mean_g(r) - sigma^2 * mean over groups
+                    of 1/n_g, floored at TAU2_FLOOR_FRAC * var(y)
+                                         (method of moments)
+          b_g = sum_g(r) / (n_g + sigma^2 / tau^2)
+  stop when no offset moved more than EM_TOL_FRAC * sd(y) across a refit
 
 The fitted sigma^2, tau^2, the rounds used and whether it converged are written
 per (pass, space). So is the fraction a group of ONE keeps of its mean residual,
@@ -159,6 +162,9 @@ OOF_SPLITS = 5
 EM_MAX_ROUNDS = 5
 # Stop when no offset moves by more than this share of the training label SD.
 EM_TOL_FRAC = 1e-3
+# Variance-and-offset steps per model refit, iterated on one round's residuals
+# until no offset moves by more than a tenth of the stopping tolerance.
+EM_INNER_MAX = 500
 # tau^2 floor, as a share of the training label variance. At the floor the
 # random intercept keeps almost nothing of any group's mean residual.
 TAU2_FLOOR_FRAC = 1e-6
@@ -231,25 +237,45 @@ def random_intercept_offsets(X, y, g, oof_fn, max_rounds=EM_MAX_ROUNDS,
     converged = False
     rounds = 0
     history = []
+    sums = np.zeros(counts.size)
     for rounds in range(1, max_rounds + 1):
         p = np.asarray(oof_fn(X, y - b_group[inv]), dtype=float)
         r = y - p
-        # The EM step for sigma^2 adds each offset's posterior variance,
-        # 1 / (n_g / sigma^2 + 1 / tau^2), to the squared residual, as MERF
-        # does. Without it sigma^2 is biased low: a shrunk offset has already
-        # absorbed part of its own molecules' residuals. MEASURED on the smoke's
-        # toy (true sigma^2 1.0): 0.73 without the term.
-        if np.isfinite(sigma2) and np.isfinite(tau2):
-            post_var = 1.0 / (counts / sigma2 + 1.0 / tau2)
-        else:
-            post_var = np.zeros(counts.size)
-        sigma2 = float(max(np.mean((r - b_group[inv]) ** 2 + post_var[inv]),
-                           1e-12))
-        tau2 = moments_tau2(r, inv, counts, sigma2, floor)
         sums = np.bincount(inv, weights=r)
-        new_b = sums / (counts + sigma2 / tau2)
+        # The variance-and-offset step is iterated to its own fixed point on
+        # this round's residuals before the next model refit. That step costs
+        # a few bincounts; the refit costs OOF_SPLITS LightGBM fits. Until
+        # 2026-09-28 it ran once per refit, starting from b = 0, so sigma^2 in
+        # round 1 held the whole between-group spread. MEASURED on a toy with
+        # median group size 1 (true sigma^2 0.38, tau^2 0.62): after 3 rounds
+        # sigma^2 was 0.603 and a group of one kept 0.452 of its residual; the
+        # fixed point, reached after 14 rounds, is 0.380 and 0.635. The fixed
+        # point is unchanged by this; only how many refits it takes to reach it.
+        b_inner = b_group.copy()
+        inner = 0
+        for inner in range(1, EM_INNER_MAX + 1):
+            # The EM step for sigma^2 adds each offset's posterior variance,
+            # 1 / (n_g / sigma^2 + 1 / tau^2), to the squared residual, as MERF
+            # does. Without it sigma^2 is biased low: a shrunk offset has
+            # already absorbed part of its own molecules' residuals. MEASURED
+            # on the smoke's toy (true sigma^2 1.0): 0.73 without the term.
+            if np.isfinite(sigma2) and np.isfinite(tau2):
+                post_var = 1.0 / (counts / sigma2 + 1.0 / tau2)
+            else:
+                post_var = np.zeros(counts.size)
+            sigma2 = float(max(np.mean((r - b_inner[inv]) ** 2
+                                       + post_var[inv]), 1e-12))
+            tau2 = moments_tau2(r, inv, counts, sigma2, floor)
+            b_next = sums / (counts + sigma2 / tau2)
+            moved = (float(np.max(np.abs(b_next - b_inner)))
+                     if b_next.size else 0.0)
+            b_inner = b_next
+            if moved <= 0.1 * tol:
+                break
+        new_b = b_inner
         step = float(np.max(np.abs(new_b - b_group))) if new_b.size else 0.0
         history.append({'round': rounds, 'sigma2': sigma2, 'tau2': tau2,
+                        'variance_steps': int(inner),
                         'largest_offset_move': step})
         b_group = new_b
         if step <= tol:
@@ -426,6 +452,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         'oof_splits': oof_splits,
         'em_max_rounds': em_max_rounds,
         'em_tol_frac_of_label_sd': EM_TOL_FRAC,
+        'em_inner_max_variance_steps_per_refit': EM_INNER_MAX,
         'tau2_floor_frac_of_label_var': TAU2_FLOOR_FRAC,
         'min_group_size_for_center_3plus': MIN_GROUP_SIZE_FOR_CENTER,
         'gap_min_frac': GAP_MIN_FRAC,
