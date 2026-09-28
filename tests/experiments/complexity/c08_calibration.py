@@ -147,7 +147,11 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             best_model = None
             best_search = None
             best_meta = None
-            for candidate_model in ['rf', 'svm', 'lightgbm', 'dnn', 'knn']:
+            # xgboost is in DOWNSTREAM_MODELS and in every cluster search, and
+            # was missing here, so a dataset where xgboost won could never have
+            # it as 'optimal'. Appended last so ties resolve as before.
+            for candidate_model in ['rf', 'svm', 'lightgbm', 'dnn', 'knn',
+                                    'xgboost']:
                 try:
                     s, m = get_best_search_for_downstream(
                         reps, labels, groups,
