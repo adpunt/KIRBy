@@ -247,9 +247,16 @@ def metric_ceiling(inv, labels, task_type, metric_name):
     each molecule's distance from its own group's mean, in the dataset's label
     units, and the ceiling on R2 follows from it.
 
-    Classification scored by AUC: a tied active and a tied inactive must receive
-    one identical score, so that pair counts 0.5 instead of 1. The ceiling is
-    1 - 0.5 * (tied active-inactive pairs / all active-inactive pairs).
+    Classification scored by AUC: every molecule in a tied group receives one
+    identical score. The best AUC a group-constant score can reach is the AUC of
+    scoring each group by its own fraction of actives (ordering by likelihood
+    ratio), with a tie counting 0.5. That is 'auc_ceiling'.
+
+    ⛔ Until 2026-09-28 'auc_ceiling' was 1 - 0.5 * (tied pairs / all pairs),
+    which assumes every untied active-inactive pair can be ordered correctly at
+    once. Two mixed groups make that impossible: A above B loses B's actives
+    against A's inactives. That number is an upper bound above the real
+    ceiling; it is kept as 'auc_bound_tied_pairs_only'.
 
     Classification scored by accuracy: the best a model can do in a tied group is
     the group's commonest class.
@@ -287,8 +294,17 @@ def metric_ceiling(inv, labels, task_type, metric_name):
         total_pairs = n_pos * n_neg
         out['n_active_inactive_pairs'] = int(total_pairs)
         out['n_pairs_forced_to_tie'] = int(tied_pairs)
-        out['auc_ceiling'] = (float(1.0 - 0.5 * tied_pairs / total_pairs)
-                              if total_pairs else None)
+        out['auc_bound_tied_pairs_only'] = (
+            float(1.0 - 0.5 * tied_pairs / total_pairs) if total_pairs else None)
+        if total_pairs:
+            from sklearn.metrics import roc_auc_score
+            is_pos = (y == pos).astype(float)
+            group_rate = np.zeros(n, dtype=float)
+            for members in groups:
+                group_rate[members] = is_pos[members].mean()
+            out['auc_ceiling'] = float(roc_auc_score(is_pos, group_rate))
+        else:
+            out['auc_ceiling'] = None
     correct = 0
     for members in groups:
         vals, cnt = np.unique(y[members], return_counts=True)
