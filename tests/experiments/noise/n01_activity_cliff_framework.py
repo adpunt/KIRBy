@@ -866,8 +866,23 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                  .setdefault(st.name, {}).setdefault(str(k), [])
                  .append(row))
 
-    def _evaluate_condition(get_Xy_fn, label, model_factory, model_name=None):
-        """Run CV, return {metric_all, metric_cliff, metric_noncliff, gap, ...}."""
+    from experiments.noise.noise_cache import (
+        model_signature as _model_signature,
+        blueprint_fingerprint as _blueprint_fingerprint)
+
+    def _evaluate_condition(get_Xy_fn, label, model_factory, model_name=None,
+                            key_extra=None):
+        """Run CV, return {metric_all, metric_cliff, metric_noncliff, gap, ...}.
+
+        key_extra: optional fold -> JSON-able, added to the checkpoint key. The
+        hybrid passes its fold's recipe, so a checkpoint written under another
+        recipe is not read back as this one's predictions.
+        """
+        # The checkpoint key names the model by its class and parameters as
+        # well as its name (2026-09-28). The file fingerprint holds the data
+        # and the thresholds only, so a rerun into the same output directory
+        # with other model settings read back the old predictions.
+        _msig = _model_signature(model_factory())
         fold_all, fold_cliff, fold_noncliff = [], [], []
         # (cliff score, non-cliff score) of each fold where BOTH are defined.
         # The gap is a within-fold contrast, so it is averaged over these
@@ -915,7 +930,10 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             # back on resume (2026-09-25). The prediction is stored at full
             # precision and rebuilt in its own dtype, so a resumed fold scores
             # the same numbers.
-            _rec = ckpt.cached([model_name, label, int(fold_i)], _fit_predict)
+            _key = [model_name, label, int(fold_i), _msig]
+            if key_extra is not None:
+                _key.append(key_extra(fold_i))
+            _rec = ckpt.cached(_key, _fit_predict)
             y_pred = np.asarray(_rec['y_pred'], dtype=_rec['dtype'])
 
             fold_all.append(metric_fn(y_val, y_pred))
@@ -1039,8 +1057,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                     lower_is_better=lower_is_better)
                 return X_tr_h, X_va_h
 
-            res = _evaluate_condition(_get_hybrid, 'hybrid', model_factory,
-                                      model_name=model_name)
+            res = _evaluate_condition(
+                _get_hybrid, 'hybrid', model_factory, model_name=model_name,
+                key_extra=lambda f, _bps=model_bps: (
+                    None if _bps.get(f) is None else
+                    _blueprint_fingerprint(_bps[f], list(reps))))
             if res:
                 per_model['_hybrid'] = res
                 mn = res['metric']
