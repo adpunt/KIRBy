@@ -160,6 +160,16 @@ def input_keys(data, domain):
             return None
         light = light if light is not None else [''] * len(heavy)
         return np.array([f'{h}|{l}' for h, l in zip(heavy, light)], dtype=object)
+    if domain == 'reaction':
+        # Reaction datasets carry 'rxn_smiles', not 'smiles'. Before 2026-09-28
+        # this fell through to data.get('smiles'), got None, and every tie on
+        # buchwald_hartwig was filed as the representation merging two
+        # reactions, including any reaction the dataset holds twice. The
+        # string is compared as written, so two spellings of one reaction are
+        # not matched.
+        rxn = data.get('rxn_smiles')
+        return None if rxn is None else np.array([str(r) for r in rxn],
+                                                 dtype=object)
     smiles = data.get('smiles')
     if smiles is None:
         return None
