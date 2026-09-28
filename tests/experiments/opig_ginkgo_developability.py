@@ -275,11 +275,27 @@ def _summarize_hybrid_scores(r2_scores, rmse_scores, spearman_scores):
 
     Mirrors opig_kingsmith_component_splits._summarize_scores so the legacy
     results['kirby_hybrid'] entry keeps the same structure as the base reps.
-    NaN-tolerant (folds with too-few val points contribute no Spearman).
+    Folds that never fitted are left out; a fitted fold with an undefined
+    Spearman makes the Spearman mean NaN, as it does for the baseline arm.
     """
     r2_arr = np.asarray(r2_scores, dtype=np.float64)
     rmse_arr = np.asarray(rmse_scores, dtype=np.float64)
     sp_arr = np.asarray(spearman_scores, dtype=np.float64) if spearman_scores else None
+    # SAME NaN RULE AS THE BASELINE ARM, 2026-09-28. run_baseline_survey.
+    # evaluate_rep averages Spearman with np.mean over the folds that fitted,
+    # so one fold with a constant prediction makes a baseline row NaN and
+    # print_analysis then drops it. This used np.nanmean, so the same fold
+    # was quietly left out of the hybrid's mean instead. Folds that never
+    # fitted (NaN rmse) are still left out, as evaluate_rep leaves them out;
+    # a fitted fold whose Spearman is undefined now makes the mean NaN.
+    if sp_arr is not None:
+        fitted = np.isfinite(rmse_arr) if len(rmse_arr) == len(sp_arr) \
+            else np.ones(len(sp_arr), dtype=bool)
+        sp_fitted = sp_arr[fitted]
+        if sp_fitted.size and np.any(np.isnan(sp_fitted)):
+            sp_arr = np.full_like(sp_arr, np.nan)
+        else:
+            sp_arr = sp_fitted
     return {
         'r2': {
             'mean': float(np.nanmean(r2_arr)) if np.any(~np.isnan(r2_arr)) else float('nan'),
