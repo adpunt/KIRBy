@@ -1766,112 +1766,128 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['per_pass_counts'] = convert_numpy(fold_cliff_counts)
 
     # ── The paired differences ──────────────────────────────────────────────
-    for space in spaces:
-        space_block = {'per_detector': {},
-                       'per_model_no_cleaning_mean': {},
-                       'per_model_clean_label_ceiling_mean': {}}
-        for m in downstream_models:
-            vals = np.array(list(base_noisy[space][m].values()), dtype=float)
-            space_block['per_model_no_cleaning_mean'][m] = (
-                float(np.nanmean(vals)) if vals.size else float('nan'))
-            vals = np.array(list(base_clean[space][m].values()), dtype=float)
-            space_block['per_model_clean_label_ceiling_mean'][m] = (
-                float(np.nanmean(vals)) if vals.size else float('nan'))
+    # ⛔ ONE BLOCK PER NOISE LEVEL. Fixed 2026-09-28. A pass key is
+    # 'L<level>|f<fold>|s<draw>', and every count and mean below used to take
+    # every key, so level 0.0 -- nothing injected -- and the injected level
+    # were pooled into one pass count and one mean gain. Results stay separate
+    # by noise level; each level now has its own per_space and summary under
+    # results['per_level'][<level>].
+    results['per_level'] = {}
+    for level in levels:
+        _pfx = f'L{level:g}|'
 
-        for detector in detectors:
-            by_rate = {}
-            for rate in flag_rates:
-                rk = str(rate)
-                block = {'per_model': {},
-                         'molecules_spared_by_matrix': convert_numpy({
-                             k: spared.get(k, {}).get(detector, {}).get(rk, {})
-                             for k in sorted(set(
-                                 matrix_of.get(space, {}).values()))})}
-                for m in downstream_models:
-                    row = {}
-                    for cleanup in CLEANUPS:
-                        cells = arm_score[space][detector][rk][m][cleanup]
-                        keys = sorted(cells['plain'])
-                        if not keys:
-                            continue
-                        axis, vals_ = setting_axis(cleanup, is_clf)
-                        slot = flag_rates.index(rate)
-                        entry = {
-                            'swept_axis': axis,
-                            'setting': (rate if axis == 'flag_rate'
-                                        else (vals_[slot]
-                                              if slot < len(vals_) else None)),
-                            'what_the_cleanup_does':
-                                WHAT_THE_CLEANUP_DOES.get(cleanup, 'unknown'),
-                            'plain_mean': float(np.nanmean(
-                                [cells['plain'][k] for k in keys])),
-                        }
-                        # Two paired comparisons per cleanup: the treatment
-                        # against the plain cleanup, and the control against
-                        # the plain cleanup. Every difference is signed by
-                        # _gain, which reads lower_is_better.
-                        for arm in ('cliff_exempt', 'random_exempt'):
-                            gains = [_gain(cells[arm].get(k, float('nan')),
-                                           cells['plain'][k], lower_is_better)
-                                     for k in keys]
-                            gains = np.array([g for g in gains
-                                              if np.isfinite(g)], dtype=float)
-                            _sp_m = (spared.get(matrix_of.get(space, {})
-                                                .get(m), {})
-                                     .get(detector, {}).get(rk, {})
-                                     .get(cleanup, {}))
-                            sp = [_sp_m.get(k, {}) for k in keys]
-                            spared_key = ('n_cliff_molecules_spared'
-                                          if arm == 'cliff_exempt'
-                                          else 'n_random_molecules_spared')
-                            n_sp = [int(x.get(spared_key, 0)) for x in sp]
-                            entry[arm] = {
-                                'passes_won': int((gains > 0).sum()),
-                                'passes_scored': int(gains.size),
-                                'mean_gain_over_plain': (
-                                    float(gains.mean()) if gains.size
-                                    else float('nan')),
-                                'pass_gains': [float(x) for x in gains],
-                                'spread_over_passes': (
-                                    float(gains.std()) if gains.size
-                                    else float('nan')),
-                                'arm_mean': float(np.nanmean(
-                                    [cells[arm].get(k, float('nan'))
-                                     for k in keys])),
-                                'molecules_put_back_per_pass': n_sp,
-                                'nothing_was_spared': bool(
-                                    n_sp and max(n_sp) == 0),
+        def _only(d, _p=_pfx):
+            return {k_: v_ for k_, v_ in d.items() if str(k_).startswith(_p)}
+        _lvl_per_space = {}
+        for space in spaces:
+            space_block = {'per_detector': {},
+                           'per_model_no_cleaning_mean': {},
+                           'per_model_clean_label_ceiling_mean': {}}
+            for m in downstream_models:
+                vals = np.array([v for k_, v in base_noisy[space][m].items() if k_.startswith(_pfx)], dtype=float)
+                space_block['per_model_no_cleaning_mean'][m] = (
+                    float(np.nanmean(vals)) if vals.size else float('nan'))
+                vals = np.array([v for k_, v in base_clean[space][m].items() if k_.startswith(_pfx)], dtype=float)
+                space_block['per_model_clean_label_ceiling_mean'][m] = (
+                    float(np.nanmean(vals)) if vals.size else float('nan'))
+
+            for detector in detectors:
+                by_rate = {}
+                for rate in flag_rates:
+                    rk = str(rate)
+                    block = {'per_model': {},
+                             'molecules_spared_by_matrix': convert_numpy({
+                                 k: {c_: _only(v_) for c_, v_ in spared.get(k, {})
+                                     .get(detector, {}).get(rk, {}).items()}
+                                 for k in sorted(set(
+                                     matrix_of.get(space, {}).values()))})}
+                    for m in downstream_models:
+                        row = {}
+                        for cleanup in CLEANUPS:
+                            cells = arm_score[space][detector][rk][m][cleanup]
+                            keys = sorted(k_ for k_ in cells['plain'] if k_.startswith(_pfx))
+                            if not keys:
+                                continue
+                            axis, vals_ = setting_axis(cleanup, is_clf)
+                            slot = flag_rates.index(rate)
+                            entry = {
+                                'swept_axis': axis,
+                                'setting': (rate if axis == 'flag_rate'
+                                            else (vals_[slot]
+                                                  if slot < len(vals_) else None)),
+                                'what_the_cleanup_does':
+                                    WHAT_THE_CLEANUP_DOES.get(cleanup, 'unknown'),
+                                'plain_mean': float(np.nanmean(
+                                    [cells['plain'][k] for k in keys])),
                             }
-                        # The one number the third arm exists for: the cliff
-                        # exemption against the random one, pass by pass.
-                        paired = [_gain(cells['cliff_exempt'].get(k, float('nan')),
-                                        cells['random_exempt'].get(k, float('nan')),
-                                        lower_is_better) for k in keys]
-                        paired = np.array([g for g in paired if np.isfinite(g)],
-                                          dtype=float)
-                        entry['cliff_exempt_over_random_exempt'] = {
-                            'passes_won': int((paired > 0).sum()),
-                            'passes_scored': int(paired.size),
-                            'mean_gain': (float(paired.mean()) if paired.size
-                                          else float('nan')),
-                            'pass_gains': [float(x) for x in paired],
-                        }
-                        row[cleanup] = entry
-                    block['per_model'][m] = row
-                by_rate[rk] = convert_numpy(block)
-            space_block['per_detector'][detector] = {
-                'per_setting_slot': by_rate,
-                'detection_by_matrix': convert_numpy({
-                    k: det_rows.get(k, {}).get(detector, {})
-                    for k in sorted(set(matrix_of.get(space, {}).values()))}),
-                'cliff_molecules_among_the_suspicious_by_matrix': convert_numpy({
-                    k: premise.get(k, {}).get(detector, {})
-                    for k in sorted(set(matrix_of.get(space, {}).values()))}),
-            }
-        results['per_space'][space] = space_block
+                            # Two paired comparisons per cleanup: the treatment
+                            # against the plain cleanup, and the control against
+                            # the plain cleanup. Every difference is signed by
+                            # _gain, which reads lower_is_better.
+                            for arm in ('cliff_exempt', 'random_exempt'):
+                                gains = [_gain(cells[arm].get(k, float('nan')),
+                                               cells['plain'][k], lower_is_better)
+                                         for k in keys]
+                                gains = np.array([g for g in gains
+                                                  if np.isfinite(g)], dtype=float)
+                                _sp_m = (spared.get(matrix_of.get(space, {})
+                                                    .get(m), {})
+                                         .get(detector, {}).get(rk, {})
+                                         .get(cleanup, {}))
+                                sp = [_sp_m.get(k, {}) for k in keys]
+                                spared_key = ('n_cliff_molecules_spared'
+                                              if arm == 'cliff_exempt'
+                                              else 'n_random_molecules_spared')
+                                n_sp = [int(x.get(spared_key, 0)) for x in sp]
+                                entry[arm] = {
+                                    'passes_won': int((gains > 0).sum()),
+                                    'passes_scored': int(gains.size),
+                                    'mean_gain_over_plain': (
+                                        float(gains.mean()) if gains.size
+                                        else float('nan')),
+                                    'pass_gains': [float(x) for x in gains],
+                                    'spread_over_passes': (
+                                        float(gains.std()) if gains.size
+                                        else float('nan')),
+                                    'arm_mean': float(np.nanmean(
+                                        [cells[arm].get(k, float('nan'))
+                                         for k in keys])),
+                                    'molecules_put_back_per_pass': n_sp,
+                                    'nothing_was_spared': bool(
+                                        n_sp and max(n_sp) == 0),
+                                }
+                            # The one number the third arm exists for: the cliff
+                            # exemption against the random one, pass by pass.
+                            paired = [_gain(cells['cliff_exempt'].get(k, float('nan')),
+                                            cells['random_exempt'].get(k, float('nan')),
+                                            lower_is_better) for k in keys]
+                            paired = np.array([g for g in paired if np.isfinite(g)],
+                                              dtype=float)
+                            entry['cliff_exempt_over_random_exempt'] = {
+                                'passes_won': int((paired > 0).sum()),
+                                'passes_scored': int(paired.size),
+                                'mean_gain': (float(paired.mean()) if paired.size
+                                              else float('nan')),
+                                'pass_gains': [float(x) for x in paired],
+                            }
+                            row[cleanup] = entry
+                        block['per_model'][m] = row
+                    by_rate[rk] = convert_numpy(block)
+                space_block['per_detector'][detector] = {
+                    'per_setting_slot': by_rate,
+                    'detection_by_matrix': convert_numpy({
+                        k: _only(det_rows.get(k, {}).get(detector, {}))
+                        for k in sorted(set(matrix_of.get(space, {}).values()))}),
+                    'cliff_molecules_among_the_suspicious_by_matrix': convert_numpy({
+                        k: _only(premise.get(k, {}).get(detector, {}))
+                        for k in sorted(set(matrix_of.get(space, {}).values()))}),
+                }
+            _lvl_per_space[space] = space_block
 
-    results['summary'] = _summarise(results, downstream_models, flag_rates,
-                                    detectors, spaces, metric_name, CLEANUPS)
+        _lvl = {'noise_level': float(level), 'per_space': _lvl_per_space}
+        _lvl['summary'] = _summarise(_lvl, downstream_models, flag_rates,
+                                     detectors, spaces, metric_name, CLEANUPS)
+        results['per_level'][f'{level:g}'] = _lvl
     # The similarity sweep's detection readings per pass, and the spaces that
     # could not be built (2026-09-25).
     results['similarity_sweep']['detection_by_matrix'] = convert_numpy(
@@ -2011,7 +2027,6 @@ def _summarise(results, models, flag_rates, detectors, spaces, metric_name,
 
 
 def _print_summary(results, metric_name):
-    s = results['summary']
     print("\n" + "=" * 70)
     print(f"SUMMARY — passes the exempt arm won against the same cleanup "
           f"unexempted ({metric_name})")
@@ -2023,6 +2038,13 @@ def _print_summary(results, metric_name):
         print("  ⛔ the cliff reference is built from the representations "
               "themselves on this dataset; the exempt set and the suspect set "
               "are not independent")
+    for _lk, _lvl in results.get('per_level', {}).items():
+        print(f"\n  NOISE LEVEL {_lk}")
+        _print_level(_lvl['summary'])
+    print("\n  One setting winning on one pass is not a result. Read the counts.")
+
+
+def _print_level(s):
     for space, srow in s['per_space'].items():
         print(f"\n  {space}:")
         for cleanup, row in srow['per_cleanup'].items():
@@ -2053,7 +2075,6 @@ def _print_summary(results, metric_name):
                   f"{row['settings_the_cliff_exemption_won_most_passes_in']} of "
                   f"{row['settings_scored']} settings "
                   f"({', '.join(row['cleanups'])})")
-    print("\n  One setting winning on one pass is not a result. Read the counts.")
 
 
 def main():
