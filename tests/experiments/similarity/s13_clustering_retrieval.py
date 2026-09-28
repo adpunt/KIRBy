@@ -1090,10 +1090,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
         print(f"\n  Best hybrid slot (held-out): coherence={h_coh:.4f} "
               f"({h_coh_space}) vs best_rep={best_rep_coh_val:.4f} "
-              f"({'win' if h_coh > best_rep_coh_val else 'loss'}), "
+              f"({ {True: 'win', False: 'loss', None: 'no verdict'}[_cw] }), "
               f"retrieval={h_ret:.4f} ({h_ret_space}) vs "
               f"best_rep={best_rep_ret_val:.4f} "
-              f"({'win' if h_ret < best_rep_ret_val else 'loss'})")
+              f"({ {True: 'win', False: 'loss', None: 'no verdict'}[_rw] })")
 
     # ── Honest leave-one-fold-out re-score blocks (CONTRACT shape) ──
     # Two axes with OPPOSITE directions cannot share one fold_reselection block
