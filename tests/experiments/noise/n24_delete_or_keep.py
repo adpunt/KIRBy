@@ -63,7 +63,8 @@ Read out of `n07.cleaned_training_set` in this session:
   remove        deletes the molecules above the (1 - flag rate) quantile of the
                 suspicion score                              -- the flagged only
   knn_smooth    overwrites those same molecules' labels with the mean label of
-                their ten nearest neighbours                  -- the flagged only
+                their nine nearest neighbours (n07 asks for ten and drops the
+                molecule itself)                              -- the flagged only
   label_smooth  moves EVERY label toward its neighbours' mean, each one in
                 proportion to its own suspicion score         -- every molecule
   oof_smooth    the same, aiming at what a LightGBM trained on the other
@@ -92,6 +93,12 @@ sweeps nothing. They are FITTED ONCE, at the first rate, and the same per-pass
 score is written under the other rates so that every rate's table holds every
 arm. `arms_that_read_the_flag_rate` names the two that do and
 `rate_blind_rows_are_repeats` records that the others repeat.
+
+DELETE AGAINST KEEP, HEAD TO HEAD. Every rewrite and reweight arm carries
+`vs_delete`: the same pass, the same flag rate, paired against the deletion
+arm. A positive gain means keeping beat deleting. Added 2026-09-28; before it
+the file's own question was answered only through two separate comparisons
+against no cleaning.
 
 THE HEADLINE IS A COUNT OF PASSES, NOT A MEAN. One pass is one (noise draw,
 fold). Every comparison is paired: the same pass, the same held-out molecules,
@@ -1506,6 +1513,7 @@ def _summarise(acc, arms, models, metric_name, lower_is_better, seeds,
     other_arms = [a[0] for a in arms
                   if a[1] not in ('no_cleaning', 'delete_at_random')]
     family_of = {a[0]: a[1] for a in arms}
+    delete_arm = next((a[0] for a in arms if a[1] == 'delete'), None)
 
     out = {'metric': metric_name, 'lower_is_better': bool(lower_is_better),
            'headline': ('passes won against no cleaning, and against deleting '
@@ -1555,6 +1563,20 @@ def _summarise(acc, arms, models, metric_name, lower_is_better, seeds,
                                         v['passes_won'] * 2 > v['n_passes_paired']
                                         for v in vs.values()))
                                 entry['random_seeds_compared'] = len(vs)
+                                # dirty-local 2026-09-28: the file's own
+                                # question, delete or keep, had no paired
+                                # comparison between the two. Positive gain
+                                # means keeping (rewriting or down-weighting)
+                                # beat deleting the flagged molecules on the
+                                # same pass, the same held-out molecules and
+                                # the same flag rate.
+                                if family_of[arm] in ('keep_rewrite',
+                                                      'keep_reweight'):
+                                    dg = ((by_arm.get(delete_arm) or {})
+                                          .get(m) or {})
+                                    if dg:
+                                        entry['vs_delete'] = _paired(
+                                            dg, g, lower_is_better)
                                 won_nc = (entry['vs_no_cleaning']['passes_won'] * 2
                                           > entry['vs_no_cleaning']['n_passes_paired'])
                                 key = (f'{lvl}|{space}|{detector}|{rate}|{arm}'
@@ -1686,6 +1708,12 @@ def _print_summary(results, metric_name):
                                         f"{entry['random_seeds_compared']} "
                                         f"random-deletion seeds: "
                                         f"{entry['beat_every_random_seed']}")
+                            if 'vs_delete' in entry:
+                                vd = entry['vs_delete']
+                                tail += (f"; against deleting: won "
+                                         f"{vd['passes_won']} of "
+                                         f"{vd['n_passes_paired']} passes, "
+                                         f"mean {vd['mean_gain']:+.4f}")
                             print(f"      {space}/{detector}/rate {rate}/"
                                   f"{arm}/{m}: won {nc['passes_won']} of "
                                   f"{nc['n_passes_paired']} passes against no "
