@@ -542,7 +542,7 @@ def _evaluate_hybrid_per_fold(
                 # models on its 'fast' tier (find_best_hybrid.py:8639-8646), so
                 # the search scored rf, lightgbm and dnn. The loop below then
                 # trained all five names in MODELS_LIST
-                # (opig_kingsmith_component_splits.py:128) on those features. Two
+                # (set just below the imports) on those features. Two
                 # of the five downstream models the table reports were never
                 # scored by the search at all, and nothing said so.
                 #
@@ -928,8 +928,8 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
     # the training rows hold 3 and 2 components and the recipe is picked on 3
     # or 2 inner folds, not 5. Nothing written to the split's JSON said which,
     # and the warning that says so is swallowed by the blanket
-    # filterwarnings('ignore') at line 92 unless the 'always' filter at line 96
-    # keeps it. Recorded 2026-09-18, split audit section D,
+    # filterwarnings('ignore') below the imports unless the 'always' filter after
+    # it    # keeps it. Recorded 2026-09-18, split audit section D,
     # opig_kingsmith_component_splits.py:422. One count per outer fold, in fold
     # order; None where the training rows hold a single component, because
     # _make_cv_splitter raises there and no search runs. Bookkeeping only: this
@@ -1008,7 +1008,7 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
 
     # Additive, and NOT put inside `results`: that dict is keyed by
     # representation name and read as {rep: {'models': ...}} by
-    # _paired_hybrid_delta (line 679), so a key that is not a representation
+    # _paired_hybrid_delta, so a key that is not a representation
     # would be handed to .get('models', {}) there. These go on
     # the split's own dict, whose keys print_analysis reads by name.
     split_result = {
