@@ -651,6 +651,20 @@ def _raw_chembl_frame(target_chembl_id=None):
     return df, candidates
 
 
+# DIRTY-LOCAL 2026-09-28. Which ChEMBL records measure the property a dataset's
+# label is. Before this map the provider read EVERY chembl_raw_*.csv in the cache
+# and pooled them, so on herg_ki (a pKi label) a compound with an IC50 in one
+# paper and a Ki in another became a "two-paper group" whose spread was the
+# IC50-versus-Ki difference. Counted on herg_ki: 324 groups, 131 with a nonzero
+# spread, when Ki records alone give 211 groups and 20 nonzero. A dataset not
+# listed here has no ChEMBL records of its own label type, and gets a refusal:
+# matching a logD molecule to its hERG records would score a logD label against
+# hERG disagreement.
+CHEMBL_RECORDS_FOR_DATASET = {
+    'herg_ki': ('CHEMBL240', 'Ki'),
+}
+
+
 def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
     """A compound measured against one target in more than one paper.
 
@@ -677,6 +691,17 @@ def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
     """
     import pandas as pd
 
+    if dataset_name not in CHEMBL_RECORDS_FOR_DATASET:
+        raise ProviderUnavailable(
+            f"no ChEMBL record type is listed as measuring {dataset_name}'s "
+            f"label (CHEMBL_RECORDS_FOR_DATASET), so a spread across papers "
+            f"would be about a different property",
+            {'n_groups': 0,
+             'datasets_this_provider_covers':
+                 sorted(CHEMBL_RECORDS_FOR_DATASET)})
+    want_target, want_type = CHEMBL_RECORDS_FOR_DATASET[dataset_name]
+    target_chembl_id = target_chembl_id or want_target
+
     smiles, _smiles_key = dataset_smiles(data)
     if smiles is None:
         raise ProviderUnavailable(
@@ -685,6 +710,15 @@ def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
             "InChIKey", {'n_groups': 0})
 
     df, paths = _raw_chembl_frame(target_chembl_id)
+    n_records_read = int(len(df))
+    if 'standard_type' not in df.columns:
+        raise ProviderUnavailable(
+            f"the raw ChEMBL frame carries no standard_type, so {want_type} "
+            f"records cannot be told from other types", {'n_groups': 0})
+    df = df[df['standard_type'] == want_type].copy()
+    if 'target_chembl_id' in df.columns:
+        df = df[df['target_chembl_id'] == want_target].copy()
+    n_records_of_the_label_type = int(len(df))
 
     from kirby.datasets.chembl_bioactivity import _standardize_and_inchikey
     if 'inchikey' not in df.columns:
@@ -692,9 +726,16 @@ def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
                                                       if 'smiles_raw' in df
                                                       else df['smiles'])
     if 'pActivity' not in df.columns:
-        value = pd.to_numeric(df['standard_value'], errors='coerce')
-        df = df[value > 0].copy()
-        df['pActivity'] = 9 - np.log10(value[value > 0])
+        if 'pchembl_value' in df.columns:
+            # ChEMBL writes pchembl_value only for an exact ('=') value in a
+            # unit it can convert, so a censored '>10000' record has none and
+            # is dropped rather than read as an exact pKi of 5.
+            df['pActivity'] = pd.to_numeric(df['pchembl_value'],
+                                            errors='coerce')
+        else:
+            value = pd.to_numeric(df['standard_value'], errors='coerce')
+            df = df[value > 0].copy()
+            df['pActivity'] = 9 - np.log10(value[value > 0])
     df = df.dropna(subset=['inchikey', 'pActivity', 'document_chembl_id'])
 
     keys = _inchikeys(smiles)
@@ -740,6 +781,9 @@ def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
 
     counts_out = {
         'raw_frames_read': paths,
+        'record_type_kept': f'{want_type} against {want_target}',
+        'n_raw_records_read': n_records_read,
+        'n_raw_records_of_that_type': n_records_of_the_label_type,
         'n_raw_records_with_a_key_a_value_and_a_document': int(len(df)),
         'n_compounds_with_more_than_one_record': n_multi_record,
         'n_compounds_with_more_than_one_document': n_multi_document,
