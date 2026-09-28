@@ -191,6 +191,9 @@ from kirby.noise_spec import GROUPED_STRATEGIES, OUTLIER_STRATEGIES
 from experiments.noise import noise_cache as nc
 from experiments.noise import similarity_space as ss
 from experiments.noise.controls import controls_enabled
+# DIRTY-LOCAL 2026-09-28: the representations the stored search built each
+# outer fold's hybrid on (n02, commit 736ec93).
+from experiments.noise.n02_sample_weighting import search_fold_reps
 from experiments.noise.n23_uncertainty_cleaning import (
     RowSink, PassCheckpoint, ensure_dprime_models, fit_score_cached,
     swept_similarity, model_similarity_spaces, smiles_for,
@@ -972,6 +975,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # (2026-09-25): sim_detection[level][matrix][model][detector][label].
     sim_detection = {}
     sim_unavailable = {}
+    # {fold: {'<space>:<models>': {'reps', 'source'}}}: which representations
+    # each fold's hybrid was built on, and where that list came from
+    # (dirty-local 2026-09-28).
+    hybrid_fold_reps = {}
     t0 = time.time()
 
     # ── Rows, checkpoints, the similarity axis (2026-09-25) ──
@@ -1001,6 +1008,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         deleted_acc = _state['deleted_acc']
         sim_detection = _state['sim_detection']
         sim_unavailable = _state['sim_unavailable']
+        hybrid_fold_reps = _state.get('hybrid_fold_reps', {})
         done_passes = set(_state['done'])
         print(f"  resumed from {ckpt.path}: {len(done_passes)} (level, draw, "
               f"fold) passes already done")
@@ -1029,6 +1037,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                    'detection_acc': detection_acc, 'injury_acc': injury_acc,
                    'deleted_acc': deleted_acc, 'sim_detection': sim_detection,
                    'sim_unavailable': sim_unavailable,
+                   'hybrid_fold_reps': hybrid_fold_reps,
                    'done': sorted(done_passes)})
 
     def _sim_label(detector, cleanup):
@@ -1107,11 +1116,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
+                    # DIRTY-LOCAL 2026-09-28. A recipe with rep_count below
+                    # the pool size is built, in the search, on the
+                    # representations THIS fold's training rows rank highest.
+                    # Handed the whole pool and no per-fold scores,
+                    # build_fold_hybrid ranks by Blueprint.rep_scores instead
+                    # (_shared.py:5270-5300): one score per representation
+                    # over every molecule, this fold's held-out ones
+                    # included. The fold's own list from the recipe's
+                    # allocation_per_fold is passed, as n02 (736ec93), n07
+                    # (3de791d), n18 (0caa67e) and n42 (902d0d9) do. With no
+                    # per-fold record the old behaviour stands and the source
+                    # written to hybrid_fold_reps says so. The hybrid cache
+                    # key hashes the representations it is handed, so a build
+                    # on the whole pool is never read back as this one.
+                    _keep, _keep_src = search_fold_reps(
+                        _bp_m, fold_i, n_folds, list(train_reps))
+                    _tr_pool = (train_reps if _keep is None else
+                                {k: v for k, v in train_reps.items()
+                                 if k in _keep})
+                    _va_pool = (val_reps if _keep is None else
+                                {k: v for k, v in val_reps.items()
+                                 if k in _keep})
+                    hybrid_fold_reps.setdefault(str(int(fold_i)), {})[
+                        f"{_sp}:{'+'.join(_mnames)}"] = {
+                            'reps': (sorted(_keep) if _keep is not None
+                                     else None),
+                            'source': _keep_src}
+                    print(f"    fold {fold_i} {_sp} ({'+'.join(_mnames)}): "
+                          f"built on "
+                          f"{sorted(_keep) if _keep is not None else 'the pool'}"
+                          f" ({_keep_src})")
                     # noise_cache.cached_hybrid_for_fold since 2026-09-25:
                     # the same build for the same draw is shared with n23,
                     # n25, n30-n35, n38, n40 and n41 (plan section 3).
                     X_tr_h, X_va_h = cached_hybrid_cell(
-                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        dataset_name, _tr_pool, _va_pool, y0, _bp_m, g_tr,
                         None if _shareable else _mnames[0],
                         None if _shareable
                         else model_factories[_mnames[0]](),
@@ -1395,6 +1435,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               for mk, by_m in by_mk.items()}
         for lvl, by_mk in sim_detection.items()})
     results['similarity_sweep']['spaces_unavailable'] = sim_unavailable
+    results['hybrid_fold_reps'] = hybrid_fold_reps
     results['rows'] = rows.summary()
     results['controls_run'] = bool(controls_enabled())
     _print_summary(results, metric_name)
