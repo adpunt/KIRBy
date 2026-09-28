@@ -873,11 +873,18 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                     ekey = (space if cell_models == list(downstream_models)
                             else f'{space}/{cell_models[0]}')
                     cols = {'clean': (y_cl, None), 'plain_mean': (y_pl, None)}
+                    # Under hybrid_labels='noisy' the hybrid features change
+                    # every pass, so the clean model error is keyed by the
+                    # features too; keyed by the space alone it reused the
+                    # first pass's number for every later pass.
+                    mse_key = (ekey if ctx['spaces'] is not None
+                               else f'{ekey}|{_nc.array_hash(X_tr_s)}')
                     try:
-                        if ekey not in ctx['clean_mse']:
+                        if mse_key not in ctx['clean_mse']:
                             pc = oof_fn(X_tr_s, y_cl, g_tr)
-                            ctx['clean_mse'][ekey] = float(np.mean((y_cl - pc) ** 2))
-                        sd2_clean = ctx['clean_mse'][ekey]
+                            ctx['clean_mse'][mse_key] = float(
+                                np.mean((y_cl - pc) ** 2))
+                        sd2_clean = ctx['clean_mse'][mse_key]
                         p_pl = oof_fn(X_tr_s, y_pl, g_tr)
                         su2, se2, _fi = fit_noise_variance(y_pl, p_pl, k_tr)
                         if su2 is not None:
