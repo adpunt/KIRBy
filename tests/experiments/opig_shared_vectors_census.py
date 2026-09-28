@@ -117,11 +117,16 @@ def cached_reps(dataset_name):
 # ===== COUNTING ===========================================================
 
 def row_partition(X):
-    """Group ids for identical rows, compared byte for byte.
+    """Group ids for identical rows, compared value by value.
 
     Returns (group_id_per_row, size_of_each_row's_group). Two rows share a group
-    id when their bytes are identical, which for a frozen encoder is exactly the
-    condition under which no model can tell them apart.
+    id when every feature compares equal, which is the condition under which no
+    model can tell them apart.
+
+    ⛔ NOT BYTE FOR BYTE, whatever this said before 2026-09-28. np.unique on the
+    structured view compares field values: -0.0 and 0.0 are one value, and a
+    row holding NaN never equals another row, even an identical one. Rows with
+    NaN are counted separately under 'n_rows_with_nan'.
     """
     A = np.ascontiguousarray(X)
     if A.ndim != 2:
@@ -993,8 +998,10 @@ def main():
     payload = {'measured_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                'what_is_counted':
                    'A molecule counts as sharing a vector when its row of the '
-                   'representation matrix is byte-for-byte identical to some '
-                   'other molecule\'s row. The count is split by cause: the '
+                   'representation matrix equals some other molecule\'s row '
+                   'in every feature (compared by value, so -0.0 equals 0.0; '
+                   'a row containing NaN never ties and is counted under '
+                   'n_rows_with_nan). The count is split by cause: the '
                    'dataset holding one input twice, a featuriser writing a row '
                    'of zeros, and the representation merging two genuinely '
                    'different molecules. Only the third is a property of the '
