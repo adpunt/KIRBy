@@ -850,9 +850,12 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
             rep_results[model_name] = model_result
 
             mae = qsar_res['mae']['mean']
-            mcc = ac_res['ac_mcc'] if ac_res else float('nan')
+            _bp = (ac_res or {}).get('by_partition', {})
+            m_int = _bp.get('M_inter', {}).get('mcc_fold_mean', float('nan'))
+            m_test = _bp.get('M_test', {}).get('mcc_fold_mean', float('nan'))
             print(f"    {rep_name:25s} {model_name:8s}  "
-                  f"MAE={mae:.4f}  AC-MCC={mcc:.4f}  ({elapsed:.1f}s)")
+                  f"MAE={mae:.4f}  MCC-inter={m_int:.4f}  "
+                  f"MCC-test={m_test:.4f}  ({elapsed:.1f}s)")
 
         if rep_results:
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
@@ -887,9 +890,12 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
             hybrid_results[model_name] = model_result
 
             mae = hres['qsar']['mae']['mean']
-            mcc = ac_res['ac_mcc'] if ac_res else float('nan')
+            _bp = (ac_res or {}).get('by_partition', {})
+            m_int = _bp.get('M_inter', {}).get('mcc_fold_mean', float('nan'))
+            m_test = _bp.get('M_test', {}).get('mcc_fold_mean', float('nan'))
             print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
-                  f"MAE={mae:.4f}  AC-MCC={mcc:.4f}  "
+                  f"MAE={mae:.4f}  MCC-inter={m_int:.4f}  "
+                  f"MCC-test={m_test:.4f}  "
                   f"({hres['qsar']['n_folds']}/{n_folds} folds)")
 
         # ⛔ WHICH DOWNSTREAM MODELS HAVE NO HYBRID ROW, AND WHY. Recorded
@@ -957,31 +963,38 @@ def print_analysis(all_results):
         print(f"\n  --- {tr['target_name']} ({tr['n_compounds']} compounds, "
               f"{tr['n_acs']} ACs) ---")
 
+        # Three cliff MCCs per row. MCC-inter and MCC-test are Dablander's two
+        # figures (one activity known / both unknown), each the mean over folds
+        # as he reports it. MCC-pool scores every pair prediction against
+        # prediction and matches neither of his figures; it is kept because
+        # earlier result files carry only it.
         print(f"  {'Rep':25s} {'Model':8s} {'MAE':>8s} {'RMSE':>8s} "
-              f"{'R2':>8s} {'AC-MCC':>8s} {'AC-Sens':>8s}")
-        print(f"  {'-'*25} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+              f"{'R2':>8s} {'MCC-int':>8s} {'MCC-test':>8s} {'MCC-pool':>8s}")
+        print(f"  {'-'*25} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
 
         rows = []
         for rep_name, rep_data in results.items():
             for model_name, model_res in rep_data['models'].items():
                 qsar = model_res['qsar']
-                ac = model_res.get('ac', {})
+                ac = model_res.get('ac', {}) or {}
+                bp = ac.get('by_partition', {}) or {}
                 rows.append((
                     rep_name, model_name,
                     qsar['mae']['mean'], qsar['rmse']['mean'],
                     qsar['r2']['mean'],
+                    bp.get('M_inter', {}).get('mcc_fold_mean', float('nan')),
+                    bp.get('M_test', {}).get('mcc_fold_mean', float('nan')),
                     ac.get('ac_mcc', float('nan')),
-                    ac.get('sensitivity', float('nan')),
                 ))
 
         # Sort by MAE (lower is better)
         rows.sort(key=lambda r: r[2])
 
-        for rep_name, model_name, mae, rmse, r2, mcc, sens in rows:
-            mcc_s = f"{mcc:.4f}" if not np.isnan(mcc) else "—"
-            sens_s = f"{sens:.4f}" if not np.isnan(sens) else "—"
+        def _f(v):
+            return f"{v:.4f}" if v is not None and not np.isnan(v) else "—"
+        for rep_name, model_name, mae, rmse, r2, m_int, m_test, m_pool in rows:
             print(f"  {rep_name:25s} {model_name:8s} {mae:8.4f} {rmse:8.4f} "
-                  f"{r2:8.4f} {mcc_s:>8s} {sens_s:>8s}")
+                  f"{r2:8.4f} {_f(m_int):>8s} {_f(m_test):>8s} {_f(m_pool):>8s}")
 
     # Cross-target summary. The Hybrid MAE and Delta columns were removed on
     # 2026-09-04 (split audit): both came from a hybrid whose features were
@@ -996,7 +1009,7 @@ def print_analysis(all_results):
     # off the honest per-model table below.
     print(f"\n  Cross-target summary:")
     print(f"  {'Target':10s} {'Best rep':25s} {'MAE':>8s} {'nMAE':>6s} "
-          f"{'AC-MCC':>8s} {'nMCC':>6s}")
+          f"{'MCC-test':>8s} {'nMCC':>6s}")
     print(f"  {'-'*10} {'-'*25} {'-'*8} {'-'*6} {'-'*8} {'-'*6}")
 
     for target in ALL_TARGETS:
@@ -1020,10 +1033,11 @@ def print_analysis(all_results):
                     best_mae = mae
                     best_indiv = rep_name
 
-        # Best AC-MCC for any method, the hybrid included (MCC range [-1, 1];
-        # ignore NaN entries)
+        # Best MCC-test (both activities unknown, Dablander's harder figure)
+        # for any method, the hybrid included. Higher is better; NaN ignored.
         _mccs = [
-            m.get('ac', {}).get('ac_mcc', float('nan'))
+            ((m.get('ac') or {}).get('by_partition') or {}).get(
+                'M_test', {}).get('mcc_fold_mean', float('nan'))
             for rd in results.values() for m in rd['models'].values()
         ]
         _mccs = [v for v in _mccs if not (isinstance(v, float) and np.isnan(v))]
