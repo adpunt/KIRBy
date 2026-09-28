@@ -508,7 +508,12 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             # nothing to divide by. Say nan rather than report a retention.
             baseline_r2 = float('nan')
         max_noise_r2 = level_scores.get(max(_levels), float('nan'))
-        if baseline_r2 and not np.isnan(baseline_r2) and not np.isnan(max_noise_r2):
+        # ⛔ FIXED 2026-09-28. A missing score used to give retention 0.0, which
+        # reads as "lost everything". A clean score at or below zero also went
+        # through, and dividing by it flips the sign. Both are now nan, the same
+        # zero rule robustness_metrics applies to auc_norm.
+        if (np.isfinite(baseline_r2) and baseline_r2 > 0
+                and np.isfinite(max_noise_r2)):
             if lower_is_better:
                 # For lower-is-better (MAE/RMSE): retention = baseline / noisy * 100
                 # (lower noisy score = better retention)
@@ -517,7 +522,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                 # For higher-is-better (R²): retention = noisy / baseline * 100
                 retention = float(max_noise_r2 / baseline_r2 * 100)
         else:
-            retention = 0.0
+            retention = float('nan')
 
         return {
             'scores_by_level': level_scores,
