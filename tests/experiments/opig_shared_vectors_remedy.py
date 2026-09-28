@@ -61,9 +61,11 @@ null and is not one. aug_max_candidates is not swept at all: it is not a
 parameter of find_best_hybrid and passing it raises TypeError; the search pins it
 at 50 (find_best_hybrid.py:5007).
 
-Every sweep point is also checked for being a no-op after the fact: a point that
-admitted zero donor features, or whose admitted feature set is identical to
-another point's, is printed as no-op rather than as a result.
+Every sweep point is also checked after the fact. A point that admitted zero
+donor features is printed as no-op. A point whose hybrid took exactly the same
+columns as an earlier point's, on every fold, is printed as "same matrices as"
+that point. The second check compares rows inside one output file; across
+--sweep-slice files, compare 'recipe_signature_per_fold'.
 
 Usage:
     # how big is the grid, before submitting anything
@@ -521,10 +523,28 @@ def summarise_comparison(name, point, result, outer_folds, data, reps, donor_rep
                 rep_ties['kept_augmentations'] = list(
                     (finfo.get('augmentation_info') or {}).keys()) or []
                 rep_ties['hybrid_width'] = int(X_fold.shape[1])
+                # The rebuild is only "the matrix that was scored" if it has
+                # the engine's width on this fold. Recorded, and loud if not.
+                _eng_w = (entry.get('n_features_per_fold') or [None] * 99)[fold_i]
+                rep_ties['engine_width'] = _eng_w
+                rep_ties['width_matches_engine'] = (
+                    None if _eng_w is None else int(_eng_w) == int(X_fold.shape[1]))
+                if rep_ties['width_matches_engine'] is False:
+                    print(f'    !! {name} {model} fold {fold_i}: rebuilt width '
+                          f'{X_fold.shape[1]} features, engine scored '
+                          f'{_eng_w}. The tie counts for this fold do not '
+                          f'describe the scored matrix.', flush=True)
+                rep_ties['recipe_signature'] = _recipe_signature(finfo)
                 ties_per_fold.append(rep_ties)
 
+        # Only the DONOR's names count as admitted donor features. A base
+        # representation auto-demoted into augmentation_info (top_k allocations)
+        # would otherwise make a point that admitted nothing from the donor
+        # read as a real augmentation result.
+        donor_names = set(donor_reps or {})
         admitted = sorted({name for t in ties_per_fold if t
-                           for name in t['kept_augmentations']})
+                           for name in t['kept_augmentations']
+                           if name in donor_names})
         rows.append({
             'comparison': name, 'sweep_point': point, 'model': model,
             'condition_suffix': point_slug(point) if point else None,
@@ -540,11 +560,58 @@ def summarise_comparison(name, point, result, outer_folds, data, reps, donor_rep
             'n_paired_folds': len(deltas),
             'ties_per_fold': ties_per_fold,
             'donor_features_admitted': admitted,
-            'no_op': (point is not None
-                      and point.get('augmentation_strategy') != 'none'
-                      and not admitted),
+            # Without the rebuild there is nothing to read admission from, so
+            # say "not checked" rather than calling every point a no-op.
+            'no_op': (None if args.no_ties else
+                      (point is not None
+                       and point.get('augmentation_strategy') != 'none'
+                       and not admitted)),
+            'recipe_signature_per_fold': [
+                (t or {}).get('recipe_signature') for t in ties_per_fold],
         })
     return rows
+
+
+def _recipe_signature(finfo):
+    """A hash of exactly which columns this fold's hybrid took, base and donor.
+
+    Two sweep points with the same signature on every fold built the same
+    matrix, so their scores are one measurement filed under two settings.
+    """
+    h = hashlib.blake2b(digest_size=10)
+    for key in sorted(k for k, v in finfo.items()
+                      if isinstance(v, dict) and 'selected_indices' in v):
+        h.update(f'base:{key}:'.encode())
+        h.update(np.asarray(finfo[key]['selected_indices'], dtype=np.int64)
+                 .tobytes())
+    for key, v in sorted((finfo.get('augmentation_info') or {}).items()):
+        h.update(f'aug:{key}:'.encode())
+        h.update(np.asarray(v.get('selected_indices', []), dtype=np.int64)
+                 .tobytes())
+    return h.hexdigest()
+
+
+def mark_duplicate_points(rows):
+    """Mark every row whose built matrices repeat an earlier row's, fold by fold.
+
+    Same dataset, comparison and model, and the same recipe signature on every
+    fold. Only rows inside this file can be compared; a sliced run compares
+    across slice files by reading 'recipe_signature_per_fold'.
+    """
+    first = {}
+    for r in rows:
+        sigs = r.get('recipe_signature_per_fold')
+        if not sigs or any(s is None for s in sigs) or 'model' not in r:
+            continue
+        # D<i> is C<i>'s pool plus the donor, so D<i> at strategy 'none' is
+        # compared with C<i>; B has its own pool.
+        pool_id = ('C' + r['comparison'][1:] if r['comparison'].startswith('D')
+                   else r['comparison'])
+        key = (r.get('dataset'), pool_id, r['model'], tuple(sigs))
+        if key in first:
+            r['same_matrices_as'] = first[key]
+        else:
+            first[key] = f"{r['comparison']} {r.get('condition_suffix') or '-'}"
 
 
 # ===== ANALYSIS ===========================================================
@@ -568,9 +635,9 @@ def print_headline(dataset_name, choice, rows, models_common):
     print('=' * 104)
     for model in sorted(models_common):
         print(f'\n  model {model}')
-        print(f'    {"which":6s} {"setting":34s} {"score delta":>12s} '
+        print(f'    {"which":6s} {"score delta":>12s} '
               f'{"folds":>6s} {"tied: full":>11s} {"kept cols":>10s} '
-              f'{"hybrid":>8s}')
+              f'{"hybrid":>8s}  setting')
         for r in rows:
             if r['model'] != model:
                 continue
@@ -582,12 +649,18 @@ def print_headline(dataset_name, choice, rows, models_common):
             label = r['condition_suffix'] or '-'
             if r['no_op']:
                 label += '  [no-op: no donor features admitted]'
-            print(f'    {r["comparison"]:6s} {label[:34]:34s} '
-                  f'{"—" if d is None else f"{d:+12.4f}"} '
+            if r.get('same_matrices_as'):
+                label += f"  [same matrices as {r['same_matrices_as']}]"
+            # The setting goes LAST and whole. It used to be cut to 34
+            # characters, which is shorter than most sweep-point names
+            # ('uncapped_rankresidual_correlation_cap...'), so different points
+            # printed under one label and the no-op tag was never visible.
+            print(f'    {r["comparison"]:6s} '
+                  f'{"—" if d is None else f"{d:+12.4f}":>12s} '
                   f'{r["n_paired_folds"]:6d} '
-                  f'{"—" if full is None else f"{full:11.1f}"} '
-                  f'{"—" if kept is None else f"{kept:10.1f}"} '
-                  f'{"—" if built is None else f"{built:8.1f}"}')
+                  f'{"—" if full is None else f"{full:11.1f}":>11s} '
+                  f'{"—" if kept is None else f"{kept:10.1f}":>10s} '
+                  f'{"—" if built is None else f"{built:8.1f}":>8s}  {label}')
 
 
 # ===== MAIN ===============================================================
@@ -895,6 +968,7 @@ def main():
 
         for r in all_rows:
             r.setdefault('dataset', ds)
+        mark_duplicate_points([r for r in all_rows if r.get('dataset') == ds])
         by_which = {}
         for r in all_rows:
             if r.get('dataset') == ds and 'model' in r:
