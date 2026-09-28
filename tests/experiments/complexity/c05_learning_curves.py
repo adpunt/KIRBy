@@ -326,6 +326,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             n_unique_groups = len(np.unique(sub_groups))
 
             if n_unique_groups < 2:
+                # RECORDED, NOT SILENT (2026-09-28). The draw above always
+                # takes the first group whole, so on a dataset with a few large
+                # groups a small point is one group and cannot be split. On
+                # flab_expression_koenig (5 groups of about 855 rows) the 10%
+                # point asks for 427 rows and draws one group of 855 on every
+                # seed. Before this, that point was nan with nothing saying why.
+                search_failures.append({
+                    'n_sub': int(n_sub), 'seed': int(seed),
+                    'n_groups': int(n_unique_groups),
+                    'n_rows': int(len(idx)),
+                    'error': ('not searched: the group draw returned one '
+                              'group, so no group-aware split exists'),
+                })
+                print(f"    seed={seed}: draw returned {len(idx)} rows in one "
+                      f"group; no search at n={n_sub}")
                 continue
 
             sub_folds = min(n_folds, n_unique_groups)
