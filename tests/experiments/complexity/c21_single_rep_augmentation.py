@@ -1037,7 +1037,13 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     delta = 0.0 if is_baseline else float('nan')
                 else:
                     aug_mean = float(np.nanmean(scores_aug))
-                    delta = aug_mean - base_mean
+                    # Paired over the folds where the augmented arm scored. It
+                    # was aug_mean minus base_mean, and base_mean covers every
+                    # fold, so one failed augmented fold made the delta compare
+                    # two folds against three. Identical when no fold failed.
+                    _pairs = [a - b for a, b in zip(scores_aug, scores_base)
+                              if np.isfinite(a) and np.isfinite(b)]
+                    delta = float(np.mean(_pairs)) if _pairs else float('nan')
 
                 all_kept = set()
                 total_added = []
@@ -1080,7 +1086,15 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     'aug_mean': aug_mean,
                     'aug_std': float(np.nanstd(scores_aug)) if not is_baseline else 0.0,
                     'aug_scores': scores_aug,
+                    # aug minus base in the metric's own units: negative is an
+                    # improvement on an RMSE dataset. delta_improvement is the
+                    # same number signed so that positive is always better.
                     'delta': delta,
+                    'delta_improvement': ((-1 if lower_is_better else 1) * delta
+                                          if not np.isnan(delta) else float('nan')),
+                    'n_folds_paired': int(sum(
+                        1 for a, b in zip(scores_aug, scores_base)
+                        if np.isfinite(a) and np.isfinite(b))),
                     'aug_status': aug_status,
                     # Sign-normalise: positive == improvement regardless of
                     # metric direction. Without this, RMSE/MAE wins are stored
