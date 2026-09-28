@@ -355,6 +355,10 @@ def run(data, config, output_dir, dataset_name):
     fold_feature_sets = {}  # fold_idx -> set of (rep, idx) tuples
     fold_feature_infos = {}  # fold_idx -> feature_info from that fold's build
     own_fold_scores = {}  # fold_idx -> score on own test data
+    # fold_idx -> the search's own inner-CV score for the recipe it picked, on
+    # that fold's training rows. Recorded so the gap between what the search
+    # promised and what the held-out fold gave can be read off the results.
+    fold_search_scores = {}
     # (row-set key, importance method) -> importance vectors. Empty and unused
     # when _C24_REUSE_FOLD_WORK is off.
     _imp_cache = {} if _C24_REUSE_FOLD_WORK else None
@@ -416,6 +420,7 @@ def run(data, config, output_dir, dataset_name):
         bp = best['blueprint']
         fold_blueprints[fold_i] = bp
         fold_best_models[fold_i] = best_model
+        fold_search_scores[fold_i] = float(best['score_mean'])
         print(f"    Fold {fold_i}: {best_model}, budget={bp.budget}, "
               f"alloc={bp.allocation_method}, imp={bp.importance_method}")
 
@@ -710,8 +715,13 @@ def run(data, config, output_dir, dataset_name):
     # For each target fold: compare own blueprint score vs cross-fold blueprint scores
     per_target = {}
     n_nonfinite_targets = 0  # folds dropped because a score was NaN/inf
+    n_nonfinite_cross = 0  # off-diagonal cells dropped because NaN/inf
     for tgt_fold in fold_blueprints:
         own_score = transfer_matrix.get((tgt_fold, tgt_fold))
+        n_nonfinite_cross += sum(
+            1 for src in fold_blueprints
+            if src != tgt_fold and (src, tgt_fold) in transfer_matrix
+            and not np.isfinite(transfer_matrix[(src, tgt_fold)]))
         # Drop non-finite (NaN/inf) fold scores before averaging. A Spearman
         # (or other metric) on near-constant predictions returns NaN; if that
         # NaN own-fold score is left in, this fold's delta is NaN and np.mean
@@ -800,12 +810,19 @@ def run(data, config, output_dir, dataset_name):
             'Step-1 blueprint is never applied off the diagonal, because it '
             'was searched on rows that include the target fold'),
         'per_target': convert_numpy(per_target),
+        # The search's inner-CV score for the recipe it chose, per fold, in the
+        # dataset's own metric. Beside own-fold held-out scores (the diagonal
+        # of transfer_matrix) it shows how optimistic the search's choice was.
+        # The inner folds train on fewer rows than the outer fit, so the gap
+        # mixes that optimism with a sample-size difference.
+        'fold_search_inner_score': convert_numpy(fold_search_scores),
         'aggregate': {
             'mean_abs_delta': float(np.mean(np.abs(deltas))) if deltas else None,
             'max_abs_delta': max_delta if deltas else None,
             'mean_delta': mean_delta,
             'n_target_folds': len(deltas),
             'n_nonfinite_targets': n_nonfinite_targets,
+            'n_nonfinite_cross_cells': n_nonfinite_cross,
         },
         'stability': {
             'nogueira_phi': phi,
