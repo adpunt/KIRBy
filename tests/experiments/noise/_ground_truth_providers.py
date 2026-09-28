@@ -754,6 +754,8 @@ def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
     n_multi_document = 0
     n_matched = 0
     n_second_target = 0
+    n_zero_spread = 0
+    doc_group_count = {}
     for gkey, block in df.groupby(key_cols):
         inchikey = gkey[0] if isinstance(gkey, tuple) else gkey
         if len(block) > 1:
@@ -778,6 +780,15 @@ def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
         values[gid] = float(np.std(per_doc.to_numpy(),
                                    ddof=GROUP_SPREAD_DDOF))
         n_matched += 1
+        # DIRTY-LOCAL 2026-09-28. Counted, not acted on. On herg_ki two
+        # documents (CHEMBL5726098 and CHEMBL5726336, 187 Ki records and one
+        # assay each) share 144 compounds and give the same pchembl_value on
+        # 143 of them: one deposit counted as two papers. Which documents the
+        # matched groups lean on is written so that is visible in the result.
+        if values[gid] == 0:
+            n_zero_spread += 1
+        for _doc in per_doc.index:
+            doc_group_count[_doc] = doc_group_count.get(_doc, 0) + 1
 
     counts_out = {
         'raw_frames_read': paths,
@@ -790,6 +801,10 @@ def chembl_multi_document(data, dataset_name, target_chembl_id=None, **kwargs):
         'n_of_those_also_in_this_dataset': n_matched,
         'n_dropped_because_the_compound_already_had_a_group': n_second_target,
         'n_groups': len(values),
+        'n_groups_whose_papers_agree_exactly': n_zero_spread,
+        'documents_in_the_most_groups': [
+            [d, int(c)] for d, c in sorted(doc_group_count.items(),
+                                           key=lambda kv: (-kv[1], kv[0]))[:5]],
     }
     if len(values) < MIN_GROUND_TRUTH_GROUPS:
         raise ProviderUnavailable(
