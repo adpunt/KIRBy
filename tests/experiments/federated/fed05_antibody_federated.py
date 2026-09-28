@@ -19,12 +19,15 @@ fusion outperform prediction-level ensemble across heterogeneous antibody silos?
     C5: Pooled binding (DDG + DMS, z-score normalized)
     C6: Rep diversity per silo (different rep subsets)
     C7: SKIPPED — FLuID quality-weighted ensemble is incompatible with the
-        antibody silo structure here. Each silo has a different feature space
-        (different shared-rep dimensionalities + a per-silo PCA basis via
-        cap_dimensions), and labels are in incompatible ranges (kcal/mol vs
+        antibody silo structure here. The three silos' DATASET_REPS 'general'
+        lists intersect in nothing (measured 2026-09-28), so a teacher fitted
+        on one silo's representations has no column in common with another
+        silo's matrix, and the labels are in incompatible ranges (kcal/mol vs
         normalized DMS score vs °C). Calling a teacher.predict on another
         silo's features either crashes or silently returns meaningless
         predictions, so we report an explicit skip rather than fake numbers.
+        The reason given here until 2026-09-28 was a per-silo PCA basis via
+        cap_dimensions; this file never calls cap_dimensions.
     C8: SKIPPED — same reason as C7. The KNN distance still uses the target
         silo's ESM2 embedding, but the regression head was fit on a
         different feature space, so predictions are not comparable.
@@ -1088,24 +1091,29 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     # prediction-level ensemble.
     #
     # NOT IMPLEMENTED here: the antibody silos do not share a common feature
-    # space. Each silo's teacher is trained on `cap_dimensions(X_tr, X_te)`
-    # where X_tr/X_te come from its OWN shared-rep concatenation. The
-    # cap_dimensions PCA basis is fit per silo, so a teacher's `predict()`
-    # called on another silo's features either crashes (dim mismatch) or
-    # silently returns meaningless numbers (different PCA basis, different
-    # label scale: kcal/mol vs normalized DMS score vs °C). Either failure
-    # mode produces invalid results.
+    # space. The three DATASET_REPS 'general' lists have no representation in
+    # common (ddg_combined and abagym_EGFR share mutation_features and
+    # esm2_concat; flab_thermo_tresanco shares neither), so a teacher fitted on
+    # one silo's matrix has no column in common with another silo's, and its
+    # `predict()` there either crashes (dim mismatch) or returns meaningless
+    # numbers (different columns, different label scale: kcal/mol vs normalized
+    # DMS score vs °C). Either failure mode produces invalid results.
+    #
+    # The reason recorded here until 2026-09-28 was a per-silo PCA basis via
+    # cap_dimensions. This file never calls cap_dimensions, so that named a
+    # cause it did not have; the representation lists and the label units are
+    # the real ones.
     #
     # Safer to report an explicit skip than fabricate numbers. A correct
-    # implementation would require a shared feature space (e.g. a fixed
-    # cross-silo PCA basis) AND per-silo label z-scoring before teacher
-    # training. Left for future work.
+    # implementation would require a representation list every silo can build
+    # AND per-silo label z-scoring before teacher training. Left for future
+    # work.
     print("\n--- Phase 8: C7/C8 — FLuID ensemble baselines ---")
     _skip_msg = (
         "NOT IMPLEMENTED: cross-silo predict() requires a shared feature "
         "space and shared label scale. Antibody silos here have neither "
-        "(per-silo PCA basis via cap_dimensions; labels in kcal/mol vs "
-        "normalized DMS vs °C). See module docstring."
+        "(the three silos' general representation lists intersect in nothing; "
+        "labels in kcal/mol vs normalized DMS vs °C). See module docstring."
     )
     results['c7_fluid_quality'] = {'error': _skip_msg, 'skipped': True}
     results['c8_fluid_similarity'] = {'error': _skip_msg, 'skipped': True}
