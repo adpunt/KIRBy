@@ -988,7 +988,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     sP = (acc['all'].get(space, {}).get(arm, {})
                           .get(m, {}).get(fk))
-                    if sP is None:
+                    # No row without both scores: a failed fit is already in
+                    # _errors, and a row with a NaN gain would be read as a
+                    # comparison that happened.
+                    if sP is None or sD is None:
                         continue
                     rows.add(method=arm, method_setting=(
                                  f'ridge_alpha={alpha:g}|n_iter={n_iter}'),
@@ -1027,6 +1030,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                  metric_fn)
                             sD = (acc['all'].get(space, {})
                                   .get(ARM_TO_BEAT, {}).get(m, {}).get(fk))
+                            if s_ is None:
+                                # The fit failed: say why, write no row.
+                                errors[f'{fk}|{ckey}|{arm}|{cname}|{m}'] = err
+                                continue
+                            if sD is None:
+                                continue
                             rows.add(method=arm, method_setting=(
                                          f'ridge_alpha={alpha:g}|n_iter='
                                          f'{n_iter}|control={cname}'),
