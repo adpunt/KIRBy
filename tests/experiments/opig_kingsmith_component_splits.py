@@ -873,6 +873,18 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
     cv = GroupKFold(n_splits=actual_folds)
     fold_splits = list(cv.split(sample_X, labels, groups=groups))
 
+    # Which component each fold held out, in fold order. GroupKFold does NOT
+    # hand out folds in the order of `group_names` (it places the largest
+    # group first), so rmse_per_fold[k] is not the score on group_names[k].
+    # Without this list nothing in the JSON said which component a per-fold
+    # score belongs to. Bookkeeping only; no score moves.
+    held_out_component_per_fold = []
+    for _, _va_idx in fold_splits:
+        _held = np.unique(groups[_va_idx])
+        held_out_component_per_fold.append(
+            group_names[int(_held[0])] if len(_held) == 1
+            else [group_names[int(g)] for g in _held])
+
     # How many inner folds each outer fold's recipe search runs on.
     # The find_best_hybrid call below passes no n_folds, so it asks for
     # DEFAULT_N_FOLDS folds, and _make_cv_splitter (find_best_hybrid.py:
@@ -976,6 +988,9 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
         'inner_search_n_folds_per_fold': inner_n_folds_per_outer_fold,
         'inner_search_n_folds_requested': int(DEFAULT_N_FOLDS),
         'group_names': group_names,
+        # Fold k's held-out component. Every *_per_fold list below, and every
+        # per_fold_delta, is in this order, not in group_names order.
+        'held_out_component_per_fold': held_out_component_per_fold,
         'results': results,
         # Per-model, per-held-out-group hybrid-minus-base-representation, in
         # RMSE — the metric the registry reports this dataset in, and the one
