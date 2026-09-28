@@ -329,6 +329,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                         for fs in source_fold_searches]
 
     per_model = {}
+    # full_transfer's carve scores on the source rows, keyed by evaluator.
+    _src_carve_cache = {}
 
     # Each downstream model's block is written to
     # opig_blueprint_transfer/<source>_to_<target>.partial.jsonl when it
@@ -384,10 +386,52 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         # every shared one (7 for logd->herg_ki and logd->caco2). full_transfer
         # then carried features from representations the source recipe never
         # used, while recipe_transfer (built through build_fold_hybrid) kept
-        # only the top rep_count. build_fold_hybrid ranks them by
-        # source_bp.rep_scores, the source search's own scores. No target row
-        # is touched. The "validation" side is the same source rows and is
-        # discarded.
+        # only the top rep_count. No target row is touched. The "validation"
+        # side is the same source rows and is discarded.
+        #
+        # 2026-09-28 (dirty local, verification): WHICH rep_count
+        # representations, and the budget split between them, now come from
+        # the scores the search itself uses. Blueprint.rep_scores is each
+        # representation's best whole-dataset baseline over EVERY downstream
+        # model; the search ranks by the recipe's internal evaluator read with
+        # the dataset's metric on create_hybrid's internal carve
+        # (find_best_hybrid.py "Top-N representation restriction"). On logd
+        # the two disagree (s03 commit 5eaabcb: rep_scores keeps molformer on
+        # its svm score and drops avalon, the opposite of an rf ranking). These
+        # carve scores are computed on source rows only and passed as
+        # precomputed_alloc_scores, which build_fold_hybrid ranks by first and
+        # create_hybrid then splits the budget with, as it would have scored
+        # them itself. Under a geometry or blended objective the carve score is
+        # not reproducible here, so rep_scores stays the source there.
+        _src_alloc_scores = getattr(source_bp, 'rep_scores', None)
+        _src_rank_source = 'blueprint.rep_scores'
+        _src_obj = getattr(source_bp, 'objective', None)
+        if _src_obj in (None, 'predictive'):
+            from kirby.hybrid import (internal_holdout_split,
+                                      _score_rep_for_budget)
+            _ev = getattr(source_bp, 'internal_evaluator', None) or 'rf'
+            if _ev == 'match':
+                _ev = model_name
+            # One set per evaluator: the scores do not depend on the
+            # downstream model unless the evaluator is 'match'.
+            if _ev not in _src_carve_cache:
+                _ctr, _cva = internal_holdout_split(
+                    len(source_labels), source_labels, source_groups)
+                _ys = np.asarray(source_labels)
+                _sc = {}
+                for _rn, _X in src.items():
+                    _Xc = np.nan_to_num(np.clip(np.asarray(_X, dtype=float),
+                                                -1e10, 1e10),
+                                        nan=0.0, posinf=1e10, neginf=-1e10)
+                    _sc[_rn] = float(_score_rep_for_budget(
+                        _Xc[_ctr], _Xc[_cva], _ys[_ctr], _ys[_cva],
+                        internal_evaluator=_ev, metric_fn=metric_fn,
+                        lower_is_better=lower_is_better,
+                        is_clf=(task_type == 'classification')))
+                _src_carve_cache[_ev] = _sc
+            _src_alloc_scores = dict(_src_carve_cache[_ev])
+            _src_rank_source = (f'internal carve on all source rows, '
+                                f'evaluator {_ev}, metric {metric_name}')
         try:
             _, _, fi_source = build_fold_hybrid(
                 src, src, source_labels, source_bp,
@@ -397,11 +441,9 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 # so without this the keep/drop decisions were judged on rows
                 # sharing scaffolds with their own training rows.
                 groups=source_groups,
-                # What each representation scored on its own in the source
-                # search, over these same rows. Reused so the budget split is
-                # the one the search settled on, instead of every representation
-                # being scored again here.
-                precomputed_alloc_scores=getattr(source_bp, 'rep_scores', None),
+                # Carve scores on all source rows (see above). They pick the
+                # rep_count representations and set the budget split.
+                precomputed_alloc_scores=_src_alloc_scores,
                 # Explicit: this experiment has no augmentations.
                 augmentations_train=None, augmentations_val=None,
                 lower_is_better=lower_is_better,
@@ -636,6 +678,12 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 'allocation': source_bp.allocation_method,
                 'importance': source_bp.importance_method,
                 'evaluator': source_bp.internal_evaluator,
+                # The representations full_transfer's features come from, and
+                # the scores that ranked them (source rows only).
+                'full_transfer_reps_kept': (fi_source.get('rep_count_kept')
+                                            or sorted(src.keys())),
+                'full_transfer_rank_scores': _src_alloc_scores,
+                'full_transfer_ranked_by': _src_rank_source,
             },
             # Context only. Chosen over every target row, so it is not what the
             # native arm was scored with — that is per_fold_native_blueprint.

@@ -144,6 +144,11 @@ def _default_param_value(fam_name, variants):
         f"move to another setting.")
 
 
+# SVC(probability=True) fits its Platt scaling on an internal cross-validation
+# whose shuffle is seeded by random_state. Unset, the SVM family's AUROC on a
+# classification set changed from run to run with nothing else changed.
+
+
 def _get_regularization_families(task_type='regression'):
     """Return {family: [(param_name, param_value, factory_fn), ...]}.
 
@@ -172,10 +177,10 @@ def _get_regularization_families(task_type='regression'):
                 ('max_depth', None, lambda: RandomForestClassifier(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)),
             ],
             'SVM': [
-                ('C', 0.01, lambda: SVC(kernel='rbf', C=0.01, probability=True)),
-                ('C', 0.1, lambda: SVC(kernel='rbf', C=0.1, probability=True)),
-                ('C', 1.0, lambda: SVC(kernel='rbf', C=1.0, probability=True)),
-                ('C', 10.0, lambda: SVC(kernel='rbf', C=10.0, probability=True)),
+                ('C', 0.01, lambda: SVC(kernel='rbf', C=0.01, probability=True, random_state=42)),
+                ('C', 0.1, lambda: SVC(kernel='rbf', C=0.1, probability=True, random_state=42)),
+                ('C', 1.0, lambda: SVC(kernel='rbf', C=1.0, probability=True, random_state=42)),
+                ('C', 10.0, lambda: SVC(kernel='rbf', C=10.0, probability=True, random_state=42)),
             ],
         }
     return {
