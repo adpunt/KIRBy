@@ -114,7 +114,8 @@ from kirby.noise_spec import (
     CLASSIFICATION_STRATEGIES, DOSE_MATCHED_STRATEGIES, GROUPED_STRATEGIES,
 )
 from kirby.utils.lnl_methods import (
-    get_lnl_method, _standard_dnn_train_predict, LNL_REGISTRY)
+    get_lnl_method, _standard_dnn_train_predict,
+    _standard_dnn_train_predict_clf, LNL_REGISTRY)
 from kirby.utils.noise_estimation import get_noise_estimator, weights_from_scores
 # The similarity-sweep kit and the disk caches, added 2026-09-25 (plan
 # sections 1-3). See n07_remediation's SIMILARITY-SWEEP KIT block.
@@ -1094,6 +1095,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'model, so there are no stored rows to rank and no baseline scores '
             'to difference against')
 
+    # The plain DNN every Track A method is read against. On a classification
+    # dataset it is the cross-entropy network the label-noise methods train
+    # (LNLMethod._default_predict routes there on is_clf), returning the
+    # positive-class probability. Until 2026-09-28 both calls below used the
+    # regression trainer on every dataset, so on a classification set the
+    # methods were compared with a squared-error network on the class codes.
+    if is_clf:
+        _all_classes = np.unique(labels)
+
+        def _plain_dnn(X_tr, y_tr, X_va, **kw):
+            return _standard_dnn_train_predict_clf(X_tr, y_tr, X_va,
+                                                   classes_=_all_classes, **kw)
+    else:
+        _plain_dnn = _standard_dnn_train_predict
+
     # ── Cache fold splits and label-independent eval features ──
     clean_scores_by_model = {}
     # Track A is DNN-based (all LNL methods use _standard_dnn_train_predict
@@ -1145,7 +1161,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # (matched-evaluator anchors for Track A)
         for _sp, (_k, _rn) in track_a_base.items():
             try:
-                dnn_pred = _standard_dnn_train_predict(
+                dnn_pred = _plain_dnn(
                     _by_rep[_rn][0], y_train_clean, _by_rep[_rn][1],
                     epochs=LNL_EPOCHS, patience=10, random_state=42)
                 clean_scores_dnn[f'base_{_k}'].append(
@@ -1555,7 +1571,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # is read against this, not against the clean-label
                         # DNN, which mixes the noise damage into the number.
                         try:
-                            _plain_pred = _standard_dnn_train_predict(
+                            _plain_pred = _plain_dnn(
                                 X_train_s, y_noisy, X_val_s,
                                 epochs=LNL_EPOCHS, patience=10,
                                 random_state=_seed_combined)
