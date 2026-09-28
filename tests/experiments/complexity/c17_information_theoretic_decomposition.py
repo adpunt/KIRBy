@@ -817,6 +817,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # meaningless between budgets, and averaging it mixes the two.
     per_budget_density = {}
     best_per_budget = {}
+    tied_per_budget = {}
     for budget in budgets:
         cell = {}
         for strategy in strategies:
@@ -825,11 +826,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                               else float('nan'))
         per_budget_density[budget] = cell
         finite = {k: v for k, v in cell.items() if not np.isnan(v)}
-        best_per_budget[budget] = (max(finite, key=finite.get) if finite else None)
+        # The information estimate is clipped at zero, so several strategies
+        # can share the top value exactly. max() would then name whichever
+        # comes first in `strategies`, which is 'hybrid'. An exact tie names
+        # no winner and lists the tied strategies instead.
+        if finite:
+            _top = max(finite.values())
+            _tied = [k for k, v in finite.items() if v == _top]
+        else:
+            _tied = []
+        best_per_budget[budget] = _tied[0] if len(_tied) == 1 else None
+        tied_per_budget[budget] = _tied if len(_tied) > 1 else []
 
     results['summary'] = {
         'mi_density_per_budget': per_budget_density,
         'best_strategy_per_budget': best_per_budget,
+        'tied_at_best_per_budget': tied_per_budget,
         'mi_density_measured_on': 'held-out rows',
         'mi_density_comparable_across_budgets': False,
     }
