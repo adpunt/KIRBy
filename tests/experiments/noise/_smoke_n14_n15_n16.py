@@ -309,6 +309,30 @@ def test_n14_geometry_on_an_empty_graph():
            and not cliff_mask.any())
 
 
+def test_n14_chance_baseline_counts_the_same_pairs():
+    # four molecules; pairs (0,1) and (2,3) are the candidates, both a 3-unit gap
+    labels = np.array([1.0, 4.0, 1.0, 4.0])
+    a, b = n14._unique_pairs([0, 1, 2, 3, 0], [1, 0, 3, 2, 0], 4)
+    _check('n14 each unordered pair is a candidate once and no molecule pairs '
+           'with itself', a.tolist() == [0, 2] and b.tolist() == [1, 3],
+           f"got {a.tolist()} {b.tolist()}")
+    same = np.zeros((4, 4), dtype=bool)
+    same[0, 1] = same[1, 0] = True
+    a2, b2 = n14._unique_pairs([0, 2], [1, 3], 4, same)
+    _check('n14 two rows of one molecule are never a candidate pair',
+           a2.tolist() == [2] and b2.tolist() == [3])
+    cb = n14._chance_baseline(a, b, labels, n_shuffles=50, seed=1)
+    _check('n14 the observed count is the cliff pairs among the candidates',
+           cb['cliff_pairs'] == 2 and cb['n_candidate_pairs'] == 2)
+    _check('n14 shuffled counts stay within the number of candidate pairs',
+           0 <= cb['shuffled_cliff_pairs_p05'] <= cb['shuffled_cliff_pairs_p95'] <= 2)
+    # every label pair differs by 3 in exactly 4 of the 6 pairs, so the share is 4/6
+    _check('n14 the share of all pairs over the threshold counts every pair once',
+           abs(n14._share_all_pairs_over_threshold(labels) - 4 / 6) < 1e-12)
+    _check('n14 a gap of exactly 2 is not over the threshold in the all-pairs share',
+           n14._share_all_pairs_over_threshold(np.array([2.4, 4.4])) == 0.0)
+
+
 def main():
     print("=== SMOKE: n14 / n15 / n16 ===\n")
     print("n16 — how far the top of an importance ranking moves:")
@@ -326,6 +350,7 @@ def main():
     test_n14_similarity_mask_absolute_and_percentile()
     test_n14_geometry_counts_edges_not_ends()
     test_n14_geometry_on_an_empty_graph()
+    test_n14_chance_baseline_counts_the_same_pairs()
 
     print(f"\n=== {'ALL GREEN' if not _FAILS else f'{len(_FAILS)} FAILED: {_FAILS}'} ===")
     sys.exit(1 if _FAILS else 0)
