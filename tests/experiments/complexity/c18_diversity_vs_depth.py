@@ -202,6 +202,59 @@ def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget,
     return np.hstack(tr_parts), np.hstack(va_parts)
 
 
+def _fold_heldout_rep_scores(train_reps, y_train, groups_train, blueprint,
+                             metric_fn):
+    """{rep: held-out score on this fold's training rows}, higher is better.
+
+    Added 2026-09-28. The same call create_hybrid makes to size each
+    representation's share (hybrid.py allocate_performance_weighted ->
+    _score_rep_for_budget): the recipe's internal evaluator, fitted on the
+    internal carve of this fold's TRAINING rows (internal_holdout_split) and
+    scored with the dataset's metric on the other part of those rows. No
+    held-out fold row is read.
+
+    Two uses. (1) When the recipe's rep_count is smaller than the pool,
+    build_fold_hybrid keeps the best rep_count representations, and without
+    scores passed in it ranks them by blueprint.rep_scores, which the search
+    measured over EVERY row -- the three outer held-out folds included. Under
+    the local run logd and buchwald_hartwig hold 6 representations and
+    rep_count is 5, so the natural arm there dropped a representation chosen
+    with the held-out labels. Same fix as c15's _fold_alloc_scores. (2) The
+    depth arms rank by summed gain; this is written beside that ranking so
+    the two can be compared. Nothing else reads it.
+
+    Returns None for a recipe this cannot reproduce (evaluator 'match', a
+    geometry objective), and the caller then leaves build_fold_hybrid as it
+    was.
+    """
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    from kirby.find_best_hybrid import (OBJECTIVE_PREDICTIVE,
+                                        _is_geometry_objective)
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or (objective is not None and (isinstance(objective, dict)
+                                           or _is_geometry_objective(objective)))):
+        return None
+    from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
+    from experiments._shared import object_direction
+    lib = object_direction(blueprint, 'the c18 recipe')
+    inner_tr, inner_va = internal_holdout_split(
+        len(y_train), y_train, groups_train)
+    out = {}
+    for name in sorted(train_reps):
+        X = train_reps[name]
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        out[name] = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lib,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=False))
+    return out
+
+
 # =========================================================================
 # RUN
 # =========================================================================
@@ -348,6 +401,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # The two reference numbers for the top hybrid at that budget:
         # delta_vs_source_mean and delta_vs_best_rep. {budget: hybrid_deltas(...)}.
         'hybrid_deltas_by_budget': {},
+        # Added 2026-09-28. {budget: [per fold: {gain_sum_ranking,
+        # heldout_scores, natural_reps_kept}]}. gain_sum_ranking is the order
+        # the depth arms took representations in. heldout_scores is each
+        # representation's score on the internal carve of that fold's
+        # training rows, higher is better, the quantity the natural arm sizes
+        # its shares by. natural_reps_kept is which representations the
+        # natural arm was built from.
+        'fold_rep_rankings_by_budget': {},
     }
 
     # Per-budget blueprint discovery via pool helper (best (tier, aug_cond)
@@ -504,6 +565,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"    WARNING: the two hybrid deltas failed: {e}")
 
         fold_scores = {}  # {condition_name: [per_fold_scores]}
+        # Per fold: the depth arms' ranking (summed gain) beside the held-out
+        # ranking the natural arm uses, and which representations the natural
+        # arm was restricted to. Top level, not in per_budget (see the note on
+        # the top-2 keys above).
+        _fold_rankings = []
         # Seconds spent inside build_fold_hybrid, summed over this
         # budget's folds, against the seconds the whole budget took.
         # Printed so a slow run says WHICH arm was slow instead of
@@ -569,19 +635,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # depth_N and uniform_all operate on base reps only, so the natural
             # arm must also be base-reps-only to keep the comparison apples-to-
             # apples. Augmentations were inflating natural's feature pool.
+            _rank_row = {'gain_sum_ranking': [n for n, _ in fold_ranked],
+                         'heldout_scores': None,
+                         'natural_reps_kept': None}
+            _fold_rankings.append(_rank_row)
             if meta is not None:
                 try:
                     best_config = meta['best_config']
                     if 'blueprint' in best_config:
                         bp = best_config['blueprint']
                         _nt0 = time.time()
+                        _g_tr = (groups[train_idx] if groups is not None else None)
+                        _ho = _fold_heldout_rep_scores(
+                            train_reps, y_train, _g_tr, bp, metric_fn)
+                        _rank_row['heldout_scores'] = _ho
+                        _rc = getattr(bp, 'rep_count', None)
+                        # Passed only when rep_count cuts, so a fold that keeps
+                        # every representation builds exactly as before.
+                        _alloc = (_ho if (_ho is not None and _rc is not None
+                                          and int(_rc) < len(train_reps))
+                                  else None)
                         X_tr_h, X_va_h, _fi = build_fold_hybrid(
                             train_reps, val_reps_fold, y_train, bp,
                             augmentations_train=None,
                             augmentations_val=None,
-                            groups=(groups[train_idx] if groups is not None else None),
+                            groups=_g_tr,
                             model=_RF(n_estimators=100, random_state=42, n_jobs=-1),
-                            metric_fn=metric_fn)
+                            metric_fn=metric_fn,
+                            precomputed_alloc_scores=_alloc)
+                        _rank_row['natural_reps_kept'] = (
+                            _fi.get('rep_count_kept') or sorted(train_reps))
                         _natural_secs += time.time() - _nt0
                         scaler = StandardScaler()
                         X_tr_s = scaler.fit_transform(X_tr_h)
@@ -625,6 +708,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"folds, of which {_natural_secs:.0f}s rebuilding the "
               f"natural arm's hybrid]")
         results['per_budget'][budget] = convert_numpy(conditions)
+        results['fold_rep_rankings_by_budget'][budget] = convert_numpy(
+            _fold_rankings)
 
     return results
 
