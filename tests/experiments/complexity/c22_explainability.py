@@ -83,6 +83,57 @@ def _reduce_shap_to_per_feature(shap_vals, n_features):
     return arr
 
 
+def _fold_alloc_scores(train_reps, y_train, groups_train, blueprint,
+                       metric_fn, is_clf):
+    """{rep: score on this fold's training rows} when rep_count cuts, else None.
+
+    Added 2026-09-28, same fix as c15's _fold_alloc_scores and c18's
+    _fold_heldout_rep_scores. When the recipe's rep_count is smaller than the
+    pool, build_fold_hybrid keeps the best rep_count representations. Without
+    scores passed in it ranks them by blueprint.rep_scores, which the search
+    measured over every row, this fold's held-out rows included. Under the
+    local run logd and buchwald_hartwig hold 6 representations and rep_count
+    is 5, so the dropped representation was chosen with the held-out labels.
+
+    This is the call the search makes to rank them: the recipe's internal
+    evaluator, fitted on the internal carve of this fold's training rows and
+    scored with the dataset's metric, higher is better. Returns None when
+    nothing is cut, so those folds build exactly as before.
+    """
+    rep_count = getattr(blueprint, 'rep_count', None)
+    if rep_count is None or int(rep_count) >= len(train_reps):
+        return None
+    evaluator = getattr(blueprint, 'internal_evaluator', None)
+    objective = getattr(blueprint, 'objective', None)
+    from kirby.find_best_hybrid import (OBJECTIVE_PREDICTIVE,
+                                        _is_geometry_objective)
+    if (not isinstance(evaluator, str) or evaluator == 'match'
+            or (objective is not None and (isinstance(objective, dict)
+                                           or _is_geometry_objective(objective)))):
+        print(f"    [c22] fold-local representation ranking not computed "
+              f"(evaluator={evaluator!r}); build_fold_hybrid ranks on the "
+              f"whole-dataset rep_scores")
+        return None
+    from kirby.hybrid import _score_rep_for_budget, internal_holdout_split
+    from experiments._shared import object_direction
+    lib = object_direction(blueprint, 'the c22 recipe')
+    inner_tr, inner_va = internal_holdout_split(
+        len(y_train), y_train, groups_train)
+    out = {}
+    for name in sorted(train_reps):
+        X = train_reps[name]
+        Xtr = np.nan_to_num(np.clip(X[inner_tr], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        Xva = np.nan_to_num(np.clip(X[inner_va], -1e10, 1e10),
+                            nan=0.0, posinf=1e10, neginf=-1e10)
+        out[name] = float(_score_rep_for_budget(
+            Xtr, Xva, y_train[inner_tr], y_train[inner_va],
+            internal_evaluator=evaluator, metric_fn=metric_fn,
+            lower_is_better=lib,
+            objective=objective or OBJECTIVE_PREDICTIVE, is_clf=is_clf))
+    return out
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """C22: Hybrid Explainability."""
     print("\n" + "=" * 70)
@@ -226,19 +277,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_X_val_s = None
         best_X_train_s = None
         fold_build_failures = {}
+        fold_reps_kept = {}
+        _g_tr = groups[train_idx] if groups is not None else None
         for model_name, model_factory in models.items():
             _bp_m = bp_by_model.get(model_name)
             if _bp_m is None:
                 continue
             try:
+                # Fold-local ranking when rep_count cuts the pool; None
+                # otherwise, which leaves the build exactly as it was.
+                _alloc = _fold_alloc_scores(
+                    train_reps, y_train, _g_tr, _bp_m, metric_fn,
+                    is_clf=(task_type == 'classification'))
                 X_train, X_val, feature_info = build_fold_hybrid(
                     train_reps, val_reps, y_train, _bp_m,
                     augmentations_train=train_augs,
                     augmentations_val=val_augs,
-                    groups=(groups[train_idx] if groups is not None else None),
+                    groups=_g_tr,
                     model=model_factory(),
                     metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
+                    lower_is_better=lower_is_better,
+                    precomputed_alloc_scores=_alloc)
+                fold_reps_kept[model_name] = {
+                    'kept': feature_info.get('rep_count_kept') or sorted(train_reps),
+                    'ranked_by': feature_info.get('rep_count_ranked_by'),
+                }
             except Exception as e:
                 fold_build_failures[model_name] = f'{type(e).__name__}: {e}'
                 print(f"    Fold {fold_idx}: {model_name} hybrid build "
@@ -367,6 +430,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_hybrid_features': int(X_train_s.shape[1]),
             'n_hybrid_features_by_model': dict(fold_widths),
             'build_failed_by_model': dict(fold_build_failures),
+            # Which representations each model's build was restricted to, and
+            # what ranked them ('fold_alloc_scores' = this fold's training
+            # rows; None = rep_count did not cut).
+            'reps_kept_by_model': dict(fold_reps_kept),
             'shap_available': shap_info is not None,
         })
 
