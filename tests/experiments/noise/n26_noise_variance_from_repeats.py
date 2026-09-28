@@ -619,7 +619,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         condition=kwargs.get('tag'), data=data, config=config,
         source_file=__file__,
         key={'models': list(downstream_models), 'base_reps': base_by_model,
-             'spaces': list(spaces), 'n_splits': n_folds})
+             'spaces': list(spaces), 'n_splits': n_folds,
+             # The hybrid recipe per model and space (2026-09-28), so a
+             # resumed run under a re-searched recipe refits instead of
+             # reading back folds built on the old one (n02, 401c873).
+             'hybrid_recipes': convert_numpy(recipe_record)})
     done_folds = set()
     _state = ckpt.load()
     if _state:
