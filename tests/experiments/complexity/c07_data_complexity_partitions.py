@@ -182,47 +182,76 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 print("    Not enough scaffolds with 2+ members, skipping")
                 continue
             median_var = np.median(list(scaffold_var.values()))
-            mask_easy = np.array([scaffold_var.get(g, 0) <= median_var for g in groups])
-            mask_hard = ~mask_easy
+            # A one-molecule scaffold has no label variance. It used to be
+            # given 0, which is at or below any median, so every singleton
+            # scaffold landed in 'easy' and that half became mostly the rare
+            # scaffolds -- the scaffold_frequency split again. Such rows now
+            # sit in neither half and are counted in n_undefined.
+            has_var = np.array([g in scaffold_var for g in groups])
+            mask_easy = has_var & np.array(
+                [scaffold_var.get(g, np.inf) <= median_var for g in groups])
+            mask_hard = has_var & ~mask_easy
 
         elif partition_name == 'feature_variance':
             # Scaffolds whose rows sit close together in representation space
             # vs spread out. Uses no label at any step, so membership carries
-            # nothing about the property being predicted. Every representation
-            # is z-scored first so a wide one does not set the spread on its
-            # own, then a group's spread is the mean per-feature variance of
-            # its rows.
+            # nothing about the property being predicted. Every feature is
+            # z-scored, a group's spread in one representation is the mean
+            # per-feature variance of its rows, and its spread overall is the
+            # mean of those over representations. Averaging per representation
+            # first is what stops a wide one setting the spread on its own:
+            # z-scoring alone equalises features, and a 2048-feature
+            # representation then still outweighs a 200-feature one 10 to 1.
             unique_scaffolds = np.unique(groups)
-            X_all = np.hstack([reps[k] for k in sorted(reps.keys())])
-            X_all = np.asarray(X_all, dtype=float)
-            _sd = X_all.std(axis=0)
-            _sd[_sd == 0] = 1.0
-            X_all = (X_all - X_all.mean(axis=0)) / _sd
+            _z = {}
+            for _k in sorted(reps.keys()):
+                _X = np.asarray(reps[_k], dtype=float)
+                _sd = np.nanstd(_X, axis=0)
+                _sd[~np.isfinite(_sd) | (_sd == 0)] = 1.0
+                _z[_k] = (_X - np.nanmean(_X, axis=0)) / _sd
             scaffold_spread = {}
             for s in unique_scaffolds:
-                rows = X_all[groups == s]
-                if len(rows) >= 2:
-                    scaffold_spread[s] = float(np.mean(np.var(rows, axis=0)))
+                _in = groups == s
+                if _in.sum() >= 2:
+                    scaffold_spread[s] = float(np.nanmean(
+                        [np.nanmean(np.nanvar(_Z[_in], axis=0))
+                         for _Z in _z.values()]))
             if not scaffold_spread:
                 print("    Not enough scaffolds with 2+ members, skipping")
                 continue
             median_spread = np.median(list(scaffold_spread.values()))
-            mask_easy = np.array(
-                [scaffold_spread.get(g, 0.0) <= median_spread for g in groups])
-            mask_hard = ~mask_easy
+            # One-molecule scaffolds have no spread; they sit in neither half
+            # (they used to be given 0.0 and all land in 'easy').
+            has_var = np.array([g in scaffold_spread for g in groups])
+            mask_easy = has_var & np.array(
+                [scaffold_spread.get(g, np.inf) <= median_spread for g in groups])
+            mask_hard = has_var & ~mask_easy
         else:
             print(f"    Unknown partition: {partition_name}, skipping")
             continue
 
         n_easy = mask_easy.sum()
         n_hard = mask_hard.sum()
-        print(f"    easy={n_easy}, hard={n_hard}")
+        # Rows in neither half: invalid SMILES under molecular_complexity,
+        # one-molecule scaffolds under the two variance splits.
+        n_neither = int(len(labels) - n_easy - n_hard)
+        print(f"    easy={n_easy}, hard={n_hard}, in neither={n_neither}")
 
         if n_easy < 50 or n_hard < 50:
+            # Written, not only printed: on a set where 80% or more of the
+            # scaffolds hold one molecule, scaffold_frequency's 80th-percentile
+            # count is 1, every scaffold counts as frequent, and 'hard' is
+            # empty. The results file has to say that rather than omit the key.
             print("    Subpopulation too small, skipping")
+            results['partitions'][partition_name] = {
+                'skipped': (f'a half under 50 rows: easy={int(n_easy)}, '
+                            f'hard={int(n_hard)}'),
+                'n_easy': int(n_easy), 'n_hard': int(n_hard),
+                'n_neither': n_neither}
             continue
 
         part_result = {'easy': {}, 'hard': {}, 'n_easy': int(n_easy), 'n_hard': int(n_hard),
+                       'n_neither': n_neither,
                        # True when the label decided which half each row went
                        # to. The easy/hard gap is then partly the split itself.
                        'partition_uses_labels': partition_name == 'target_variance'}
