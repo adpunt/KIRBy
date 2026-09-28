@@ -1350,6 +1350,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
 
         all_curves = []
+        # Which seed each curve came from. A refused seed appends nothing, so
+        # position in auc_per_seed is not the seed number, and two conditions
+        # can be averaged over different seeds.
+        curve_seeds = []
         total_gp_failures = 0
         # Iterations on which Expected Improvement tied at its maximum across
         # more than half the remaining pool, summed over seeds. See
@@ -1490,6 +1494,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         'lower_is_better'),
                                        _hybrid_scoring())))
                         all_curves.append(curve)
+                        curve_seeds.append(seed_i)
                         total_gp_failures += gp_fail
                         total_flat_acq += flat_acq
                         best_final = curve[-1] if curve else float('nan')
@@ -1518,6 +1523,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         **dict(zip(('model', 'metric_fn', 'lower_is_better'),
                                    _hybrid_scoring())))
                     all_curves.append(curve)
+                    curve_seeds.append(seed_i)
                     total_gp_failures += gp_fail
                     total_flat_acq += flat_acq
                     best_final = curve[-1] if curve else float('nan')
@@ -1534,6 +1540,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 elif condition == 'random_acq':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
                     all_curves.append(curve)
+                    curve_seeds.append(seed_i)
                     best_final = curve[-1] if curve else float('nan')
                     print(f"      final best: {best_final:.4f} (random)")
                     continue
@@ -1549,6 +1556,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 elif condition == 'multi_obj_random':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
                     all_curves.append(curve)
+                    curve_seeds.append(seed_i)
                     best_final = curve[-1] if curve else float('nan')
                     print(f"      final best: {best_final:.4f} (random, multi-obj)")
                     continue
@@ -1581,6 +1589,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception as e:
                 print(f"      Feature build FAILED: {e}")
                 all_curves.append([float('nan')])
+                curve_seeds.append(seed_i)
                 continue
 
             cond_dim = dim
@@ -1602,6 +1611,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 kernel_type=kt,
             )
             all_curves.append(curve)
+            curve_seeds.append(seed_i)
             total_gp_failures += gp_fail
             total_flat_acq += flat_acq
 
@@ -1725,6 +1735,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'mean_curve': mean_curve,
             'std_curve': std_curve,
             'n_curves': len(all_curves),
+            # seed index (0-based) of each entry of auc_per_seed
+            'curve_seeds': [int(x) for x in curve_seeds],
             'total_gp_failures': total_gp_failures,
             # picks made across the seeds that ran; the denominator of both
             # degeneracy flags
@@ -1834,6 +1846,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pct_gain = 100.0 * gain / abs(e_disp) if e_disp != 0 else 0
             print(f"\n  Hybrid vs ECFP4: AUC gain = {gain:+.1f} "
                   f"({pct_gain:+.1f}%)")
+            # The same comparison on the seeds both conditions ran. Each seed
+            # has its own starting set, and the best label in it sets most of
+            # the area, so a mean over different seeds compares starting sets
+            # as much as conditions.
+            def _by_seed(res_c):
+                m = res_c.get('metrics', {}).get(max_budget_key, {})
+                return {int(si): a for si, a in zip(res_c.get('curve_seeds', []),
+                                                    m.get('auc_per_seed', []))
+                        if np.isfinite(a)}
+            _h = _by_seed(results['conditions']['hybrid_50d'])
+            _e = _by_seed(results['conditions']['ecfp4_raw'])
+            _common = sorted(set(_h) & set(_e))
+            _d = [(_e[k] - _h[k]) if _auc_lower_better else (_h[k] - _e[k])
+                  for k in _common]
+            results['hybrid_vs_ecfp4_paired'] = {
+                'budget': max_budget_key, 'seeds': _common,
+                'gain_per_seed': _d,
+                'gain_mean': float(np.mean(_d)) if _d else None,
+                'positive_means': 'hybrid_50d found better labels',
+            }
+            print(f"  Hybrid vs ECFP4 on the {len(_common)} seed(s) both ran: "
+                  f"per-seed gain {[round(x, 1) for x in _d]}")
 
     # Which hybrid settings each seed's own seed rows chose. They can differ
     # from seed to seed; there is no one blueprint for the dataset any more.
