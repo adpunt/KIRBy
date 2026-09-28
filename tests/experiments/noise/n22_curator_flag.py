@@ -1005,6 +1005,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         per_space[space_name] = per_est
     results['per_space'] = convert_numpy(per_space)
 
+    # ── the label on its own, graded the same way (added 2026-09-28) ──
+    # A control no detector here had. Each record's suspicion is read off its
+    # own label alone: no features, no neighbours, no fit. If a detector does
+    # not beat these, its average precision against the flag says nothing
+    # about the features it was run in.
+    #   lowest_label_first         minus the pIC50, so the weakest binder
+    #                              ranks most suspicious
+    #   farthest_from_median_label the distance of the pIC50 from the median
+    #                              pIC50 of all records, either direction
+    # Both use only what every detector is already handed for the record it
+    # scores, its own label, and neither sees the flag.
+    label_only = {}
+    for _nm, _sus in (
+            ('lowest_label_first', -labels),
+            ('farthest_from_median_label',
+             np.abs(labels - np.median(labels)))):
+        _row = {'records': grade(flag, _sus, label='records')}
+        _row['molecules'] = grade(
+            flag_by_molecule,
+            _by_molecule(_sus, molecule_of_row, n_molecules, 'max'),
+            label='molecules')
+        label_only[_nm] = _row
+    results['label_only_controls'] = convert_numpy(label_only)
+
+    # ── how much of the flag is a cut on the value (added 2026-09-28) ──
+    # Counted, not assumed. pIC50 = 9 - log10(IC50 in nM), so pIC50 below 4
+    # is IC50 above 100,000 nM.
+    _below = labels < 4.0 - 1e-9
+    _otr = np.array([ft == 'Outside typical range' for ft in flag_text],
+                    dtype=bool)
+    results['flag_versus_ic50_above_100000_nM'] = {
+        'n_records_above_100000_nM': int(_below.sum()),
+        'n_of_those_carrying_any_flag': int((_below & flag).sum()),
+        'n_outside_typical_range_records': int(_otr.sum()),
+        'n_of_those_above_100000_nM': int((_otr & _below).sum()),
+        'n_flagged_records_at_or_below_100000_nM': int((flag & ~_below).sum()),
+        'note': (
+            "Counts of records. If every record above 100,000 nM carries a "
+            "flag and every 'Outside typical range' record is above it, that "
+            "text is a fixed cut on the value in this pull. Whether a person "
+            "or a rule wrote it is not recorded in the pull."),
+    }
+
     # ── the hybrid minus each single representation, per detector ──
     # One block per single-representation space (base_1, base_2), each keyed
     # by hybrid space.
@@ -1053,7 +1096,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"{n_flag / float(n_samples):.4f}):")
             for name, ap in ranked:
                 print(f"    {ap:.4f}  {name}")
+            for _nm, _row in label_only.items():
+                _g = _row.get('records') or {}
+                if _g:
+                    print(f"    {_g['detection_average_precision']:.4f}  "
+                          f"[control, label only] {_nm}")
     results['average_precision_ranking'] = convert_numpy(best)
+    results['average_precision_ranking_note'] = (
+        'detectors only. The two label-only controls are under '
+        "'label_only_controls', graded over the same records, and a detector "
+        'that does not beat them has shown nothing about its feature space')
 
     # Every per-record score, so a re-analysis costs nothing.
     results['per_record'] = convert_numpy({
