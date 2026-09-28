@@ -285,7 +285,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data['groups']
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
-    metric_name, metric_fn, _ = get_domain_metric(data)
+    metric_name, metric_fn, metric_lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
     # The roster's rf (find_best_hybrid.DEFAULT_MODELS: 100 trees,
     # max_features='sqrt', random_state=42), the model the search below is
@@ -355,6 +355,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {
         'metric': metric_name,
+        # Direction of every score below. Added 2026-09-28: the reader
+        # (firstpass_notready.lower_is_better) reads this flag first and
+        # otherwise falls back to the registry, so the file now says it.
+        'lower_is_better': bool(metric_lower_is_better),
         'budgets': budgets,
         # Which importance method every arm at this budget ranked features with
         # (the search's own choice). Keyed by budget.
