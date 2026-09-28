@@ -1122,10 +1122,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if _geometry_recipe:
             return None, None, None
         return _hybrid_build_model(target_dim), metric_fn, lower_is_better
-    # BO maximizes -metric when lower_is_better, so curves & AUC are over the
-    # negated objective. We sign-flip the AUC at STORAGE time below so that
-    # JSON consumers read auc_mean in the natural metric direction without
-    # needing to know about negation. display_sign stays 1.0 at display sites.
+    # BO maximizes y_bo, which is the negated label when the low end is hunted
+    # (see _hunt below). The AUC and mean curve are sign-flipped back at
+    # STORAGE time under a low hunt, so JSON consumers read them in the
+    # label's own units. display_sign stays 1.0 at display sites.
     display_sign = 1.0
 
     # Which END OF THE LABEL this search hunts.
@@ -1601,7 +1601,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Multi-objective curves use y_multi which is constructed in
         # "higher is better" orientation (see compute_combined_objective),
         # so they are not sign-flipped.
-        if lower_is_better and not condition.startswith('multi_obj_'):
+        #
+        # The flip follows the END OF THE LABEL hunted, not the scoring metric.
+        # It used to read lower_is_better (RMSE's direction), which is True on
+        # every local dataset, so caco2 -- hunted HIGH, y_bo = labels -- was
+        # stored as minus its permeability area. After this, auc_mean is always
+        # the area under the best label found so far, in the label's own
+        # units: lower is better when the low end is hunted, higher otherwise.
+        if _hunt == 'low' and not condition.startswith('multi_obj_'):
             for bk_key, bk_metrics in metrics.items():
                 if 'auc_mean' in bk_metrics:
                     bk_metrics['auc_mean'] = -bk_metrics['auc_mean']
@@ -1623,6 +1630,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             padded.append(c_ext)
         mean_curve = list(np.nanmean(padded, axis=0))
         std_curve = list(np.nanstd(padded, axis=0))
+        # The curve in the label's own units, the same orientation auc_mean is
+        # stored in. Under a low hunt y_bo is the negated label, and the curve
+        # was stored negated while its area was not.
+        if _hunt == 'low' and not condition.startswith('multi_obj_'):
+            mean_curve = [-v for v in mean_curve]
 
         # SIMA-11: when a surrogate-driven condition's fits ALL fail, the BO loop
         # falls back to random selection every iteration, so the reported "best
@@ -1721,13 +1733,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # FINAL SUMMARY
     # =================================================================
     print(f"\n{'='*70}")
-    # Stored AUC is already sign-flipped at storage time when lower_is_better,
-    # so the printed values are always in the natural metric direction.
-    if lower_is_better:
+    # Stored AUC is the area under the best label found so far, in the label's
+    # own units, so lower is better exactly when the low end is hunted.
+    _auc_lower_better = (_hunt == 'low')
+    if _auc_lower_better:
         print("  SUMMARY: Best-found AUC at max budget "
-              "(in original metric direction; lower is better)")
+              "(label units; low end hunted, lower is better)")
     else:
-        print("  SUMMARY: Best-found AUC at max budget (higher is better)")
+        print("  SUMMARY: Best-found AUC at max budget "
+              "(label units; high end hunted, higher is better)")
     print(f"{'='*70}")
 
     max_budget_key = f'budget_{max(budget_checkpoints)}'
@@ -1760,7 +1774,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Stored AUC is in the dataset's NATURAL metric direction (negated at
             # storage time when lower_is_better), so flip the delta sign so that a
             # positive "gain" always means the hybrid improved over ECFP4.
-            gain = (e_disp - h_disp) if lower_is_better else (h_disp - e_disp)
+            gain = (e_disp - h_disp) if _auc_lower_better else (h_disp - e_disp)
             pct_gain = 100.0 * gain / abs(e_disp) if e_disp != 0 else 0
             print(f"\n  Hybrid vs ECFP4: AUC gain = {gain:+.1f} "
                   f"({pct_gain:+.1f}%)")
@@ -1783,9 +1797,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # sign-flip at storage time when lower_is_better), so declare that direction
     # rather than a hardcoded False — else molecular RMSE/MAE datasets are
     # written with an inverted direction and ranked backwards downstream.
+    # The direction of bo_auc is the hunted end of the label, not the dataset
+    # metric's; make_structured_output keeps the dataset's own direction in
+    # the top-level key and records this one as primary_metric_lower_is_better.
+    results['hunt'] = results_hunt
+    results['auc_units'] = ('area under the best label found so far, label '
+                            'units x picks; lower is better' if _auc_lower_better
+                            else 'area under the best label found so far, '
+                            'label units x picks; higher is better')
     output = make_structured_output(
         's11_bayesian_optimization', dataset_name, data, config,
-        results, primary_metric='bo_auc', lower_is_better=lower_is_better,
+        results, primary_metric='bo_auc', lower_is_better=_auc_lower_better,
     )
     return output
 
