@@ -1047,7 +1047,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                         "r2_delta_max_over_schemes": round(
                             cands[best_lbl]["r2_delta_mean"], 5),
                         "r2_folds_won_of_max_scheme": cands[best_lbl]["r2_folds_won"],
-                        "native_delta_max_over_schemes": round(
+                        "native_delta_of_r2_max_scheme": round(
                             cands[best_lbl]["native_delta_mean"], 5),
                         "scheme_fold_wins_vs_target": int(
                             sum(c["r2_folds_won"] for c in cands.values())),
@@ -1060,7 +1060,12 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
                                       "same folds it is scored on. Not a measured "
                                       "delta for any one method; no CI is given "
                                       "because the per-method CI does not cover the "
-                                      "choice. Use scheme_fold_wins_vs_target.",
+                                      "choice. Use scheme_fold_wins_vs_target. "
+                                      "native_delta_of_r2_max_scheme is the "
+                                      "dataset-metric delta of that same "
+                                      "scheme, not the largest dataset-metric "
+                                      "delta; the two "
+                                      "picks can differ.",
                 }
     mout["best_scheme_by_cell"] = best_by_cell
 
