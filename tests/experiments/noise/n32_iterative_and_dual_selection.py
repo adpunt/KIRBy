@@ -1136,8 +1136,10 @@ def two_learner_exchange(X, y, groups, make_a, make_b, share_kept,
                          rounds=EXCHANGE_ROUNDS, oof_splits=OOF_SPLITS):
     """Each learner picks the lowest-loss share for the OTHER to train on.
 
-    Returns (intersection keep mask, record). The record holds the counts of
-    molecules each learner flags and how many both flag.
+    Returns (intersection keep mask, record, suspicion). The record holds the
+    counts of molecules each learner flags and how many both flag. suspicion is
+    the larger of the two learners' final losses per molecule, which the caller
+    grades against the moved molecules.
     """
     all_rows = np.ones(len(y), dtype=bool)
     loss_a = subset_loss(make_a, X, y, groups, all_rows, oof_splits)
@@ -1264,7 +1266,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     The two shift_only_* conditions are not in the NoiseInject registry, so no
     per-condition job ever names them. They run here, in the job that names no
-    condition, beside the eight registry conditions. A job that names a
+    condition, beside the other conditions in DETECTION_IS_DEFINED. A job that names a
     condition where every label moves gets a skip carrying the reason.
     """
     if data['task_type'] != 'regression':
