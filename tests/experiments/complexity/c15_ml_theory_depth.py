@@ -757,8 +757,10 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
 
     # --- Summary table ---
     print(f"\n    Summary:")
+    # Align is the held-out alignment. The all-rows one counts the fit the
+    # hybrid's features were selected for (see the split above).
     print(f"    {'Space':<20} {'Dim':>5} {'logCond':>8} {'K_cv':>8} "
-          f"{'K_mean':>8} {'K_std':>8} {'Align':>8} {'EigRank':>8}")
+          f"{'K_mean':>8} {'K_std':>8} {'AlignHO':>8} {'EigRank':>8}")
     print(f"    {'-'*20} {'-'*5} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
     all_items = list(results['per_rep'].items())
     for budget in sorted(budgets):
@@ -768,7 +770,7 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     for name, m in all_items:
         print(f"    {name:<20} {m['dim']:>5} {m['log_condition']:>8.1f} "
               f"{m['kernel_cv']:>8.4f} {m['kernel_mean']:>8.4f} "
-              f"{m['kernel_std']:>8.4f} {m['kernel_target_alignment']:>8.4f} "
+              f"{m['kernel_std']:>8.4f} {m['kernel_target_alignment_heldout']:>8.4f} "
               f"{m['kernel_effective_rank']:>8.1f}")
 
     return results
