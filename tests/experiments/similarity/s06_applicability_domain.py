@@ -1070,16 +1070,46 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _fold_conf = {}
                 _conf_threw = False
 
-                # Per-fold hybrid using search blueprint (avoids data leakage)
-                train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
-                val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
-                aug_tr_c = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-                aug_va_c = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+                # Split train into proper-train and calibration (group-aware).
+                # Done FIRST since 2026-09-28: the hybrid below is built on the
+                # proper-training rows only. It used to be built on every
+                # training row, calibration rows included, so the calibration
+                # labels helped choose the hybrid's features and budget split.
+                # Its calibration residuals then came out smaller than its
+                # held-out ones, the conformal quantile shrank, and the hybrid
+                # alone got a narrower interval than the exchangeability
+                # argument allows. A single representation selects nothing, so
+                # it never had this advantage.
+                train_groups = groups[train_idx] if groups is not None else None
+                if train_groups is not None and len(np.unique(train_groups)) >= 2:
+                    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+                    tr_local, cal_local = next(gss.split(
+                        np.arange(len(y_train)), y_train, groups=train_groups))
+                else:
+                    n_cal = max(int(len(y_train) * 0.2), 10)
+                    rng = np.random.RandomState(42)
+                    perm = rng.permutation(len(y_train))
+                    cal_local, tr_local = perm[:n_cal], perm[n_cal:]
+                tr_rows = train_idx[tr_local]
+                cal_rows = train_idx[cal_local]
+                n_cal_rows = len(cal_rows)
+                # Calibration rows then held-out rows, stacked, so one rebuild
+                # applies the proper-training selection to both.
+                apply_rows = np.concatenate([cal_rows, val_idx])
+                y_tr = labels[tr_rows]
+                y_cal = labels[cal_rows]
+
+                # Per-fold hybrid using search blueprint, fitted on proper-train.
+                train_reps_fold = {k: v[tr_rows] for k, v in reps.items()}
+                apply_reps_fold = {k: v[apply_rows] for k, v in reps.items()}
+                aug_tr_c = {k: v[tr_rows] for k, v in augmentations.items()} if augmentations else None
+                aug_ap_c = {k: v[apply_rows] for k, v in augmentations.items()} if augmentations else None
+                _tr_groups = groups[tr_rows] if groups is not None else None
                 try:
-                    X_hybrid_tr, X_hybrid_va, fi = build_fold_hybrid(
-                        train_reps_fold, val_reps_fold, y_train, bp,
-                        augmentations_train=aug_tr_c, augmentations_val=aug_va_c,
-                        groups=(groups[train_idx] if groups is not None else None),
+                    X_hybrid_tr, X_hybrid_ap, fi = build_fold_hybrid(
+                        train_reps_fold, apply_reps_fold, y_tr, bp,
+                        augmentations_train=aug_tr_c, augmentations_val=aug_ap_c,
+                        groups=_tr_groups,
                         **fold_hybrid_scoring_kwargs(
                             bp, model=_rf_factory(), metric_fn=metric_fn,
                             lower_is_better=lower_is_better))
@@ -1091,15 +1121,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     continue
 
                 # The geometry family's own recipe, same fold, same split.
-                X_hyb_sim_tr = X_hyb_sim_va = None
+                X_hyb_sim_tr = X_hyb_sim_ap = None
                 if bp_sim is not None:
                     try:
-                        X_hyb_sim_tr, X_hyb_sim_va, _fi2 = build_fold_hybrid(
-                            train_reps_fold, val_reps_fold, y_train, bp_sim,
+                        X_hyb_sim_tr, X_hyb_sim_ap, _fi2 = build_fold_hybrid(
+                            train_reps_fold, apply_reps_fold, y_tr, bp_sim,
                             augmentations_train=aug_tr_c,
-                            augmentations_val=aug_va_c,
-                            groups=(groups[train_idx] if groups is not None
-                                    else None),
+                            augmentations_val=aug_ap_c,
+                            groups=_tr_groups,
                             **fold_hybrid_scoring_kwargs(
                                 bp_sim, model=_rf_factory(),
                                 metric_fn=metric_fn,
@@ -1108,35 +1137,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         print(f"      AD calibration fold {SIM_ARM} build "
                               f"failed: {type(exc).__name__}: {exc}")
                         _conf_threw = True
-                        X_hyb_sim_tr = X_hyb_sim_va = None
+                        X_hyb_sim_tr = X_hyb_sim_ap = None
 
-                # Split train into proper-train and calibration (group-aware)
-                train_groups = groups[train_idx] if groups is not None else None
-                if train_groups is not None and len(np.unique(train_groups)) >= 2:
-                    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-                    tr_local, cal_local = next(gss.split(
-                        np.arange(len(y_train)), y_train, groups=train_groups))
-                else:
-                    n_cal = max(int(len(y_train) * 0.2), 10)
-                    rng = np.random.RandomState(42)
-                    perm = rng.permutation(len(y_train))
-                    cal_local, tr_local = perm[:n_cal], perm[n_cal:]
-
-                for feat_name, X_tr_all, X_va in (
-                    [(rname, reps[rname][train_idx], reps[rname][val_idx])
+                for feat_name, X_tr_raw, X_ap_raw in (
+                    [(rname, reps[rname][tr_rows], reps[rname][apply_rows])
                      for rname in reps]
-                    + [('hybrid', X_hybrid_tr, X_hybrid_va)]
-                    + ([(SIM_ARM, X_hyb_sim_tr, X_hyb_sim_va)]
+                    + [('hybrid', X_hybrid_tr, X_hybrid_ap)]
+                    + ([(SIM_ARM, X_hyb_sim_tr, X_hyb_sim_ap)]
                        if X_hyb_sim_tr is not None else [])
                 ):
                     scaler = StandardScaler()
-                    X_tr_all_s = scaler.fit_transform(X_tr_all)
-                    X_va_s = scaler.transform(X_va)
-
-                    X_tr = X_tr_all_s[tr_local]
-                    X_cal = X_tr_all_s[cal_local]
-                    y_tr = y_train[tr_local]
-                    y_cal = y_train[cal_local]
+                    X_tr = scaler.fit_transform(X_tr_raw)
+                    X_ap_s = scaler.transform(X_ap_raw)
+                    X_cal = X_ap_s[:n_cal_rows]
+                    X_va_s = X_ap_s[n_cal_rows:]
 
                     # Train RF, compute conformal quantile on calibration set
                     rf = _rf_factory()
