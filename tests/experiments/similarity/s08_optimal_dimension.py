@@ -445,6 +445,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         bp = search.best_by_model['knn']['blueprint'] if search.best_by_model.get('knn') else None
         if bp is None:
             print(f"    No blueprint at budget={budget}, skipping prediction")
+            # Written down, not only printed: this cell is otherwise absent
+            # from every result key with nothing saying why. (dirty-local
+            # 2026-09-28)
+            _err = {'error': 'the search stored no knn recipe', 'family': family}
+            results['budgets_by_family'].setdefault(family, {})[budget] = _err
+            results['family_unavailable'].setdefault(family, {})[budget] = (
+                f'the search under objective={family} at {budget} features '
+                f'stored no knn recipe, so no fold hybrid could be built')
+            if family == PRIMARY_FAMILY:
+                results['budgets'][budget] = _err
             continue
 
         # 2026-04-21 cache-collision fix: align blueprint.augmentation_strategy
