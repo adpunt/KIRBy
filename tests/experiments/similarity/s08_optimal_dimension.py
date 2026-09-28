@@ -476,6 +476,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"each family's own best: {_fam_str or 'none'}")
 
         actual_dim = X_hybrid.shape[1]
+        # The number of features the whole-dataset recipe was searched at.
+        # get_best_for_downstream returns the best recipe across ALL budgets
+        # when this budget's own entry is missing or non-finite, so sac_rho,
+        # violation_rate, dist_corr_with_full and mle_id on this row can come
+        # from a different width than the row's key. None when unknown.
+        # (dirty-local 2026-09-28)
+        try:
+            whole_dataset_recipe_budget = int(
+                _meta['best_config']['blueprint'].budget)
+        except Exception:
+            whole_dataset_recipe_budget = None
+        if (whole_dataset_recipe_budget is not None
+                and whole_dataset_recipe_budget != budget):
+            print(f"    whole-dataset recipe was searched at "
+                  f"{whole_dataset_recipe_budget} features, not {budget}: "
+                  f"the pool held no finite entry at {budget}")
 
         # MLE intrinsic dimensionality of the hybrid
         if len(X_hybrid) <= 11:
@@ -887,6 +903,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         budget_result = {
             'actual_dim': actual_dim,
+            'whole_dataset_recipe_budget': whole_dataset_recipe_budget,
+            'whole_dataset_recipe_substituted': bool(
+                whole_dataset_recipe_budget is not None
+                and whole_dataset_recipe_budget != budget),
             'mle_id': mle_id,
             'metric': metric_name,
             'sac_rho': sac_rho,  # FULL-data SAC (optimistic; kept for back-compat)
