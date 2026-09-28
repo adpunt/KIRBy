@@ -1268,7 +1268,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Val: predict + interval
                     y_pred_va = rf.predict(X_va_s)
                     tree_preds_va = np.array([t.predict(X_va_s) for t in rf.estimators_])
-                    va_std = tree_preds_va.std(axis=0)
+                    # Same 1e-10 as cal_std above. The score divides by
+                    # (spread + 1e-10), so the interval multiplies by it too;
+                    # without it a held-out molecule on which every tree
+                    # agrees got a zero-width interval. Fixed 2026-09-28.
+                    va_std = tree_preds_va.std(axis=0) + 1e-10
                     interval_width = 2 * q * va_std
 
                     picp = float(np.mean(np.abs(y_val - y_pred_va) <= interval_width / 2))
