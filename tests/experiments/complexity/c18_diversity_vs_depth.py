@@ -266,13 +266,11 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
     Classification + multi-class: F1 needs class labels, not probabilities.
     Regression: anything that has .predict() works.
     """
-    if task_type == 'classification' and hasattr(model, 'predict_proba'):
-        try:
-            probs = model.predict_proba(X_val)
-            if probs.shape[1] == 2:
-                return metric_fn(y_val, probs[:, 1])
-        except Exception:
-            pass
+    # 2026-09-28: the probability branch that stood here handed class-1
+    # probabilities to EVERY binary metric, not only auc, and relied on an
+    # accuracy or f1 call raising on them to reach the line below.
+    # _predict_for_metric gives probabilities to auc alone, so auc scores are
+    # unchanged and no other metric can be fed probabilities.
     return metric_fn(y_val, _predict_for_metric(model, X_val, metric_fn))
 
 
