@@ -646,6 +646,11 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs, boot_ci)
                     "native_pf": npf, "r2_pf": r2pf, "oof": oof, "nfeat": nf,
                     "scheme": label, "mech": "global", "N": N, "B": B})
                 s["origin_counts"] = oc
+                # Features actually selected in each outer fold, as the quota
+                # arm already writes. Added 2026-09-28; nothing else changes.
+                s["features_per_fold"] = [
+                    int(sum(len(v) for v in sel_i.values()))
+                    for sel_i in per_fold_sel_g]
                 strategies[f"B{B}"][f"{label}|global|N{N}"] = s
 
     mout["strategies"] = strategies
