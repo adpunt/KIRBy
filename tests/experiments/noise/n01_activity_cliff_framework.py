@@ -97,29 +97,44 @@ def _compute_ecfp4_tanimoto_sim(smiles_list):
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
-    fps = []
-    for smi in smiles_list:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            # Fallback: zero vector (will have Tc=0 with everything)
-            fps.append(AllChem.GetMorganFingerprintAsBitVect(
-                Chem.MolFromSmiles('C'), 2, nBits=2048))
-        else:
-            fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048))
-
-    # Convert to numpy for fast Jaccard via scipy
-    fp_array = np.zeros((len(fps), 2048), dtype=np.float32)
-    for i, fp in enumerate(fps):
-        arr = np.zeros(2048, dtype=np.float32)
-        for bit in fp.GetOnBits():
-            arr[bit] = 1.0
-        fp_array[i] = arr
+    # A SMILES RDKit refuses gets an all-zero row. Until 2026-09-28 it got
+    # methane's fingerprint instead, the comment claiming "Tc=0 with
+    # everything": every refused molecule then had Tanimoto 1 with every other
+    # refused molecule (and with methane), so any two of them with different
+    # labels were counted as a cliff pair. _zero_empty_rows below makes an
+    # empty row similar to nothing.
+    fp_array = _morgan_bits(smiles_list, n_bits=2048)
 
     # Tanimoto = 1 - Jaccard distance for binary vectors
     jaccard_dist = scipy_cdist(fp_array, fp_array, metric='jaccard')
     tanimoto_sim = 1.0 - jaccard_dist
     np.fill_diagonal(tanimoto_sim, 0.0)  # exclude self-pairs
-    return tanimoto_sim
+    return _zero_empty_rows(tanimoto_sim, fp_array)
+
+
+# How many rows of the last structural reference built here had no bits at all
+# (RDKit refused the string, or every part of a reaction). Read by
+# _run_cliff_stratified into cliff_info, so a result file says how many
+# molecules could never be a cliff. Added 2026-09-28.
+LAST_REFERENCE_N_EMPTY = 0
+
+
+def _zero_empty_rows(sim, bits):
+    """Similarity 0 for every pair that involves a row with no bits.
+
+    scipy's jaccard distance between two all-zero vectors is 0, so without
+    this two empty rows score Tanimoto 1 with each other: every molecule RDKit
+    refused would be 'identical' to every other refused molecule.
+    """
+    global LAST_REFERENCE_N_EMPTY
+    empty = ~np.asarray(bits).any(axis=1)
+    LAST_REFERENCE_N_EMPTY = int(empty.sum())
+    if LAST_REFERENCE_N_EMPTY:
+        print(f"    WARNING: {LAST_REFERENCE_N_EMPTY} rows have no fingerprint "
+              f"bits (unparsed); they are similar to nothing")
+        sim[empty, :] = 0.0
+        sim[:, empty] = 0.0
+    return sim
 
 
 def _compute_euclidean_sim(X, standardize=True):
@@ -186,7 +201,7 @@ def _compute_reaction_tanimoto_sim(rxn_smiles, n_bits=2048):
 
     sim = 1.0 - scipy_cdist(arr, arr, metric='jaccard')
     np.fill_diagonal(sim, 0.0)
-    return sim
+    return _zero_empty_rows(sim, arr)
 
 
 def _compute_dta_sim(drug_smiles, protein_ids=None, n_bits=2048):
@@ -202,6 +217,7 @@ def _compute_dta_sim(drug_smiles, protein_ids=None, n_bits=2048):
     arr = _morgan_bits(drug_smiles, n_bits=n_bits)
     sim = 1.0 - scipy_cdist(arr, arr, metric='jaccard')
     np.fill_diagonal(sim, 0.0)
+    sim = _zero_empty_rows(sim, arr)
     if protein_ids is not None:
         pid = np.asarray(protein_ids)
         if len(pid) == len(drug_smiles):
@@ -418,6 +434,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
     print(f"    Cliff source: {sim_source}")
+    # Rows of a fingerprint reference with no bits: RDKit refused them, so they
+    # can never be in a cliff pair. None for the edit-distance and
+    # concatenated-representation references, which have no such rows.
+    cliff_info['n_reference_rows_unparsed'] = (
+        int(LAST_REFERENCE_N_EMPTY) if 'tanimoto' in sim_source else None)
     if not cliff_reference_independent:
         print(f"    Cliff reference is built from the representations being "
               f"graded — the cliff/non-cliff gap below is circular for this "
