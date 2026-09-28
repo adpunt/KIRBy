@@ -579,19 +579,13 @@ def _arm_scores(det_cell, detector, scores, sim, only, X_tr_s, X_va_s, y0,
                         'the deletion declined on this pass')
                     random_cache[ck] = {}
                 else:
-                    if deleted_acc is not None:
-                        rm = ~np.asarray(rcleaned['keep'], dtype=bool)
-                        (deleted_acc.setdefault(lvl_key, {})
-                         .setdefault(ckey, {})
-                         .setdefault(f'random_seed{seed}', {})
-                         .setdefault(rate_key, []).append({
-                             'molecules_deleted': int(rm.sum()),
-                             'training_molecules': n_tr,
-                             'widened_molecules_among_the_deleted':
-                                 int(np.sum(np.asarray(
-                                     cmask, dtype=bool) & rm)),
-                             'widened_molecules': int(
-                                 np.sum(cmask))}))
+                    rm = ~np.asarray(rcleaned['keep'], dtype=bool)
+                    random_cache[('deleted',) + ck] = {
+                        'molecules_deleted': int(rm.sum()),
+                        'training_molecules': n_tr,
+                        'widened_molecules_among_the_deleted':
+                            int(np.sum(np.asarray(cmask, dtype=bool) & rm)),
+                        'widened_molecules': int(np.sum(cmask))}
                     out = {}
                     for mname in cell_models:
                         s, err = _fit_score(
@@ -608,6 +602,17 @@ def _arm_scores(det_cell, detector, scores, sim, only, X_tr_s, X_va_s, y0,
             for mname, s in random_cache[ck].items():
                 (rate_cell.setdefault(arm, {})
                  .setdefault(mname, {})[pass_key]) = s
+            # dirty-local 2026-09-28: recorded per detector, and on a cache
+            # hit too. It was recorded only when the fit ran, under a key with
+            # no detector, so a second detector deleting the same count added
+            # nothing and one deleting a different count added a second entry
+            # for the same pass under the same seed.
+            _rec = random_cache.get(('deleted',) + ck)
+            if deleted_acc is not None and _rec is not None:
+                (deleted_acc.setdefault(lvl_key, {})
+                 .setdefault(ckey, {})
+                 .setdefault(f'{detector}/random_seed{seed}', {})
+                 .setdefault(rate_key, []).append(dict(_rec)))
 
 
 def _rows_for_rate(rows, rate_cell, arms, detector, rate, label_fn, space,
