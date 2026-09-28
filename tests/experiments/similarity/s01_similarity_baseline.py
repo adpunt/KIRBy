@@ -97,8 +97,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_pairs_available': int(n_samples * (n_samples - 1) // 2),
         'n_permutations': int(perm_ranks.shape[0]),
         'note': ('every sac_rho below is one Spearman over these molecule '
-                 'pairs, and every sac_permutation_p counts these shuffles'),
+                 'pairs, and every sac_permutation_p counts these shuffles. '
+                 'sac_p is scipy\'s p-value, which assumes the pairs are '
+                 'independent; they share molecules, so it is far too small. '
+                 'sac_permutation_p is the one that accounts for that.'),
     }
+    # What violation_rate would be if each molecule's five neighbours were
+    # five random molecules: the same threshold, applied to random pairs. For
+    # regression that is just under 0.5 by construction (the threshold is the
+    # random-pair median); for classification it depends on the class balance.
+    # Without it a violation_rate has nothing to be read against.
+    results['_violation_random_reference'] = _violation_random_reference(
+        labels, is_classification, scalable=_scalable)
     print(f"\n  {len(pairs[0])} molecule pairs of "
           f"{n_samples * (n_samples - 1) // 2}, and {perm_ranks.shape[0]} "
           f"shuffled activity columns over them, built in "
@@ -176,6 +186,39 @@ def _violation_reference(labels, is_classification, scalable=False):
     return float(np.median(np.abs(y[triu_i] - y[triu_j])))
 
 
+def _random_pair_sample(n, scalable):
+    """The 50,000 molecule pairs _violation_reference draws, same seed."""
+    if scalable:
+        return _sample_offdiag_pairs(n, 50000, 42)
+    triu_i, triu_j = np.triu_indices(n, k=1)
+    if len(triu_i) > 50000:
+        idx = np.random.RandomState(42).choice(len(triu_i), 50000,
+                                               replace=False)
+        return triu_i[idx], triu_j[idx]
+    return triu_i, triu_j
+
+
+def _violation_random_reference(labels, is_classification, scalable=False):
+    """violation_rate's rule applied to random molecule pairs, not neighbours.
+
+    Regression: the fraction of random pairs whose activity difference is
+    above the median activity difference of those pairs. Classification: the
+    fraction of random pairs in different classes. Same pairs as
+    _violation_reference.
+    """
+    y = np.asarray(labels)
+    pi, pj = _random_pair_sample(len(y), scalable)
+    if is_classification:
+        rate = float(np.mean(y[pi] != y[pj]))
+        rule = 'random pair in different classes'
+    else:
+        d = np.abs(y[pi] - y[pj])
+        rate = float(np.mean(d > np.median(d)))
+        rule = 'random pair activity difference above the random-pair median'
+    return {'random_pair_violation_rate': rate, 'rule': rule,
+            'n_pairs': int(len(pi))}
+
+
 def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
                  pairs=None, perm_ranks=None):
     """Compute SAC / violation rate / SALI for one representation.
@@ -200,6 +243,15 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
     viol = violation_rate(D, labels, k=5, is_clf=is_classification)
     viol_ref = _violation_reference(labels, is_classification)
     sali = compute_sali(D, labels, is_clf=is_classification)
+
+    # Pairs of molecules with identical feature vectors (distance exactly 0).
+    # compute_sali divides by 1 - 1/(1+0) + 1e-6, so each such pair whose
+    # labels differ contributes |delta_y| x 1,000,000 to its molecules' SALI.
+    # These counts let a reader see how much of sali_mean comes from them.
+    _iu = np.triu_indices(len(labels), k=1)
+    _zero = D[_iu] == 0
+    _n_ident = int(_zero.sum())
+    _n_ident_diff = int((_zero & (labels[_iu[0]] != labels[_iu[1]])).sum())
 
     # Is that correlation distinguishable from a shuffled activity column?
     sac_perm_p, _perm_rhos = sac_permutation_p(pair_dists, perm_ranks, sac_rho)
@@ -230,10 +282,13 @@ def _run_per_rep(rep_name, X, labels, results, n_sample, is_classification,
         'sali_mean': sali['mean'],
         'sali_max': sali['max'],
         'sali_std': sali['std'],
+        'n_identical_vector_pairs': _n_ident,
+        'n_identical_vector_pairs_label_differs': _n_ident_diff,
     }
 
-    print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
-          f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
+    print(f"    SAC rho={sac_rho:.4f} (permutation p={sac_perm_p:.3f}), "
+          f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}, "
+          f"identical-vector pairs with different labels={_n_ident_diff}")
 
     results[rep_name] = rep_result
 
@@ -277,9 +332,12 @@ def _run_per_rep_scalable(rep_name, X, labels, results, n_sample,
         'sali_max': sali['max'],
         'sali_std': sali['std'],
         'scalable_nn_path': True,
+        # Not counted on this path: it would need every pair's distance.
+        'n_identical_vector_pairs': None,
+        'n_identical_vector_pairs_label_differs': None,
     }
 
-    print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
+    print(f"    SAC rho={sac_rho:.4f} (permutation p={sac_perm_p:.3f}), "
           f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
 
     results[rep_name] = rep_result
