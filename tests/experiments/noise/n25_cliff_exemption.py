@@ -236,6 +236,9 @@ from experiments.noise.n23_uncertainty_cleaning import (
     cached_hybrid_cell, CACHEABLE_MODELS, TODAY_SIMILARITY, NO_NEIGHBOURS,
     TODAY_NEIGHBOUR_CLEANUPS,
 )
+# DIRTY-LOCAL 2026-09-28: the representations the stored search built each
+# outer fold's hybrid on (n02, commit 736ec93).
+from experiments.noise.n02_sample_weighting import search_fold_reps
 
 
 # Every cleanup n07 registers, taken from n07 rather than written out again.
@@ -1372,6 +1375,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                      for m in downstream_models}
                             for r in flag_rates} for d in detectors}
     hybrid_failures = []
+    # {fold: {'<space>:<models>': {'reps', 'source'}}}: which representations
+    # each fold's hybrid was built on, and where that list came from.
+    hybrid_fold_reps = {}
     provenance = {}
     fold_cliff_counts = []
     # The similarity sweep's detection readings and missing spaces
@@ -1409,6 +1415,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'premise', 'matrix_of', 'hybrid_failures', 'provenance',
                 'fold_cliff_counts', 'sim_detection', 'sim_unavailable'))
         done_passes = set(_state['done'])
+        hybrid_fold_reps = _state.get('hybrid_fold_reps', {})
         print(f"  resumed from {ckpt.path}: {len(done_passes)} (level, fold, "
               f"draw) passes already done")
     sim_axis = swept_similarity()
@@ -1440,6 +1447,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                    'fold_cliff_counts': fold_cliff_counts,
                    'sim_detection': sim_detection,
                    'sim_unavailable': sim_unavailable,
+                   'hybrid_fold_reps': hybrid_fold_reps,
                    'done': sorted(done_passes)})
 
     def _today_label(detector, cleanup):
@@ -1538,10 +1546,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     for _bp_m, _mnames, _shareable in group_models_by_recipe(
                             {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                              for _m in downstream_models}, downstream_models):
+                        # DIRTY-LOCAL 2026-09-28. A recipe with rep_count below
+                        # the pool size keeps, in the search, the
+                        # representations THIS fold's training rows rank
+                        # highest. Handed the whole pool and no per-fold
+                        # scores, build_fold_hybrid ranks by
+                        # Blueprint.rep_scores instead (_shared.py:5277-5300):
+                        # one score per representation over every molecule,
+                        # this fold's held-out ones included. The fold's own
+                        # list from the recipe's allocation_per_fold is passed,
+                        # as n02 (736ec93), n07 (3de791d) and n18 (0caa67e)
+                        # do; with no such record the old build stands and the
+                        # source written to hybrid_fold_reps says so.
+                        _keep, _keep_src = search_fold_reps(
+                            _bp_m, fold_i, n_folds, list(_tr_reps))
+                        _tr_pool = (_tr_reps if _keep is None else
+                                    {k: v for k, v in _tr_reps.items()
+                                     if k in _keep})
+                        _va_pool = (_va_reps if _keep is None else
+                                    {k: v for k, v in _va_reps.items()
+                                     if k in _keep})
+                        hybrid_fold_reps.setdefault(str(int(fold_i)), {})[
+                            f"{_sp}:{'+'.join(_mnames)}"] = {
+                                'reps': (sorted(_keep) if _keep is not None
+                                         else None),
+                                'source': _keep_src}
                         # noise_cache.cached_hybrid_for_fold since 2026-09-25
                         # (plan section 3).
                         X_tr_h, X_va_h = cached_hybrid_cell(
-                            dataset_name, _tr_reps, _va_reps, y_noisy, _bp_m,
+                            dataset_name, _tr_pool, _va_pool, y_noisy, _bp_m,
                             g_tr, None if _shareable else _mnames[0],
                             None if _shareable
                             else model_factories[_mnames[0]](),
@@ -1762,6 +1795,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"built keep their numbers")
 
     results['feature_matrices'] = convert_numpy(matrix_of)
+    results['hybrid_fold_reps'] = hybrid_fold_reps
     results['noise_provenance'] = provenance
     results['per_pass_counts'] = convert_numpy(fold_cliff_counts)
 
