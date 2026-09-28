@@ -7088,18 +7088,67 @@ def get_fitted_pool_hybrid(
     # and same ranking source as build_fold_hybrid: Blueprint.rep_scores
     # (higher is better whatever the metric), and a recipe that cannot be
     # ranked raises rather than rebuilding on the whole pool.
+    #
+    # ⛔ WHICH N, CORRECTED THE SAME DAY. Blueprint.rep_scores is each
+    # representation's best whole-dataset baseline over EVERY downstream model
+    # (find_best_hybrid.py, "Build per-rep best baseline scores"). The search
+    # does not rank by that. It ranks, per fold, by the recipe's internal
+    # evaluator read with the dataset's metric on create_hybrid's internal carve
+    # ("Top-N representation restriction"). The two disagree on both
+    # six-representation pools of the local run: on logd rep_scores keeps
+    # molformer (svm 0.5234 rmse, rf 0.7762) and drops avalon (rf 0.6717), the
+    # opposite of an rf ranking; on buchwald_hartwig it keeps reactant_mol2vec
+    # and drops diff_maccs. Under the predictive objective the full-data
+    # rebuild now ranks the way the search does, on the full rows' internal
+    # carve — the same function, carve and evaluator create_hybrid then uses to
+    # split the budget, as c16 does per fold. rep_scores remains the source
+    # only under a geometry or blended objective, whose ranking score this door
+    # cannot reproduce.
     _rc = getattr(bp, 'rep_count', None)
     if _rc is not None and int(_rc) < len(reps):
         _rc = int(_rc)
-        _scores = getattr(bp, 'rep_scores', None) or {}
-        if sum(1 for r in reps if r in _scores) < _rc:
+        if _metric_kw:
+            from kirby.hybrid import internal_holdout_split, _score_rep_for_budget
+            _ev = getattr(bp, 'internal_evaluator', None) or 'rf'
+            if _ev == 'match':
+                # The search expands 'match' to the downstream model's own name
+                # (find_best_hybrid.py, _evaluators_for_model).
+                _ev = downstream_model
+            _tr, _va = internal_holdout_split(len(labels), labels, groups)
+            _y = np.asarray(labels)
+
+            def _clean(X):
+                X = np.clip(np.asarray(X, dtype=float), -1e10, 1e10)
+                return np.nan_to_num(X, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            _scores = {}
+            for _name, _X in reps.items():
+                _Xc = _clean(_X)
+                _scores[_name] = float(_score_rep_for_budget(
+                    _Xc[_tr], _Xc[_va], _y[_tr], _y[_va],
+                    internal_evaluator=_ev,
+                    metric_fn=_metric_kw['metric_fn'],
+                    lower_is_better=_metric_kw['lower_is_better'],
+                    is_clf=_metric_kw['is_clf']))
+            _source = f'internal carve, evaluator {_ev}, metric {_mname}'
+        else:
+            _scores = getattr(bp, 'rep_scores', None) or {}
+            _source = 'blueprint.rep_scores'
+        if sum(1 for r in reps if np.isfinite(_scores.get(r, np.nan))) < _rc:
             raise ValueError(
                 f"get_fitted_pool_hybrid: the recipe was searched on {_rc} "
-                f"representations and blueprint.rep_scores ranks only "
-                f"{sorted(r for r in reps if r in _scores)} of {sorted(reps)}.")
+                f"representations and {_source} gives a finite score to only "
+                f"{sorted(r for r in reps if np.isfinite(_scores.get(r, np.nan)))}"
+                f" of {sorted(reps)}.")
         _keep = set(sorted(reps, key=lambda r: (
-            -_scores.get(r, float('-inf')), r))[:_rc])
+            -(_scores[r] if np.isfinite(_scores.get(r, np.nan))
+              else float('-inf')), r))[:_rc])
         reps = {k: v for k, v in reps.items() if k in _keep}
+        meta = dict(meta)
+        meta['rep_count_applied'] = _rc
+        meta['rep_count_ranked_by'] = _source
+        meta['rep_count_scores'] = dict(_scores)
+        meta['rep_count_kept'] = sorted(reps)
 
     X_hybrid, fi = create_hybrid(
         reps, labels,
