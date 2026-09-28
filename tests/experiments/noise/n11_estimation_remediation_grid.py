@@ -1603,6 +1603,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             for _m in _models_scored}
         sigma_result['heldout_recovery'] = (
             sigma_result['heldout_recovery_by_model'][_ref_model])
+        # 2026-09-28: the same pick with the hybrid detection spaces left out.
+        # The pick above ranks every space, and the hybrid recipes were chosen
+        # on the clean labels of every molecule, held-out folds included --
+        # the bias this file refuses to headline in space_effect_oracle_biased.
+        # Here only the single representations can win.
+        _hyb = {_r['space'] for _r in hybrid_recipes}
+        sigma_result['heldout_recovery_by_model_single_rep_spaces'] = {
+            _m: _heldout_recovery(
+                clean_by_fold[_m], noisy_by_fold[_m],
+                {sp: v for sp, v in denoised_by_fold[_m].items()
+                 if sp not in _hyb},
+                GAP_MIN_FRAC, lower_is_better=lower_is_better)
+            for _m in _models_scored}
 
         results['per_sigma'][str(sigma)] = convert_numpy(sigma_result)
 
@@ -1709,7 +1722,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'scores_in_dataset_metric': [
             'per_sigma.*.clean_score', 'per_sigma.*.noisy_score',
             'per_sigma.*.gap', 'per_sigma.*.per_space.*.denoised_score',
-            'per_sigma.*.per_space.*.recovery', 'heldout_recovery'],
+            'per_sigma.*.per_space.*.recovery', 'heldout_recovery',
+            'heldout_recovery_by_model_single_rep_spaces'],
         'scores_read_from_the_search': [
             'pool_selection.hybrid_spaces.*.search_score_mean'],
         'recipe_selection_rows': meta.get('selection_scope'),
@@ -2075,6 +2089,10 @@ def _compute_summary(results):
                 'chose it. A search result, not a measured recovery — read '
                 'heldout_recovery for the out-of-fold number.'),
             'heldout_recovery': sigma_data.get('heldout_recovery'),
+            # The same out-of-fold pick with the hybrid spaces left out, per
+            # evaluation unit. See run().
+            'heldout_recovery_by_model_single_rep_spaces': sigma_data.get(
+                'heldout_recovery_by_model_single_rep_spaces'),
             'best_config': all_configs[0],
             'top_10': all_configs[:10],
             'setting_effect': setting_effect,
