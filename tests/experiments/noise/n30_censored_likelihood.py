@@ -98,9 +98,11 @@ feature matrix.
                    distribution. A row at the limit is given the interval
                    [limit, +inf); every other row an interval of zero width at
                    its label. AFT models log(time), so each label enters as
-                   time = exp(y - centre), and a prediction comes back as
-                   log(prediction) + centre. With that map the normal
-                   applies to the label itself, not to a shifted copy of it.
+                   time = exp((y - centre) / sd), and a prediction comes
+                   back as sd * log(prediction) + centre. With that map the
+                   normal applies to the label itself, with width sd, and
+                   XGBoost's penalty and minimum leaf weight count molecules
+                   as they do for the paired xgboost (2026-09-28).
                    MEASURED in this session on toy data: xgboost 2.1.4's
                    predict() returns exp(margin), so log() is the inverse. The
                    error scale the likelihood uses is `sd` above, read off
@@ -365,17 +367,35 @@ def winsorise(y, p, c):
 def fit_aft_predict(X_tr, y_clipped, at, X_va, sd, params=None, rounds=None):
     """XGBoost survival:aft on interval labels, predictions on the label scale.
 
-    Each label enters as time = exp(y - centre). A row at the limit is the
-    interval [exp(limit - centre), +inf); every other row a zero-width
-    interval at its own time. AFT's normal is on log(time), which is then
-    y - centre, so the error model applies to the label itself.
+    Each label enters as time = exp((y - centre) / sd). A row at the limit is
+    the interval [exp((limit - centre) / sd), +inf); every other row a
+    zero-width interval at its own time. AFT's normal (scale 1) is on
+    log(time), which is then (y - centre) / sd, so the error model is a
+    normal of width sd on the label itself.
 
     Returns predictions for X_va in label units.
     """
     import xgboost as xgb
     y = np.asarray(y_clipped, dtype=float)
+    # DIRTY-LOCAL 2026-09-28. The labels are put on the scale of sd before the
+    # exp, and the likelihood's own scale is 1. The same statistical model as
+    # a normal of width sd on the raw label, but XGBoost counts its L2 penalty
+    # (lambda) and min_child_weight in units of the loss's second derivative,
+    # which is 1/sd**2 per molecule for a normal of width sd and 1 per
+    # molecule under the squared error the paired xgboost uses. Left in label
+    # units, xgboost_aft carried a penalty worth sd**2 molecules for each one
+    # the paired xgboost carried, and exp(y - centre) overflows XGBoost's
+    # 32-bit label past 88.7 label units (trace/n30.md, Verification).
+    k = float(sd)
+    if not (np.isfinite(k) and k > 0):
+        raise ValueError(f'the residual sd is {k}; the labels cannot be put '
+                         f'on its scale')
     centre = float(np.median(y))
-    t = np.exp(y - centre)
+    z = (y - centre) / k
+    if np.max(np.abs(z)) > 80:
+        raise ValueError('a label sits more than 80 sd from the median; exp() '
+                         'would overflow the 32-bit label XGBoost stores')
+    t = np.exp(z)
     upper = t.copy()
     upper[at] = np.inf
     dtr = xgb.DMatrix(np.asarray(X_tr, dtype=float))
@@ -384,10 +404,10 @@ def fit_aft_predict(X_tr, y_clipped, at, X_va, sd, params=None, rounds=None):
     p = dict(AFT_PARAMS if params is None else params)
     p.update({'objective': 'survival:aft',
               'aft_loss_distribution': 'normal',
-              'aft_loss_distribution_scale': float(max(sd, 1e-3))})
+              'aft_loss_distribution_scale': 1.0})
     booster = xgb.train(p, dtr, int(AFT_ROUNDS if rounds is None else rounds))
     pred_time = booster.predict(xgb.DMatrix(np.asarray(X_va, dtype=float)))
-    return np.log(np.clip(pred_time, 1e-300, None)) + centre
+    return np.log(np.clip(pred_time, 1e-300, None)) * k + centre
 
 
 def recovery_share(clean, clipped, arm, lower_is_better,
@@ -512,7 +532,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'built for the model it replaces, and paired against that model on '
             'the clipped labels. rf_l1 and lightgbm_huber have no recipe of '
             'their own in the pool. xgboost_aft enters each label as '
-            'exp(label - centre) and returns log(prediction) + centre.'),
+            'exp((label - centre) / sd) and returns sd * log(prediction) + '
+            'centre.'),
         'arms': arm_names,
         'arm_to_beat': 'clipped',
         'winsor_c': winsor_c,
@@ -521,7 +542,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'gap_min_frac': GAP_MIN_FRAC,
         'aft_params': dict(AFT_PARAMS, rounds=AFT_ROUNDS,
                            distribution='normal',
-                           scale='sd of y - p over the rows not at the limit'),
+                           scale=('sd of y - p over the rows not at the '
+                                  'limit; labels divided by it, likelihood '
+                                  'scale 1')),
         'lift_formula_note': (
             'constant_lift and per_molecule_lift use limit + sd * mills, as '
             'censoring_probe.py did, so they reproduce FINDINGS.md sections 6 '
