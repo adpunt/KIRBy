@@ -87,7 +87,8 @@ Graded by detection_scores against the molecules the injector moved:
   The sign does not enter: |Z + d'| and |Z - d'| have one distribution, so the
   theory is the same for the random-sign and the one-direction conditions.
   Checked: d' = 2, pi = 0.05 gives power 0.309, false positives 0.0124,
-  precision 0.568 -- the report's 31%, 1.2%, 58%.
+  precision 0.567 -- the report's 31% and 1.2%. The report says 58% for the
+  precision; theory_threshold gives 0.5666, re-run 2026-09-28.
   The theory is evaluated twice: at the nominal d' (in resid_sd_rep's resid_sd),
   and at d'_space = shift / SD of the unmoved molecules' residuals in that
   space, the d' the space's own model actually faced. The second uses the mask
