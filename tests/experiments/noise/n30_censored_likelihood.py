@@ -189,6 +189,9 @@ from experiments.noise.n23_uncertainty_cleaning import (
     control_twins, as_cleanup_dict, fit_cleaned, cached_base_cell,
     cached_hybrid_cell, NO_NEIGHBOURS,
 )
+# DIRTY-LOCAL 2026-09-28: the representations the stored search built each
+# outer fold's hybrid on (n02 736ec93, n37 7d9f64f).
+from experiments.noise.n02_sample_weighting import search_fold_reps
 
 # The only condition this file is defined for. Every arm reads the limit.
 CENSORING_CONDITION = 'censoring'
@@ -742,11 +745,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for _bp_m, _mnames, _shareable in group_models_by_recipe(
                         {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                          for _m in downstream_models}, downstream_models):
+                    # DIRTY-LOCAL 2026-09-28. A recipe with rep_count below
+                    # the pool size keeps, in the search, the representations
+                    # THIS fold's training rows rank highest. Handed the whole
+                    # pool, build_fold_hybrid ranks by Blueprint.rep_scores
+                    # instead (_shared.py:5270-5300), one score per
+                    # representation over every molecule, this fold's
+                    # held-out ones included. On herg_ki that gave rf 0.6143,
+                    # svm 0.5821, lightgbm 0.6285 RMSE at level 0 against the
+                    # search's 0.6058, 0.5740, 0.6019 on the same folds. The
+                    # fold's own list from allocation_per_fold is passed; with
+                    # no such record the old behaviour stands and the source
+                    # says so.
+                    _keep, _keep_src = search_fold_reps(
+                        _bp_m, fold_i, n_folds, list(train_reps))
+                    _tr_pool = (train_reps if _keep is None else
+                                {k: v for k, v in train_reps.items()
+                                 if k in _keep})
+                    _va_pool = (val_reps if _keep is None else
+                                {k: v for k, v in val_reps.items()
+                                 if k in _keep})
+                    _hkey = (_sp if list(_mnames) == list(downstream_models)
+                             else f'{_sp}/{_mnames[0]}')
+                    clip_rec.setdefault('hybrid_fold_reps', {})[_hkey] = {
+                        'reps': sorted(_keep) if _keep is not None else None,
+                        'source': _keep_src}
                     # noise_cache.cached_hybrid_for_fold since 2026-09-25:
                     # the same build for the same draw is shared with n23,
                     # n24, n25, n31-n35, n38, n40 and n41 (plan section 3).
                     X_tr_h, X_va_h = cached_hybrid_cell(
-                        dataset_name, train_reps, val_reps, y0, _bp_m, g_tr,
+                        dataset_name, _tr_pool, _va_pool, y0, _bp_m, g_tr,
                         None if _shareable else _mnames[0],
                         None if _shareable
                         else model_factories[_mnames[0]](),
