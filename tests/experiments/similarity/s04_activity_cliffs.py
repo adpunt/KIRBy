@@ -941,7 +941,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         fallback_rep_name = (min if lower_is_better else max)(
             results['per_rep'], key=lambda r: results['per_rep'][r]['score_all']
         )
+    # The fallback is chosen per fold on the OTHER folds' kNN scores. It was
+    # the representation with the best kNN score_all, a mean that includes the
+    # fold being predicted, so where the pool named no representation the
+    # held-out fold's own labels chose the RF's input (fixed 2026-09-28).
+    # fallback_rep_name above is kept only for the printed name.
+    def _fallback_for_fold(fi):
+        best, best_m = None, None
+        for r, rv in results['per_rep'].items():
+            fs = np.asarray(rv.get('fold_scores') or [], dtype=float)
+            other = np.array([s for j, s in enumerate(fs) if j != fi
+                              and np.isfinite(s)], dtype=float)
+            if other.size == 0:
+                continue
+            m = float(other.mean())
+            if best is None or (m < best_m if lower_is_better else m > best_m):
+                best, best_m = r, m
+        return best
     rf_rep_by_fold = {}
+    rf_rep_source_by_fold = {}
     for _fi in range(len(fold_splits)):
         _rep = None
         try:
@@ -949,9 +967,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         except Exception as exc:
             print(f"      rf pool read failed on fold {_fi}: "
                   f"{type(exc).__name__}: {exc}")
+        _src = 'pool_other_folds'
         if _rep is None or _rep not in reps:
-            _rep = fallback_rep_name
+            _rep = _fallback_for_fold(_fi)
+            _src = 'knn_other_folds_fallback'
         rf_rep_by_fold[_fi] = _rep
+        rf_rep_source_by_fold[_fi] = _src
     _rf_reps = sorted({r for r in rf_rep_by_fold.values() if r})
     best_rep_name = (rf_rep_by_fold.get(0) or fallback_rep_name)
     if best_rep_name:
@@ -1014,6 +1035,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'reps_by_fold': {str(_fi): rf_rep_by_fold.get(_fi)
                              for _fi in sorted(rf_rep_by_fold)},
             'rep_selection': 'other_folds_of_pool_search',
+            # Per fold: 'pool_other_folds', or 'knn_other_folds_fallback' where
+            # the pool named no representation for rf.
+            'rep_source_by_fold': {str(_fi): rf_rep_source_by_fold.get(_fi)
+                                   for _fi in sorted(rf_rep_source_by_fold)},
             'score_all': float(np.mean(fold_all)),
             'score_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
             'score_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
