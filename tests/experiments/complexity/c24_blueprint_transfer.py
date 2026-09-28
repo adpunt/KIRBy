@@ -270,13 +270,26 @@ def nogueira_stability(feature_sets, total_features):
 
     phi = 1 - numerator / denominator
 
-    # Standard error (Eq. 7 from the paper, simplified)
-    # For confidence intervals: phi ± z * se
-    # Same cancellation: the d**2 here paired with the d in the old
-    # denominator. Dropped with it so se stays on phi's scale.
-    var_terms = p_f * (1 - p_f)
-    se = np.sqrt((4 / (M * (k_bar * (1 - k_bar / d))**2)) *
-                 np.sum(var_terms**2)) if M > 2 else float('nan')
+    # Standard error: the paper's asymptotic variance (Nogueira et al. 2018,
+    # Theorem 9), var = (4 / M^2) * sum_i (phi_i - mean(phi_i))^2, with one
+    # term phi_i per selection. Written as in the authors' reference code
+    # (getVarianceofStability), with every mean over the d features of the
+    # pool. Features no selection picked have z = 0 and p = 0 and add nothing
+    # to the sums, so summing over the union and dividing by d is exact.
+    #
+    # ⛔ Until 2026-09-28 this was sqrt(4/(M * denom^2) * sum (p(1-p))^2),
+    # labelled "Eq. 7, simplified". It is not the paper's estimator and does
+    # not reduce to it: it has no per-selection term at all.
+    if M > 2:
+        k_i = Z.sum(axis=1)                       # features picked per fold
+        denom = (k_bar / d) * (1 - k_bar / d)
+        phi_i = (1.0 / denom) * (
+            (Z @ p_f) / d
+            - k_i * k_bar / d**2
+            + (phi / 2) * (2 * k_i * k_bar / d**2 - k_i / d - k_bar / d + 1))
+        se = float(np.sqrt((4.0 / M**2) * np.sum((phi_i - phi_i.mean())**2)))
+    else:
+        se = float('nan')
 
     return float(phi), float(se)
 
