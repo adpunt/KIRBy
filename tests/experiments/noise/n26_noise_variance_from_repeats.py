@@ -367,13 +367,18 @@ def _fit_predict(factory, X_tr, y_tr, X_va):
     return np.asarray(m.predict(X_va), dtype=np.float64).ravel()
 
 
-def _oof_base_one_model(factory, X_base, y, splits):
-    """Out-of-fold prediction in one single representation, one model."""
+def _oof_base_one_model(dataset_name, factory, X_base, y, splits):
+    """Out-of-fold prediction in one single representation, one model.
+
+    The matrices come from cached_base_cell, the same call the main loop
+    makes for base_1. That call leaves an all-0/1 matrix unscaled. A plain
+    StandardScaler here scaled it, so for svm the slope without injection and
+    the slope with it came from two different inputs (fixed 2026-09-28).
+    """
     oof = np.full(len(y), np.nan)
     for tr, va in splits:
-        sc = StandardScaler()
-        oof[va] = _fit_predict(factory, sc.fit_transform(X_base[tr]), y[tr],
-                               sc.transform(X_base[va]))
+        X_tr, X_va = cached_base_cell(dataset_name, X_base, tr, va)
+        oof[va] = _fit_predict(factory, X_tr, y[tr], X_va)
     return oof
 
 
@@ -725,7 +730,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for s2 in injected:
             y_pert = y + rng.normal(0.0, np.sqrt(s2 * inv_k))
             try:
-                p = _oof_base_one_model(model_factories[check_model], X_base,
+                p = _oof_base_one_model(dataset_name,
+                                        model_factories[check_model], X_base,
                                         y_pert, splits)
                 s1 = fit_ols((y_pert - p) ** 2, inv_k)['slope_s2e']
                 check['per_injected_variance'][f'{s2:g}'] = {
