@@ -29,8 +29,9 @@ Per-fold CV with per-fold hybrid construction:
         features, i.e. the same feature space the `hybrid` and
         `hybrid_weighted` distances are measured in (tautological pair).
       * `['neutral_model']` -- errors from an RF fitted on every representation
-        glued together, which never sees the hybrid feature space
-        (de-tautologised pair). That model is an error generator, not an arm;
+        glued together. Its features contain every hybrid feature, so it is a
+        different model, not a disjoint feature space (wording corrected
+        2026-09-28; it used to say it never sees the hybrid feature space). That model is an error generator, not an arm;
         nothing is ranked against it.
   - Reliability diagram (distance decile -> mean error)
   - Conformal calibration comparison: comparator rep vs hybrid (PICP, MPIW, AND
@@ -954,9 +955,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 **_sim_neutral,
                 'error_source': 'rf_fitted_on_concat_features',
                 'error_source_note': (
-                    'errors come from a model that never sees the hybrid feature '
-                    'space, so these distances and these errors do not share a '
-                    'feature space (de-tautologised pair)'),
+                    'errors come from a forest fitted on every representation '
+                    'glued together. Its features CONTAIN every hybrid feature '
+                    'and every single representation, so it is a different '
+                    'model on a wider feature set, not a disjoint feature space. '
+                    'It removes "the same fitted model" from the pair, not '
+                    '"the same features" (wording corrected 2026-09-28)'),
                 'fold_handling': 'pooled_across_folds',
                 'per_fold_mean': neutral_per_fold,
             }
