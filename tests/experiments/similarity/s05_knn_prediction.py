@@ -453,6 +453,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         budget and relaxed its filter to every budget the search holds — so a
         row labelled 10 features could hold a hybrid built at 500.
         """
+        # A similarity-family recipe fits no downstream model, so the neighbour
+        # count never reaches its build (fold_hybrid_scoring_kwargs returns
+        # nothing for it). Key it without k, so k=5 and k=10 share one build.
+        from kirby.find_best_hybrid import _is_geometry_objective
+        if _is_geometry_objective(getattr(hybrid.get('blueprint'),
+                                          'objective', None)):
+            cache_key = tuple(cache_key[:3]) + (None,) + tuple(cache_key[4:])
         if cache_key in _fold_build_cache:
             return _fold_build_cache[cache_key]
         blueprint = hybrid.get('blueprint')
