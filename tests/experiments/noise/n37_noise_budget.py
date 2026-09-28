@@ -144,6 +144,9 @@ from experiments.noise.n26_noise_variance_from_repeats import (
     measurements_by_molecule, direct_noise_variance,
 )
 from experiments.noise._ground_truth_providers import build_replicate_groups
+# DIRTY-LOCAL 2026-09-28: the representations the stored search built each
+# outer fold's hybrid on (n02, commit 736ec93).
+from experiments.noise.n02_sample_weighting import search_fold_reps
 # The per-fold checkpoint, cached builds and the similarity axis shared by
 # n32-n41 (n32's shared block, 2026-09-25). n37 changes no label, so it writes
 # no D-versus-D' rows: SIMEX adds noise to measure sensitivity, it mitigates
@@ -668,12 +671,35 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             for _bp_m, _mnames, _shareable in group_models_by_recipe(
                     {_m: recipe_for_space_by_model.get(_m, {}).get(_sp)
                      for _m in downstream_models}, downstream_models):
+                # DIRTY-LOCAL 2026-09-28. A recipe with rep_count below the
+                # pool size keeps, in the search, the representations THIS
+                # fold's training rows rank highest. Handed the whole pool and
+                # no per-fold scores, build_fold_hybrid ranks by
+                # Blueprint.rep_scores instead (_shared.py:5270-5300), a score
+                # over every molecule, this fold's held-out ones included. On
+                # herg_ki that built a different hybrid from the one the search
+                # scored (rf 0.6143 RMSE here against the search's 0.6058 on
+                # the same folds). So the fold's own list from the recipe's
+                # allocation_per_fold is passed; with no such record the
+                # old behaviour stands and the source says so.
+                _keep, _keep_src = search_fold_reps(_bp_m, fold_i, n_folds,
+                                                    list(train_reps))
+                _tr_pool = (train_reps if _keep is None else
+                            {k: v for k, v in train_reps.items() if k in _keep})
+                _va_pool = (val_reps if _keep is None else
+                            {k: v for k, v in val_reps.items() if k in _keep})
                 # Cached per (fold, recipe, labels), 2026-09-25.
                 X_tr_h, X_va_h = cached_hybrid(
-                    dataset_name, train_reps, val_reps, y_tr, _bp_m, g_tr,
+                    dataset_name, _tr_pool, _va_pool, y_tr, _bp_m, g_tr,
                     _mnames[0], model_factories, metric, train_idx, _shareable)
                 _key = (_sp if list(_mnames) == list(downstream_models)
                         else f'{_sp}/{_mnames[0]}')
+                frec.setdefault('hybrid_fold_reps', {})[_key] = {
+                    'reps': sorted(_keep) if _keep is not None else None,
+                    'source': _keep_src}
+                print(f"    fold {fold_i} {_key}: built on "
+                      f"{sorted(_keep) if _keep is not None else 'the pool'} "
+                      f"({_keep_src})")
                 if X_tr_h is None:
                     errors[f'f{fold_i}|{_key}|build'] = (
                         'the hybrid could not be built')
