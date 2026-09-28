@@ -395,7 +395,8 @@ def freshness_check(data, rep_names, n_rows=200, tol=1e-4):
 
 # ===== ONE DATASET ========================================================
 
-def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True):
+def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True,
+                keys=None, stereo_keys=None, task_type=None, domain=None):
     """How many molecules the TOP HYBRIDS give one identical row.
 
     ⛔ top_base_reps IS DELIBERATELY NOT CALLED IN THIS FILE, AND A 2026-09-28
@@ -428,8 +429,10 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
     """
     out = []
     try:
-        from experiments._shared import get_best_search_for_downstream, top_hybrids
+        from experiments._shared import (get_best_search_for_downstream,
+                                         top_hybrids, build_fold_hybrid)
         from kirby.hybrid import create_hybrid
+        from experiments.complexity.complexity_helpers import DATASET_REPS
     except Exception as exc:
         if verbose:
             print(f'  hybrid rows skipped: {type(exc).__name__}: {exc}', flush=True)
@@ -437,13 +440,30 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
 
     # Refuse to search. If the precompute has not run for this dataset there is
     # nothing to read and the row is simply absent.
+    #
+    # ⛔ THE LOOKUP GETS THE GENERAL POOL ONLY. Fixed 2026-09-28. The stored
+    # search is keyed on the exact set of representations it searched (the
+    # 'rep_pool' column of the result database), and the precompute searches
+    # DATASET_REPS[...]['general']. This used to pass `reps`, which is the
+    # census set: the general pool PLUS the augmentation donors. On herg_ki that
+    # is 15 representations against a stored search over 10, so the key never
+    # matched, KIRBY_NO_COLD_SEARCH refused, and no hybrid row was produced.
+    _general = list((DATASET_REPS.get(dataset_name) or {}).get('general') or [])
+    search_reps = {k: reps[k] for k in _general if k in reps}
+    if _general and len(search_reps) < len(_general) and verbose:
+        print(f'  hybrid rows: {len(_general) - len(search_reps)} of the '
+              f'{len(_general)} general-pool representations are not loaded '
+              f'here, so the stored search will not match: '
+              f'{sorted(set(_general) - set(search_reps))}', flush=True)
+    if not search_reps:
+        search_reps = dict(reps)
     _prev = os.environ.get('KIRBY_NO_COLD_SEARCH')
     os.environ['KIRBY_NO_COLD_SEARCH'] = '1'
     try:
         try:
             search, _meta = get_best_search_for_downstream(
-                reps, labels, groups, downstream_model='rf', budget=None,
-                dataset_name=dataset_name, task_type=None)
+                search_reps, labels, groups, downstream_model='rf', budget=None,
+                dataset_name=dataset_name, task_type=task_type, domain=domain)
         except Exception as exc:
             if verbose:
                 print(f'  no stored search for {dataset_name} '
@@ -488,6 +508,25 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
             print(f'  hybrid rows for {_name}: none -- {_why}', flush=True)
 
     n = int(np.asarray(labels).size)
+    y_all = np.asarray(labels)
+    # Per-representation allocation scores over every molecule, one set per
+    # (internal evaluator, representation set). A recipe with rep_count below
+    # its pool size keeps only the rep_count representations these rank
+    # highest, as the search did on each of its folds. The stored recipes carry
+    # rep_scores=None, so build_fold_hybrid cannot rank without these.
+    _alloc_scores = {}
+
+    def _scores_for(bp, base):
+        key = (bp.internal_evaluator, tuple(sorted(base)))
+        if key not in _alloc_scores:
+            _X, _info = create_hybrid(
+                base, y_all, allocation_method='performance_weighted',
+                budget=bp.budget, importance_method=bp.importance_method,
+                internal_evaluator=bp.internal_evaluator, groups=groups,
+                augmentation_strategy='none')
+            _alloc_scores[key] = _info.get('allocation_baseline_scores')
+        return _alloc_scores[key]
+
     for model_name in _DM:
         try:
             picked = top_hybrids(search, model_name, n_per_model,
@@ -507,22 +546,46 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
             bp = entry.get('blueprint')
             if bp is None:
                 continue
+            # ⛔ REBUILT FROM THE RECIPE, NOT FROM create_hybrid's DEFAULTS.
+            # Fixed 2026-09-28. This used to call create_hybrid on every
+            # representation the census loaded, with four recipe fields. That
+            # ignored the recipe's own representation list (bp.reps), its
+            # representation count (bp.rep_count: the local default keeps 5 of
+            # 10) and its augmentation and ranking fields. The row was then a
+            # hybrid the search never chose, filed under the winner's name.
+            base = {k: reps[k] for k in (bp.reps or []) if k in reps}
+            _missing = sorted(set(bp.reps or []) - set(base))
+            if _missing or not base:
+                if verbose:
+                    print(f'  hybrid {model_name} rank {rank}: the recipe needs '
+                          f'{_missing or bp.reps}, not loaded here -- no row',
+                          flush=True)
+                continue
             try:
-                X, _info = create_hybrid(
-                    reps, np.asarray(labels),
-                    allocation_method=bp.allocation_method,
-                    budget=bp.budget,
-                    importance_method=bp.importance_method,
-                    internal_evaluator=bp.internal_evaluator,
-                    groups=groups,
-                )
+                _pre = None
+                _rc = getattr(bp, 'rep_count', None)
+                if _rc is not None and int(_rc) < len(base):
+                    _pre = _scores_for(bp, base)
+                X, _Xv, _info = build_fold_hybrid(
+                    base, base, y_all, bp, groups=groups,
+                    precomputed_alloc_scores=_pre)
             except Exception as exc:
                 if verbose:
                     print(f'  hybrid {model_name} rank {rank}: could not build '
                           f'({type(exc).__name__}: {exc})', flush=True)
                 continue
-            inv, sizes = row_partition(np.asarray(X, dtype=np.float64))
-            tied = int((sizes > 1).sum())
+            Xh = np.asarray(X, dtype=np.float64)
+            inv, sizes = row_partition(Xh)
+            # Same attribution as the per-representation rows, so the column
+            # 'n_representation_merged' means the same thing on both. It used
+            # to be every molecule sharing a row, repeated inputs and zero rows
+            # included, under the name of the narrower count -- and the row
+            # carried no 'n_stereo_only', which print_worst reads, so the first
+            # hybrid row to reach the table raised KeyError before the JSON
+            # was written.
+            groups_attr = attribute_groups(inv, sizes, ~np.any(Xh != 0, axis=1),
+                                           keys, stereo_keys)
+            tied = int(groups_attr['n_representation_merged'])
             out.append({
                 'dataset': dataset_name,
                 'representation': f'hybrid[{model_name}#{rank}]',
@@ -532,15 +595,24 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
                 'budget': bp.budget,
                 'allocation_method': bp.allocation_method,
                 'importance_method': bp.importance_method,
-                'n_features': int(np.asarray(X).shape[1]),
+                'n_features': int(Xh.shape[1]),
                 'n_molecules': n,
-                'n_representation_merged': tied,
+                'recipe_reps': list(bp.reps or []),
+                'rep_count': getattr(bp, 'rep_count', None),
+                'reps_used': sorted(_info.get('rep_count_kept') or base),
+                'n_distinct_vectors': int(np.unique(inv).size),
+                **groups_attr,
+                'percent_molecules_sharing': (round(
+                    100.0 * groups_attr['n_molecules_sharing'] / n, 3)
+                    if n else None),
                 'percent_merged': round(100.0 * tied / n, 4) if n else None,
             })
             if verbose:
                 print(f'    hybrid[{model_name}#{rank}] '
-                      f'{np.asarray(X).shape[1]:>5}f  {tied:>5} of {n} '
-                      f'share a row ({100.0*tied/max(n,1):5.2f}%)', flush=True)
+                      f'{Xh.shape[1]:>5}f  '
+                      f'{groups_attr["n_molecules_sharing"]:>5} of {n} '
+                      f'share a row, {tied} merged by the representation '
+                      f'({100.0*tied/max(n,1):5.2f}%)', flush=True)
     return out
 
 
@@ -661,7 +733,9 @@ def census_one(dataset_name, rep_names, build_missing=False, verbose=True,
         try:
             rows.extend(hybrid_rows(dataset_name, reps, labels,
                                     data.get('groups'), n_per_model=with_hybrids,
-                                    verbose=verbose))
+                                    verbose=verbose, keys=keys,
+                                    stereo_keys=stereo_keys,
+                                    task_type=task_type, domain=domain))
         except Exception as exc:
             if verbose:
                 print(f'  hybrid rows failed: {type(exc).__name__}: {exc}',
