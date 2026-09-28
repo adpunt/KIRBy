@@ -415,6 +415,8 @@ def run(data, config, output_dir, dataset_name):
 
         if best is None:
             print(f"    Fold {fold_i}: no valid config found, skipping")
+            fold_errors.append({'fold': fold_i, 'stage': 'search',
+                                'exception': 'search returned no model'})
             continue
 
         bp = best['blueprint']
@@ -533,6 +535,7 @@ def run(data, config, output_dir, dataset_name):
             _pair_idx = np.where(_pair_mask)[0]
             y_val_tgt = labels[val_idx]
             src_bp = None
+            _pair_exc = 'no blueprint from the pair-excluded search'
             try:
                 if len(np.unique(groups[_pair_idx])) < 2:
                     raise ValueError(
@@ -603,11 +606,12 @@ def run(data, config, output_dir, dataset_name):
             except Exception as exc:
                 print(f"    recipe search excluding folds {src_fold},{tgt_fold} "
                       f"failed: {type(exc).__name__}: {exc}")
+                _pair_exc = f'{type(exc).__name__}: {exc}'
             if src_bp is None:
                 fold_errors.append({
                     'fold': tgt_fold, 'stage': 'pair_recipe_search',
                     'source_fold': src_fold,
-                    'exception': 'no blueprint from the pair-excluded search'})
+                    'exception': _pair_exc})
                 continue
             cell_recipe_provenance[f'{src_fold}->{tgt_fold}'] = {
                 'rows_selection_saw': int(len(_pair_idx)),
@@ -700,6 +704,13 @@ def run(data, config, output_dir, dataset_name):
                 # degrades rather than errors.
                 print(f"    transfer src={src_fold}->tgt={tgt_fold} failed: "
                       f"{type(exc).__name__}: {exc}")
+                # Printed only, until 2026-09-28: the comment above said the
+                # failure was surfaced, but nothing reached the result file, so
+                # a missing cell read the same as one never attempted.
+                fold_errors.append({
+                    'fold': tgt_fold, 'stage': 'transfer_cell',
+                    'source_fold': src_fold,
+                    'exception': f'{type(exc).__name__}: {exc}'})
                 continue
 
     # --- Step 3: Compute the deltas ---
@@ -816,6 +827,10 @@ def run(data, config, output_dir, dataset_name):
         # The inner folds train on fewer rows than the outer fit, so the gap
         # mixes that optimism with a sample-size difference.
         'fold_search_inner_score': convert_numpy(fold_search_scores),
+        # Every search, own-fold build, pair search and off-diagonal cell that
+        # failed, with its exception. Written only on the skip path until
+        # 2026-09-28, so a run that lost cells stored nothing saying which.
+        'fold_diagnostics': convert_numpy(fold_errors),
         'aggregate': {
             'mean_abs_delta': float(np.mean(np.abs(deltas))) if deltas else None,
             'max_abs_delta': max_delta if deltas else None,
