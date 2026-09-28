@@ -855,9 +855,21 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         continue
                     secs = time.time() - t0
                     # WHICH features the recipe took, per representation.
+                    # A representation the allocation gave zero features has
+                    # NO entry in feat_info (checked 2026-09-28 on a synthetic
+                    # create_hybrid call), only a 0 in feat_info['allocation'].
+                    # Skipping it dropped exactly the level where a
+                    # representation lost every feature, so the retained
+                    # fraction read too high. It is recorded as an empty set.
+                    _alloc = feat_info.get('allocation')
+                    _considered = (set(_alloc) if isinstance(_alloc, dict)
+                                   else set())
                     for rname in rep_order:
                         info = feat_info.get(rname)
                         if not isinstance(info, dict):
+                            if rname in _considered:
+                                rep_block[('hybrid', 'recipe', rname, lv,
+                                           fold_idx)] = np.zeros(0, dtype=int)
                             continue
                         sel = np.asarray(info.get('selected_indices', []), dtype=int)
                         rep_block[('hybrid', 'recipe', rname, lv, fold_idx)] = sel
@@ -988,6 +1000,13 @@ def _save_vectors(rep_block, output_dir, dataset_name, condition, replicate, res
     results.setdefault('vector_files', []).append(path)
     results.setdefault('vector_keys', {})[str(replicate)] = sorted(payload)
     print(f"  [saved {path}] {len(payload)} arrays")
+
+
+def _nanmean(xs):
+    """Mean of the finite values, nan when there are none (no RuntimeWarning)."""
+    a = np.asarray(xs, dtype=float)
+    a = a[np.isfinite(a)]
+    return float(a.mean()) if a.size else float('nan')
 
 
 def _summarise_replicate(rep_block, rep_order, imp_methods, levels, n_folds,
@@ -1147,8 +1166,14 @@ def _summarise_replicate(rep_block, rep_order, imp_methods, levels, n_folds,
                     'per_fold': per_fold,
                     'mean_n_selected_features': float(np.mean(
                         [r['n_selected_features'] for r in per_fold])),
-                    'mean_retained_fraction_of_level_zero': float(np.mean(
-                        [r['retained_fraction_of_level_zero'] for r in per_fold])),
+                    # nan on a fold where the representation held no features
+                    # at level 0.0 (nothing to retain); those folds are left out
+                    # and counted beside it.
+                    'mean_retained_fraction_of_level_zero': _nanmean(
+                        [r['retained_fraction_of_level_zero'] for r in per_fold]),
+                    'n_folds_with_no_features_at_level_zero': int(sum(
+                        r['n_selected_features_at_level_zero'] == 0
+                        for r in per_fold)),
                     'nogueira_selection_stability_across_folds': (
                         nogueira_stability(sets, width) if len(sets) > 1
                         else float('nan')),
