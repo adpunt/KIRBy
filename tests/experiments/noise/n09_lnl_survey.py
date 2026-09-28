@@ -169,30 +169,44 @@ class _BaselineDNN:
     def fit(self, X, y, groups=None):
         self.X_train_ = np.asarray(X)
         self.y_train_ = np.asarray(y)
+        self.groups_ = (np.asarray(groups) if groups is not None
+                        and len(groups) == len(self.y_train_) else None)
         return self
 
     def predict(self, X):
         return _run_baseline(self.X_train_, self.y_train_, np.asarray(X),
                              None, random_state=self.random_state,
-                             is_clf=self.is_clf, classes_=self.classes_in)
+                             is_clf=self.is_clf, classes_=self.classes_in,
+                             groups=getattr(self, 'groups_', None))
 
 
 def _run_baseline(X_train, y_train, X_val, y_val, random_state=42,
-                  is_clf=False, classes_=None):
-    """Standard DNN baseline (no LNL). Routes to clf trainer when is_clf=True."""
+                  is_clf=False, classes_=None, groups=None):
+    """Standard DNN baseline (no LNL). Routes to clf trainer when is_clf=True.
+
+    `groups` are the scaffold groups of the training rows. They make the
+    network's early-stopping holdout scaffold-disjoint. Until 2026-09-28 this
+    function passed none, so the plain DNN stopped on a RANDOM 20% of its
+    training rows. Eight of the twelve methods stop on a scaffold-disjoint 20%
+    (LNLMethod._carve_selection), and heteroscedastic_gp's final fit does too.
+    The headline gain (method minus plain DNN, same labels) therefore carried a
+    difference in stopping rule that is not part of any method. With the same
+    groups, GroupShuffleSplit(random_state=42, test_size=0.2) gives the plain
+    DNN the same carve those methods use.
+    """
     if is_clf:
         return _standard_dnn_train_predict_clf(
             X_train, y_train, X_val,
             epochs=200, hidden_sizes=(256, 128, 64),
             dropout=0.2, lr=0.001, batch_size=256,
             patience=20, random_state=random_state,
-            classes_=classes_,
+            classes_=classes_, groups=groups,
         )
     return _standard_dnn_train_predict(
         X_train, y_train, X_val,
         epochs=200, hidden_sizes=(256, 128, 64),
         dropout=0.2, lr=0.001, batch_size=256,
-        patience=20, random_state=random_state,
+        patience=20, random_state=random_state, groups=groups,
     )
 
 
@@ -583,15 +597,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         scaler_base.fit_transform(reps[_rn][train_idx]),
                         scaler_base.transform(reps[_rn][val_idx]))
 
+                # The scaffold groups of this fold's training rows. Set before
+                # the hybrid build's try, because the plain DNN of conditions A,
+                # B and E reads them for its early-stopping carve; inside the
+                # try, a failure before this line would turn condition A into a
+                # NameError that its own except swallows.
+                train_groups_subset = (groups[train_idx]
+                                       if groups is not None else None)
+
                 # Build hybrid features by running a fresh feature-mix search on
                 # the NOISY training labels (matching the c06 per-variant pattern).
                 # The pool blueprint `bp` above was fit on clean labels, which
                 # would give the LNL methods a feature mix chosen with oracle
                 # access to ground truth. Refitting per (noise level, fold) on
                 # noisy labels removes that leak. Uses a reduced budget grid to
-                # keep runtime tractable; downstream model is 'rf' as a
-                # fast proxy for DNN (RF-best and DNN-best feature mixes are
-                # usually well-correlated on tabular molecular features).
+                # keep runtime tractable. The search model is the plain DNN
+                # (_BaselineDNN) since 2026-09-28, not a random forest.
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
                 val_reps = {k: v[val_idx] for k, v in reps.items()}
                 try:
@@ -599,9 +620,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
 
                     # Run search WITHIN the train fold using noisy labels.
-                    # Subset groups (if present) so inner CV stays inside the train fold.
-                    train_groups_subset = (groups[train_idx]
-                                           if groups is not None else None)
+                    # train_groups_subset (set above the try) keeps inner CV
+                    # inside the train fold.
                     inner_n_folds = max(2, min(3, n_folds))
                     # ⛔ THE SEARCH MODEL IS THE DNN, 2026-09-28. Two things used
                     # to disagree. This search fitted a RandomForest and nothing
@@ -768,7 +788,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         y_pred_a = _run_baseline(X_base_train_s, y_train,
                                                  X_base_val_s, y_val,
                                                  random_state=42 + fold_idx,
-                                                 is_clf=is_clf, classes_=classes_)
+                                                 is_clf=is_clf, classes_=classes_,
+                                                 groups=train_groups_subset)
                         score_a = float(metric_fn(y_val, y_pred_a))
                         sigma_results[f'{_bk}_no_lnl'].append(score_a)
                         sigma_folds[f'{_bk}_no_lnl'].append(fold_idx)
@@ -782,7 +803,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         y_pred_b = _run_baseline(X_hybrid_train_s, y_train,
                                                  X_hybrid_val_s, y_val,
                                                  random_state=42 + fold_idx,
-                                                 is_clf=is_clf, classes_=classes_)
+                                                 is_clf=is_clf, classes_=classes_,
+                                                 groups=train_groups_subset)
                         score_b = float(metric_fn(y_val, y_pred_b))
                         sigma_results['hybrid_no_lnl'].append(score_b)
                         sigma_folds['hybrid_no_lnl'].append(fold_idx)
@@ -828,7 +850,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         y_pred_e = _run_baseline(X_whybrid_train_s, y_train,
                                                  X_whybrid_val_s, y_val,
                                                  random_state=42 + fold_idx,
-                                                 is_clf=is_clf, classes_=classes_)
+                                                 is_clf=is_clf, classes_=classes_,
+                                                 groups=train_groups_subset)
                         score_e = float(metric_fn(y_val, y_pred_e))
                         sigma_results['weighted_hybrid_no_lnl'].append(score_e)
                         sigma_folds['weighted_hybrid_no_lnl'].append(fold_idx)
