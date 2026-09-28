@@ -932,10 +932,17 @@ def cleaned_training_set(strategy, X_tr_s, y_tr, noise_scores, noise_fraction,
         #
         # HOW THIS DIFFERS FROM `oof_smooth`, which also moves a label toward
         # the same prediction: oof_smooth moves it by `alpha * score_norm`,
-        # a fraction the caller chooses and the score scales. Here the fraction
-        # is DERIVED -- it is the ratio of the two variances, so there is no
-        # alpha to tune and the shrinkage is whatever the data says it should
-        # be. If the two disagree, the difference is the tuning.
+        # a fraction the caller chooses and the score scales. The intent here
+        # was a fraction DERIVED from the ratio of two variances.
+        #
+        # ⛔ DIRTY-LOCAL 2026-09-28: IT IS NOT DERIVED. sigma2_i is built below
+        # as u_i * tau2 * strength, with u_i the suspicion score rescaled to
+        # 0-1, so tau2 cancels and shrink_i = strength*u_i / (1 + strength*u_i).
+        # No variance of the data enters. The fraction is a fixed concave
+        # function of the rescaled score: 0 for the least suspect molecule,
+        # 1/3 at u = 0.5, 1/2 for the most suspect at strength 1. oof_smooth at
+        # its default alpha 0.5 moves u/2 toward the same out-of-fold target,
+        # so the two cleanups differ only in that curve.
         # Build the target when the caller hoisted none, exactly as
         # `oof_smooth` does. Declining instead was wrong: n07 passes no targets
         # at all -- its three callers of `_evaluate_fold` leave targets at None
