@@ -628,7 +628,9 @@ def inject_shift_train_labels(y_all, *, train_idx, condition, delta_sd, seed):
     moved = np.zeros(n_train, dtype=bool)
     if n_move > 0 and float(delta_sd) != 0.0:
         moved[rng.choice(n_train, size=n_move, replace=False)] = True
-    label_sd = float(np.std(y_all))
+    # Sized from the clean TRAINING labels only, as inject_train_labels has been
+    # since 2026-09-27. The whole column let held-out rows set the shift.
+    label_sd = float(np.std(y_all[train_idx]))
     shift = float(delta_sd) * label_sd
     y_train = y_all[train_idx].copy()
     y_train[moved] += shift
