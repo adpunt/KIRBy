@@ -1616,7 +1616,13 @@ def _summarise(results, models, spaces, metric_name, lower_is_better,
                     # The spread across draws is the spread over WHICH measurement
                     # became the training label. A difference between arms smaller
                     # than this is not a difference between arms.
-                    'std_over_draws': float(np.std(vals)) if vals else float('nan'),
+                    #
+                    # NaN below two draws, not 0.0. np.std of one number is
+                    # 0.0, and a spread of 0.0 reads as "every draw agreed",
+                    # which one draw cannot say. The local run sets N_DRAWS
+                    # to 1 (_local_run.py), so every arm printed 0.0 there.
+                    'std_over_draws': (float(np.std(vals)) if len(vals) >= 2
+                                       else float('nan')),
                     'per_draw': vals,
                     'n_draws_scored': len(vals),
                 }
