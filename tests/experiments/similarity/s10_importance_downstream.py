@@ -559,9 +559,21 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10, is_self=False):
     dists, indices = nn.kneighbors(X_query)
 
     if is_self:
-        # Drop the first column (self-match with distance=0)
-        dists = dists[:, 1:]
-        indices = indices[:, 1:]
+        # Drop each row's OWN entry, found by index. Dropping column 0 assumed
+        # the row itself comes back first; when another training row sits at
+        # distance 0 (a duplicate, or two rows equal on every feature a zero
+        # weight left standing) the tie can put that row first, and then the
+        # row's own label stayed in its neighbour mean. The weighted arm zeroes
+        # every feature with no gain, so it made more such ties than the
+        # unweighted arm it is compared with. A row whose own entry is not
+        # among the k+1 returned (more than k exact ties) drops the last.
+        n_q = indices.shape[0]
+        own = indices == np.arange(n_q)[:, None]
+        no_own = ~own.any(axis=1)
+        own[no_own, -1] = True
+        keep = ~own
+        dists = dists[keep].reshape(n_q, -1)
+        indices = indices[keep].reshape(n_q, -1)
 
     y_neighbors = y_train[indices]  # (n_query, k)
     mean_y = np.mean(y_neighbors, axis=1)
