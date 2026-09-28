@@ -1100,13 +1100,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── the ordering, so it can be put beside n11's ──
     best = {}
+    # How many records each ranked number is over (2026-09-28). A detector
+    # that failed in a fold is graded over fewer records than the rest, with a
+    # different flagged share, and the ranking used to set it beside them with
+    # nothing to say so. The ranking itself is unchanged; this sits beside it.
+    ranked_n = {}
     for space_name in spaces:
         ranked = []
+        ranked_n[space_name] = {}
         for est_name in estimators:
             g = per_space[space_name][est_name]['records']
             if g and np.isfinite(g.get('detection_average_precision', np.nan)):
                 ranked.append((_canonical(est_name),
                                float(g['detection_average_precision'])))
+                ranked_n[space_name][_canonical(est_name)] = {
+                    'n_scored': int(g['n_scored']),
+                    'n_flagged': int(g['n_flagged'])}
         ranked.sort(key=lambda kv: -kv[1])
         best[space_name] = ranked
         if ranked:
@@ -1115,13 +1124,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"random ranking would score "
                   f"{n_flag / float(n_samples):.4f}):")
             for name, ap in ranked:
-                print(f"    {ap:.4f}  {name}")
+                _n = ranked_n[space_name][name]
+                _short = ('' if _n['n_scored'] == n_samples else
+                          f"  [over {_n['n_scored']} records, "
+                          f"{_n['n_flagged']} flagged, not all {n_samples}]")
+                print(f"    {ap:.4f}  {name}{_short}")
             for _nm, _row in label_only.items():
                 _g = _row.get('records') or {}
                 if _g:
                     print(f"    {_g['detection_average_precision']:.4f}  "
                           f"[control, label only] {_nm}")
     results['average_precision_ranking'] = convert_numpy(best)
+    results['average_precision_ranking_counts'] = convert_numpy(ranked_n)
     results['average_precision_ranking_note'] = (
         'detectors only. The two label-only controls are under '
         "'label_only_controls', graded over the same records, and a detector "
