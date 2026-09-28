@@ -943,9 +943,11 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 # Fallback when no search is found: the engine's own current
                 # defaults. Was 'greedy'/'treeshap'/'ridge' -- greedy is cut,
                 # and treeshap/ridge are neither the engine default nor what
-                # the search would have picked.
+                # the search would have picked. The evaluator is 'rf', the
+                # engine's default since 2026-09-16 and what 9b and 9c fall
+                # back to; it was 'lightgbm' here alone.
                 alloc, imp, int_eval = ('performance_weighted',
-                                        'lightgbm_gain', 'lightgbm')
+                                        'lightgbm_gain', 'rf')
                 aug_strat = 'uncapped' if augs else 'none'
             _from_fallback = _m is None
 
