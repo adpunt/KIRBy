@@ -527,7 +527,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_importance[rep_name][_fi_imp] = None
 
     # --- Per-rep kNN baselines (unweighted + weighted) ---
-    print(f"\n  Per-rep kNN baselines (k=5, metric={metric_name}):")
+    print(f"\n  Per-rep kNN baselines (k={knn_k}, metric={metric_name}):")
     for rep_name, X_rep in reps.items():
         # Unweighted
         def _get_rep(tr, va, yt, fold_i, _X=X_rep):
@@ -637,7 +637,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- Hybrid kNN, one arm per (family, rank) slot the pool returned ---
     if hybrid_blueprint_available:
-        print(f"\n  Hybrid kNN (k=5), {len(hybrid_arms)} pool arms "
+        print(f"\n  Hybrid kNN (k={knn_k}), {len(hybrid_arms)} pool arms "
               f"(subset {_POOL_SUBSET}, top {_N_POOL_HYBRIDS} per family):")
 
         def _arm_entry(fold_i, objective, rank):
@@ -964,6 +964,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # 'n_cliff_rows_by_fold'.
     results['fold_reselection'] = {
         'lower_is_better': bool(lower_is_better),
+        # The metric's name as well as its direction, so hr_direction can check
+        # one against the other instead of trusting the flag alone.
+        'metric_name': metric_name,
         'fold_score_stratum': 'cliff_rows_only',
         'exclude_folds': ([] if fold0_pruned is False else [0]),
         'fold0_pruned': (None if fold0_pruned is None else bool(fold0_pruned)),
