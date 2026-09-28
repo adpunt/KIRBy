@@ -697,7 +697,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     pre_alloc = alloc_cache.get((fold_i, _ev, metric_name))
                     if pre_alloc is None:
                         pre_alloc = alloc_cache.get((fold_i, _ev))
+                    # ⛔ NO STORED RANKING, NO WHOLE-DATASET RANKING. Added
+                    # 2026-09-28 (dirty local). When the search's per-fold
+                    # scores are unusable (its folds hold other molecules, or
+                    # this fold has no entry) and the recipe keeps fewer
+                    # representations than the pool, build_fold_hybrid ranks
+                    # them by blueprint.rep_scores. Those were scored over
+                    # every row the search ran on, this fold's held-out rows
+                    # included, on clean labels for the clean recipe. The
+                    # fold's own ranking, on its noisy training rows, is
+                    # computed here instead, with c10's helper (the same fix
+                    # c10, c15, c18 and c22 received). None when nothing is
+                    # cut, which leaves the build as it was.
                     try:
+                        if pre_alloc is None:
+                            from experiments.noise.c10_noise_robustness import (
+                                _fold_alloc_scores)
+                            pre_alloc = _fold_alloc_scores(
+                                train_reps, y_train,
+                                (groups[train_idx] if groups is not None
+                                 else None),
+                                bp, metric_fn)
                         # Feature construction ALSO sees only the noisy train labels
                         # — otherwise the arm gets a second, hidden look at truth.
                         X_tr, X_va, _ = build_fold_hybrid(
