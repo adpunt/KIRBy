@@ -427,12 +427,22 @@ def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False,
     `fold_idx` was removed 2026-09-12: the fold must not reach the seed, or a
     molecule's corruption depends on which fold it lands in. See
     noise_helpers.noise_spec_for.
+
+    DIRTY-LOCAL 2026-09-28, two changes.
+    (1) Classification now injects the flip model the condition names. It
+    pinned 'uniform', so the six flip conditions the sweep runs on a
+    classification set were six copies of one uniform flip. noise_spec_for
+    still falls back to 'uniform' for a name that is not a flip model.
+    (2) The p override is applied only when the caller passes a number. The
+    sweep in _run_one_condition passes None on regression unless the run was
+    given noise_fraction explicitly, so outlier_p01 runs at p = 0.01. Before,
+    all six outlier conditions ran at p = 0.10 under their own names.
     """
     from dataclasses import replace
     if condition == AS_THEY_COME:
         return None
     if is_clf:
-        return noise_spec_for(dataset_name, 'uniform', noise_fraction,
+        return noise_spec_for(dataset_name, condition, noise_fraction,
                               noise_seed=noise_seed, is_clf=True)
     spec = noise_spec_for(dataset_name, condition, level,
                           noise_seed=noise_seed)
@@ -2414,6 +2424,14 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     budget = kwargs.get('budget', 100)
     noise_fraction = kwargs.get('noise_fraction', 0.1)
+    # DIRTY-LOCAL 2026-09-28: what reaches the injector as the share. On
+    # classification it is the flip rate. On regression it overrides an outlier
+    # condition's own p only when the run named noise_fraction; otherwise None,
+    # so outlier_p01 / _p05 / _p10 keep the p their names say. noise_fraction
+    # itself stays a number because cleaned_training_set reads it positionally.
+    inject_fraction = (noise_fraction
+                       if (is_clf or kwargs.get('noise_fraction') is not None)
+                       else None)
     condition = kwargs.get('noise_condition') or DEFAULT_CONDITION
     # How much noise the corrupted rows receive. This experiment had no level axis
     # at all -- the magnitude was hardcoded at 0.3 of the label range -- so the
@@ -2421,6 +2439,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # (Kramer et al. 2012), 0.35 on caco2 (Bentz et al. 2013 Table 6), half the label
     # SD where nothing is published.
     noise_level = kwargs.get('noise_level', reference_noise_level(dataset_name))
+    # On classification the level IS the flip rate (_noise_spec), so the level
+    # written to the result and the rows is the flip rate injected, not 0.5.
+    if is_clf:
+        noise_level = float(noise_fraction)
     # Nothing injected under AS_THEY_COME: the level is 0 and the three draws
     # would be three identical passes, so one is kept.
     if condition == AS_THEY_COME:
@@ -2852,7 +2874,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             'every representation. model_rep_ranking holds every score that '
             'chose the two and how many features each representation has.'),
         'lower_is_better': lower_is_better,
-        'noise_fraction': noise_fraction,
+        # The share handed to the injector: the flip rate on classification,
+        # an outlier p override on regression only when the run named one.
+        # None means every condition used the parameters its name gives.
+        'noise_fraction': inject_fraction,
         'flag_shares': flag_shares,
         'flag_share_note': (
             'noise_fraction is the injector\'s share only (the outlier '
@@ -3377,7 +3402,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 actual_seed = 42 + fold_i * 1000 + noise_seed
                 # Compute the noisy y and noise_scores ONCE per (fold, seed);
                 # all 6 noise-dependent strategies reuse them.
-                _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
+                _spec = _noise_spec(dataset_name, inject_fraction, noise_level,
                                     noise_seed=noise_seed,
                                     is_clf=is_clf, condition=condition)
                 # TODO(similarity-sweep 2026-09-25): plan section 4 -- this
@@ -3709,7 +3734,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
             for noise_seed in _seeds_here:
                 actual_seed = 42 + fold_i * 1000 + noise_seed
-                _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
+                _spec = _noise_spec(dataset_name, inject_fraction, noise_level,
                                     noise_seed=noise_seed,
                                     is_clf=is_clf, condition=condition)
                 y_tr_noisy, _, _prov = _inject_or_recorded(
@@ -3828,7 +3853,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
                 for noise_seed in _seeds_here:
                     actual_seed = 42 + fold_i * 1000 + noise_seed
-                    _spec = _noise_spec(dataset_name, noise_fraction,
+                    _spec = _noise_spec(dataset_name, inject_fraction,
                                         noise_level, noise_seed=noise_seed,
                                         is_clf=is_clf, condition=condition)
                     y_tr_noisy, _cm, _prov = _inject_or_recorded(
