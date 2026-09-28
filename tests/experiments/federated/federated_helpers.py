@@ -1002,17 +1002,37 @@ def predict_fluid_similarity_ensemble(teacher_models, cluster_data_train,
         # All teachers were None — return uniform predictions
         return np.zeros(n_test, dtype=int), np.full(n_test, 0.5), {}
 
-    # Normalize distances → similarities per silo (consistent with regression variant)
+    # Distances -> similarities on ONE scale shared by every teacher, as
+    # FLuID's annotate_transfer_data does (FLuID.py:925-940: minWeight and
+    # maxWeight are taken over teachers 1..k together). Every teacher here
+    # measures in the same Morgan space, so the scale is comparable.
+    #
+    # This used to min-max each teacher on its own. That erased the fact the
+    # weight exists to carry -- which silo is nearer -- since every teacher's
+    # nearest test molecule got 1 and its farthest got 0. It also gave a
+    # molecule that is the farthest from every silo weight 0 from all of
+    # them, and its prediction then came out as class 0 at probability 0
+    # whatever the teachers said. The student pipeline below already used
+    # the shared scale.
     active_teachers = sorted(all_probs.keys())
+    _raw_all = np.concatenate([np.asarray(all_weights[t], dtype=float)
+                               for t in active_teachers])
+    min_w, max_w = _raw_all.min(), _raw_all.max()
+    delta_w = max_w - min_w if max_w > min_w else 1.0
     for t in active_teachers:
-        raw = all_weights[t]
-        min_t, max_t = raw.min(), raw.max()
-        delta_t = max_t - min_t if max_t > min_t else 1.0
-        normalized = (raw - min_t) / delta_t
+        normalized = (all_weights[t] - min_w) / delta_w
         all_weights[t] = (1.0 - normalized) ** 2
 
     # Normalize weights to sum to 1 per sample (active teachers only)
     weight_sum = sum(all_weights[t] for t in active_teachers)
+    # A molecule with weight 0 from every teacher (only possible when all of
+    # them sit at the shared maximum) is shared equally rather than
+    # predicted as 0 by the clamp below.
+    _all_zero = weight_sum <= 0
+    if np.any(_all_zero):
+        for t in active_teachers:
+            all_weights[t] = np.where(_all_zero, 1.0, all_weights[t])
+        weight_sum = sum(all_weights[t] for t in active_teachers)
     weight_sum = np.maximum(weight_sum, 1e-10)
     for t in active_teachers:
         all_weights[t] = all_weights[t] / weight_sum
