@@ -1712,8 +1712,18 @@ def _level_block(specs, models, detectors, k_values, seeds, clean, noisy,
                     _floor = (max(1e-10, GAP_MIN_FRAC * abs(c))
                               if np.isfinite(c) else 1e-10)
                     gap_too_small = not (abs(gap_by_model[m]) > _floor)
+                    # DIRTY-LOCAL 2026-09-28: n07 computes a recovery only when
+                    # the noise HURT the model (its r_hurt / _hurt guard,
+                    # n07_remediation.py:4036 and 4108). This file took n07's
+                    # floor and not that guard, so a model the noise improved
+                    # by more than the floor got a recovery on a gap pointing
+                    # the wrong way: clean 0.60 rmse, noisy 0.58, repaired
+                    # 0.57 read as -50%. gap_by_model is signed so a positive
+                    # gap means the noise cost something.
+                    noise_did_not_hurt = (np.isfinite(gap_by_model[m])
+                                          and gap_by_model[m] <= 0)
                     if (np.isfinite(c) and np.isfinite(nz)
-                            and not gap_too_small):
+                            and not gap_too_small and not noise_did_not_hurt):
                         recovery = float((denoised - nz) / (c - nz) * 100.0)
                         recovery_note = None
                     else:
@@ -1723,6 +1733,11 @@ def _level_block(specs, models, detectors, k_values, seeds, clean, noisy,
                             f'({gap_by_model[m]:.6g}) is under '
                             f'{GAP_MIN_FRAC:.0%} of the clean score ({c:.6g})'
                             if gap_too_small and np.isfinite(c)
+                            else f'not computed: the noise did not degrade '
+                                 f'this model (clean {c:.6g}, corrupted '
+                                 f'{nz:.6g}, lower_is_better '
+                                 f'{lower_is_better})'
+                            if noise_did_not_hurt
                             else 'not computed: a score was not finite')
                     repair[f'{m}|{est_key}'] = {
                         'model': m,
