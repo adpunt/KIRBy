@@ -1689,8 +1689,12 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                                                         k=k_n, is_self=True)
                     sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
                                                         k=k_n, is_self=False)
-                    X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
-                    X_va_aug_w = np.hstack([X_va_w, sim_va_w])
+                    # The forest reads the UNWEIGHTED base features, as the unweighted arm
+                    # does. Only the four neighbour features change between the two arms.
+                    # The forest is blind to a positive rescale of a feature, but a zero weight
+                    # turned every no-gain feature into a constant column it could not split on.
+                    X_tr_aug_w = np.hstack([X_tr, sim_tr_w])
+                    X_va_aug_w = np.hstack([X_va, sim_va_w])
                     rf_aug_w = _make_rf()
                     rf_aug_w.fit(X_tr_aug_w, y_train)
                     w_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug_w, X_va_aug_w, metric_name, is_clf)))
@@ -1807,8 +1811,12 @@ def _run_qrasar(reps, labels, groups, config, fold_blueprints,
                                                             k=k_n, is_self=True)
                         sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
                                                             k=k_n, is_self=False)
-                        X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
-                        X_va_aug_w = np.hstack([X_va_w, sim_va_w])
+                        # The forest reads the UNWEIGHTED base features, as the unweighted arm
+                        # does. Only the four neighbour features change between the two arms.
+                        # The forest is blind to a positive rescale of a feature, but a zero weight
+                        # turned every no-gain feature into a constant column it could not split on.
+                        X_tr_aug_w = np.hstack([X_tr, sim_tr_w])
+                        X_va_aug_w = np.hstack([X_va, sim_va_w])
                         rf_aug_w = _make_rf()
                         rf_aug_w.fit(X_tr_aug_w, y_train)
                         w_by_k[k_n].append(metric_fn(y_val, _predict_for_metric(rf_aug_w, X_va_aug_w, metric_name, is_clf)))
