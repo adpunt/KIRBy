@@ -547,10 +547,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # 5 by default and coincide, but on --mode intermediary
                         # n_out is 1 while the search still runs
                         # DEFAULT_N_FOLDS, and n_out squared is then 5x low.
+                        #
+                        # n_out is NOT a factor. selection_fits is the cost of
+                        # ONE run of the process, the way the ensemble rows
+                        # count theirs (inner fits for one outer fold), and a
+                        # deployer runs one search, which is what break-even
+                        # divides. Multiplying by n_out counted the outer CV's
+                        # replication as search cost: 3x on this run.
                         n_search_folds = (len(best_row.get('fold_scores') or [])
                                           or DEFAULT_N_FOLDS)
                         search_fits = max(search_fits,
-                                          n_cfg * n_out * n_search_folds)
+                                          n_cfg * n_search_folds)
                 per_fold[f_i] = bps_f
             return per_fold
 
@@ -569,7 +576,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 bps[budget] = meta['best_config']['blueprint']
                 last_search = search
                 n_cfg = len(getattr(search, 'all_results', None) or [])
-                search_fits = max(search_fits, n_cfg * n_out)
+                # The search's own fold count, not n_out (see the per_fold
+                # branch above): one search over every row.
+                n_search_folds = (len(meta['best_config'].get('fold_scores')
+                                      or []) or DEFAULT_N_FOLDS)
+                search_fits = max(search_fits, n_cfg * n_search_folds)
         return bps
 
     results = []
