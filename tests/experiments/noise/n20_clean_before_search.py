@@ -1657,6 +1657,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 _col_key = _label_column_key(y_t)
                                 _score_key = _label_column_key(y_s)
                                 ns_c = f'{ns}_{cleanup}_{_col_key}_{_score_key}'
+                                # `remove`: WHICH rows were kept goes in too.
+                                # The store's identity holds the label and
+                                # group hashes and the pool's names and
+                                # widths, never the rows' features, so two
+                                # masks whose kept labels and groups read the
+                                # same would share a search they did not run.
+                                if keep is not None:
+                                    ns_c += f'_k{_label_column_key(keep)}'
                                 search_cleaned = _run_one_search(
                                     tr_for_search, y_s, y_t, g_s,
                                     dataset_name=dataset_name,
