@@ -514,10 +514,18 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     # cluster on opposite sides. No score already reported is contaminated:
                     # this carve is inside the training rows and the test rows were cut
                     # group-aware first. Fixed 2026-09-18.
+                    # THIS silo's groups on THIS silo's training rows. Until
+                    # 2026-09-28 this read s_groups and s_tr, which are left
+                    # over from the recipe-search loop above and belong to
+                    # whichever silo was searched LAST (develop, 672 rows).
+                    # ddg_exp (429 rows) and dms (659 rows) therefore got
+                    # another dataset's cluster ids, or an IndexError that the
+                    # bare except below turned into a silently missing profile.
+                    _c3_groups = sd.get('groups')
                     _, fi_c = create_hybrid(
                         c_reps, c_labels,
-                        groups=(np.asarray(s_groups)[s_tr][c_idx]
-                                if s_groups is not None else None),
+                        groups=(np.asarray(_c3_groups)[tr][c_idx]
+                                if _c3_groups is not None else None),
                         allocation_method=c3_alloc,
                         importance_method=c3_imp,
                         internal_evaluator=c3_int_eval,
