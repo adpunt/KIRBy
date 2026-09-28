@@ -415,8 +415,25 @@ def run(all_dataset_results):
                       f"unweighted baseline]: {reduction:.1f}% "
                       f"(best_rep={best_rep_rmse:.4f} -> hybrid={hybrid_rmse:.4f})")
             else:
-                # rmse_cliff absent (e.g., classification dataset)
-                cliff_n_skipped_clf += 1
+                # Only a classification file carries no rmse_cliff key on any
+                # single representation. A regression file whose lead hybrid
+                # arm lost every fold was counted here too, and the note then
+                # called it "likely classification". Both cases now record why
+                # the reduction is absent. (dirty-local 2026-09-28)
+                _is_clf4 = not any('rmse_cliff' in v
+                                   for v in exp4['per_rep'].values())
+                if _is_clf4:
+                    cliff_n_skipped_clf += 1
+                _record_absent(
+                    ds_summary, 'cliff_rmse_reduction_pct',
+                    's04 min over per_rep[*].rmse_cliff vs '
+                    'hybrid.weighted.rmse_cliff',
+                    ('no single representation carries rmse_cliff '
+                     '(classification file)') if _is_clf4 else
+                    (f"{len(valid_rmse)} finite per_rep rmse_cliff, "
+                     f"hybrid.weighted.rmse_cliff={hybrid_rmse!r}, "
+                     f"hybrid.weighted_status="
+                     f"{exp4['hybrid'].get('weighted_status')!r}"))
 
             # Like-for-like baseline: s04 also scores each single rep with the
             # same importance-weighted kNN distance the hybrid arm uses, under
