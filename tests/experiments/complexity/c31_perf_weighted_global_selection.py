@@ -519,8 +519,17 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     ranked = sorted(rep_native, key=lambda r: gs * rep_native[r][0], reverse=True)
     # One candidate pool per size in POOLS; the smaller pool is a prefix of the
     # larger, so everything computed per rep is computed once over the widest.
-    pools = {p: ranked[:p] for p in POOLS}
-    P = ranked[:max(POOLS)]
+    #
+    # A requested size larger than the number of loaded representations is cut
+    # to that number, and sizes that then coincide are run once. Before
+    # 2026-09-28 the local run (five or six representations per dataset) ran
+    # "pool10" as a second copy of the whole pool: on a five-representation
+    # dataset pool5 and pool10 were the same five names, so every configuration
+    # was fitted twice and reported under two keys as if they differed. Keys
+    # now carry the size actually used; pool_sizes_requested keeps POOLS.
+    pool_sizes = sorted({min(p, len(ranked)) for p in POOLS})
+    pools = {p: ranked[:p] for p in pool_sizes}
+    P = ranked[:max(pool_sizes)]
     best_rep = ranked[0]
     target_native_pf = rep_native[best_rep][1]
     target_r2_pf = rep_r2[best_rep][1]
@@ -563,7 +572,9 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
             float(rep_r2[best_rep][0] - rep_r2[second_rep][0])
             if second_rep else None),
     }
-    mout["pools"] = {str(p): pools[p] for p in POOLS}
+    mout["pools"] = {str(p): pools[p] for p in pool_sizes}
+    mout["pool_sizes_requested"] = list(POOLS)
+    mout["pool_sizes_used"] = list(pool_sizes)
     mout["pool_widths"] = {rn: rep_width[rn] for rn in P}
 
     # -- whole-data sanitized hib — REPORTING only; every weight is sized from
@@ -629,7 +640,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # pool10's weights read on five names.
     fold_hib = {p: [_sanitize_baseline_scores(
                         {rn: fold_train_score[i][rn] for rn in pools[p]})
-                    for i in range(NFOLDS)] for p in POOLS}
+                    for i in range(NFOLDS)] for p in pool_sizes}
 
     # ======================================================================
     # SECOND BASELINE (2026-09-04, SPLIT_AUDIT c31:428) — the target above is
@@ -665,7 +676,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # per-scheme, per-pool, per-fold weight vectors (POOL_TOTAL-independent) ---
     scheme_fold_weights = {}      # (label, pool size) -> [ {rn: w} per fold ]
     for label, (scheme, params) in SCHEMES.items():
-        for p in POOLS:
+        for p in pool_sizes:
             wl = []
             for i in range(NFOLDS):
                 w = _compute_allocation_weights(
@@ -691,7 +702,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # scheme_weights reporting: mean + std over folds (density check reads mean).
     scheme_weights = {}
     for label in SCHEMES:
-        for p in POOLS:
+        for p in pool_sizes:
             wl = scheme_fold_weights[(label, p)]
             scheme_weights[f"pool{p}_{label}"] = {
                 rn: {"mean": round(float(np.mean([wl[i][rn] for i in range(NFOLDS)])), 6),
@@ -765,7 +776,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # WEIGHTED-GLOBAL — scheme x POOL_TOTAL x budget x IMPORTANCE (items 2,4)
     # ======================================================================
     weighted = {imp: {} for imp in imps_ok}
-    for p in POOLS:
+    for p in pool_sizes:
         for label, (scheme, params) in SCHEMES.items():
             for B in BUDGETS:
                 for mult in POOL_TOTAL_MULTS:
@@ -788,7 +799,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # ARM1 — per-rep equal quota (create_hybrid 'fixed'). IMPORTANCE-INVARIANT.
     # ======================================================================
     arm1 = {}
-    for p in POOLS:
+    for p in pool_sizes:
         for B in BUDGETS:
             q = max(1, B // p)
             per_fold_sel = [{rn: topk_local(rn, i, q) for rn in pools[p]}
@@ -803,7 +814,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # ARM2 — EQUAL balanced global (equal top-N per rep) — per importance
     # ======================================================================
     arm2 = {imp: {} for imp in imps_ok}
-    for p in POOLS:
+    for p in pool_sizes:
         for B in BUDGETS:
             # N is an axis of its own (NCAPS, merged from c30), plus the cap that
             # makes this arm's candidate pool the same size as the weighted arm's
@@ -828,7 +839,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # ARM3 — naive global (whole pool, no cap) density ctrl — per importance
     # ======================================================================
     arm3 = {imp: {} for imp in imps_ok}
-    for p in POOLS:
+    for p in pool_sizes:
         slots_full = {rn: rep_width[rn] for rn in pools[p]}
         slots_by_fold_full = {i: slots_full for i in range(NFOLDS)}
         for imp in imps_ok:
@@ -916,7 +927,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     # target, which does not depend on picking a winner.
     best_by_cell = {imp: {} for imp in imps_ok}
     for imp in imps_ok:
-        for p in POOLS:
+        for p in pool_sizes:
             for B in BUDGETS:
                 for mult in POOL_TOTAL_MULTS:
                     cands = {lbl: mout["weighted_global"][imp][wkey(p, lbl, B, mult)]
@@ -956,7 +967,7 @@ def _run_model(ds, model, reps, y, groups, folds, mfn, lower, task, gs,
     density = {imp: {} for imp in imps_ok}
     for imp in imps_ok:
         d = {}
-        for p in POOLS:
+        for p in pool_sizes:
             widest = max(pools[p], key=lambda rn: rep_width[rn])
             rank_of = {rn: j + 1 for j, rn in enumerate(pools[p])}
             dp = {"widest_rep": widest, "widest_width": rep_width[widest],
