@@ -899,6 +899,17 @@ def run(data, config, output_dir, dataset_name):
             'picked_exceeds_train_rows': (
                 None if picked_modal is None
                 else bool(picked_modal > min_train_rows)),
+            # The two above are by the budget ASKED for. These are by the width
+            # the hybrid BUILT at that budget (mean across outer folds), the
+            # same test the per-budget table's '*' uses. None when no width
+            # was recorded.
+            'picked_width_exceeds_train_rows': (
+                rows.get(picked_modal, {}).get('width_exceeds_train_rows')
+                if picked_modal is not None else None),
+            'reselected_best_width_exceeds_train_rows': (
+                rows.get(curve['reselected_best_budget'], {})
+                .get('width_exceeds_train_rows')
+                if curve['reselected_best_budget'] is not None else None),
             'reselected_at_picked_budget': reselected_at_picked,
             'overfit_gap': overfit_gap,
             # Same two gaps, paired fold by fold, with their own fold spread.
@@ -1005,9 +1016,19 @@ def run(data, config, output_dir, dataset_name):
             return f"{v:>{w}.{p}f}" if v is not None else f"{'-':>{w}}"
         pk = s['picked_budget_modal']
         hb = s['reselected_best_budget']
+        # Same marks as the per-budget table above: '*' when the hybrid BUILT
+        # more features than the training rows, '~' when it only ASKED for
+        # more. Until 2026-09-28 this table put '*' on the budget asked for,
+        # under the legend that says built.
+        def _mark(width_over, asked_over):
+            if width_over:
+                return '*'
+            if asked_over:
+                return '~'
+            return ''
         print(f"  {model:<10} "
-              f"{(str(pk) + ('*' if s['picked_exceeds_train_rows'] else '')) if pk else '-':>8} "
-              f"{(str(hb) + ('*' if s['reselected_best_exceeds_train_rows'] else '')) if hb else '-':>12} "
+              f"{(str(pk) + _mark(s['picked_width_exceeds_train_rows'], s['picked_exceeds_train_rows'])) if pk else '-':>8} "
+              f"{(str(hb) + _mark(s['reselected_best_width_exceeds_train_rows'], s['reselected_best_exceeds_train_rows'])) if hb else '-':>12} "
               f"{_s(s['process_gap'], 12)} "
               f"{_s(s['process_gap_fold_sd'], 8)} "
               f"{_s(s['overfit_gap'], 10)} "
