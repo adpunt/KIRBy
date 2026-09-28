@@ -887,16 +887,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_e, y_e, rows_e = X_fold, y_fold, rows
                 excl_e, val_e = excl_fold, is_val
                 g_e = fold_groups
-                if (est_name in GP_SUBSAMPLED_ESTIMATORS
-                        and len(rows) > GP_MAX_ROWS):
-                    # Seeded from the fold number alone, so every space caps
-                    # the SAME records and the difference between the two
-                    # spaces is not partly a difference in which rows ran.
-                    rng = np.random.RandomState(42 + fold_i)
-                    keep = np.sort(rng.permutation(len(rows))[:GP_MAX_ROWS])
-                    X_e, y_e, rows_e = X_fold[keep], y_fold[keep], rows[keep]
-                    excl_e, val_e = excl_fold[keep], is_val[keep]
-                    g_e = None if fold_groups is None else fold_groups[keep]
+                # No row cap for gaussian_process here (removed 2026-09-28).
+                # This file used to hand it 1,000 of the fold's 12,008 rows,
+                # so it scored about 1,000 records in all while every other
+                # detector scored all 12,008, and the ranking below set its
+                # average precision beside theirs over different records.
+                # The cap bought no compute: GaussianProcessEstimator already
+                # fits each of its inner folds on at most 1,000 training rows
+                # (noise_estimation.py, n_max in fold_fn) and only PREDICTS
+                # the rest. GP_SUBSAMPLED_ESTIMATORS and GP_MAX_ROWS stay
+                # imported and unused so n06's constants are not touched.
 
                 t_est = time.time()
                 try:
