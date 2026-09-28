@@ -489,6 +489,25 @@ def sign_flip_shares(residual, rec_doc, rec_mol_local, n_mol, eligible,
             for d in eligible}
 
 
+def arm_setting(arm, alpha, n_iter):
+    """The row's method_setting: the offset or map settings this arm reads,
+    'none' for an arm that reads neither.
+
+    Until 2026-09-28 every arm's rows said ridge_alpha and n_iter, including
+    per_record (no offset), document_quantile_map (labels only),
+    within_document_rank (a ranker) and per_record_random_effect (its penalty
+    is re-estimated, not ridge_alpha). A run at another --ridge-alpha then
+    wrote the same per_record rows under a second setting.
+    """
+    if arm in ('per_record_bias', 'mean_label_bias_corrected'):
+        return f'ridge_alpha={alpha:g}|n_iter={n_iter}'
+    if arm == 'per_record_random_effect':
+        return f'penalty=sigma2_over_tau2|n_iter={n_iter}'
+    if arm == 'document_quantile_map':
+        return f'min_measurements={QUANTILE_MAP_MIN_MEASUREMENTS}'
+    return 'none'
+
+
 def _fit_score(factory, X_tr, y_tr, X_va, y_va, metric_fn):
     """One fit, one held-out score, or (None, why)."""
     try:
@@ -993,8 +1012,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # comparison that happened.
                     if sP is None or sD is None:
                         continue
-                    rows.add(method=arm, method_setting=(
-                                 f'ridge_alpha={alpha:g}|n_iter={n_iter}'),
+                    rows.add(method=arm, method_setting=arm_setting(
+                                 arm, alpha, n_iter),
                              similarity_setting=NO_NEIGHBOURS,
                              model_input=space, model=m, noise_condition='none',
                              level=None, draw=0, fold=fold_i, score_D=sD,
@@ -1037,8 +1056,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             if sD is None:
                                 continue
                             rows.add(method=arm, method_setting=(
-                                         f'ridge_alpha={alpha:g}|n_iter='
-                                         f'{n_iter}|control={cname}'),
+                                         f'{arm_setting(arm, alpha, n_iter)}'
+                                         f'|control={cname}'),
                                      similarity_setting=NO_NEIGHBOURS,
                                      model_input=space, model=m,
                                      noise_condition='none', level=None,
