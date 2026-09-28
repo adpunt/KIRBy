@@ -22,6 +22,21 @@ Scientific questions:
   3. Which component axis is hardest to extrapolate (aryl halide > ligand > base > additive)?
 
 Motivation:
+  ⛔ CITATIONS CHECKED 2026-09-28 against each paper's published abstract.
+  Three of the attributions below do not match. They are left as written so
+  the history is visible; do not cite them until the author has fixed them.
+  - DOI 10.1021/acs.jcim.3c01524 ("When Yield Prediction Does Not Yield
+    Prediction", JCIM 64(1):42-56, 2024) is by Voinarovska, Kabeshov,
+    Dudenko, Genheden and Tetko. It is not by Saebi et al. Saebi et al. is
+    Chem. Sci. 14:4997 (2023), about an electronic-notebook yield dataset.
+    Neither abstract describes a leave-one-component-out comparison.
+  - King-Smith et al. 2024 (Nat. Chem., doi 10.1038/s41557-023-01393-w) is
+    the HiTEA statistical framework for HTE data. Its abstract says nothing
+    about random splits being optimistic. The full text was not read.
+  - Bradshaw et al. 2025 (ACS Cent. Sci. 11:539) is about predicting reaction
+    PRODUCTS, not yields. A random-split versus out-of-sample R2 for yields
+    is not what it reports. The full text was not read.
+
   King-Smith et al. (Nature Chemistry, 2024) "Probing the Chemical Reactome"
   showed that standard random splits are overly optimistic for HTE reaction
   datasets. Component-wise leave-one-out splits (unseen aryl halide, unseen
