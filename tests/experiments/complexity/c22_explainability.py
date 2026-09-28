@@ -513,8 +513,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         feature_counts = {len(sv) for _f, sv in all_shap_values}
         if len(feature_counts) > 1:
             print(f"  Hybrid width differs between folds "
-                  f"{sorted(feature_counts)}; the top-feature listing is the "
-                  f"last fold's, as it is on every run.")
+                  f"{sorted(feature_counts)}; the top-feature listing is fold "
+                  f"{top_feature_fold}'s alone.")
         # If feature_info has an augmentation_info block, note that the by-rep
         # SHAP breakdown does not currently account for augmentation features.
         if feature_info.get('augmentation_info'):
@@ -644,7 +644,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # in the same position in every fold, which the per-fold budget split does
     # not give.
     summary = format_explanation_summary(explanation, max_features=15)
-    print(f"\n  Top features (last fold only):\n{summary}")
+    print(f"\n  Top features (fold {top_feature_fold} only, "
+          f"{'SHAP' if last_fold_shap is not None else 'NOT SHAP: the build importance scores'}):"
+          f"\n{summary}")
 
     # Per-model mean scores
     print(f"\n  Per-model mean scores ({metric_name}):")
@@ -696,8 +698,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                               for k, v in aug_info.items()} if aug_info else {},
         'rep_breakdown': {k: {'n_features': v.get('n_features', 0)}
                           for k, v in rep_breakdown.items()},
-        # Mean over folds of each fold's own representation total, matched to
-        # that fold's own feature map before averaging.
+        # Mean over folds of each fold's SHARE, not its total:
+        # aggregate_importance_by_rep (importance/hybrid.py:434-468) already
+        # divides each fold's per-representation sums by that fold's total.
+        # So this holds the same numbers as shap_share_by_rep below, except
+        # that a fold whose SHAP summed to zero enters here as zeros and is
+        # skipped there. shap_by_rep_std is the spread of those shares.
         'shap_by_rep': shap_by_rep,
         'shap_by_rep_std': shap_by_rep_std,
         # Mean over folds of each representation's SHARE within its fold. Read
