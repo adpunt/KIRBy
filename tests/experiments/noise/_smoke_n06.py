@@ -215,6 +215,18 @@ def test_gp_cap_drops_whole_groups():
     assert dropped2 == 10, dropped2
     assert not (excl2[keep2] >= 100).any(), \
         "a row measured once took a place a repeat group needed"
+    # herg_ki's shape: every ground-truth group is ONE row. 1,412 lone rows,
+    # 13 of them held out and gradable, cap 1,000: all 13 must survive.
+    excl3 = np.arange(1412)
+    prio3 = np.zeros(1412, dtype=bool)
+    prio3[[5, 80, 300, 301, 700, 900, 1000, 1100, 1200, 1300, 1400, 1410,
+           1411]] = True
+    keep3, dropped3, n_first3 = n06._cap_whole_groups(
+        np.arange(1412), excl3, 1000, np.random.RandomState(0),
+        priority=prio3)
+    assert len(keep3) == 1000, len(keep3)
+    assert prio3[keep3].sum() == 13 and dropped3 == 0 and n_first3 == 13, \
+        (prio3[keep3].sum(), dropped3, n_first3)
     print(f"PASS gaussian-process cap: {len(kept_groups)} whole groups kept "
           f"({len(keep)} rows, cap 10), {dropped} of {n_repeat} dropped, none "
           f"split; with 900 lone rows beside 20 groups and a cap of 30, "
