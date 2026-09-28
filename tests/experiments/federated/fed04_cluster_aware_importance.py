@@ -131,6 +131,24 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
     return profiles, feature_infos, cluster_stats
 
 
+def _allocation_profiles(feature_infos):
+    """How many features KIRBy's allocation gave each representation, per cluster.
+
+    extract_importance_profile sums the raw gain of the features each
+    representation contributed. Each representation's gain comes from its
+    own model, fitted on that representation alone, so the sum mixes the
+    allocation with how far that model drove down its own training loss.
+    The allocation is the quantity the docstring asks about: the number of
+    features out of the budget that each representation was given.
+    """
+    out = {}
+    for s, fi in feature_infos.items():
+        alloc = (fi or {}).get('allocation')
+        if isinstance(alloc, dict) and alloc:
+            out[s] = {r: float(n) for r, n in alloc.items()}
+    return out
+
+
 def _run_one(data, config, output_dir, dataset_name, **kwargs):
     """Fed04: Cluster-aware importance."""
     print("\n" + "=" * 70)
@@ -330,7 +348,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             for _s, _n in enumerate(_sizes, 1):
                 _null_indices[_s] = _perm[_cut:_cut + _n]
                 _cut += _n
-            null_profiles, _, null_cluster_stats = _compute_cluster_importance(
+            null_profiles, null_feature_infos, null_cluster_stats = _compute_cluster_importance(
                 train_reps, y_train, _null_indices, K, budget=BUDGET,
                 alloc=_alloc, imp=_imp, int_eval=_int_eval,
                 augs=train_augs, aug_cond=aug_cond,
@@ -341,6 +359,20 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
 
             # ── Phase 3: Compare importance profiles ─────────────────────────
             mean_spearman, pairwise = compare_importance_profiles(profiles)
+            # The same comparison on the allocation itself: features given to
+            # each representation, out of the budget. See _allocation_profiles.
+            alloc_profiles = _allocation_profiles(feature_infos)
+            null_alloc_profiles = _allocation_profiles(null_feature_infos)
+            alloc_spearman, alloc_pairwise = compare_importance_profiles(
+                alloc_profiles)
+            null_alloc_spearman, null_alloc_pairwise = compare_importance_profiles(
+                null_alloc_profiles)
+            _as_str = 'n/a' if alloc_spearman is None else f"{alloc_spearman:.3f}"
+            _nas_str = ('n/a' if null_alloc_spearman is None
+                        else f"{null_alloc_spearman:.3f}")
+            print(f"  Phase 3 mean pairwise Spearman of the allocation "
+                  f"(features per representation): {_as_str}  "
+                  f"(random partition: {_nas_str})")
             _ms_str = 'n/a' if mean_spearman is None else f"{mean_spearman:.3f}"
             _ns_str = 'n/a' if null_spearman is None else f"{null_spearman:.3f}"
             print(f"  Phase 3 mean pairwise Spearman: {_ms_str}  "
@@ -351,8 +383,9 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 rep_rankings[s] = [r for r, _ in ranked]
 
             # ── Phase 3b: Compare the selected features themselves ───────────
-            # The Spearman above ranks representations by how much of the budget
-            # each one won. Two clusters can split 100 features across the same
+            # The first Spearman above ranks representations by the summed gain
+            # of the features each one contributed; the second ranks them by
+            # how much of the budget each one won. Two clusters can split 100 features across the same
             # representations in the same proportions and still take 100 different
             # descriptors and fingerprint bits, and that comparison says so.
             cluster_selections = {
@@ -534,6 +567,17 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     'mean_spearman': mean_spearman,
                     'pairwise': pairwise,
                 }),
+                'allocation_stability': convert_numpy({
+                    'mean_spearman': alloc_spearman,
+                    'pairwise': alloc_pairwise,
+                    'allocations': alloc_profiles,
+                }),
+                'allocation_stability_null': convert_numpy({
+                    'mean_spearman': null_alloc_spearman,
+                    'pairwise': null_alloc_pairwise,
+                    'allocations': null_alloc_profiles,
+                    'partition': 'random, same cluster sizes as K-Means',
+                }),
                 'profile_stability_null': convert_numpy({
                     'mean_spearman': null_spearman,
                     'pairwise': null_pairwise,
@@ -601,6 +645,14 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     null_vals = [v for v in null_vals
                  if isinstance(v, (int, float)) and not np.isnan(v)]
     mean_stability_null = float(np.mean(null_vals)) if null_vals else None
+
+    def _mean_defined(key):
+        vals = [(r.get(key) or {}).get('mean_spearman') for r in headline_records]
+        vals = [v for v in vals
+                if isinstance(v, (int, float)) and not np.isnan(v)]
+        return float(np.mean(vals)) if vals else None
+    mean_alloc_stability = _mean_defined('allocation_stability')
+    mean_alloc_stability_null = _mean_defined('allocation_stability_null')
 
     # ── Which features this dataset prefers, across every fold ───────────
     # Each fold x cluster produced one selection of BUDGET features. Counting
@@ -733,6 +785,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             'global_hybrid': glob_agg,
             'mean_profile_stability': mean_stability,
             'mean_profile_stability_null': mean_stability_null,
+            'mean_allocation_stability': mean_alloc_stability,
+            'mean_allocation_stability_null': mean_alloc_stability_null,
             'smooth_factor_stability': convert_numpy(smooth_factor_stability),
             'n_fallback': convert_numpy(n_fallback_agg),
             'feature_preference': convert_numpy(dataset_feature_preference),
@@ -750,6 +804,10 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Profile stability (mean): {_stab_str}")
     print(f"  Same number over a RANDOM partition of the same cluster sizes: "
           f"{_null_str}")
+    _fmt = lambda v: 'n/a' if v is None else f"{v:.3f}"
+    print(f"  Allocation stability (features per representation), mean "
+          f"pairwise Spearman: {_fmt(mean_alloc_stability)}; random "
+          f"partition: {_fmt(mean_alloc_stability_null)}")
     print(f"  MCC, per-cluster features + per-cluster rows: "
           f"{cond_agg['mcc']['mean']:.3f} ± {cond_agg['mcc']['std']:.3f}")
     print(f"  MCC, per-cluster features + ALL training rows: "
