@@ -586,10 +586,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # NOT more threads, and it is a change to what the residual spread
             # is measured on, so it is not made here.
             #
-            # 11 features per molecule is also a regime where the surrogate can
-            # memorise, which biases the residual spread DOWN and makes the
-            # labels read cleaner than they are. The width is printed so that
-            # is visible beside the number.
+            # About 11 features per molecule (15,081 features over 1,412
+            # molecules in the 2026-09-28 local run, ten representations) is a
+            # regime where the surrogate overfits its training folds. The
+            # residuals are out of fold, so overfitting cannot hide the
+            # held-out labels' noise; it makes the out-of-fold error LARGER,
+            # which biases the residual spread UP and makes the labels read
+            # noisier than they are. (Until 2026-09-28 this comment said the
+            # opposite.) The width is printed so that is visible beside the
+            # number.
             _w = int(X_concat.shape[1])
             print(f"  Stage-0 feature space: {_w} features over "
                   f"{len(labels)} molecules (every representation "
