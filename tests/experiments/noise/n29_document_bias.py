@@ -698,6 +698,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'measured a training molecule in that fold.'),
         'per_fold': {},
     }
+    # within_document_rank is fitted only where xgboost is a downstream model
+    # (the `'xgboost' in cell_models` test below). Say so on the file rather
+    # than leave the arm absent with no reason.
+    if 'xgboost' not in downstream_models:
+        results['arms_not_run'] = {
+            'within_document_rank': ('xgboost is not in the model list '
+                                     f'{downstream_models}; the arm is written '
+                                     'under xgboost only')}
+        print(f"  within_document_rank not run: xgboost is not in "
+              f"{downstream_models}")
 
     # ── Hybrid recipes, one per downstream model (n23's block) ──
     by_model, no_recipe = pool_recipe_per_downstream_model(
