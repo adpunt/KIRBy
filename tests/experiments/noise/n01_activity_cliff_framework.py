@@ -269,7 +269,14 @@ def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k, is_clf=False,
     else:
         sim_cutoff = sim_threshold
 
-    cliff_pair_mask = (sim_matrix >= sim_cutoff) & (delta_y > activity_threshold)
+    # A pair with similarity 0 is never structurally similar. Until 2026-09-28
+    # a percentile cutoff that landed on 0 (fewer than similar_percentile% of
+    # pairs above 0, as on a drug-target set where every cross-protein pair is
+    # 0) made `>= 0` true for EVERY pair, so every label difference above the
+    # threshold became a cliff, and the rows _zero_empty_rows had set to 0
+    # (unparsed SMILES) counted as similar to everything again.
+    cliff_pair_mask = ((sim_matrix >= sim_cutoff) & (sim_matrix > 0)
+                       & (delta_y > activity_threshold))
     np.fill_diagonal(cliff_pair_mask, False)
 
     cliff_mask = cliff_pair_mask.any(axis=1)
