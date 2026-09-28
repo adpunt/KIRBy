@@ -290,6 +290,9 @@ def main():
     # ---- (c) GLOBAL RANKING counterfactual (gain-based, matched budget) ------
     print("\n== (c) global-ranking counterfactual ==", flush=True)
     R["global"] = {}
+    # One gain fit per fold, shared by every budget. It does not depend on B,
+    # and over the whole pool it is the slowest single fit in this file.
+    _global_imp = {}
     for B in BUDGETS:
         g_pf, origin_share, g_width, g_npos = [], [], [], []
         for fi, (tr, va) in enumerate(folds):
@@ -304,9 +307,11 @@ def main():
             # highest raw-variance columns before the gain fit, and over the
             # concatenated pool that cut favoured wide-range features over
             # 0/1 fingerprint bits before any label was looked at.
-            imp = np.asarray(hybrid.compute_feature_importance(
-                {"_": Ctr}, y[tr], method="lightgbm_gain",
-                max_features_lgb=Ctr.shape[1])["_"], dtype=float)
+            if fi not in _global_imp:
+                _global_imp[fi] = np.asarray(hybrid.compute_feature_importance(
+                    {"_": Ctr}, y[tr], method="lightgbm_gain",
+                    max_features_lgb=Ctr.shape[1])["_"], dtype=float)
+            imp = _global_imp[fi]
             # Same rule as the per-representation hybrid (concatenate_features):
             # only features with gain above zero are taken. The zero-gain tail
             # was ordered by column position, so padding with it handed the
