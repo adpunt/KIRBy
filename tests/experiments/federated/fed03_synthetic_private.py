@@ -813,31 +813,44 @@ def _run_herg_source_based(data, config, output_dir, dataset_name,
                              'c9_fed_fit_selected': {}}
 
             def _fed_fit_and_score(Xtr_f, Xte_f):
-                """One model per source; only predictions are combined."""
-                teachers, s_tr, s_te = [None], [None], [None]
+                """One model per source; only predictions are combined.
+
+                DIRTY-LOCAL 2026-09-28. The weights now come from
+                predict_fluid_similarity_ensemble, the function C2 uses,
+                not the _classification variant. That variant min-max
+                scales each source's distances on its own, which is right
+                in fed02 where every source has its own features and wrong
+                here, where every source measures in the same columns.
+                FLuID's annotate_transfer_data puts all sources on one
+                scale; scaling each on its own erases which source is
+                nearer, the one thing the weight exists to carry. It also
+                means C8 is C2 built again (same model, same Morgan bits,
+                same sources), apart from the seed of the 20% reference
+                sample, and the two now differ by that alone.
+                """
+                import pandas as pd_local
+                teachers, s_df = [None], [None]
                 n_trained = 0
                 for _s in range(1, K + 1):
                     _idx = train_silo_indices[_s]
                     if len(_idx) < 5 or len(np.unique(y_train[_idx])) < 2:
                         teachers.append((None,))
-                        s_tr.append(np.empty((0, Xtr_f.shape[1])))
-                        s_te.append(Xte_f)
+                        s_df.append(pd_local.DataFrame({'FP': []}))
                         continue
                     _m = fit_fed_classifier(fed_model, Xtr_f[_idx],
                                             y_train[_idx], seed=fed_seed)
                     teachers.append((_m,))
-                    s_tr.append(Xtr_f[_idx])
-                    s_te.append(Xte_f)
+                    s_df.append(pd_local.DataFrame(
+                        {'FP': list(Xtr_f[_idx])}))
                     n_trained += 1
-                _cls, _prob, _w = \
-                    predict_fluid_similarity_ensemble_classification(
-                        teachers, s_tr, s_te, K, seed=fed_seed)
+                _cls, _prob, _w = predict_fluid_similarity_ensemble(
+                    teachers, s_df, Xte_f, K, seed=fed_seed)
                 _m = compute_clf_metrics(y_test, _cls, _prob)
                 _m['sources_that_trained'] = int(n_trained)
                 _m['n_features'] = int(Xtr_f.shape[1])
                 return _m
 
-            # C7 needs no selection, so it is the same at every width. Record
+            # C8 needs no selection, so it is the same at every width. Record
             # it once per budget anyway so the two tables line up.
             c7 = _fed_fit_and_score(train_fps, test_fps)
             print(f"    C8 all features: MCC={c7['mcc']:.3f}  "
