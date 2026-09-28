@@ -899,7 +899,14 @@ def print_analysis(all_results):
                 best_indiv_rho = rho
                 best_indiv_name = rep_name
 
-        delta = hybrid_rho - best_indiv_rho if not np.isnan(hybrid_rho) else float('nan')
+        # No single representation with a finite Spearman leaves best_indiv_rho
+        # at -inf; the delta against it is then undefined, not +inf. Before
+        # 2026-09-28 that +inf was counted as a hybrid win.
+        if best_indiv_name is None:
+            best_indiv_rho = float('nan')
+        delta = (hybrid_rho - best_indiv_rho
+                 if not (np.isnan(hybrid_rho) or np.isnan(best_indiv_rho))
+                 else float('nan'))
         if not np.isnan(delta) and delta > 0:
             hybrid_wins += 1
         total += 1
