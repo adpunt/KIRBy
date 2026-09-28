@@ -53,8 +53,14 @@ WHAT IS COMPUTED.
                        2026-09-25): the R2 corrected for attenuation.
        r2_threshold    1 - sL2 / Var(true label), with
                        Var(true label) = Var(mean label) - sL2. A model whose
-                       R2 is below this has an out-of-fold error larger than the
-                       average label noise.
+                       R2 AGAINST THE TRUE LABEL (r2_over_reliability) is below
+                       this has an out-of-fold error larger than the average
+                       label noise. Do not compare it with the R2 against the
+                       mean label: that R2 already carries sL2 in its error,
+                       and the verdict can flip (2026-09-28).
+       model_error_vs_label_noise  the same verdict in label units squared:
+                       the mean squared residual minus sL2 is the model's own
+                       error, set beside sL2.
      Each is computed from the direct s2e and from each fitted s2e. The model's
      own out-of-fold R2 against the mean label is written beside them.
      Two estimates that need no model at all:
@@ -303,6 +309,22 @@ def reliability_from(s2e, mean_inv_k, var_y):
                          else float('nan')),
         'variance_of_the_true_label': float(var_true),
     }
+
+
+def _model_error_vs_noise(mse, rel):
+    """The model's own error beside the label noise, label units squared.
+
+    mse is the mean squared residual against the mean label. It is the model's
+    error plus sL2, so the model's error is mse - sL2. The verdict is the same
+    one r2_threshold gives when compared with the R2 against the true label.
+    """
+    sL2 = rel.get('label_noise_variance_sL2', float('nan'))
+    if not (np.isfinite(mse) and np.isfinite(sL2)):
+        return {'model_error': float('nan'), 'label_noise_sL2': float('nan'),
+                'model_error_exceeds_label_noise': None}
+    own = float(mse - sL2)
+    return {'model_error': own, 'label_noise_sL2': float(sL2),
+            'model_error_exceeds_label_noise': bool(own > sL2)}
 
 
 def split_half(values_per_molecule, n_repeats, seed=0,
@@ -692,6 +714,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     **{f: _ratio(r2_model, rel_fit[f]['reliability'])
                        for f in rel_fit}},
                 'mean_squared_residual': float(np.mean(r2)),
+                # The r2_threshold verdict in label units squared (2026-09-28).
+                # The squared residual against the mean label is the model's
+                # own error plus sL2, so the model's error is the difference.
+                'model_error_vs_label_noise': {
+                    f: _model_error_vs_noise(float(np.mean(r2)), rel)
+                    for f, rel in (('direct',
+                                    results['direct']['reliability']),
+                                   *rel_fit.items())},
                 'error_by_count': error_by_count(res, kk),
                 'fits': fits,
                 'reliability_by_fit': rel_fit,
