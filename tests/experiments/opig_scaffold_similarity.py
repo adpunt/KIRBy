@@ -415,10 +415,16 @@ def mode_features(ctx):
         # 'solo' is the choosing half's score, the one greedy saw when it left
         # this feature out; it used to be the reporting half's, beside a
         # correlation and a delta from the choosing half.
+        # The redundancy diagnostic is NaN when there is nothing to correlate
+        # this feature against: greedy chose no feature, or the pair's
+        # correlation is undefined because one of the two rows of squared pair
+        # differences is constant. It was 0.0, which reads as a measured
+        # independence.
+        _corrs = [R[j, c] for c in chosen if np.isfinite(R[j, c])]
         excluded.append(dict(
             feature=NAMES[j], solo=float(solo_fit[j]),
             solo_reporting_half=float(solo[j]),
-            max_corr_with_chosen=float(max((R[j, c] for c in chosen), default=0)),
+            max_corr_with_chosen=float(max(_corrs)) if _corrs else float('nan'),
             delta_if_added=float(score_subset(SDf, chosen + [j], tf, hf)
                                  - greedy_fit_v)))
     return dict(n_pairs_choosing_half=n_fit, n_pairs_reporting_half=n_rep,
