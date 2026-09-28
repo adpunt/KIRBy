@@ -7,8 +7,9 @@ What has to be true before any number n31 writes can be read:
      Gaussian residuals lands on each.
   2. THE INTRACLASS CORRELATION reads high on grouped offsets, near zero on
      independent values, and is refused when no group holds two molecules.
-  3. A SYNTHETIC FLAG SET holds as many molecules as moved, at the precision
-     asked for.
+  3. A SYNTHETIC FLAG SET holds the count it is given (a swept share of the
+     training molecules, never the number moved), at the precision asked
+     for, and says so when the mask is too small to reach it.
   4. THE FOUR OPERATIONS touch the flagged molecules only.
   5. THE BREAK-EVEN PRECISION is the linear crossing, and is refused with a
      reason when the gain never crosses.
@@ -17,7 +18,8 @@ What has to be true before any number n31 writes can be read:
   7. ON TOY DATA the measured AUROC of the signed residual under a shift sits
      near the predicted one.
   8. A FULL RUN writes every arm under a subset condition, no detection and no
-     synthetic arm under gaussian, tail scores on every score, and no level 0.
+     synthetic arm under gaussian, tail scores on every score, and at level 0
+     the detector arms only (changed 2026-09-28: level 0 used to be skipped).
   9. A classification label is skipped, an unknown condition refused, a
      recipe builds the hybrid space, and the metric direction flips under
      spearman.
@@ -148,21 +150,38 @@ def test_flags_and_ops():
     mask[:20] = True
     ok = True
     for q in n31.PRECISIONS:
-        f, rp = n31.synthetic_flags(mask, q, 3)
+        f, rp = n31.synthetic_flags(mask, q, 3, 20)
         ok &= int(f.sum()) == 20 and abs(rp - q) < 1e-9
     check('3. every synthetic set holds 20 molecules at the precision asked', ok)
-    f1, _ = n31.synthetic_flags(mask, 1.0, 0)
-    f2, _ = n31.synthetic_flags(mask, 1.0, 9)
+    f40, rp40 = n31.synthetic_flags(mask, 1.0, 3, 40)
+    check('3a. asked for 40 at precision 1.0 with 20 moved: 40 flagged, '
+          'realised precision 0.5',
+          int(f40.sum()) == 40 and abs(rp40 - 0.5) < 1e-9 and f40[mask].all(),
+          f'{int(f40.sum())} flagged, precision {rp40:.3f}')
+    f1, _ = n31.synthetic_flags(mask, 1.0, 0, 20)
+    f2, _ = n31.synthetic_flags(mask, 1.0, 9, 20)
     check('3b. at precision 1.0 the set is the mask whatever the seed',
           np.array_equal(f1, mask) and np.array_equal(f2, mask))
     rng = np.random.default_rng(2)
     y = rng.normal(size=200)
     p = rng.normal(size=200)
-    flag, _ = n31.synthetic_flags(mask, 0.5, 1)
+    flag, _ = n31.synthetic_flags(mask, 0.5, 1, 20)
     y_r, k_r, w_r = n31.apply_operation('remove', y, flag, p, 0.3)
     y_d, k_d, w_d = n31.apply_operation('downweight', y, flag, p, 0.3)
     y_w, _, _ = n31.apply_operation('rewrite', y, flag, p, 0.3)
     y_b, _, _ = n31.apply_operation('bayes_shrink', y, flag, p, 0.3)
+    # The estimated weight: flagged residuals 3x the unflagged SD give
+    # sigma_n^2 = 9 - 1 = 8 times s_m^2, so w = 8/9.
+    _r = np.ones(10); _f = np.zeros(10, dtype=bool); _f[:2] = True
+    _r[_f] = 3.0
+    check('bayes_shrink estimates its weight from the out-of-fold errors: '
+          'flagged residuals 3x the rest give w = 8/9',
+          abs(n31.estimated_shrink_weight(_r, np.zeros(10), _f) - 8 / 9)
+          < 1e-12,
+          f'{n31.estimated_shrink_weight(_r, np.zeros(10), _f):.6f}')
+    check('with nothing flagged the weight is 0',
+          n31.estimated_shrink_weight(_r, np.zeros(10),
+                                      np.zeros(10, dtype=bool)) == 0.0)
     check('4. remove keeps every unflagged molecule and no flagged one',
           np.array_equal(k_r, ~flag) and w_r is None)
     check('4b. downweight gives 0.25 to the flagged, 1 to the rest',
@@ -219,13 +238,24 @@ def test_measured_near_predicted():
                         for l, p, m in rows))
 
 
+def _base1(res, cond, lvl):
+    """Every per-pass diagnostic record of base_1 at (cond, lvl), keyed
+    '<space key>|<pass>'. The records sit under base_1, or base_1/<model>
+    when the models had separate matrices -- which they do whenever
+    ensure_dprime_models adds svm and the caller's base_reps name no rank for
+    it (2026-09-25). Indexing 'base_1' alone raised KeyError there."""
+    return {f'{ek}|{pk}': r
+            for ek, recs in res['diagnostics'][cond][lvl].items()
+            if ek.split('/')[0] == 'base_1' for pk, r in recs.items()}
+
+
 def test_full_runs():
     print("\nfull runs:")
     models = ['rf', 'lightgbm']
     res = run_it(make_data(), 'toy', models=models,
                  conditions=['outlier_only_p10', 'shift_only_p05', 'gaussian'],
                  levels=[0.0, 1.0], draws=[0], precisions=[0.0, 0.5, 1.0],
-                 flag_seeds=[0, 1])
+                 flag_seeds=[0, 1], flag_shares=[0.2])
     pc = res['per_condition']
     check('8-. spaces base_1 and base_2 ran, and the representations are named',
           res['spaces_run'] == ['base_1', 'base_2']
@@ -235,24 +265,38 @@ def test_full_runs():
           f"{res['spaces_run']}, {res.get('base_reps_by_model')}")
     check('8-b. base_2 is scored too',
           'noisy' in pc['outlier_only_p10']['1']['base_2'])
-    check('8. level 0 is never run', all('0' not in pc[c] for c in pc))
+    # 2026-09-28: level 0 runs, one draw, detector arms only.
+    l0 = pc['outlier_only_p10']['0']['base_1']
+    check('8. level 0 runs the detector arms and no synthetic arm',
+          all(f'detector/share0.2/{o}' in l0 for o in n31.OPERATIONS)
+          and not any(a.startswith('flags_') for a in l0),
+          f'{sorted(l0)[:6]}')
+    # The record sits under base_1, or base_1/<model> when the models had
+    # separate matrices; every one of them is read.
+    d0 = list(_base1(res, 'outlier_only_p10', '0').values())
+    check('8-0. level 0: no detection, and why the synthetic flags are absent',
+          d0 and all('synthetic_flags_not_written_because' in r
+                     and 'detection_abs_residual' not in r for r in d0),
+          f'{len(d0)} records')
     check('8a. no fit raised', not res.get('_errors'),
           str(list((res.get('_errors') or {}).items())[:2]))
     arms = pc['outlier_only_p10']['1']['base_1']
-    want = (['clean', 'noisy'] + [f'detector/{o}' for o in n31.OPERATIONS]
-            + [f'flags_p{q:g}/seed{s}/{o}' for q in (0.0, 0.5, 1.0)
+    want = (['clean', 'noisy']
+            + [f'detector/share0.2/{o}' for o in n31.OPERATIONS]
+            + [f'flags_share0.2_p{q:g}/seed{s}/{o}' for q in (0.0, 0.5, 1.0)
                for s in (0, 1) for o in n31.OPERATIONS])
     missing = [a for a in want if a not in arms]
     check('8b. every arm scored under outlier_only_p10', not missing,
           f'missing {missing[:4]}' if missing else f'{len(want)} arms')
     g = pc['gaussian']['1']['base_1']
     check('8c. gaussian: detector operations run, no synthetic arm',
-          'detector/remove' in g and not any(a.startswith('flags_') for a in g))
-    dg = res['diagnostics']['gaussian']['1']['base_1']
+          'detector/share0.2/remove' in g
+          and not any(a.startswith('flags_') for a in g))
+    dg = _base1(res, 'gaussian', '1')
     check('8d. gaussian: detection and prediction are absent with a reason',
-          all('detection_not_defined_because' in r
-              and 'predicted_auroc' not in r for r in dg.values()))
-    ds = res['diagnostics']['shift_only_p05']['1']['base_1']
+          dg and all('detection_not_defined_because' in r
+                     and 'predicted_auroc' not in r for r in dg.values()))
+    ds = _base1(res, 'shift_only_p05', '1')
     check('8e. shift: prediction, both detections, and residual shape per pass',
           len(ds) == 3 and all(
               np.isfinite(r['predicted_auroc'])
@@ -265,15 +309,22 @@ def test_full_runs():
           all(set(tl[a][m]) == set(arms[a][m]) for a in arms for m in arms[a]))
     syn = res['summary']['per_condition']['outlier_only_p10']['1']['base_1'][
         'per_model']['rf']['synthetic']
-    check('8g. the summary holds a curve per operation',
-          set(syn) == set(n31.OPERATIONS)
-          and all('break_even_precision' in e for e in syn.values()))
+    check('8g. the summary holds a curve per share and operation',
+          set(syn) == {'share0.2'} and set(syn['share0.2']) == set(n31.OPERATIONS)
+          and all('break_even_precision' in e
+                  for e in syn['share0.2'].values()))
+    dr = list(_base1(res, 'outlier_only_p10', '1').values())
+    check('8g2. the flag count is the swept share of training molecules, not '
+          'the number moved',
+          dr and all(r['flag_count_by_share'] == {'0.2': int(round(
+              0.2 * r['training_molecules']))} for r in dr),
+          f'{len(dr)} records')
 
     res_x = run_it(make_data(), 'toy', models=models,
                    base_reps={'rf': ['toy', 'second'],
                               'lightgbm': ['second', 'toy']},
                    conditions=['shift_only_p10'], levels=[1.0], draws=[0],
-                   precisions=[1.0], flag_seeds=[0])
+                   precisions=[1.0], flag_seeds=[0], flag_shares=[0.1])
     dx = res_x['diagnostics']['shift_only_p10']['1']
     sx = res_x['per_condition']['shift_only_p10']['1']['base_1']['noisy']
     check('8h. models with different rank-1 representations get separate '
@@ -330,7 +381,8 @@ def test_the_command_line():
                                       'n31_regime_and_breakeven.py'), '--help'],
         capture_output=True, text=True)
     wanted = ('--dataset', '--conditions', '--levels', '--draws', '--precisions',
-              '--flag-seeds', '--models', '--exp-folds', '--tag')
+              '--flag-seeds', '--flag-shares', '--models', '--exp-folds',
+              '--tag')
     missing = [f for f in wanted if f not in out.stdout]
     check('10. the parser lists every flag',
           out.returncode == 0 and not missing,
@@ -354,6 +406,14 @@ def test_rows_and_checkpoint():
     methods = {x['method'] for x in rows}
     check('the rows name the methods that change the training data',
           {'remove', 'downweight', 'rewrite', 'bayes_shrink'} <= methods, str(sorted(methods)))
+    settings = {x['method_setting'] for x in rows}
+    check('every swept share is written, and no row is marked as using '
+          'injection knowledge (bayes_shrink estimates its weight since '
+          '2026-09-28)',
+          all(any(f'share{sh:g}/' in st for st in settings)
+              for sh in n31.FLAG_SHARES)
+          and not any('uses_injection' in x['method_setting'] for x in rows),
+          f'{len(settings)} settings')
     check('every row carries the direction the dataset\'s metric has',
           all(x['lower_is_better'] is bool(res['lower_is_better'])
               for x in rows), str(res['lower_is_better']))

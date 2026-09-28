@@ -37,26 +37,41 @@ WHAT IS MEASURED, per (condition, level, draw, fold, feature space):
 
 THE BREAK-EVEN PRECISION. `headroom_probe.py` (FINDINGS.md section 9) built flag
 sets whose precision is SET: a chosen share of the flagged molecules is from the
-injector's mask, the rest from outside it. Here the flag set holds as many
-molecules as the injector moved, at precision 0, 0.25, 0.5, 0.75 and 1.0, over
-FLAG_SEEDS draws. Four things are done with it:
+injector's mask, the rest from outside it. Here the flag set holds each share
+in FLAG_SHARES of the training molecules, at precision 0, 0.25, 0.5, 0.75 and
+1.0, over FLAG_SEEDS draws. When the injector moved fewer molecules than the
+precision asks for, the rest come from outside the mask and the realised
+precision, written beside it, is lower. Four things are done with it:
 
   remove           the flagged molecules dropped
   downweight       the flagged molecules weighted 0.25, every other row 1
   rewrite          the flagged labels replaced by the out-of-fold prediction
   bayes_shrink     the flagged labels moved toward the out-of-fold prediction by
-                   w = sigma_n^2 / (sigma_n^2 + s_m^2), both in label units:
-                   sigma_n^2 the realised mean squared injected error on the
-                   moved molecules, s_m^2 the clean-label out-of-fold MSE. This
-                   is the report's H4 weight, handed the injector's own
-                   variance, so it is the most this shrink can do.
+                   w = sigma_n^2 / (sigma_n^2 + s_m^2), the report's H4 weight,
+                   both ESTIMATED from the model's own out-of-fold errors on
+                   the labels as given (owner's decision 2026-09-28): s_m^2 is
+                   the mean squared error on the molecules NOT flagged, and
+                   sigma_n^2 the mean squared error on the flagged ones minus
+                   s_m^2, floored at 0. So w = 1 - s_m^2 / (flagged MSE). No
+                   injected quantity and no clean label enters it. The weight
+                   the injector's own numbers would have given is written
+                   beside it, for evaluation only.
 
 Each is paired against the noisy fit on the same pass. The break-even precision
 is where the mean paired gain crosses zero, interpolated linearly between the
-two precisions either side. It is printed beside the precision the real detector
-reached at the same flag count. The same four operations are also run on the
-REAL detector's flag set (the top k by absolute residual), so its outcome is not
-read off the curve alone.
+two realised precisions either side. It is printed beside the precision the real
+detector reached at the same flag count. The same four operations are also run
+on the REAL detector's flag set (the top k by absolute residual), so its outcome
+is not read off the curve alone.
+
+HOW MANY MOLECULES ARE FLAGGED. Each share in FLAG_SHARES = 0.05, 0.10, 0.20 of
+the training molecules, n24's grid, the same at every condition and level: arms
+detector/share<s>/<op> and flags_share<s>_p<q>/seed<k>/<op>. Owner's decision
+2026-09-28: no method may read what only exists because the noise was injected
+-- how many molecules moved, the condition's nominal share, or the injected
+variance. Until then k was the number the injector moved (a tenth of the
+training molecules under gaussian). Grading a flag set against the mask is
+evaluation and stays.
 
 THE CONDITIONS.
   outlier_only_p05, outlier_only_p10   a share of molecules gets a wider error,
@@ -70,12 +85,15 @@ THE CONDITIONS.
                                        detection, the predicted AUROC and the
                                        synthetic flags are undefined here and
                                        are not written. The detector's own flag
-                                       set is still acted on, at a tenth of the
-                                       training molecules: the case where the
-                                       report says nothing should work.
+                                       set is still acted on at every swept
+                                       share: the case where the report says
+                                       nothing should work.
 
-Levels: the dataset's own dose grid for the registry conditions, zero left out
-because at zero no molecule moved; SHIFT_ONLY_DELTAS_SD for the shifts.
+Levels: the dataset's own dose grid for the registry conditions; 0 followed by
+SHIFT_ONLY_DELTAS_SD for the shifts. Level 0, one draw, is where no molecule
+moved: the detector arms clean the recorded labels, and detection, the predicted
+AUROC and the synthetic flags are not written (nothing moved, so a flag set has
+no precision).
 
 WHAT THE HELD-OUT MOLECULES ARE GRADED AGAINST. `labels[val_idx]`, untouched, in
 every arm. Every scored fit also writes the error on the top and bottom tenth of
@@ -169,9 +187,10 @@ FLAG_SEEDS = (0, 1)
 OPERATIONS = ('remove', 'downweight', 'rewrite', 'bayes_shrink')
 DOWNWEIGHT_TO = 0.25
 
-# Under gaussian every molecule moved. The detector's flag set is then this
-# share of the training molecules.
-EVERY_ROW_FLAG_SHARE = 0.10
+# The share of training molecules every detector and synthetic flag set holds,
+# swept. n24's FLAG_RATES; the same at every condition and level, so no method
+# reads how many molecules the injector moved (owner's decision 2026-09-28).
+FLAG_SHARES = (0.05, 0.10, 0.20)
 
 # Inner folds for the out-of-fold prediction. Same as n19 and n30.
 OOF_SPLITS = 5
@@ -260,19 +279,22 @@ def residual_shape(y, p, groups):
 
 # ── Flag sets and what is done with them ─────────────────────────────────────
 
-def synthetic_flags(mask, precision, seed):
-    """A flag set of |mask| molecules, `precision` of them from the mask.
+def synthetic_flags(mask, precision, seed, k):
+    """A flag set of k molecules, `precision` of them from the mask.
 
     Returns (flag, realised precision). The count from the mask is
-    round(precision * k); the rest come from outside it. When outside holds
-    too few, the set is smaller and the realised precision says so.
+    round(precision * k), capped at the mask's size; the rest come from
+    outside it. When inside holds too few, the realised precision is lower
+    than asked; when outside holds too few, the set is smaller. The realised
+    precision says so either way. k is a swept share of the training
+    molecules, never the mask's size (owner's decision 2026-09-28).
     """
     mask = np.asarray(mask, dtype=bool)
-    k = int(mask.sum())
+    k = int(k)
     rng = np.random.default_rng(int(seed))
     inside = np.flatnonzero(mask)
     outside = np.flatnonzero(~mask)
-    n_in = int(round(float(precision) * k))
+    n_in = min(int(round(float(precision) * k)), inside.size)
     n_out = min(k - n_in, outside.size)
     flag = np.zeros(mask.size, dtype=bool)
     if n_in:
@@ -291,8 +313,29 @@ def detector_flags(abs_residual, k):
     return flag
 
 
-def apply_operation(op, y, flag, p, w_shrink):
-    """(labels, keep, sample_weight) for one operation on one flag set."""
+def estimated_shrink_weight(y, p, flag):
+    """bayes_shrink's weight from the model's own out-of-fold errors.
+
+    s_m^2 = mean squared error on the unflagged molecules (the model's error on
+    ordinary labels); sigma_n^2 = mean squared error on the flagged ones minus
+    s_m^2, floored at 0. w = sigma_n^2 / (sigma_n^2 + s_m^2). Reads only the
+    labels as given and the out-of-fold prediction. 0 when either side is
+    empty.
+    """
+    r2 = (np.asarray(y, dtype=float) - np.asarray(p, dtype=float)) ** 2
+    flag = np.asarray(flag, dtype=bool)
+    if not flag.any() or flag.all():
+        return 0.0
+    s_m2 = float(np.mean(r2[~flag]))
+    flagged = float(np.mean(r2[flag]))
+    sigma_n2 = max(flagged - s_m2, 0.0)
+    return (sigma_n2 / (sigma_n2 + s_m2)) if sigma_n2 + s_m2 > 0 else 0.0
+
+
+def apply_operation(op, y, flag, p, w_shrink=None):
+    """(labels, keep, sample_weight) for one operation on one flag set.
+    bayes_shrink's weight is estimated from this flag set when w_shrink is
+    None, which is how every arm calls it."""
     y = np.asarray(y, dtype=float)
     if op == 'remove':
         return y, ~flag, None
@@ -305,6 +348,8 @@ def apply_operation(op, y, flag, p, w_shrink):
         out[flag] = np.asarray(p, dtype=float)[flag]
         return out, None, None
     if op == 'bayes_shrink':
+        if w_shrink is None:
+            w_shrink = estimated_shrink_weight(y, p, flag)
         out = y.copy()
         out[flag] = ((1.0 - w_shrink) * y[flag]
                      + w_shrink * np.asarray(p, dtype=float)[flag])
@@ -320,7 +365,8 @@ def break_even_precision(precisions, gains):
     stays on.
     """
     pts = [(float(q), float(g)) for q, g in zip(precisions, gains)
-           if g is not None and np.isfinite(g)]
+           if g is not None and np.isfinite(g)
+           and q is not None and np.isfinite(q)]
     pts.sort()
     if len(pts) < 2:
         return None, 'fewer than two precisions scored'
@@ -375,20 +421,20 @@ def _fit_score_cached(dataset_name, model_name, factory, X_tr, y_tr, X_va,
 
 
 def _passes(dataset_name, conditions, levels=None, draws=None):
-    """(condition, level, draw) triples. Level 0 is left out: nothing moved."""
+    """(condition, level, draw) triples. At level 0 nothing moves, so one draw
+    is kept. Level 0 was left out until 2026-09-28, when the flag count stopped
+    being the number moved; at a swept share it cleans the recorded labels."""
     draws = tuple(NOISE_DRAWS if draws is None else draws)
     out = []
     for c in conditions:
         if levels is not None:
             grid = levels
         elif c in SHIFT_ONLY_CONDITIONS:
-            grid = SHIFT_ONLY_DELTAS_SD
+            grid = (0.0,) + tuple(SHIFT_ONLY_DELTAS_SD)
         else:
             grid = noise_levels(dataset_name, strategy=c, is_clf=False)
         for lvl in grid:
-            if float(lvl) <= 0:
-                continue
-            for d in draws:
+            for d in (draws if float(lvl) > 0 else draws[:1]):
                 out.append((c, float(lvl), int(d)))
     return out
 
@@ -423,6 +469,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         raise ValueError(f'n31: unknown condition(s) {unknown}; this file runs '
                          f'{list(CONDITIONS)}')
     precisions = [float(q) for q in (kwargs.get('precisions') or PRECISIONS)]
+    flag_shares = [float(x) for x in (kwargs.get('flag_shares') or FLAG_SHARES)]
     flag_seeds = [int(s) for s in (kwargs.get('flag_seeds') or FLAG_SEEDS)]
     oof_splits = int(kwargs.get('oof_splits', OOF_SPLITS))
 
@@ -451,7 +498,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'flag_seeds': flag_seeds,
         'operations': list(OPERATIONS),
         'downweight_to': DOWNWEIGHT_TO,
-        'every_row_flag_share': EVERY_ROW_FLAG_SHARE,
+        'flag_shares': flag_shares,
+        'flag_share_note': (
+            'Every detector and synthetic flag set holds each share in '
+            'flag_shares of the training molecules, the same at every '
+            'condition and level (owner\'s decision 2026-09-28). The number '
+            'the injector moved is used only to grade a flag set.'),
         'oof_splits': oof_splits,
         'shift_levels_are': 'delta in SDs of the full clean label column',
         'formula_note': (
@@ -462,9 +514,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'in the same fold and feature space. Both assume Gaussian '
             'residuals.'),
         'bayes_shrink_note': (
-            'w = sigma_n^2/(sigma_n^2 + s_m^2) with sigma_n^2 the REALISED mean '
-            'squared injected error on the moved molecules, handed over from '
-            'the injector. No estimate of it is made.'),
+            'w = sigma_n^2/(sigma_n^2 + s_m^2), estimated per flag set from the '
+            'out-of-fold errors on the labels as given: s_m^2 the mean squared '
+            'error on the unflagged molecules, sigma_n^2 the flagged mean '
+            'squared error minus s_m^2, floored at 0 (2026-09-28). '
+            'bayes_shrink_weight_from_injection in the diagnostics is the '
+            'weight the injector would have given, for comparison only.'),
         'features_are_fixed_note': (
             'Each feature space is built once per pass from the NOISY training '
             'labels and shared by every arm, clean included. The recipe was '
@@ -569,7 +624,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     t0 = time.time()
 
     # ── Rows and the per-pass checkpoint (2026-09-25) ──
-    # D is `noisy`; every detector/<op> and flags_p<q>/seed<s>/<op> arm is a
+    # D is `noisy`; every detector/share<s>/<op> and
+    # flags_share<s>_p<q>/seed<k>/<op> arm is a
     # D'; `clean` is score_clean. No arm here reads neighbours: the flags come
     # from the absolute out-of-fold residual or from the injector's mask.
     _metric = (metric_name, metric_fn, lower_is_better)
@@ -581,6 +637,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         condition=kwargs.get('tag'), data=data, config=config,
         source_file=__file__,
         key={'conditions': conditions, 'precisions': precisions,
+             'flag_shares': flag_shares,
              'flag_seeds': flag_seeds, 'oof_splits': oof_splits,
              'passes': passes, 'models': list(downstream_models),
              'base_reps': base_by_model, 'n_splits': n_folds})
@@ -716,11 +773,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         'residual_shape_clean': residual_shape(
                             y_clean_tr, p_clean, ng_tr),
                     }
-                    w_shrink = (sigma_n2 / (sigma_n2 + clean_mse)
-                                if np.isfinite(sigma_n2)
-                                and sigma_n2 + clean_mse > 0 else 0.0)
-                    rec['bayes_shrink_weight'] = float(w_shrink)
-                    if not every_row:
+                    # Evaluation only, never handed to an arm: the weight the
+                    # injector's own variance and the clean labels would give.
+                    rec['bayes_shrink_weight_from_injection'] = float(
+                        sigma_n2 / (sigma_n2 + clean_mse)
+                        if np.isfinite(sigma_n2)
+                        and sigma_n2 + clean_mse > 0 else 0.0)
+                    # At level 0 nothing moved: no detection, no predicted
+                    # AUROC, no synthetic flags. The detector arms still run.
+                    nothing_moved = float(level) <= 0
+                    if nothing_moved:
+                        rec['detection_not_defined_because'] = (
+                            'level 0: no training label moved')
+                        rec['synthetic_flags_not_written_because'] = (
+                            'level 0: no training label moved, so a flag set '
+                            'has no precision to set')
+                    elif not every_row:
                         if is_shift:
                             delta = float(np.mean(disp[mask])) / label_sd
                             rec['realised_shift_label_sd_units'] = delta
@@ -742,13 +810,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             mask, np.abs(resid), condition)
                         rec['detection_signed_residual'] = detection_scores(
                             mask, resid, condition)
-                        k_flag = int(mask.sum())
                     else:
                         rec['detection_not_defined_because'] = (
                             'every training label moved, so no molecule is '
                             'untouched to tell apart')
-                        k_flag = int(round(EVERY_ROW_FLAG_SHARE * len(y0)))
-                    rec['flag_count'] = k_flag
+                    # One flag count per swept share of the training
+                    # molecules, whatever the condition moved.
+                    k_by_share = {sh: int(round(sh * len(y0)))
+                                  for sh in flag_shares}
+                    rec['flag_count_by_share'] = {f'{sh:g}': k for sh, k
+                                                  in k_by_share.items()}
                     (diag.setdefault(condition, {}).setdefault(lvl_key, {})
                      .setdefault(_ekey, {}))[pass_key] = rec
 
@@ -756,24 +827,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # arm -> (labels, keep, weight).
                     cols = {'clean': (y_clean_tr, None, None),
                             'noisy': (y0, None, None)}
-                    if k_flag > 0:
+                    det_prec = {}
+                    for sh, k_flag in k_by_share.items():
+                        if k_flag <= 0:
+                            continue
                         dflag = detector_flags(np.abs(resid), k_flag)
+                        if not every_row and not nothing_moved:
+                            # Evaluation only: how many of the flagged
+                            # molecules the injector moved.
+                            det_prec[f'{sh:g}'] = float(mask[dflag].mean())
                         for op in OPERATIONS:
-                            cols[f'detector/{op}'] = apply_operation(
-                                op, y0, dflag, p, w_shrink)
-                    if not every_row and k_flag > 0:
+                            cols[f'detector/share{sh:g}/{op}'] = (
+                                apply_operation(op, y0, dflag, p))
+                    if det_prec:
+                        rec['detector_precision_by_share'] = det_prec
+                    if not every_row and not nothing_moved:
                         realised = {}
-                        for q in precisions:
-                            for s in flag_seeds:
-                                seed = zlib.crc32(
-                                    f'{q}|{s}|{condition}|{lvl_key}|{pass_key}'
-                                    .encode()) & 0x7FFFFFFF
-                                flag, rp = synthetic_flags(mask, q, seed)
-                                realised[f'p{q:g}/seed{s}'] = rp
-                                for op in OPERATIONS:
-                                    cols[f'flags_p{q:g}/seed{s}/{op}'] = (
-                                        apply_operation(op, y0, flag, p,
-                                                        w_shrink))
+                        for sh, k_flag in k_by_share.items():
+                            if k_flag <= 0:
+                                continue
+                            for q in precisions:
+                                for s in flag_seeds:
+                                    seed = zlib.crc32(
+                                        f'{sh}|{q}|{s}|{condition}|{lvl_key}|'
+                                        f'{pass_key}'.encode()) & 0x7FFFFFFF
+                                    flag, rp = synthetic_flags(mask, q, seed,
+                                                               k_flag)
+                                    realised[f'share{sh:g}/p{q:g}/seed{s}'] = rp
+                                    for op in OPERATIONS:
+                                        cols[f'flags_share{sh:g}_p{q:g}/'
+                                             f'seed{s}/{op}'] = (
+                                            apply_operation(op, y0, flag, p))
                         rec['synthetic_realised_precision'] = realised
 
                     sc_cell = (acc.setdefault(condition, {})
@@ -815,7 +899,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             if sP is None:
                                 continue
                             rows.add(method=arm.rsplit('/', 1)[-1],
-                                     method_setting=arm,
+                                     method_setting=_arm_setting(arm),
                                      similarity_setting=NO_NEIGHBOURS,
                                      model_input=space, model=mname,
                                      noise_condition=condition,
@@ -846,7 +930,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         sample_weight=tw.get('sample_weight'))
                                     rows.add(
                                         method=arm.rsplit('/', 1)[-1],
-                                        method_setting=f'{arm}|control={cname}',
+                                        method_setting=(f'{_arm_setting(arm)}'
+                                                        f'|control={cname}'),
                                         similarity_setting=NO_NEIGHBOURS,
                                         model_input=space, model=mname,
                                         noise_condition=condition,
@@ -874,7 +959,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['_errors'] = errors
     results['summary'] = convert_numpy(_summarise(
         acc, diag, downstream_models, precisions, flag_seeds, metric_name,
-        lower_is_better))
+        lower_is_better, flag_shares))
     results['rows'] = rows.summary()
     results['controls_run'] = bool(controls_enabled())
     _print_summary(results, metric_name)
@@ -882,6 +967,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"{rows.path or 'memory'}")
     ckpt.clear()
     return results
+
+
+def _arm_setting(arm):
+    """The rows' method_setting for an arm: the arm name. (Until 2026-09-28
+    bayes_shrink rows carried |uses_injection_knowledge; its weight is now
+    estimated from the model's errors.)"""
+    return arm
 
 
 def _paired(base, got, lower_is_better):
@@ -910,10 +1002,14 @@ def _mean(vals):
 
 
 def _summarise(acc, diag, models, precisions, flag_seeds, metric_name,
-               lower_is_better):
-    """Per (condition, level, space, model): the detector ops, the synthetic
-    curve and its break-even precision, beside the predicted and measured
-    detector numbers for the same space."""
+               lower_is_better, flag_shares=FLAG_SHARES):
+    """Per (condition, level, space, model, flag share): the detector ops, the
+    synthetic curve and its break-even precision, beside the predicted and
+    measured detector numbers for the same space.
+
+    The break-even is interpolated on the mean REALISED precision of each
+    point: at a share larger than the moved set, precision 1.0 cannot be
+    reached and the realised value is what the curve was measured at."""
     out = {'metric': metric_name, 'lower_is_better': bool(lower_is_better),
            'headline': ('every gain is paired against the noisy fit on the '
                         'same pass; a pass is one (draw, fold)'),
@@ -947,6 +1043,11 @@ def _summarise(acc, diag, models, precisions, flag_seeds, metric_name,
                         r['residual_shape_noisy'].get('excess_kurtosis')
                         for r in drecs.values()),
                     'n_pass_records': len(drecs),
+                    'detector_precision_by_share_mean': {
+                        f'{sh:g}': _mean(
+                            (r.get('detector_precision_by_share') or {}).get(
+                                f'{sh:g}') for r in drecs.values())
+                        for sh in flag_shares},
                 }
                 srow = {'detection': det, 'per_model': {}}
                 noisy = by_arm.get('noisy') or {}
@@ -960,45 +1061,57 @@ def _summarise(acc, diag, models, precisions, flag_seeds, metric_name,
                            'clean_vs_noisy': _paired(b, clean.get(m) or {},
                                                      lower_is_better),
                            'detector_ops': {}, 'synthetic': {}}
-                    for op in OPERATIONS:
-                        g = (by_arm.get(f'detector/{op}') or {}).get(m) or {}
-                        if g:
-                            row['detector_ops'][op] = _paired(
-                                b, g, lower_is_better)
-                    for op in OPERATIONS:
-                        curve = {}
-                        for q in precisions:
-                            gains = []
-                            n_paired = 0
-                            for s in flag_seeds:
-                                g = ((by_arm.get(f'flags_p{q:g}/seed{s}/{op}')
-                                      or {}).get(m) or {})
-                                if not g:
-                                    continue
-                                pr = _paired(b, g, lower_is_better)
-                                gains += pr['pass_gains']
-                                n_paired += pr['n_passes_paired']
-                            if n_paired:
-                                curve[f'{q:g}'] = {
-                                    'mean_gain': _mean(gains),
-                                    'spread_over_pass_gains': (
-                                        float(np.std(gains)) if gains
-                                        else float('nan')),
-                                    'n_paired': n_paired,
-                                    'passes_won': int(sum(x > 0 for x in gains)),
-                                }
-                        if not curve:
-                            continue
-                        qs = [float(k) for k in curve]
-                        be, why = break_even_precision(
-                            qs, [curve[k]['mean_gain'] for k in curve])
-                        row['synthetic'][op] = {
-                            'curve': curve,
-                            'break_even_precision': be,
-                            'break_even_refused_because': why,
-                            'detector_precision_at_k_mean': det[
-                                'detector_precision_at_k_mean'],
-                        }
+                    for sh in flag_shares:
+                        shk = f'share{sh:g}'
+                        for op in OPERATIONS:
+                            g = (by_arm.get(f'detector/{shk}/{op}')
+                                 or {}).get(m) or {}
+                            if g:
+                                row['detector_ops'].setdefault(shk, {})[op] = (
+                                    _paired(b, g, lower_is_better))
+                        for op in OPERATIONS:
+                            curve = {}
+                            for q in precisions:
+                                gains = []
+                                n_paired = 0
+                                for s in flag_seeds:
+                                    g = ((by_arm.get(
+                                        f'flags_{shk}_p{q:g}/seed{s}/{op}')
+                                          or {}).get(m) or {})
+                                    if not g:
+                                        continue
+                                    pr = _paired(b, g, lower_is_better)
+                                    gains += pr['pass_gains']
+                                    n_paired += pr['n_passes_paired']
+                                if n_paired:
+                                    curve[f'{q:g}'] = {
+                                        'mean_gain': _mean(gains),
+                                        'spread_over_pass_gains': (
+                                            float(np.std(gains)) if gains
+                                            else float('nan')),
+                                        'n_paired': n_paired,
+                                        'passes_won': int(sum(x > 0
+                                                              for x in gains)),
+                                        'realised_precision_mean': _mean(
+                                            (r.get('synthetic_realised_precision')
+                                             or {}).get(f'{shk}/p{q:g}/seed{s}')
+                                            for r in drecs.values()
+                                            for s in flag_seeds),
+                                    }
+                            if not curve:
+                                continue
+                            be, why = break_even_precision(
+                                [curve[k]['realised_precision_mean']
+                                 for k in curve],
+                                [curve[k]['mean_gain'] for k in curve])
+                            row['synthetic'].setdefault(shk, {})[op] = {
+                                'curve': curve,
+                                'break_even_precision': be,
+                                'break_even_refused_because': why,
+                                'detector_precision_at_this_share_mean': det[
+                                    'detector_precision_by_share_mean'].get(
+                                        f'{sh:g}'),
+                            }
                     srow['per_model'][m] = row
                 lrow[space] = srow
             crow[lvl] = lrow
@@ -1025,15 +1138,20 @@ def _print_summary(results, metric_name):
                 for m, row in srow['per_model'].items():
                     print(f"      {m}: noisy {row['noisy_mean']:.4f}, clean "
                           f"{row['clean_mean']:.4f}")
-                    for op, e in row['detector_ops'].items():
-                        print(f"        detector flags, {op:12s} won "
-                              f"{e['passes_won']} of {e['n_passes_paired']} "
-                              f"passes, mean {e['mean_gain']:+.4f}")
-                    for op, e in row['synthetic'].items():
-                        be = e['break_even_precision']
-                        print(f"        break-even precision, {op:12s} "
-                              + (f"{be:.2f}" if be is not None
-                                 else f"none ({e['break_even_refused_because']})"))
+                    for shk, by_op in row['detector_ops'].items():
+                        for op, e in by_op.items():
+                            print(f"        detector flags {shk}, {op:12s} won "
+                                  f"{e['passes_won']} of "
+                                  f"{e['n_passes_paired']} passes, mean "
+                                  f"{e['mean_gain']:+.4f}")
+                    for shk, by_op in row['synthetic'].items():
+                        for op, e in by_op.items():
+                            be = e['break_even_precision']
+                            print(f"        break-even precision {shk}, "
+                                  f"{op:12s} "
+                                  + (f"{be:.2f}" if be is not None
+                                     else f"none "
+                                          f"({e['break_even_refused_because']})"))
     print("\n  A mean gain no larger than the spread of the per-pass gains "
           "behind it is not a gain.")
 
@@ -1053,6 +1171,10 @@ def main():
                         help='Comma-separated synthetic flag precisions')
     parser.add_argument('--flag-seeds', type=str, default=None,
                         help='Comma-separated synthetic flag draws (default 0,1)')
+    parser.add_argument('--flag-shares', type=str, default=None,
+                        help='Comma-separated shares of training molecules '
+                             'flagged (default '
+                             f'{",".join(f"{x:g}" for x in FLAG_SHARES)})')
     parser.add_argument('--exp-folds', type=int, default=None,
                         help='Outer folds. Overrides the 1 or 5 --mode gives')
     parser.add_argument('--tag', type=str, default=None,
@@ -1074,6 +1196,8 @@ def main():
         kw['precisions'] = [float(x) for x in args.precisions.split(',')]
     if args.flag_seeds:
         kw['flag_seeds'] = [int(x) for x in args.flag_seeds.split(',')]
+    if args.flag_shares:
+        kw['flag_shares'] = [float(x) for x in args.flag_shares.split(',')]
 
     res = run(data, config, args.output, args.dataset, **kw)
     suffix = 'all' if not args.conditions else args.conditions.replace(',', '+')

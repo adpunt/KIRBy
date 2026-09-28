@@ -69,8 +69,10 @@ a method; the functions named are called.
   n30  winsorise at every WINSOR_C; under censoring the three lift columns
        (n30.lift_columns without its shuffled controls).
   n31  remove / downweight / rewrite on the top-residual molecules
-       (n31.detector_flags, n31.apply_operation).
-  n32  itlm at every alpha, two_learner_exchange, shrink_flagged (both columns).
+       (n31.detector_flags, n31.apply_operation), at every share in
+       FLAG_SHARES of the training molecules.
+  n32  itlm at every alpha, two_learner_exchange and shrink_flagged (both
+       columns) at every share in FLAG_SHARES.
   n33  invvar_ngboost weights and c_mixup (D' holds 2n rows).
   n35  downweight_pairs in the model input's own distance and in every
        similarity setting's full training distance (FoldSimilarity.full_distance).
@@ -167,6 +169,13 @@ REGRESSION_ONLY_FAMILIES = ('n30', 'n31', 'n32', 'n33', 'n35', 'n41')
 # grids together, (0.01, 0.05, 0.1, 0.2).
 FLAG_RATES = tuple(sorted(set(float(r) for r in n24.FLAG_RATES)
                           | set(float(r) for r in n25.FLAG_RATES)))
+
+# The shares of training molecules the flag-count methods of n31 and n32 flag:
+# n24.FLAG_RATES, the grid n31.FLAG_SHARES and n32.FLAG_SHARES also sweep. The
+# same at every condition and level. Until 2026-09-28 this was one share per
+# condition, the condition's nominal share; owner's decision 2026-09-28 is that
+# no method may read what only exists because the noise was injected.
+FLAG_SHARES = tuple(float(r) for r in n24.FLAG_RATES)
 
 # The flag rate handed to a cleanup that does not read one (n25.reads_flag_rate
 # says which). n07's own default noise_fraction (n07:2303). It changes nothing
@@ -273,20 +282,6 @@ def _rows_added_dict(X_new, y_new):
     controls.random_twin and shuffled_twin write no twin for it."""
     return {'X': np.asarray(X_new), 'y': np.asarray(y_new),
             'sample_weight': None, 'keep': None, 'label_column': None}
-
-
-def _nominal_share(condition, level):
-    """The share of training molecules the flag-count methods (n31, n32) flag.
-
-    n32.FLAG_SHARE for the conditions that damage a subset; the level for
-    censoring, as n32 does (n32:1488-1489); n31.EVERY_ROW_FLAG_SHARE for a
-    condition that moves every label, as n31 does for gaussian.
-    """
-    if condition in n32.FLAG_SHARE:
-        return float(n32.FLAG_SHARE[condition])
-    if condition == 'censoring':
-        return float(level)
-    return float(n31.EVERY_ROW_FLAG_SHARE)
 
 
 def _n07_cleanups(is_clf):
@@ -699,33 +694,32 @@ def _fam_n30(u, sim):
 
 
 def _fam_n31(u, sim):
-    """TODO(similarity-sweep 2026-09-25): n31 flags as many molecules as the
-    injector actually moved (n31:745, k_flag = mask.sum()), which reads the
-    corruption. Here the count is the nominal share (_nominal_share)."""
+    """n31's detector flag set at every share in FLAG_SHARES, the same at every
+    condition and level (owner's decision 2026-09-28), as n31 now does."""
     p = u.p()
     if p is None:
         return
-    share = _nominal_share(u.condition, u.level)
-    k = int(round(share * len(u.y0)))
-    if k <= 0:
-        return
-    flag = n31.detector_flags(np.abs(np.asarray(u.y0, dtype=float) - p), k)
-    for op in ('remove', 'downweight', 'rewrite'):
-        try:
-            lab, keep, w = n31.apply_operation(op, u.y0, flag, p, 0.0)
-            if keep is not None:
-                d = _keep_dict(u.X_tr, u.y0, keep)
-            elif w is not None:
-                d = n07.cleaned_from_weights(u.X_tr, u.y0, w)
-            else:
-                d = n07.cleaned_from_labels(u.X_tr, lab)
-        except Exception as exc:
-            u.errors.add(f'n31/{op}', exc)
-            d = None
-        u.emit('n31', f'detector/{op}',
-               f'flag_share={share:g}|downweight_to={n31.DOWNWEIGHT_TO:g}'
-               if op == 'downweight' else f'flag_share={share:g}',
-               n07.NO_NEIGHBOURS, d)
+    for share in FLAG_SHARES:
+        k = int(round(share * len(u.y0)))
+        if k <= 0:
+            continue
+        flag = n31.detector_flags(np.abs(np.asarray(u.y0, dtype=float) - p), k)
+        for op in ('remove', 'downweight', 'rewrite'):
+            try:
+                lab, keep, w = n31.apply_operation(op, u.y0, flag, p, 0.0)
+                if keep is not None:
+                    d = _keep_dict(u.X_tr, u.y0, keep)
+                elif w is not None:
+                    d = n07.cleaned_from_weights(u.X_tr, u.y0, w)
+                else:
+                    d = n07.cleaned_from_labels(u.X_tr, lab)
+            except Exception as exc:
+                u.errors.add(f'n31/{op}', exc)
+                d = None
+            u.emit('n31', f'detector/{op}',
+                   f'flag_share={share:g}|downweight_to={n31.DOWNWEIGHT_TO:g}'
+                   if op == 'downweight' else f'flag_share={share:g}',
+                   n07.NO_NEIGHBOURS, d)
 
 
 def _fam_n32(u, sim):
@@ -733,7 +727,6 @@ def _fam_n32(u, sim):
     if p is None:
         return
     y0 = np.asarray(u.y0, dtype=float)
-    share = _nominal_share(u.condition, u.level)
     for a in n32.ITLM_ALPHAS:
         key = {'X': nc.array_hash(u.X_tr), 'y': nc.array_hash(y0),
                'groups': nc.array_hash(u.g_tr), 'alpha': float(a),
@@ -751,35 +744,40 @@ def _fam_n32(u, sim):
         u.emit('n32', 'itlm', f'alpha={float(a):g}|rounds={n32.ITLM_ROUNDS}',
                n07.NO_NEIGHBOURS, d)
 
-    d = None
-    try:
-        lf = u.learner_factories
-        la, lb = n32.EXCHANGE_LEARNERS[0], n32.EXCHANGE_LEARNERS[1]
-        key = {'X': nc.array_hash(u.X_tr), 'y': nc.array_hash(y0),
-               'groups': nc.array_hash(u.g_tr), 'share_kept': 1.0 - share,
-               'rounds': int(n32.EXCHANGE_ROUNDS),
-               'oof_splits': int(n32.OOF_SPLITS),
-               'a': nc.model_signature(lf[la]()),
-               'b': nc.model_signature(lf[lb]())}
-        both = nc.cached(u.ds, 'n42_two_learner_keep', key, lambda: np.asarray(
-            n32.two_learner_exchange(u.X_tr, y0, u.g_tr, lf[la], lf[lb],
-                                     1.0 - share,
-                                     oof_splits=n32.OOF_SPLITS)[0], dtype=bool))
-        d = _keep_dict(u.X_tr, y0, both)
-    except Exception as exc:
-        u.errors.add('n32/two_learner', exc)
-    u.emit('n32', 'two_learner', f'share_kept={1.0 - share:g}',
-           n07.NO_NEIGHBOURS, d)
+    # two_learner and the flagged-only shrinks at every share in FLAG_SHARES,
+    # the same at every condition and level (owner's decision 2026-09-28).
+    for share in FLAG_SHARES:
+        d = None
+        try:
+            lf = u.learner_factories
+            la, lb = n32.EXCHANGE_LEARNERS[0], n32.EXCHANGE_LEARNERS[1]
+            key = {'X': nc.array_hash(u.X_tr), 'y': nc.array_hash(y0),
+                   'groups': nc.array_hash(u.g_tr), 'share_kept': 1.0 - share,
+                   'rounds': int(n32.EXCHANGE_ROUNDS),
+                   'oof_splits': int(n32.OOF_SPLITS),
+                   'a': nc.model_signature(lf[la]()),
+                   'b': nc.model_signature(lf[lb]())}
+            both = nc.cached(
+                u.ds, 'n42_two_learner_keep', key,
+                lambda share=share: np.asarray(n32.two_learner_exchange(
+                    u.X_tr, y0, u.g_tr, lf[la], lf[lb], 1.0 - share,
+                    oof_splits=n32.OOF_SPLITS)[0], dtype=bool))
+            d = _keep_dict(u.X_tr, y0, both)
+        except Exception as exc:
+            u.errors.add('n32/two_learner', exc)
+        u.emit('n32', 'two_learner', f'share_kept={1.0 - share:g}',
+               n07.NO_NEIGHBOURS, d)
 
-    try:
-        one, per, _rec = n32.shrink_flagged(y0, p, share)
-    except Exception as exc:
-        u.errors.add('n32/shrink_flagged', exc)
-        one = per = None
-    for name, col in (('shrink_flagged_one_weight', one),
-                      ('shrink_flagged_per_row', per)):
-        u.emit('n32', name, f'share={share:g}', n07.NO_NEIGHBOURS,
-               None if col is None else n07.cleaned_from_labels(u.X_tr, col))
+        try:
+            one, per, _rec = n32.shrink_flagged(y0, p, share)
+        except Exception as exc:
+            u.errors.add('n32/shrink_flagged', exc)
+            one = per = None
+        for name, col in (('shrink_flagged_one_weight', one),
+                          ('shrink_flagged_per_row', per)):
+            u.emit('n32', name, f'share={share:g}', n07.NO_NEIGHBOURS,
+                   None if col is None
+                   else n07.cleaned_from_labels(u.X_tr, col))
 
 
 def _fam_n33(u, sim):
@@ -1256,6 +1254,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'families_run': list(families),
         'families_skipped': skipped_families,
         'flag_rates': list(FLAG_RATES),
+        'flag_shares_n31_n32': list(FLAG_SHARES),
         'n07_detectors': list(N07_DETECTORS),
         'methods_not_run': METHODS_NOT_RUN,
         'covered_by_another_family': COVERED_BY_ANOTHER_FAMILY,

@@ -243,7 +243,23 @@ def test_full_runs():
     s = res['summary']['per_level']['2']['base_1']['rf']['per_arm']
     check('6f. ITLM and the exchange are paired against their random controls',
           len(s['itlm_a0.9']['vs_random_removal']) == 2
-          and len(s['two_learner']['vs_random_removal']) == 2)
+          and all(len(s[f'two_learner_share{sh:g}']['vs_random_removal']) == 2
+                  for sh in n32.FLAG_SHARES))
+    # Owner's decision 2026-09-28: the flagged share is swept, never the
+    # condition's own share. Every swept share is scored at level 0 too.
+    check('6g. two_learner and both shrinks run at every swept share, level 0 '
+          'included',
+          all(f'{a}_share{sh:g}' in res['per_level'][lv]['base_1']
+              for sh in n32.FLAG_SHARES for lv in ('0', '2')
+              for a in ('two_learner', 'shrink_flagged_one_weight',
+                        'shrink_flagged_per_row')))
+    recs_s = res['method_records']['2']['base_1']
+    check('6h. the shrink flags the swept share of training molecules, not '
+          'the count the injector moved',
+          all(r[f'shrink_flagged_share{sh:g}']['molecules_flagged']
+              == r['training_molecules']
+              - int(round((1 - sh) * r['training_molecules']))
+              for r in recs_s for sh in n32.FLAG_SHARES))
     check('7. at level 0 nothing moved and no detection is written',
           '0' not in (res['detection'] or {}))
 
@@ -370,7 +386,7 @@ def test_rows_resume_and_sweep():
     check('17. with KIRBY_NOISE_CONTROLS=1 every data-changing arm has a random '
           'and a shuffled twin row',
           {'itlm_a0.9|random_twin', 'itlm_a0.9|shuffled_twin',
-           'shrink_flagged_one_weight|random_twin'} <= meths,
+           'shrink_flagged_one_weight_share0.1|random_twin'} <= meths,
           f'{len(crow)} rows')
 
 
@@ -423,7 +439,8 @@ def test_the_command_line():
                                       'n32_iterative_and_dual_selection.py'),
          '--help'], capture_output=True, text=True)
     wanted = ('--dataset', '--noise-condition', '--levels', '--draws',
-              '--alphas', '--detectors', '--random-seeds', '--models',
+              '--alphas', '--detectors', '--random-seeds', '--flag-shares',
+              '--models',
               '--exp-folds', '--tag')
     missing = [f for f in wanted if f not in out.stdout]
     check('11. the parser lists every flag',

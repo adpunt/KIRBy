@@ -72,14 +72,23 @@ has neither. Paired against `plain_mean`.
   weights_n19_fitted             plain_mean labels, weight 1 / (sigma_u^2 +
                                  sigma_e^2 / k) with both read off n19's
                                  regression of squared out-of-fold error on 1/k.
-  weights_rho_hat                plain_mean labels, weight 1 / (sd2_hat + v_i),
-                                 v_i = sigma_e^2 [rho_hat + (1 - rho_hat)/k_i]
-                                 + tau_hat^2 / k_i, tau_hat^2 the variance of the
-                                 fitted offsets, sd2_hat the mean squared
-                                 out-of-fold error minus mean(v_i), floored.
-                                 Uses the injected sigma_e.
-  offset_removed_rho_hat_weights offset_removed labels, the same weight without
-                                 the tau term.
+  weights_within_var             plain_mean labels, weight 1 / (sd2_hat + v_i),
+                                 v_i = (s_w^2 + tau_hat^2) / k_i: s_w^2 the
+                                 within-molecule variance after offset removal,
+                                 tau_hat^2 the variance of the fitted offsets.
+                                 sd2_hat is the mean squared out-of-fold error
+                                 minus mean(v_i), floored, so it carries the
+                                 model error AND the shared part rho sigma_e^2,
+                                 which is exactly the sum the weight needs.
+                                 Estimated from the labels and the model's
+                                 errors only (owner's decision 2026-09-28).
+                                 Until then this arm was weights_rho_hat and
+                                 read the injected sigma_e.
+  offset_removed_within_var_weights
+                                 offset_removed labels, the same weight without
+                                 the tau term, with sd2_hat from the out-of-fold
+                                 error on the offset-removed labels. Was
+                                 offset_removed_rho_hat_weights.
   weights_rho0_oracle            plain_mean labels, weight from the TRUE
                                  sigma_e, tau and model error, with rho set to 0.
   weights_true_rho_oracle        the same with the true rho. The ceiling.
@@ -202,7 +211,7 @@ MIXEDLM_MAX_ROWS = 20000
 MODEL_ERROR_FLOOR_FRAC = 0.01
 
 ARMS = ('clean', 'plain_mean', 'offset_removed', 'weights_n19_fitted',
-        'weights_rho_hat', 'offset_removed_rho_hat_weights',
+        'weights_within_var', 'offset_removed_within_var_weights',
         'weights_rho0_oracle', 'weights_true_rho_oracle')
 ARM_TO_BEAT = 'plain_mean'
 
@@ -584,9 +593,11 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         'rho_identifiability_note': (
             'rho is not identifiable from the labels alone: the shared error '
             'is the same in every source of a molecule. rho_hat = 1 - s_w^2 / '
-            'sigma_e^2 uses the injected sigma_e, the stand-in for a published '
-            'per-measurement error. The weights depend on rho only through '
-            'a + b/k.'),
+            'sigma_e^2 uses the injected sigma_e, so it is written as a '
+            'diagnostic and no arm uses it (2026-09-28). The weights depend on '
+            'rho only through a + b/k: weights_within_var takes b from the '
+            'within-molecule variance and a from the model\'s out-of-fold '
+            'error.'),
         'oracle_arms_note': (
             'weights_rho0_oracle and weights_true_rho_oracle use the true '
             'sigma_e, tau and rho, and a model error read off an out-of-fold '
@@ -827,6 +838,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
             try:
                 b_hat, s_w2, oinfo = fit_offsets(mol_t, src_t, val_t, N_SOURCES,
                                                  method=offset_method)
+                # rho_hat reads the injected sigma_e, so it is a DIAGNOSTIC
+                # only (how well the sources recover rho); no arm uses it.
                 r_hat = rho_hat_from(s_w2, sigma_e)
                 used = np.unique(src_t)
                 y_off = (np.bincount(mol_t, weights=val_t - b_hat[src_t],
@@ -839,8 +852,9 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                                                                 used)})
             except Exception as exc:
                 errors[f'{ck}|{lk}|{pk}|offsets'] = f'{type(exc).__name__}: {exc}'
-                y_off = r_hat = None
+                y_off = r_hat = s_w2 = None
                 tau2_hat = 0.0
+            s_w2_ok = s_w2 is not None and np.isfinite(s_w2)
             est.setdefault(ck, {}).setdefault(lk, []).append(erec)
 
             ctx = fold_ctx(fold_i, train_idx, val_idx)
@@ -861,18 +875,24 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                         if su2 is not None:
                             cols['weights_n19_fitted'] = (
                                 y_pl, inverse_variance_weights(su2, se2 / k_tr))
-                        if r_hat is not None and np.isfinite(r_hat):
-                            v = rho_aware_variance(sigma_e, r_hat, k_tr, tau2_hat)
+                        # 2026-09-28: no injected sigma_e. The per-molecule
+                        # variance is read off the sources (s_w2, tau2_hat) and
+                        # the rest off the model's out-of-fold error; the
+                        # shared part rho sigma_e^2 cannot be told apart from
+                        # the model error, and does not need to be, because the
+                        # weight only needs their sum.
+                        if s_w2_ok:
+                            v = (s_w2 + tau2_hat) / np.asarray(k_tr, dtype=float)
                             sd2, _ = subtracted_model_error(y_pl, p_pl, v)
-                            cols['weights_rho_hat'] = (
+                            cols['weights_within_var'] = (
                                 y_pl, weights_from_variance(sd2, v))
                         if y_off is not None:
                             cols['offset_removed'] = (y_off, None)
-                            if r_hat is not None and np.isfinite(r_hat):
+                            if s_w2_ok:
                                 p_off = oof_fn(X_tr_s, y_off, g_tr)
-                                v0 = rho_aware_variance(sigma_e, r_hat, k_tr)
+                                v0 = s_w2 / np.asarray(k_tr, dtype=float)
                                 sd2o, _ = subtracted_model_error(y_off, p_off, v0)
-                                cols['offset_removed_rho_hat_weights'] = (
+                                cols['offset_removed_within_var_weights'] = (
                                     y_off, weights_from_variance(sd2o, v0))
                         cols['weights_rho0_oracle'] = (y_pl, weights_from_variance(
                             sd2_clean, rho_aware_variance(sigma_e, 0.0, k_tr,
@@ -911,7 +931,7 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                     # ── Controls (KIRBY_NOISE_CONTROLS=1): each arm that
                     # changed the plain_mean labels or their weights. ──
                     # TODO(similarity-sweep 2026-09-25):
-                    # offset_removed_rho_hat_weights changes the labels AND
+                    # offset_removed_within_var_weights changes the labels AND
                     # the weights at once; controls.py twins one change, so
                     # it has no twin until the owner says which the control
                     # should move (arm_result returns None for it).

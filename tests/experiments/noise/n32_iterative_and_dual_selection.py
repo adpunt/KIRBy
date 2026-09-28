@@ -77,7 +77,7 @@ labels.
                             the same NUMBER of molecules removed at random. The
                             control, for n24's reason: a smaller training set is
                             a different fit, and sometimes a better one.
-  two_learner               lightgbm and svm (the suite's own factories). Each
+  two_learner_share<s>      lightgbm and svm (the suite's own factories). Each
                             scores every molecule out of fold; each hands the
                             other its lowest-loss share; each refits on what it
                             was handed and rescores; 2 exchange rounds. Every
@@ -86,10 +86,12 @@ labels.
                             both would keep. The union was the other option; with
                             the two learners agreeing on most molecules it would
                             remove almost nothing. How far the two flagged sets
-                            agree is written as counts.
-  two_learner_random/seed<k>
+                            agree is written as counts. Each learner flags the
+                            share s of the training molecules and keeps 1 - s.
+  two_learner_share<s>_random/seed<k>
                             the same number removed at random.
-  shrink_flagged_one_weight the flagged share (the top of |y - p|) moved toward p
+  shrink_flagged_one_weight_share<s>
+                            the share s (the top of |y - p|) moved toward p
                             by ONE weight w = sn^2 / (sn^2 + sm^2). sm^2 is the
                             mean square of y - p over the UNFLAGGED molecules;
                             sn^2 is how far the flagged molecules' mean square
@@ -97,15 +99,19 @@ labels.
                             variances: a one-direction shift has a small
                             variance and a large mean square. Both are estimated from the
                             corrupted labels; the injector's size is NOT read.
-  shrink_flagged_per_row    the same flagged share, each molecule with its own
+  shrink_flagged_per_row_share<s>
+                            the same flagged share, each molecule with its own
                             w_i = max(r_i^2 - sm^2, 0) / (max(r_i^2 - sm^2, 0)
                             + sm^2).
 
-THE FLAGGED SHARE is the condition's NOMINAL share (FLAG_SHARE below), what a
-user who knew the condition would ask for. It is not the realised count of moved
-molecules, which a user cannot see. Under grouped_wider the nominal share is of
-scaffold GROUPS, so the molecule share differs, and the realised count is
-written beside it.
+THE FLAGGED SHARE s is swept over FLAG_SHARES = 0.05, 0.10, 0.20 of the
+training molecules, the grid n24 uses (its FLAG_RATES), the same at every
+condition and level. Owner's decision 2026-09-28: no method may read what only
+exists because the noise was injected -- how many molecules moved, the
+condition's nominal share, or the injected variance. A real user knows none of
+them. Until then the share was the condition's nominal share (FLAG_SHARE
+below); FLAG_SHARE is now only written beside the results, for reading, and
+never reaches a method. ITLM's alphas were already a fixed grid.
 
 TAIL SCORES. Every scored fit also writes `tail_scores`: rmse on the held-out
 molecules whose clean label is in the top and the bottom tenth, and the
@@ -162,7 +168,8 @@ from experiments.noise.noise_helpers import (
     pool_recipe_per_downstream_model, group_models_by_recipe,
     detection_scores, detection_is_defined, tail_scores, sweep_conditions,
     DETECTION_IS_DEFINED, SHIFT_ONLY_CONDITIONS, SHIFT_ONLY_DELTAS_SD,
-    inject_shift_train_labels,
+    inject_shift_train_labels, RELATIVE_CONDITIONS, relative_levels,
+    inject_relative_train_labels, oof_residual_sd,
 )
 from experiments.noise.n07_remediation import _predict_for_metric
 from kirby.noise_spec import GROUPED_STRATEGIES
@@ -173,15 +180,28 @@ from kirby.utils.noisy_labels.core import (
 
 DEFAULT_NOISE_CONDITION = 'outlier_only_p10'
 
-# The nominal share of molecules each condition damages. See the docstring.
+# The nominal share of molecules each condition damages. Written into the
+# results for reading only; no method reads it (owner's decision 2026-09-28).
 FLAG_SHARE = {
     'outlier_p01': 0.01, 'outlier_p05': 0.05, 'outlier_p10': 0.10,
     'outlier_only_p01': 0.01, 'outlier_only_p05': 0.05,
     'outlier_only_p10': 0.10,
     'grouped_wider': 0.20,
     **SHIFT_ONLY_CONDITIONS,
+    # 2026-09-27. The six sparse_dprime_* conditions were added to
+    # DETECTION_IS_DEFINED after this table was written, so a run naming no
+    # condition wrote 10 files and then raised on the first of them. Each moves
+    # the share of molecules carried in its own definition in noiseInject.
+    **{c: float(v['share']) for c, v in RELATIVE_CONDITIONS.items()
+       if c.startswith('sparse_dprime')},
 }
 # censoring's share is its level, the fraction clipped.
+
+# The share of training molecules two_learner and the flagged-only shrinks
+# flag, swept. n24's FLAG_RATES; the same at every condition and level, so no
+# method reads how many molecules the injector moved (owner's decision
+# 2026-09-28).
+FLAG_SHARES = (0.05, 0.10, 0.20)
 
 NOISE_DRAWS = (0, 1, 2)
 ITLM_ALPHAS = (0.8, 0.9, 0.95)
@@ -1187,14 +1207,17 @@ def random_keep(n, n_remove, seed):
     return keep
 
 
-def build_arm_names(alphas, seeds):
+def build_arm_names(alphas, seeds, shares=FLAG_SHARES):
     out = ['clean', 'no_cleaning']
     for a in alphas:
         out.append(f'itlm_a{a:g}')
         out += [f'itlm_a{a:g}_random/seed{s}' for s in seeds]
-    out.append('two_learner')
-    out += [f'two_learner_random/seed{s}' for s in seeds]
-    out += ['shrink_flagged_one_weight', 'shrink_flagged_per_row']
+    for sh in shares:
+        out.append(f'two_learner_share{sh:g}')
+        out += [f'two_learner_share{sh:g}_random/seed{s}' for s in seeds]
+    for sh in shares:
+        out += [f'shrink_flagged_one_weight_share{sh:g}',
+                f'shrink_flagged_per_row_share{sh:g}']
     return out
 
 
@@ -1219,6 +1242,9 @@ def _levels_and_draws(dataset_name, condition, levels=None, draws=None):
     if levels is None:
         if condition in SHIFT_ONLY_CONDITIONS:
             levels = (0.0,) + tuple(SHIFT_ONLY_DELTAS_SD)
+        elif condition in RELATIVE_CONDITIONS:
+            # Sizes in residual SDs (1, 2, 4), 0 included -- n41's grid.
+            levels = relative_levels(condition)
         else:
             levels = noise_levels(dataset_name, strategy=condition,
                                   is_clf=False)
@@ -1278,8 +1304,6 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             f"n32: condition {condition!r} moves every training label, so there "
             f"is no damaged subset to find. Run it under one of: "
             f"{', '.join(DETECTION_IS_DEFINED)}.")
-    if condition not in FLAG_SHARE and condition != 'censoring':
-        raise ValueError(f"n32: no nominal flag share for {condition!r}")
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_folds = config['n_splits']
@@ -1290,7 +1314,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     detectors = list(kwargs.get('detectors') or DETECTORS)
     oof_splits = int(kwargs.get('oof_splits', OOF_SPLITS))
     itlm_rounds = int(kwargs.get('itlm_rounds', ITLM_ROUNDS))
-    arm_names = build_arm_names(alphas, seeds)
+    flag_shares = [float(x) for x in (kwargs.get('flag_shares') or FLAG_SHARES)]
+    arm_names = build_arm_names(alphas, seeds, flag_shares)
 
     downstream_models = downstream_model_list(kwargs, config)
     model_factories = get_model_factories(
@@ -1325,14 +1350,20 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'noise_condition': condition,
         'dose_units': ('label SDs of upward shift'
                        if condition in SHIFT_ONLY_CONDITIONS
+                       else ('residual SDs: lightgbm out-of-fold residual on '
+                             "the fold's clean training labels, in "
+                             'resid_sd_rep')
+                       if condition in RELATIVE_CONDITIONS
                        else noise_dose_units(dataset_name)),
         'nominal_flag_share': FLAG_SHARE.get(condition,
                                              'the level (fraction clipped)'),
-        'nominal_flag_share_note': (
-            'The share every flag-based method removes or shrinks is the '
-            "condition's NOMINAL share, not the realised count of moved "
-            'molecules. Under grouped_wider the nominal share is of scaffold '
-            'groups.'),
+        'flag_shares': flag_shares,
+        'flag_share_note': (
+            'two_learner and the flagged-only shrinks flag each share in '
+            'flag_shares of the training molecules, the same at every '
+            'condition and level (owner\'s decision 2026-09-28). '
+            'nominal_flag_share is the condition\'s own share, written for '
+            'reading only; no method reads it.'),
         'noise_draws': list(NOISE_DRAWS if kwargs.get('draws') is None
                             else kwargs['draws']),
         'models': downstream_models,
@@ -1422,6 +1453,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             reps=reps, dataset_name=dataset_name)
     results['base_reps_by_model'] = base_by_model
     results['base_reps_missing'] = base_missing
+    # The one representation a relative condition's residual SD is measured
+    # in: the first model's rank-1 single representation, the same choice n40
+    # and n41 make. Not signed off by the owner; recorded so it can be read.
+    _ref_model = next((m for m in downstream_models if base_by_model.get(m)),
+                      None)
+    resid_sd_rep = base_by_model[_ref_model][0] if _ref_model else None
+    if condition in RELATIVE_CONDITIONS:
+        results['resid_sd_rep'] = resid_sd_rep
+        results['resid_sd_rep_chosen_as'] = (
+            f'rank-1 single representation of {_ref_model}, the first '
+            f'downstream model that has one' if _ref_model else
+            'none: no downstream model has a single representation, so no '
+            'residual SD can be measured and nothing is injected')
     base_spaces_run = tuple(
         f'base_{k}' for k in range(1, NOISE_BASE_REP_COUNT + 1)
         if base_rank_groups(base_by_model, k, downstream_models))
@@ -1485,9 +1529,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
     for level, draw in passes:
         lvl_key = f'{level:g}'
-        share = (FLAG_SHARE[condition] if condition in FLAG_SHARE
-                 else float(level))
         spec = (None if condition in SHIFT_ONLY_CONDITIONS
+                or condition in RELATIVE_CONDITIONS
                 else noise_spec_for(dataset_name, condition, level,
                                     noise_seed=draw, is_clf=False))
         print(f"\n  --- {condition} / level {lvl_key} / draw {draw} ---")
@@ -1505,6 +1548,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     y0, cmask, prov = inject_shift_train_labels(
                         labels, train_idx=train_idx, condition=condition,
                         delta_sd=level, seed=draw * 1000 + fold_i)
+                elif condition in RELATIVE_CONDITIONS:
+                    if resid_sd_rep is None:
+                        raise RuntimeError(results['resid_sd_rep_chosen_as'])
+                    s_r, _ = oof_residual_sd(
+                        StandardScaler().fit_transform(np.asarray(
+                            reps[resid_sd_rep][train_idx], dtype=np.float64)),
+                        y_clean_tr, groups=g_tr, n_splits=OOF_SPLITS)
+                    y0, cmask, prov = inject_relative_train_labels(
+                        labels, train_idx=train_idx, condition=condition,
+                        level=level, seed=draw * 1000 + fold_i, resid_sd=s_r)
                 else:
                     y0, cmask, prov = inject_train_labels(
                         labels, spec, train_idx=train_idx, is_clf=False,
@@ -1570,8 +1623,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     _ekey = (space if cell_models == list(downstream_models)
                              else f'{space}/{cell_models[0]}')
                     rec = {'pass': pass_key, 'training_molecules': n_tr,
-                           'molecules_moved': int(cmask.sum()),
-                           'nominal_flag_share': share}
+                           'molecules_moved': int(cmask.sum())}
 
                     try:
                         # The out-of-fold LightGBM target, cached on the label
@@ -1635,32 +1687,38 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                             rk = random_keep(n_tr, n_rm, replicate_seed(
                                 s, lvl_key, draw, fold_i, n_tr, n_rm))
                             cols[f'itlm_a{a:g}_random/seed{s}'] = (y0, rk)
-                    try:
-                        both, xrec, xloss = two_learner_exchange(
-                            X_tr_s, y0, g_tr,
-                            learner_factories[EXCHANGE_LEARNERS[0]],
-                            learner_factories[EXCHANGE_LEARNERS[1]],
-                            1.0 - share, oof_splits=oof_splits)
-                        cols['two_learner'] = (y0, both)
-                        n_rm = int(n_tr - both.sum())
-                        xrec['moved_molecules_among_the_removed'] = int(
-                            np.sum(cmask & ~both))
-                        xrec['detection_by_larger_of_the_two_losses'] = (
-                            detection_scores(cmask, xloss, condition))
-                        rec['two_learner'] = xrec
-                        for s in seeds:
-                            rk = random_keep(n_tr, n_rm, replicate_seed(
-                                'x', s, lvl_key, draw, fold_i, n_tr, n_rm))
-                            cols[f'two_learner_random/seed{s}'] = (y0, rk)
-                    except Exception as exc:
-                        errors[f'{lvl_key}|{_ekey}|two_learner|f{fold_i}'] = (
-                            f'{type(exc).__name__}: {exc}')
-                    if p is not None:
-                        one, per, srec = shrink_flagged(y0, p, share)
-                        rec['shrink_flagged'] = srec
-                        if one is not None:
-                            cols['shrink_flagged_one_weight'] = (one, None)
-                            cols['shrink_flagged_per_row'] = (per, None)
+                    # Each swept share of the training molecules, not the
+                    # condition's own share (owner's decision 2026-09-28).
+                    for sh in flag_shares:
+                        tl_arm = f'two_learner_share{sh:g}'
+                        try:
+                            both, xrec, xloss = two_learner_exchange(
+                                X_tr_s, y0, g_tr,
+                                learner_factories[EXCHANGE_LEARNERS[0]],
+                                learner_factories[EXCHANGE_LEARNERS[1]],
+                                1.0 - sh, oof_splits=oof_splits)
+                            cols[tl_arm] = (y0, both)
+                            n_rm = int(n_tr - both.sum())
+                            xrec['moved_molecules_among_the_removed'] = int(
+                                np.sum(cmask & ~both))
+                            xrec['detection_by_larger_of_the_two_losses'] = (
+                                detection_scores(cmask, xloss, condition))
+                            rec[tl_arm] = xrec
+                            for s in seeds:
+                                rk = random_keep(n_tr, n_rm, replicate_seed(
+                                    'x', s, lvl_key, draw, fold_i, n_tr, n_rm))
+                                cols[f'{tl_arm}_random/seed{s}'] = (y0, rk)
+                        except Exception as exc:
+                            errors[f'{lvl_key}|{_ekey}|{tl_arm}|f{fold_i}'] = (
+                                f'{type(exc).__name__}: {exc}')
+                        if p is not None:
+                            one, per, srec = shrink_flagged(y0, p, sh)
+                            rec[f'shrink_flagged_share{sh:g}'] = srec
+                            if one is not None:
+                                cols[f'shrink_flagged_one_weight_share{sh:g}'] = (
+                                    one, None)
+                                cols[f'shrink_flagged_per_row_share{sh:g}'] = (
+                                    per, None)
 
                     rec_acc.setdefault(lvl_key, {}).setdefault(
                         _ekey, []).append(rec)
@@ -1735,7 +1793,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         results['_errors'] = errors
     results['summary'] = convert_numpy(_summarise(
         acc, tail_acc, arm_names, downstream_models, alphas, seeds,
-        metric_name, lower_is_better))
+        metric_name, lower_is_better, shares=flag_shares))
     _print_summary(results, metric_name)
     return results
 
@@ -1810,7 +1868,7 @@ def _tail_row(tails_arm, tails_base):
 
 
 def _summarise(acc, tail_acc, arm_names, models, alphas, seeds, metric_name,
-               lower_is_better):
+               lower_is_better, shares=FLAG_SHARES):
     """Every arm against no_cleaning; each removal arm against its randoms."""
     out = {'metric': metric_name, 'lower_is_better': bool(lower_is_better),
            'headline': ('passes won against no_cleaning, paired per pass; a '
@@ -1818,7 +1876,9 @@ def _summarise(acc, tail_acc, arm_names, models, alphas, seeds, metric_name,
            'per_level': {}}
     removal = {f'itlm_a{a:g}': [f'itlm_a{a:g}_random/seed{s}' for s in seeds]
                for a in alphas}
-    removal['two_learner'] = [f'two_learner_random/seed{s}' for s in seeds]
+    for sh in shares:
+        removal[f'two_learner_share{sh:g}'] = [
+            f'two_learner_share{sh:g}_random/seed{s}' for s in seeds]
     for lvl, by_space in acc.items():
         lrow = {}
         for space, by_arm in by_space.items():
@@ -1922,6 +1982,10 @@ def main():
                              f'{",".join(DETECTORS)})')
     parser.add_argument('--random-seeds', type=str, default=None,
                         help='Comma-separated random-removal replicates')
+    parser.add_argument('--flag-shares', type=str, default=None,
+                        help='Comma-separated shares of training molecules '
+                             'two_learner and the shrinks flag (default '
+                             f'{",".join(f"{x:g}" for x in FLAG_SHARES)})')
     parser.add_argument('--exp-folds', type=int, default=None,
                         help='Outer folds. Overrides the 1 or 5 --mode gives')
     parser.add_argument('--tag', type=str, default=None,
@@ -1945,6 +2009,8 @@ def main():
         kw['detectors'] = [x.strip() for x in args.detectors.split(',')]
     if args.random_seeds:
         kw['random_seeds'] = [int(x) for x in args.random_seeds.split(',')]
+    if args.flag_shares:
+        kw['flag_shares'] = [float(x) for x in args.flag_shares.split(',')]
 
     if args.tag:
         # A tagged run is a one-off: one condition, written under the tag.

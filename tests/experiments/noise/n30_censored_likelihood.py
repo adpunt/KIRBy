@@ -41,7 +41,12 @@ reached through `noise_helpers.inject_train_labels`:
     the result file. Asking for more draws with --draws repeats the same fit.
 
 WHICH ROWS COUNT AS CLIPPED. The rows whose label equals the limit, which is what
-a practitioner holding only the recorded labels can see. That is not always the
+a practitioner holding only the recorded labels can see. Since 2026-09-28 the
+limit itself is read off the training labels too (`limit_from_labels`: the
+largest label, when at least 1% of training molecules and at least 2 sit on
+it), never from the injector; the injector's limit is written beside it for
+evaluation only. So level 0.0 runs the lift and drop arms too wherever the
+recorded labels already pile on their top value. That is not always the
 injector's mask: on a coarsely recorded assay some labels sat ON the limit before
 the clip and were never moved (`core.py:782-815`). Both counts are written for
 every pass, `molecules_at_the_limit` and `molecules_the_clip_moved`.
@@ -239,6 +244,24 @@ def build_arm_names(winsor_c, shuffle_seeds):
     out += ['truncated_normal_mean', 'drop_clipped']
     out += [f'winsor_c{c:g}' for c in winsor_c]
     return out
+
+
+# 2026-09-28, owner's decision: the limit is read off the recorded training
+# labels, never off the injector. A user holding clipped labels sees many of
+# them piled on one top value. The largest training label counts as a limit
+# when at least this share of training molecules (and at least 2) sit exactly
+# on it; otherwise there is no limit and the lift and drop arms do not run.
+MIN_SHARE_AT_LIMIT = 0.01
+
+
+def limit_from_labels(y, min_share=MIN_SHARE_AT_LIMIT, tol=1e-12):
+    """The upper limit a user would read off the labels, or None."""
+    y = np.asarray(y, dtype=float)
+    if y.size == 0:
+        return None
+    top = float(np.max(y))
+    n_at = int(np.sum(y >= top - tol))
+    return top if n_at >= max(2, int(np.ceil(min_share * y.size))) else None
 
 
 def rows_at_limit(y_clipped, limit, tol=1e-12):
@@ -660,13 +683,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     f'{type(exc).__name__}: {exc}')
                 continue
             y0 = np.asarray(y0, dtype=float)
-            limit = prov.get('censoring_limit') if level > 0 else None
-            limit = (float(limit) if limit is not None
-                     and np.isfinite(float(limit)) else None)
+            limit = limit_from_labels(y0)
+            # Evaluation only: the injector's own limit, never handed to an arm.
+            _inj = prov.get('censoring_limit') if level > 0 else None
+            _inj = (float(_inj) if _inj is not None
+                    and np.isfinite(float(_inj)) else None)
             at = rows_at_limit(y0, limit)
             n_tr = int(len(y0))
             clip_rec = {
                 'pass': pass_key, 'limit': limit,
+                'limit_read_from': 'the training labels (limit_from_labels)',
+                'limit_from_injector_for_evaluation': _inj,
                 'training_molecules': n_tr,
                 'molecules_at_the_limit': int(at.sum()),
                 'molecules_the_clip_moved': int(np.sum(cmask)),
