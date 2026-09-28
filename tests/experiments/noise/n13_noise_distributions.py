@@ -1483,7 +1483,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # that model's blueprint on the NOISY labels. This is the
                     # hybrid candidate the fold_reselection helper compares against
                     # the base-rep baseline arm. Identical blueprints across
-                    # models share one create_hybrid build via _hyb_space_cache.
+                    # models shared one build until 2026-09-28; see _cache_key.
                     _hyb_space_cache = {}  # bp_sig -> (X_tr_s, X_va_s) or None
                     for mname, mfactory in model_factories.items():
                         _bp_m = bp_by_model.get(mname)
@@ -1497,7 +1497,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         _obj_m = objective_by_model.get(mname)
                         _sig = f"{_obj_m}|{_bp_sig(_bp_m)}"
                         reselected_hyb_name[mname] = _sig
-                        if _sig not in _hyb_space_cache:
+                        # A prediction-built recipe is rebuilt with THIS model
+                        # handed in, and allocate_performance_weighted scores
+                        # each representation with it, so the budget split is
+                        # the model's own. Until 2026-09-28 the cache key was
+                        # the recipe alone, so every model after the first
+                        # reused the first model's features. A similarity
+                        # recipe takes no model and is still built once.
+                        _cache_key = (_sig if _obj_m == OBJECTIVE_SIMILARITY
+                                      else f"{_sig}|model={mname}")
+                        if _cache_key not in _hyb_space_cache:
                             try:
                                 _augc_m = aug_by_model.get(mname, 'uncapped')
                                 if _augc_m != 'none' and augmentations:
@@ -1527,12 +1536,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     groups=(groups[fd['train_idx']] if groups is not None else None),
                                     **_obj_kw)
                                 _sc_h = StandardScaler()
-                                _hyb_space_cache[_sig] = (
+                                _hyb_space_cache[_cache_key] = (
                                     _sc_h.fit_transform(_Xh_tr),
                                     _sc_h.transform(_Xh_va))
                             except Exception:
-                                _hyb_space_cache[_sig] = None
-                        _built = _hyb_space_cache[_sig]
+                                _hyb_space_cache[_cache_key] = None
+                        _built = _hyb_space_cache[_cache_key]
                         if _built is None:
                             continue
                         _Xh_tr_s, _Xh_va_s = _built
