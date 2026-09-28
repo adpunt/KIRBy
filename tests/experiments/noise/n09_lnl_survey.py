@@ -1181,8 +1181,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     results['retention_schema'] = (
         'Each entry has {delta_from_clean: noisy-clean, score_ratio_pct: '
         'ratio*100 when both sides are positive else NaN — a plain ratio, may '
-        'exceed 100 when denoising beats the clean baseline}. Prefer delta '
-        'for direction-robust comparison.')
+        'exceed 100 when denoising beats the clean baseline}. delta is NOT '
+        'sign-normalised: on a lower_is_better metric (rmse) a positive delta '
+        'means the noisy score is worse, on a higher-is-better one (auc, '
+        'spearman) it means better. score_ratio_pct is flipped for '
+        'lower_is_better, so above 100 means better in both directions.')
 
     # =========================================================================
     # THE HEADLINE, 2026-09-27 (owner's decision): each method against the
