@@ -41,59 +41,61 @@ except ImportError:
 
 
 def _nogueira_stability(feature_sets, total_features):
-    """Compute Nogueira et al. (2018) stability index from per-fold feature sets.
+    """Nogueira et al. (2018) stability index from per-fold feature sets.
 
     Args:
         feature_sets: list of sets, each containing (rep_name, feature_idx) tuples.
-        total_features: int, total number of features available.
+        total_features: int, the number of features the selector could choose
+            from (d in the paper). Features no fold selected contribute zero
+            to the sum below, so only the selected ones need a column.
 
     Returns:
-        (phi, se): stability index in [-1, 1] and standard error.
+        (phi, se): stability index and its standard error.
         phi=1 means identical selection every fold.
 
     Reference:
         Nogueira, Sechidis & Brown (2018). "On the Stability of Feature
-        Selection Algorithms." JMLR 18(174), 1-54.
+        Selection Algorithms." JMLR 18(174), 1-54. Estimator and variance as
+        in the authors' reference code (getStability, getVarianceofStability).
+
+    ⛔ FIXED 2026-09-28. This divided by d once too often and took d as the
+    number of features ANY fold selected, not the number available. The
+    first made phi 1 - (1 - true phi) / d, so it read about 0.99 whatever
+    the folds did. The standard error was not the paper's either.
     """
     M = len(feature_sets)
-    if M < 2 or total_features == 0:
+    d = int(total_features)
+    if M < 2 or d == 0:
         return float('nan'), float('nan')
 
-    # Build unified feature index from all selected features across folds
-    all_features = set()
-    for fs in feature_sets:
-        all_features.update(fs)
-    all_features = sorted(all_features)
-    feat_to_idx = {f: i for i, f in enumerate(all_features)}
-    d = len(all_features)
-
-    if d == 0:
+    selected = sorted(set().union(*feature_sets))
+    if not selected:
         return float('nan'), float('nan')
-
-    # Binary matrix Z: M x d
-    Z = np.zeros((M, d), dtype=float)
+    col = {f: i for i, f in enumerate(selected)}
+    Z = np.zeros((M, len(selected)), dtype=float)
     for i, fs in enumerate(feature_sets):
         for f in fs:
-            if f in feat_to_idx:
-                Z[i, feat_to_idx[f]] = 1.0
+            Z[i, col[f]] = 1.0
 
-    k_bar = Z.sum(axis=1).mean()
-    if k_bar == 0 or k_bar == d:
+    p_f = Z.mean(axis=0)                 # selection frequency, selected features
+    k = Z.sum(axis=1)                    # features selected on each fold
+    k_bar = float(p_f.sum())             # mean features selected per fold
+    denom = (k_bar / d) * (1 - k_bar / d)
+    if denom <= 0:
         return float('nan'), float('nan')
 
-    p_f = Z.mean(axis=0)
-    numerator = (M / (M - 1)) * np.sum(p_f * (1 - p_f))
-    denominator = d * k_bar * (1 - k_bar / d)
+    # (1/d) * sum over ALL d features; unselected features add 0.
+    s2_mean = (M / (M - 1)) * float(np.sum(p_f * (1 - p_f))) / d
+    phi = 1 - s2_mean / denom
 
-    if denominator == 0:
-        return float('nan'), float('nan')
-
-    phi = 1 - numerator / denominator
-    var_terms = p_f * (1 - p_f)
-    se = np.sqrt((4 / (M * d**2 * (k_bar * (1 - k_bar / d))**2)) *
-                 np.sum(var_terms**2)) if M > 2 else float('nan')
-
-    return float(phi), float(se)
+    # Per-fold terms of the variance estimator (mean over all d features).
+    phi_i = np.array([
+        (1 / denom) * (float(Z[i] @ p_f) / d - k[i] * k_bar / d ** 2
+                       + (phi / 2) * (2 * k[i] * k_bar / d ** 2
+                                      - k[i] / d - k_bar / d + 1))
+        for i in range(M)])
+    var = (4 / M ** 2) * float(np.sum((phi_i - phi_i.mean()) ** 2))
+    return float(phi), float(np.sqrt(var))
 
 
 def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
@@ -825,8 +827,9 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             results['feature_stability']['nogueira_phi'] = nogueira_phi
             results['feature_stability']['nogueira_se'] = nogueira_se
             if not np.isnan(nogueira_phi):
-                # SE can be NaN when M<=2 folds (Nogueira formula needs M>2);
-                # writing NaN to JSON is not a valid value, so skip the CI.
+                # SE is NaN when phi is undefined; writing NaN to JSON is not
+                # a valid value, so skip the CI. With 3 folds the variance
+                # estimate rests on 3 per-fold terms and the CI is rough.
                 if not np.isnan(nogueira_se):
                     ci_lo = nogueira_phi - 1.96 * nogueira_se
                     ci_hi = nogueira_phi + 1.96 * nogueira_se
@@ -835,7 +838,7 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
                           f"(95% CI: [{ci_lo:.3f}, {ci_hi:.3f}])")
                 else:
                     print(f"    Nogueira stability (level=0): phi={nogueira_phi:.3f} "
-                          f"(CI undefined: requires M>2 folds)")
+                          f"(CI undefined)")
 
         # Feature stability across noise levels (compare level=0 features to each level)
         if features_by_level.get(0.0):
