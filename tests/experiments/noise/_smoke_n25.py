@@ -10,7 +10,8 @@ the paired difference the experiment reports cannot be read.
   2. PUT BACK EVERYTHING AND THE CLEANING IS UNDONE. A full exempt mask
      reproduces the labels, the weights and the rows the fold started with.
   3. THE THREE SHAPES ARE ALL RESTORED. A cleanup that deletes a row puts the
-     row back, one that lowers a weight sets it to 1, one that rewrites a label
+     row back, one that lowers a weight sets it to the untouched level (the
+     largest weight in the column), one that rewrites a label
      restores the label -- and the molecules NOT exempted keep exactly what the
      cleanup gave them.
   4. THE COUNT OF MOLECULES PUT BACK COUNTS ONLY EXEMPT MOLECULES THE CLEANUP
@@ -184,6 +185,13 @@ def test_put_back():
             check(f'{cleanup}: an exempt molecule\'s weight is the same as '
                   f'every other exempt molecule\'s',
                   float(w1[exempt].max() - w1[exempt].min()) < 1e-12)
+            # An exempt molecule gets the weight of a molecule the cleanup did
+            # not lower -- the largest in the column -- not 1.0, which after
+            # the cleanup's own mean-1 normalisation sits below that level.
+            check(f'{cleanup}: an exempt molecule\'s weight is the untouched '
+                  f'level, the largest weight in the column',
+                  bool(np.isclose(w1[exempt][0], float(np.max(w1)))),
+                  f'{float(w1[exempt][0]):.4f} against {float(np.max(w1)):.4f}')
         if plain.get('keep') is not None:
             check(f'{cleanup}: an exempt molecule is never deleted',
                   bool(np.all(some['keep'][exempt])),
@@ -242,7 +250,7 @@ def test_run_base_only():
                cleanups=['remove', 'downweight', 'knn_smooth'],
                flag_rates=[0.10], base_reps={'rf': ['toy', 'second']})
 
-    check('the run is not dropped', 'summary' in r)
+    check('the run is not dropped', 'per_level' in r)
     check('it records that no hybrid was available, and why',
           r['hybrid_available'] is False
           and 'precomputed pool' in r['hybrid_unavailable_reason'])
@@ -251,10 +259,15 @@ def test_run_base_only():
     check('which representations they are is recorded',
           r['base_reps_by_model'] == {'rf': ['toy', 'second']},
           str(r.get('base_reps_by_model')))
-    check('one model means one matrix per space, named by the space',
-          r['feature_matrices'] == {'base_1': {'rf': 'base_1'},
-                                    'base_2': {'rf': 'base_2'}},
-          str(r.get('feature_matrices')))
+    # ensure_dprime_models adds svm to a run asked for rf alone, so rf does
+    # not hold every matrix and each one is named '<space>/rf'. A matrix is
+    # named by the space alone only when every downstream model shares it.
+    _mk = {sp: (sp if list(r['models']) == ['rf'] else f'{sp}/rf')
+           for sp in ('base_1', 'base_2')}
+    check('each matrix is named by its space, and by rf when rf does not '
+          'hold every model',
+          r['feature_matrices'] == {sp: {'rf': _mk[sp]} for sp in _mk},
+          f"{r.get('feature_matrices')} for models {r.get('models')}")
     check('the three arms are named', list(r['arms']) ==
           ['plain', 'cliff_exempt', 'random_exempt'], str(r['arms']))
     check('the condition and the draw are recorded',
@@ -288,7 +301,7 @@ def test_run_base_only():
           str([(c['n_cliff_molecules_in_training'],
                 c['n_random_control_molecules']) for c in counts]))
 
-    blk = (r['per_space']['base_1']['per_detector']['neighbor_residual']
+    blk = (r['per_level']['0.5']['per_space']['base_1']['per_detector']['neighbor_residual']
            ['per_setting_slot']['0.1'])
     row = blk['per_model']['rf']
     check('every cleanup carries a pair count',
@@ -308,7 +321,7 @@ def test_run_base_only():
               'rewrites_the_label'},
           str({c: cell['what_the_cleanup_does'] for c, cell in row.items()}))
 
-    sp = blk['molecules_spared_by_matrix']['base_1']
+    sp = blk['molecules_spared_by_matrix'][_mk['base_1']]
     print("\n  molecules each cleanup actually spared, per pass:")
     for c in sorted(sp):
         for pk in sorted(sp[c]):
@@ -321,8 +334,8 @@ def test_run_base_only():
           all(e['n_cliff_molecules_spared'] <= e['n_cliff_molecules_in_training']
               for c in sp for e in sp[c].values()))
 
-    prem = (r['per_space']['base_1']['per_detector']['neighbor_residual']
-            ['cliff_molecules_among_the_suspicious_by_matrix']['base_1'])
+    prem = (r['per_level']['0.5']['per_space']['base_1']['per_detector']['neighbor_residual']
+            ['cliff_molecules_among_the_suspicious_by_matrix'][_mk['base_1']])
     check('the premise is counted on every pass', len(prem) == 3,
           f'{len(prem)} passes')
     print("\n  of the molecules the detector calls most suspicious:")
@@ -337,7 +350,7 @@ def test_run_base_only():
           all(p['n_uncorrupted_cliff_molecules_among_the_most_suspicious']
               <= p['n_most_suspicious_molecules_taken'] for p in prem.values()))
 
-    s = r['summary']['per_space']['base_1']
+    s = r['per_level']['0.5']['summary']['per_space']['base_1']
     check('the summary counts settings, and a degenerate pair is counted apart',
           all('settings_where_nothing_was_spared' in v
               for v in s['per_cleanup'].values() if v.get('settings_scored')))
@@ -362,13 +375,13 @@ def test_hybrid_space():
           str(r['spaces_run']))
     got = {}
     for space in r['spaces_run']:
-        got[space] = (r['per_space'][space]
+        got[space] = (r['per_level']['0.5']['per_space'][space]
                       ['per_model_no_cleaning_mean']['rf'])
     check('the two spaces are genuinely different feature spaces',
           abs(got['base_1'] - got['hybrid']) > 1e-9,
           str({k: round(v, 6) for k, v in got.items()}))
     check('the clean-label ceiling is recorded beside the corrupted score',
-          all(np.isfinite(r['per_space'][s]
+          all(np.isfinite(r['per_level']['0.5']['per_space'][s]
                           ['per_model_clean_label_ceiling_mean']['rf'])
               for s in r['spaces_run']))
 
@@ -402,16 +415,16 @@ def test_per_model_spaces():
             for sp in r['spaces_run']}
     check('each model was scored in its own matrix in every space',
           r['feature_matrices'] == want, str(r.get('feature_matrices')))
-    det = (r['per_space']['base_1']['per_detector']['neighbor_residual']
+    det = (r['per_level']['0.5']['per_space']['base_1']['per_detector']['neighbor_residual']
            ['detection_by_matrix'])
     check('the detector ran once per matrix',
           set(det) == {'base_1/rf', 'base_1/lightgbm'}
           and all(len(v) == 3 for v in det.values()),
           str({k: len(v) for k, v in det.items()}))
-    ok = all(np.isfinite(r['per_space'][sp]['per_model_no_cleaning_mean'][m])
+    ok = all(np.isfinite(r['per_level']['0.5']['per_space'][sp]['per_model_no_cleaning_mean'][m])
              for sp in r['spaces_run'] for m in ('rf', 'lightgbm'))
     check('every model has a score in every space', ok)
-    row = (r['per_space']['hybrid']['per_detector']['neighbor_residual']
+    row = (r['per_level']['0.5']['per_space']['hybrid']['per_detector']['neighbor_residual']
            ['per_setting_slot']['0.1']['per_model'])
     check('both models carry the paired arms in the hybrid',
           all(row.get(m, {}).get('knn_smooth', {}).get('cliff_exempt', {})
