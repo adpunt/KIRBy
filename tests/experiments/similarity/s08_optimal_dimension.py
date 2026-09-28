@@ -1237,6 +1237,98 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     print(f"  No trade-off [{_label}]: both objectives peak "
                           f"at budget={_rf_b}")
 
+    # ── Optima read off HELD-OUT SAC, per search family. Added dirty-local
+    # 2026-09-28, additive: no key above changes value.
+    #
+    # results['optimal']['best_sac_budget'] and every Pareto trade-off above
+    # compare a prediction optimum measured on held-out folds against a SAC
+    # optimum measured on the whole dataset, on a hybrid whose features were
+    # chosen with every label. The two optima are then not measured the same
+    # way. Here the SAC optimum is the budget with the highest mean held-out
+    # SAC over the folds that scored (sac_fold_scores), which is measured on
+    # the same folds as the prediction scores. It is computed for every
+    # family in budgets_by_family, because results['optimal'] and the Pareto
+    # block read the predictive family alone. Direction: SAC higher is better;
+    # each model's score follows the dataset metric. Every 'loss' below is
+    # positive when moving to the other objective's optimum costs something.
+    def _finite_mean(vals):
+        _v = [float(x) for x in (vals or [])
+              if x is not None and np.isfinite(x)]
+        return (float(np.mean(_v)) if _v else float('nan')), len(_v)
+
+    results['optimal_heldout_by_family'] = {}
+    for _fam, _cells in results['budgets_by_family'].items():
+        _bl = sorted(b for b, c in _cells.items()
+                     if isinstance(c, dict) and 'error' not in c)
+        if not _bl:
+            results['optimal_heldout_by_family'][_fam] = {
+                'unavailable_reason': 'no budget was built and scored'}
+            continue
+        _dims = sorted({_cells[b].get('actual_dim') for b in _bl
+                        if _cells[b].get('actual_dim') is not None})
+        _insuff = len(_dims) < 4
+        _sac_w, _sac_u = {}, {}
+        for b in _bl:
+            _m, _n = _finite_mean(_cells[b].get('sac_fold_scores'))
+            _sac_w[b] = {'mean': _m, 'n_folds': _n}
+            _m, _n = _finite_mean(_cells[b].get('sac_fold_scores_unweighted'))
+            _sac_u[b] = {'mean': _m, 'n_folds': _n}
+
+        def _argbest(score_by_b, lower):
+            _ok = [(b, v) for b, v in score_by_b.items()
+                   if v is not None and np.isfinite(v)]
+            if not _ok:
+                return None
+            return (min if lower else max)(_ok, key=lambda t: t[1])[0]
+
+        _best_sac_w = _argbest({b: d['mean'] for b, d in _sac_w.items()}, False)
+        _best_sac_u = _argbest({b: d['mean'] for b, d in _sac_u.items()}, False)
+        _per_model = {}
+        for _mn in model_factories:
+            _sc = {b: (_cells[b].get('model_scores') or {}).get(_mn)
+                   for b in _bl}
+            _bm = _argbest(_sc, lower_is_better)
+            _e = {'best_budget': _bm}
+            if _bm is None or _best_sac_w is None:
+                _e['unavailable_reason'] = (
+                    'no budget had a finite held-out score for '
+                    + ('this model' if _bm is None else 'SAC'))
+            else:
+                _at_sac = _sc.get(_best_sac_w)
+                _e['optima_differ'] = None if _insuff else bool(_bm != _best_sac_w)
+                _e['optima_differ_trustworthy'] = not _insuff
+                _e['sac_loss_at_model_optimum'] = float(
+                    _sac_w[_best_sac_w]['mean'] - _sac_w[_bm]['mean'])
+                if _at_sac is None or not np.isfinite(_at_sac):
+                    _e['model_loss_at_sac_optimum'] = float('nan')
+                else:
+                    _e['model_loss_at_sac_optimum'] = float(
+                        (_at_sac - _sc[_bm]) if lower_is_better
+                        else (_sc[_bm] - _at_sac))
+                _e['budget_gap'] = abs(int(_bm) - int(_best_sac_w))
+            _per_model[_mn] = _e
+        results['optimal_heldout_by_family'][_fam] = {
+            'budgets_scored': _bl,
+            'distinct_dims': _dims,
+            'insufficient_budgets': bool(_insuff),
+            'heldout_sac_weighted_by_budget': _sac_w,
+            'heldout_sac_unweighted_by_budget': _sac_u,
+            'best_sac_budget_heldout': _best_sac_w,
+            'best_sac_budget_heldout_unweighted': _best_sac_u,
+            'by_model': _per_model,
+            'metric': metric_name,
+            'lower_is_better': bool(lower_is_better),
+            'sac_direction': 'higher is better',
+        }
+        print(f"\n  Held-out optima, {_fam} family: SAC peaks at "
+              f"{_best_sac_w} features (weighted), {_best_sac_u} (unweighted); "
+              + ', '.join(f"{_mn} at {_e['best_budget']}"
+                          for _mn, _e in _per_model.items())
+              + (" [fewer than 4 distinct widths: optima_differ suppressed]"
+                 if _insuff else ""))
+    results['optimal_heldout'] = results['optimal_heldout_by_family'].get(
+        PRIMARY_FAMILY)
+
     # ── Honest, cross-validated SAC comparison (the redesigned "optimal
     # similarity dimension" claim). best_sac_budget above is an argmax of SAC
     # computed on the FULL dataset — selection and scoring share every sample,
