@@ -187,7 +187,7 @@ def _run_baseline(X_train, y_train, X_val, y_val, random_state=42,
     `groups` are the scaffold groups of the training rows. They make the
     network's early-stopping holdout scaffold-disjoint. Until 2026-09-28 this
     function passed none, so the plain DNN stopped on a RANDOM 20% of its
-    training rows. Eight of the twelve methods stop on a scaffold-disjoint 20%
+    training rows. Seven of the twelve methods stop on a scaffold-disjoint 20%
     (LNLMethod._carve_selection), and heteroscedastic_gp's final fit does too.
     The headline gain (method minus plain DNN, same labels) therefore carried a
     difference in stopping rule that is not part of any method. With the same
