@@ -851,6 +851,12 @@ def run(data, config, output_dir, dataset_name):
 
         picked = _picked_budgets(entry)
         picked_modal = _modal(picked)
+        # How many outer folds picked the 'modal' budget. With 3 outer folds
+        # and 3 budgets, three different picks is a tie that _modal breaks to
+        # the smallest budget, so the 'modal' budget was picked by 1 fold of 3
+        # and the modal gap is the gap at that one fold's pick.
+        picked_modal_count = sum(1 for v in picked if v == picked_modal) \
+            if picked_modal is not None else 0
 
         reselected_at_picked = None
         if picked_modal is not None and picked_modal in rows:
@@ -896,6 +902,8 @@ def run(data, config, output_dir, dataset_name):
             'process_gap': process_gap,
             'picked_budget_per_fold': picked,
             'picked_budget_modal': picked_modal,
+            'picked_budget_modal_count': picked_modal_count,
+            'picked_budget_n_folds': sum(1 for v in picked if v is not None),
             'picked_exceeds_train_rows': (
                 None if picked_modal is None
                 else bool(picked_modal > min_train_rows)),
@@ -1048,6 +1056,18 @@ def run(data, config, output_dir, dataset_name):
           "which was picked on")
     print("  the same held-out folds, so the modal gap cannot be negative and "
           "the process gap leans positive.")
+    _single = [f"{m} ({summary[m]['picked_budget_modal']} picked by "
+               f"{summary[m]['picked_budget_modal_count']} of "
+               f"{summary[m]['picked_budget_n_folds']} folds)"
+               for m in sorted(summary)
+               if summary[m]['picked_budget_modal'] is not None
+               and summary[m]['picked_budget_modal_count'] < 2
+               and summary[m]['picked_budget_n_folds'] > 1]
+    if _single:
+        print("  ⛔ no budget was picked by more than one outer fold for: "
+              + ", ".join(_single) + ".")
+        print("     The 'picked' column there is the smallest pick, by the "
+              "tie rule, not a mode.")
 
     # ---- double descent: one row is one model ---------------------------
     print(f"\n  ACROSS THE INTERPOLATION THRESHOLD "
