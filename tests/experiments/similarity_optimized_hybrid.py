@@ -572,7 +572,18 @@ def _knn_smoothed_labels(X, y, is_clf, k=KNN_SMOOTH_K):
         return np.asarray(y, dtype=float)
     nn = NearestNeighbors(n_neighbors=k + 1).fit(X)
     dist, idx = nn.kneighbors(X)
-    dist, idx = dist[:, 1:], idx[:, 1:]      # drop self
+    # Drop the row itself BY INDEX. Dropping column 0 assumed the row is its
+    # own first neighbour, which fails when two rows have identical features
+    # (a tie at distance 0 comes back in either order). The row then kept its
+    # own noisy label at weight 1/1e-9 and was "smoothed" to itself.
+    # Measured on 1,000 synthetic binary rows with 121 distinct vectors: 13.7%
+    # of rows kept themselves after dropping column 0.
+    _self = idx == np.arange(n)[:, None]
+    _absent = ~_self.any(axis=1)        # self fell outside the k+1 returned
+    _self[_absent, -1] = True           # then drop the farthest instead
+    _keep = ~_self
+    dist = dist[_keep].reshape(n, k)
+    idx = idx[_keep].reshape(n, k)
     w = 1.0 / (dist + 1e-9)
     w /= w.sum(axis=1, keepdims=True)
     if is_clf:
