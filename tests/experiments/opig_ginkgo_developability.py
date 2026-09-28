@@ -215,16 +215,22 @@ def evaluate_rep_reg(X, labels, groups, prebuilt_splits, model,
     # _evaluate_rep (no retraining), in split order.
     flip = prop_name in LOWER_IS_BETTER
     recall_scores = []
-    fold_spearman = []
+    # FOLD-POSITION ALIGNED, 2026-09-28. evaluate_rep drops a fold whose fit
+    # raised, so fold_preds can be shorter than prebuilt_splits. fold_reselection
+    # pairs the two arms by list position, so a dropped fold used to shift every
+    # later score onto the wrong fold. Each prediction set is placed at the
+    # split whose held-out rows it holds; a fold with no predictions stays NaN.
+    fold_spearman = [float('nan')] * len(prebuilt_splits)
     for _val_idx, y_true, y_pred in fold_preds:
+        pos = next((i for i, (_tr, _va) in enumerate(prebuilt_splits)
+                    if np.array_equal(np.asarray(_va), _val_idx)), None)
         y_t = -y_true if flip else y_true
         y_p = -y_pred if flip else y_pred
         recall_scores.append(_recall_at_k(y_t, y_p, frac=0.1))
-        if len(y_true) > 2:
+        if pos is not None and len(y_true) > 2:
             rho, _ = spearmanr(y_true, y_pred)
-            fold_spearman.append(float(rho) if not np.isnan(rho) else float('nan'))
-        else:
-            fold_spearman.append(float('nan'))
+            fold_spearman[pos] = (float(rho) if not np.isnan(rho)
+                                  else float('nan'))
     if recall_scores:
         result['top10_recall'] = {
             'mean': float(np.mean(recall_scores)),
@@ -451,7 +457,14 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
     from kirby.hybrid import (apply_feature_selection,
                               apply_augmentation_selection)
 
-    per_model = {m: {'r2': [], 'rmse': [], 'spearman': []} for m in models}
+    # FOLD-POSITION ALIGNED, 2026-09-28: one slot per fold, NaN until that fold
+    # scores. A fold whose search or fit failed used to be skipped with
+    # `continue`, so every later fold's score moved up one place, and
+    # fold_reselection, which pairs by position, compared the hybrid on one fold
+    # against the single representation on another.
+    _F = len(fold_splits)
+    per_model = {m: {'r2': [np.nan] * _F, 'rmse': [np.nan] * _F,
+                     'spearman': [np.nan] * _F} for m in models}
     dims = []
     top3_first_fold = None
     # Filled from fold 0's search, the same search top3_first_fold reads.
@@ -606,16 +619,14 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
                 continue
             ss_res = np.sum((y_val - preds) ** 2)
             ss_tot = np.sum((y_val - y_val.mean()) ** 2)
-            per_model[model_name]['r2'].append(
+            per_model[model_name]['r2'][fold_idx] = (
                 1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
-            per_model[model_name]['rmse'].append(
-                float(np.sqrt(np.mean((y_val - preds) ** 2))))
+            per_model[model_name]['rmse'][fold_idx] = float(
+                np.sqrt(np.mean((y_val - preds) ** 2)))
             if len(y_val) > 2:
                 rho, _ = spearmanr(y_val, preds)
-                per_model[model_name]['spearman'].append(
+                per_model[model_name]['spearman'][fold_idx] = (
                     float(rho) if not np.isnan(rho) else np.nan)
-            else:
-                per_model[model_name]['spearman'].append(np.nan)
 
     if not dims:
         return None, 0, top3_first_fold, {}, top2_first_fold
@@ -623,7 +634,7 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
     rep_results = {}
     fold_spearman_by_model = {}
     for model_name, s in per_model.items():
-        if not s['rmse']:
+        if not np.any(np.isfinite(np.asarray(s['rmse'], dtype=np.float64))):
             continue
         rep_results[model_name] = _summarize_hybrid_scores(
             s['r2'], s['rmse'], s['spearman'])
