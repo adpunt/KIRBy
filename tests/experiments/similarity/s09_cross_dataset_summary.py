@@ -678,7 +678,12 @@ def run(all_dataset_results):
                 # then a maximum over the numbers reported here. Older files
                 # named a comparator chosen by kNN error, not by this number.
                 # (dirty-local 2026-09-28: was labelled no-selection.)
-                _arm6 = (_ARM_BASELINE_PICKED if exp6.get('comparator_basis') is not None
+                # s06 writes comparator_basis={'error': ...} when the re-pick
+                # raised; the comparator then stays the kNN-error one, which
+                # was not picked on this number. (dirty-local 2026-09-28)
+                _cb6 = exp6.get('comparator_basis')
+                _arm6 = (_ARM_BASELINE_PICKED
+                         if isinstance(_cb6, dict) and 'error' not in _cb6
                          else _ARM_NO_SELECTION)
                 _record(ds_summary, 'ad_corr_delta', delta_ad,
                         _arm6, _src6)
