@@ -869,15 +869,30 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     def _evaluate_condition(get_Xy_fn, label, model_factory, model_name=None):
         """Run CV, return {metric_all, metric_cliff, metric_noncliff, gap, ...}."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
+        # (cliff score, non-cliff score) of each fold where BOTH are defined.
+        # The gap is a within-fold contrast, so it is averaged over these
+        # folds only; before 2026-09-28 the cliff mean and the non-cliff mean
+        # could come from different folds and the gap mixed them.
+        fold_pairs = []
+        folds_scored, fold_errors = [], []
 
         for fold_i, (train_idx, val_idx) in enumerate(folds):
             y_train, y_val = labels[train_idx], labels[val_idx]
+            # A fold whose features could not be built used to be dropped with
+            # nothing recorded, so the hybrid could be averaged over fewer
+            # folds than the representations it is compared with. Recorded
+            # since 2026-09-28.
             try:
                 X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train, fold_i)
-            except Exception:
+            except Exception as e:
+                fold_errors.append({'fold': int(fold_i),
+                                    'error': f'{type(e).__name__}: {e}'[:300]})
                 continue
             if X_tr is None:
+                fold_errors.append({'fold': int(fold_i),
+                                    'error': 'no recipe for this fold'})
                 continue
+            folds_scored.append(int(fold_i))
 
             scaler = StandardScaler()
             X_tr_s = scaler.fit_transform(X_tr)
@@ -912,23 +927,31 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             val_noncliff = np.array([i for i, vi in enumerate(val_idx)
                                      if vi not in cliff_indices])
 
+            _c = _nc = None
             if len(val_cliff) > 1:
                 try:
-                    fold_cliff.append(metric_fn(y_val[val_cliff], y_pred[val_cliff]))
+                    _c = float(metric_fn(y_val[val_cliff], y_pred[val_cliff]))
+                    fold_cliff.append(_c)
                 except Exception:
-                    pass
+                    _c = None
             if len(val_noncliff) > 1:
                 try:
-                    fold_noncliff.append(metric_fn(y_val[val_noncliff],
-                                                   y_pred[val_noncliff]))
+                    _nc = float(metric_fn(y_val[val_noncliff],
+                                          y_pred[val_noncliff]))
+                    fold_noncliff.append(_nc)
                 except Exception:
-                    pass
+                    _nc = None
+            if (_c is not None and _nc is not None
+                    and np.isfinite(_c) and np.isfinite(_nc)):
+                fold_pairs.append((_c, _nc))
 
         if not fold_all:
             return None
 
-        score_c = float(np.mean(fold_cliff)) if fold_cliff else float('nan')
-        score_nc = float(np.mean(fold_noncliff)) if fold_noncliff else float('nan')
+        score_c = (float(np.mean([p[0] for p in fold_pairs]))
+                   if fold_pairs else float('nan'))
+        score_nc = (float(np.mean([p[1] for p in fold_pairs]))
+                    if fold_pairs else float('nan'))
 
         gap = float('nan')
         if not (np.isnan(score_c) or np.isnan(score_nc)):
@@ -945,12 +968,18 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             'metric': metric_name,
             'lower_is_better': lower_is_better,
             # Sample-support behind the gap so degenerate small-sample gaps can
-            # be filtered downstream: each cliff/non-cliff score is a mean over
-            # only the folds that had >1 cliff (resp. non-cliff) compound in the
-            # held-out set. On tiny antibody/reaction sets this can be 1-2 folds,
-            # which is what produces the wild negative gaps.
+            # be filtered downstream: the folds that had >1 cliff (resp.
+            # non-cliff) compound in the held-out set and scored. On tiny
+            # antibody/reaction sets this can be 1-2 folds, which is what
+            # produces the wild negative gaps. The reported scores use only
+            # the folds where both scored (n_paired_folds).
             'n_cliff_folds': len(fold_cliff),
             'n_noncliff_folds': len(fold_noncliff),
+            # The cliff score, the non-cliff score and the gap are all means
+            # over these folds: the ones where both strata scored.
+            'n_paired_folds': len(fold_pairs),
+            'folds_scored': folds_scored,
+            'fold_errors': fold_errors,
         }
 
     # Per-model loop (matched evaluator). Each downstream model uses its own
@@ -1054,8 +1083,16 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                     _c = [r['cliff'] for r in _rows if r['cliff'] is not None]
                     _n = [r['noncliff'] for r in _rows
                           if r['noncliff'] is not None]
-                    sc_c = float(np.mean(_c)) if _c else float('nan')
-                    sc_n = float(np.mean(_n)) if _n else float('nan')
+                    # Scores and gap over the folds where both strata scored,
+                    # as cliff_noncliff_gap above (2026-09-28).
+                    _p = [(r['cliff'], r['noncliff']) for r in _rows
+                          if r['cliff'] is not None and r['noncliff'] is not None
+                          and np.isfinite(r['cliff'])
+                          and np.isfinite(r['noncliff'])]
+                    sc_c = (float(np.mean([a for a, _ in _p])) if _p
+                            else float('nan'))
+                    sc_n = (float(np.mean([b for _, b in _p])) if _p
+                            else float('nan'))
                     gap = (float('nan') if (np.isnan(sc_c) or np.isnan(sc_n))
                            else float(sc_c - sc_n) if lower_is_better
                            else float(sc_n - sc_c))
@@ -1066,6 +1103,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                         'cliff_noncliff_gap': gap,
                         'n_cliff_folds': len(_c),
                         'n_noncliff_folds': len(_n),
+                        'n_paired_folds': len(_p),
                         'mean_n_cliff_val': float(np.mean(
                             [r['n_cliff'] for r in _rows])),
                         'mean_n_val': float(np.mean(
