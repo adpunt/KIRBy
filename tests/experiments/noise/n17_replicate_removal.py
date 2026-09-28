@@ -743,8 +743,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # a smoke or a direct caller uses.
     downstream_models = list(
         kwargs.get('models') or config.get('models') or DOWNSTREAM_MODELS)
+    # n_samples is the number of ENTITIES, not the number of measurement rows.
+    # Every fit below is on one row per entity, so no fit ever sees more rows
+    # than there are entities. Until 2026-09-28 this passed len(labels), the
+    # row count: 12,008 on herg_ic50 against 9,802 entities and about 6,535
+    # training entities per fold. svm's cap is 10,000 training rows
+    # (find_best_hybrid DEFAULT_MODELS['svm']['_max_samples']), so svm was
+    # dropped from every n17 run on herg_ic50 for a size no fit here reaches.
+    n_entities = int(len(np.unique(np.asarray(rep_groups))))
     model_factories = get_model_factories(
-        downstream_models, task_type=task_type, n_samples=len(labels))
+        downstream_models, task_type=task_type, n_samples=n_entities)
     downstream_models = [m for m in downstream_models if m in model_factories]
     if not downstream_models:
         raise RuntimeError(
