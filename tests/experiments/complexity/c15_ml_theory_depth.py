@@ -1431,6 +1431,9 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
     print(f"    Full dim ({X_concat.shape[1]}D): "
           f"Rademacher={full_rademacher:.4f}, real_{metric_name}={full_real:.4f}")
 
+    n_train = _median_train_rows(groups, n_folds, X_concat, labels)
+    results['n_train'] = n_train
+
     # --- Per-budget ---
     for budget in sorted(budgets):
         n_feat = min(budget, X_concat.shape[1], n_samples - 1)
@@ -1461,16 +1464,25 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         results['real_score_hybrid'].append(real_hybrid)
         results['real_score_pca'].append(real_pca)
 
-        ratio = budget / n_samples
-        print(f"    budget={budget:>5} (p/n={ratio:.2f})  "
+        ratio = budget / n_train
+        print(f"    budget={budget:>5} (p/n_train={ratio:.2f})  "
               f"Rad_hyb={rad_hybrid:.4f}  Rad_pca={rad_pca:.4f}  "
               f"Real_hyb={real_hybrid:.4f}  Real_pca={real_pca:.4f}")
 
-    # Theoretical prediction: Rademacher ∝ sqrt(d/n)
-    print(f"\n    Theoretical sqrt(d/n) scaling:")
+    # 2026-09-28. What the memorisation score is compared against. It is a
+    # training-row R^2 on permuted labels, and for least squares with d
+    # linearly independent features that has expectation d / (n_train - 1)
+    # when d < n_train, and 1 when d >= n_train. sqrt(d/n) is the scaling of a
+    # Rademacher BOUND, not of this R^2, and was printed against the whole row
+    # count rather than the rows fitted.
+    print(f"\n    Null expectation of the permuted-label R^2 (least squares, "
+          f"d independent features, {n_train} training rows):")
+    results['null_r2_expected'] = []
     for budget in sorted(budgets):
-        theoretical = np.sqrt(min(budget, X_concat.shape[1]) / n_samples)
-        print(f"      budget={budget:>5}: sqrt(d/n) = {theoretical:.4f}")
+        d = min(budget, X_concat.shape[1])
+        null_r2 = min(1.0, d / max(1, n_train - 1))
+        results['null_r2_expected'].append(null_r2)
+        print(f"      budget={budget:>5}: d/(n_train-1) = {null_r2:.4f}")
 
     return results
 
