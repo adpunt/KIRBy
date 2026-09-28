@@ -248,7 +248,12 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'
-    _int_eval = _resolve_match(_int_eval, 'rf')
+    # DIRTY-LOCAL 2026-09-28: was _resolve_match(_int_eval, 'rf'). The search
+    # reads 'match' as "the evaluator is the downstream model"
+    # (find_best_hybrid.py, 'Resolve match evaluators'), so a recipe searched
+    # for xgboost or dnn was run here with an rf evaluator. fed03 was fixed
+    # the same way. No change when fed_model is 'rf'.
+    _int_eval = _resolve_match(_int_eval, fed_to_kirby_model(fed_model))
 
     # The metric each representation's share of the budget is scored on,
     # inside every create_hybrid call below. The search above ranked on AUC.
