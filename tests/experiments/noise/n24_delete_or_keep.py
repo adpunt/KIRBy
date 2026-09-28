@@ -821,8 +821,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'place. Under outlier_only_p01/p05/p10 the other labels are '
             'bit-identical. This run measures the difference on its own labels '
             'and writes it to injury_carried_by_the_flagged_molecules.'),
+        # dirty-local 2026-09-28: on a class label noise_spec_for replaces every
+        # regression name with its one flip model, so 'outlier_p10' there is a
+        # flip of the level's share of labels and no other label moves. The
+        # name that was actually injected is written beside the one asked for.
+        'injected_strategy': noise_spec_for(
+            dataset_name, condition, 0.1, is_clf=is_clf).strategy,
         'condition_moves_every_other_label': bool(
-            condition in OUTLIER_STRATEGIES),
+            condition in OUTLIER_STRATEGIES and not is_clf),
         'features_are_fixed_note': (
             "Each feature matrix is built once per (draw, fold) from that "
             "pass's training molecules at their CORRUPTED labels, and every "
