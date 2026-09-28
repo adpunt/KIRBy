@@ -78,6 +78,11 @@ from experiments._shared import (
     hr_exclude_folds,
 )
 from kirby.find_best_hybrid import nested_cv_outer_folds
+# Class-1 probabilities when the metric is AUC, class labels otherwise. Every
+# kNN below is scored through it, as the stored search scores its own models.
+# Until 2026-09-28 this file called predict() everywhere, so on a
+# classification dataset the AUC was computed on hard 0/1 votes.
+from kirby.find_best_hybrid import _predict_for_metric
 
 # 2026-09-12 decision: s05 stops calling get_fold_best_search and reads the pool
 # instead. The seed below now names the folds only. The pool's stored per-fold
@@ -608,7 +613,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                         model = _make_knn(k, len(y_train))
                         model.fit(X_tr, y_train)
-                        y_pred = model.predict(X_va)
+                        y_pred = _predict_for_metric(model, X_va, metric_fn)
                         fold_scores[fold_i] = float(metric_fn(y_val, y_pred))
 
                     scored = [s for s in fold_scores if s is not None]
@@ -734,7 +739,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # Unweighted
                 model = _make_knn(k_candidate, len(train_idx))
                 model.fit(X_tr, labels[train_idx])
-                fold_scores_uw.append(metric_fn(labels[val_idx], model.predict(X_va)))
+                fold_scores_uw.append(metric_fn(
+                    labels[val_idx], _predict_for_metric(model, X_va, metric_fn)))
 
                 # Weighted by importance (reuses pre-computed weights)
                 w = fold_importance[fold_i]
@@ -746,8 +752,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_va_w = X_va * w
                         model_w = _make_knn(k_candidate, len(train_idx))
                         model_w.fit(X_tr_w, labels[train_idx])
-                        fold_scores_w.append(metric_fn(labels[val_idx],
-                                                       model_w.predict(X_va_w)))
+                        fold_scores_w.append(metric_fn(
+                            labels[val_idx],
+                            _predict_for_metric(model_w, X_va_w, metric_fn)))
                     except Exception as exc:
                         # N9: log so a NaN weighted-kNN fold reads as "fit/predict
                         # threw" rather than a genuine score.
