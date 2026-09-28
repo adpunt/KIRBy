@@ -391,12 +391,18 @@ def lof_suspicion(X, r, n_neighbors=LOF_NEIGHBOURS, metric=None):
     return -m.negative_outlier_factor_
 
 
-def residual_low_disagreement(X, y, groups, oof_splits, seeds=DISAGREEMENT_SEEDS,
+def residual_low_disagreement(X, y, groups, oof_splits, seeds=None,
                               dataset_name=None):
     """|mean seed prediction - y| / (SD across seeds + floor), all out of fold.
 
     dataset_name, added 2026-09-25, caches each seed's fit through noise_cache;
-    the same values."""
+    the same values.
+
+    seeds None reads DISAGREEMENT_SEEDS when called, 2026-09-28. As a default
+    argument it was bound at import, so _local_run's cut to 3 seeds never
+    reached this function and 5 seeds ran."""
+    if seeds is None:
+        seeds = DISAGREEMENT_SEEDS
     y = np.asarray(y, dtype=float)
     if dataset_name is None:
         P = np.vstack([oof_predict(X, y, groups, n_splits=oof_splits,
@@ -643,6 +649,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'winsor_c': WINSOR_C,
         'random_seeds': seeds,
         'oof_splits': oof_splits,
+        'disagreement_seeds': list(DISAGREEMENT_SEEDS),
         'joined_matrix_note': ('isolation_forest and lof run on [features, r], '
                                'r z-scored. lof: r multiplied by sqrt(number '
                                'of features). isolation_forest: r repeated '
