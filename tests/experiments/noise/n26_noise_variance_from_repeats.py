@@ -81,6 +81,16 @@ representation (space base_1), and the ols slope is refitted. What is written is
 slope against the injected s2_inj. If the estimator works, the two are close.
 This arm says nothing about the real noise.
 
+WHAT THE CHECK CANNOT SEE (2026-09-28). The slope reads as s2e only if the
+model's own error is the same at every measurement count. When it is not, that
+difference is in the slope without injection AND in the slope with it, so it
+cancels in the change. The check then passes while the slope is wrong. On
+20,000 synthetic molecules with s2e 0.3 and a model error of 0.30 at one
+measurement and 0.05 at two or more, the ols slope was 0.689; the injected
+0.1, 0.25 and 0.5 moved it by 0.104, 0.254 and 0.500. The direct s2e was 0.296.
+So the test of that assumption is each fitted slope against the direct s2e,
+not this check.
+
 WHAT THIS CANNOT SEPARATE. A bias shared by every measurement of a molecule --
 the same paper reporting the same number twice, or two papers copying a third --
 does not shrink with the count. It lands in the intercept, not the slope. So s2e
@@ -754,6 +764,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     check = {'model': check_model, 'space': 'base_1', 'rep': check_rep,
              'what_it_is': ('a check of the 1/count regression, not a '
                             'measurement of the real noise'),
+             'what_it_cannot_see': (
+                 'model error that differs by measurement count. It sits in '
+                 'the slope with and without injection and cancels in the '
+                 'change, so the check passes while the slope is biased. '
+                 'Compare each fitted slope with direct s2e for that.'),
              'per_injected_variance': {}}
     if check_rep is not None and np.isfinite(base_oof).all():
         X_base = ent_reps[check_rep]
