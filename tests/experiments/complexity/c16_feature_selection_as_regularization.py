@@ -260,8 +260,15 @@ def _fold_rep_scores(train_reps, y_train, groups_train, blueprint, metric_fn):
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
                    metric_fn, augmentations=None, blueprint=None,
                    task_type='regression',
-                   importance_by_fold=None, alloc_scores_by_fold=None):
+                   importance_by_fold=None, alloc_scores_by_fold=None,
+                   cell_info=None):
     """Evaluate one (model, budget) cell. Returns (score, train_score, fold_scores).
+
+    cell_info: a dict the caller owns, filled with how many folds this cell's
+        mean is over and how many features each fold's hybrid actually had.
+        The mean is over the folds that built, so two cells in one row can be
+        means over different folds; and a budget above the width of the
+        representations a recipe kept builds fewer features than its label.
 
     importance_by_fold: {(fold, importance_method): {rep: scores}} shared by the
         WHOLE heatmap and filled here on first use. Per-feature importance over
@@ -292,6 +299,7 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
     # already treats as bad (_shared.py:1515).
     val_by_fold = [None] * int(n_folds)
     train_by_fold = [None] * int(n_folds)
+    width_by_fold = [None] * int(n_folds)
     # (row budget, the blueprint's own budget) for every cell where the pool
     # returned a recipe filed under a different budget than the one asked for.
     blueprint_budget_mismatch = set()
@@ -401,6 +409,8 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
                   f"fold left blank: {type(_e).__name__}: {_e}", flush=True)
             continue
 
+        if _fold_i < len(width_by_fold):
+            width_by_fold[_fold_i] = int(X_train.shape[1])
         scaler = StandardScaler()
         X_tr_s = scaler.fit_transform(X_train)
         X_va_s = scaler.transform(X_val)
@@ -419,6 +429,9 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         print(f"      budget {budget}: the pool's recipe was filed under a "
               f"different budget {sorted(blueprint_budget_mismatch)}; built at "
               f"{budget} via budget_override")
+    if cell_info is not None:
+        cell_info['n_folds_scored'] = len(val_scores)
+        cell_info['n_features_built'] = list(width_by_fold)
     if not val_scores:
         return float('nan'), float('nan'), [None] * int(n_folds)
     return (float(np.mean(val_scores)), float(np.mean(train_scores)),
@@ -745,13 +758,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for pname, pval, factory in variants:
                 _t_cell = time.time()
                 _alloc_cache = _alloc_scores_by_fold
+                _cell_info = {}
                 val_score, train_score, fold_scores = _evaluate_cell(
                     reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
                     augmentations=augmentations,
                     blueprint=fam_blueprints.get(budget),
                     task_type=task_type,
                     importance_by_fold=_importance_by_fold,
-                    alloc_scores_by_fold=_alloc_cache)
+                    alloc_scores_by_fold=_alloc_cache,
+                    cell_info=_cell_info)
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
                     'train': train_score,
@@ -763,6 +778,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Per-fold validation scores kept for the per-fold reselection
                     # (leave-one-fold-out budget / reg selection). Additive.
                     'fold_scores': list(fold_scores),
+                    # How many folds the mean is over, and the width each
+                    # fold's hybrid really had. Additive.
+                    'n_folds_scored': _cell_info.get('n_folds_scored', 0),
+                    'n_features_built': _cell_info.get('n_features_built', []),
                 }
                 print(f"    [c16 {_c16_t():.0f}s] cell {fam_name} "
                       f"budget={budget} {pname}={pval}: "
