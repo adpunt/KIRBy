@@ -16,9 +16,17 @@ WHAT IS COMPUTED, per fold, on the fold's training molecules as recorded:
      For each molecule, the k-th nearest neighbour, k = 1..K_MAX. delta_k is the
      mean squared distance to it, gamma_k the mean of half the squared label
      difference. A straight line through the K_MAX (delta, gamma) points; its
-     intercept estimates the label-noise variance, in label units squared. It
-     also holds real activity differences the features cannot resolve, so it is
-     an upper bound. In these distance spaces, as n35:
+     intercept estimates the label-noise variance, in label units squared.
+     ⛔ The intercept is NOT an upper bound (corrected 2026-09-28). It is a
+     straight line carried from the smallest neighbour distance down to zero.
+     With hundreds of features the ten delta_k sit close together far from
+     zero, and the intercept lands on either side of the true noise. Measured
+     on synthetic labels with noise variance 0.1: 0.021 at 100 features, 0.422
+     at 500. gamma_1, half the mean squared label difference to the nearest
+     neighbour, IS an upper bound when the distance reads no label: it is the
+     noise variance plus a non-negative term. Both are written; gamma_1 is
+     gamma[0] of each record, and its share of the MSE sits beside the
+     intercept's. In these distance spaces, as n35:
        base_1, base_2    each downstream model's rank-1 and rank-2 single
                          representation (see THE FEATURE SPACES): Tanimoto when
                          every value is 0 or 1, else Euclidean on the
@@ -54,7 +62,11 @@ WHAT IS COMPUTED, per fold, on the fold's training molecules as recorded:
      Gamma intercept, at lambda in SIMEX_LAMBDAS, SIMEX_DRAWS draws each. Every model
      in every space is refitted and scored on the ORIGINAL held-out labels.
      Straight-line and quadratic fits of MSE on lambda (lambda = 0 is the plain
-     fit) are carried to lambda = -1: the MSE with the estimated noise gone.
+     fit) are carried to lambda = -1: the MSE with the estimated noise gone
+     from the TRAINING labels only. The held-out labels keep their own noise,
+     so the drop is the part of the MSE the training-label noise causes. It is
+     not the same quantity as the Gamma share in 3, which is the held-out
+     labels' own noise. When s2 overstates the noise, lambda = -1 overshoots.
      ⛔ The hybrid features are built ONCE per fold from the clean training
      labels and held fixed across lambda. This curve therefore measures the
      model's sensitivity to label noise, not the feature choice's. Rebuilding
@@ -69,7 +81,8 @@ WHAT IS COMPUTED, per fold, on the fold's training molecules as recorded:
      |residual|. The first two are also written per fold.
 
   6. RESIDUAL SPREAD AGAINST THE PREDICTION. The squared out-of-fold residual
-     regressed on the prediction: R^2 and n * R^2, the Breusch-Pagan statistic.
+     regressed on the prediction: R^2 and n * R^2, Koenker's studentised form
+     of the Breusch-Pagan statistic.
      NO p-value is computed. On a dataset with repeat measurements, a second fit
      with the molecule's measurement count and the SD of its measurements added.
 
@@ -354,12 +367,17 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
         'has_repeat_measurements': rep_groups is not None,
         'gamma_note': (
             'intercept of gamma_k on delta_k, k = 1..k_max nearest neighbours; '
-            'label units squared. An upper bound on the label-noise variance: '
-            'it also holds activity differences the features cannot resolve.'),
+            'label units squared. NOT an upper bound: it is a straight line '
+            'carried to zero distance and can fall either side of the noise '
+            'variance when the features are many. gamma[0], the k = 1 value, '
+            'is an upper bound when the distance reads no label; '
+            'gamma_reference_k1_over_mse is its share of the MSE.'),
         'simex_note': (
             'extra noise at lambda * the fold reference Gamma intercept '
             '(gamma_reference_rep), scored on '
-            'the original held-out labels; the hybrid features are built once '
+            'the original held-out labels, which keep their own noise: the '
+            'drop at lambda = -1 is the MSE the TRAINING-label noise causes, '
+            'not the held-out noise share; the hybrid features are built once '
             'per fold from the clean training labels and held fixed across '
             'lambda, so the curve is the model sensitivity, not the feature '
             'choice sensitivity.'),
@@ -598,6 +616,8 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                 del _D
         g_base = frec['gamma'].get(ref_key) if ref_key else None
         s2_base = (g_base or {}).get('intercept', float('nan'))
+        # gamma_1: the upper bound (module docstring, 1).
+        s2_k1 = float(((g_base or {}).get('gamma') or [float('nan')])[0])
 
         # The check: the reference neighbours are fixed, so the intercept
         # should rise by the realised injected variance.
@@ -684,7 +704,10 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                 row = {'metric': float(metric_fn(y_va, pred)), 'mse': mse,
                        'gamma_reference_over_mse': (s2_base / mse
                                                if mse > 0 and np.isfinite(s2_base)
-                                               else None)}
+                                               else None),
+                       'gamma_reference_k1_over_mse': (
+                           s2_k1 / mse if mse > 0 and np.isfinite(s2_k1)
+                           else None)}
                 gk = frec['gamma'].get(key)
                 if isinstance(gk, dict) and 'intercept' in gk:
                     row['gamma_this_space_over_mse'] = (
@@ -800,8 +823,8 @@ def _vals(xs):
 
 def _summarise(per_fold, oof_block):
     """Per space and model: the fold values side by side, and their mean."""
-    out = {'gamma_intercept': {}, 'noise_share_of_mse': {}, 'simex': {},
-           'tails': {}}
+    out = {'gamma_intercept': {}, 'noise_share_of_mse': {},
+           'noise_share_of_mse_k1_upper_bound': {}, 'simex': {}, 'tails': {}}
     for f in per_fold:
         for sp, g in (f.get('gamma') or {}).items():
             if isinstance(g, dict) and 'intercept' in g:
@@ -810,6 +833,9 @@ def _summarise(per_fold, oof_block):
             for m, row in by_m.items():
                 (out['noise_share_of_mse'].setdefault(sp, {})
                  .setdefault(m, []).append(row.get('gamma_reference_over_mse')))
+                (out['noise_share_of_mse_k1_upper_bound'].setdefault(sp, {})
+                 .setdefault(m, []).append(
+                     row.get('gamma_reference_k1_over_mse')))
         for sp, by_m in (f.get('simex') or {}).items():
             for m, ex in by_m.items():
                 d = (ex.get('quadratic') or {}).get('drop_share_of_plain')
@@ -822,7 +848,8 @@ def _summarise(per_fold, oof_block):
         a = _vals(v)
         out['gamma_intercept'][sp] = {'per_fold': v, 'mean': (
             float(a.mean()) if a.size else None)}
-    for sp, by_m in out['noise_share_of_mse'].items():
+    for sp, by_m in (list(out['noise_share_of_mse'].items())
+                     + list(out['noise_share_of_mse_k1_upper_bound'].items())):
         for m, v in list(by_m.items()):
             a = _vals(v)
             by_m[m] = {'per_fold': v,
@@ -859,14 +886,17 @@ def _print_summary(results, metric_name):
         print(f"  level {lvl:>5s}: rise {r['intercept_rise_mean']:+.4f}, "
               f"injected {r['realised_injected_variance_mean']:.4f} "
               f"({len(r['folds'])} fold draws)")
-    print("\nGAMMA INTERCEPT per space (label units squared; upper bound on "
-          "the noise variance), mean over folds:")
+    print("\nGAMMA INTERCEPT per space (label units squared; an extrapolated "
+          "estimate of the noise variance, not a bound), mean over folds:")
     for sp, g in s['gamma_intercept'].items():
         print(f"  {sp:28s} {_fmt(g['mean'])}")
-    print("\nREFERENCE GAMMA INTERCEPT / held-out MSE, mean over folds:")
+    print("\nREFERENCE GAMMA INTERCEPT / held-out MSE, and gamma at k = 1 "
+          "(the upper bound) / held-out MSE, mean over folds:")
+    k1 = s.get('noise_share_of_mse_k1_upper_bound', {})
     for sp, by_m in s['noise_share_of_mse'].items():
         for m, v in by_m.items():
-            print(f"  {sp}/{m}: {_fmt(v['mean'], 3)}")
+            print(f"  {sp}/{m}: {_fmt(v['mean'], 3)}, "
+                  f"{_fmt((k1.get(sp, {}).get(m) or {}).get('mean'), 3)}")
     if s['simex']:
         print("\nSIMEX: share of held-out MSE gone at lambda = -1 "
               "(linear, quadratic), mean over folds:")
