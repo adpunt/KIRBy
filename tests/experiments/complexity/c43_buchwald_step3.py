@@ -249,7 +249,7 @@ def main():
     print("\n== (c) global-ranking counterfactual ==", flush=True)
     R["global"] = {}
     for B in BUDGETS:
-        g_pf, origin_share = [], []
+        g_pf, origin_share, g_width, g_npos = [], [], [], []
         for fi, (tr, va) in enumerate(folds):
             # concat pool (train) -> one lightgbm gain over all columns
             parts_tr, parts_va, owners = [], [], []
@@ -258,17 +258,35 @@ def main():
                 parts_tr.append(Xtr); parts_va.append(Xva)
                 owners += [r] * Xtr.shape[1]
             Ctr = np.hstack(parts_tr); Cva = np.hstack(parts_va); owners = np.array(owners)
-            imp = H.rank_columns(Ctr, y[tr])
-            top = np.argsort(imp)[::-1][:B]
+            # Every column is scored. H.rank_columns keeps only the 2,000
+            # highest raw-variance columns before the gain fit, and over the
+            # concatenated pool that cut favoured wide-range features over
+            # 0/1 fingerprint bits before any label was looked at.
+            imp = np.asarray(hybrid.compute_feature_importance(
+                {"_": Ctr}, y[tr], method="lightgbm_gain",
+                max_features_lgb=Ctr.shape[1])["_"], dtype=float)
+            # Same rule as the per-representation hybrid (concatenate_features):
+            # only features with gain above zero are taken. The zero-gain tail
+            # was ordered by column position, so padding with it handed the
+            # last representations in the pool features no tree had used.
+            n_pos = int(np.sum(imp > 0))
+            top = np.argsort(imp)[::-1][:min(B, n_pos) if n_pos > 0 else B]
             r_g, _ = lgbm_rmse(Ctr[:, top], y[tr], Cva[:, top], y[va])
             g_pf.append(r_g)
+            g_width.append(int(len(top))); g_npos.append(n_pos)
             share = {r: int(np.sum(owners[top] == r)) for r in POOL}
             origin_share.append(share)
-            print(f"  B{B} fold{fi}: global_rmse={r_g:.3f}  cgr_share={share[BEST]}/{B}", flush=True)
+            print(f"  B{B} fold{fi}: global_rmse={r_g:.3f}  cgr_share={share[BEST]}/{len(top)} "
+                  f"(budget {B}, {n_pos} features with gain above zero)", flush=True)
         R["global"][f"B{B}"] = {
             "global_rmse_mean": float(np.mean(g_pf)),
             "global_rmse_per_fold": [float(x) for x in g_pf],
             "cgr_share_per_fold": [s[BEST] for s in origin_share],
+            # Features actually used per fold; below B when fewer than B
+            # features had gain above zero.
+            "global_width_per_fold": g_width,
+            "n_gain_above_zero_per_fold": g_npos,
+            "origin_share_per_fold": origin_share,
             "origin_share_fold0": origin_share[0],
         }
         json.dump(R, open(CKPT, "w"), indent=2)
