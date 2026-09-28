@@ -178,9 +178,10 @@ NOISE_DRAWS = (0, 1, 2)
 # Precision of the synthetic flag set, as headroom_probe.py swept it.
 PRECISIONS = (0.0, 0.25, 0.5, 0.75, 1.0)
 
-# Draws of WHICH molecules fill each synthetic flag set. At precision 1.0 the set
-# is the injector's mask and every seed gives the same set; at the others the
-# seed changes which moved and which untouched molecules are picked.
+# Draws of WHICH molecules fill each synthetic flag set. The seed changes which
+# moved and which untouched molecules are picked. At precision 1.0 every seed
+# gives the same set only when the flag count equals or exceeds the number
+# moved; below that, the seed picks which of the moved molecules are flagged.
 FLAG_SEEDS = (0, 1)
 
 # The four operations on a flag set, and the weight downweight gives.
@@ -505,7 +506,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'condition and level (owner\'s decision 2026-09-28). The number '
             'the injector moved is used only to grade a flag set.'),
         'oof_splits': oof_splits,
-        'shift_levels_are': 'delta in SDs of the full clean label column',
+        'shift_levels_are': ('delta in SDs of the clean TRAINING labels of '
+                             'the fold (inject_shift_train_labels)'),
         'formula_note': (
             'Predicted AUROC is the research report\'s derivation, not a '
             'measurement: shift Phi(delta/(sqrt(2) s_m)) for a signed score, '
