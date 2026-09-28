@@ -2060,9 +2060,43 @@ def predict_fluid_similarity_ensemble_regression(teacher_models,
     return predictions, teacher_weights
 
 
+def _quality_cv_kwargs(n_cv, groups, n_rows, classification):
+    """The split the quality ensembles score each silo's model on.
+
+    With groups=None it is the random KFold these functions always used, so
+    a caller that passes no groups (fed05) is unchanged. With groups -- one
+    per training row, the same scaffold groups the outer split used -- it is
+    GroupKFold, or StratifiedGroupKFold for classification. A random split
+    puts near-identical molecules on both sides and scores each
+    representation on how well it recognises them, which is not what the
+    weight is meant to measure (feedback_no_random_splits.md). FLuID itself
+    has no quality-weighted ensemble, so there is no FLuID split to follow.
+    """
+    from sklearn.model_selection import KFold
+    if groups is None:
+        return {'cv': KFold(n_splits=n_cv, shuffle=True, random_state=42)}
+    groups = np.asarray(groups)
+    if len(groups) != n_rows:
+        raise ValueError(
+            f"quality ensemble: {len(groups)} groups for {n_rows} training "
+            f"rows")
+    if len(np.unique(groups)) < n_cv:
+        raise ValueError(
+            f"quality ensemble: {len(np.unique(groups))} scaffold groups, "
+            f"fewer than the {n_cv} folds asked for")
+    if classification:
+        from sklearn.model_selection import StratifiedGroupKFold
+        cv = StratifiedGroupKFold(n_splits=n_cv, shuffle=True, random_state=42)
+    else:
+        from sklearn.model_selection import GroupKFold
+        cv = GroupKFold(n_splits=n_cv)
+    return {'cv': cv, 'groups': groups}
+
+
 def predict_fluid_quality_ensemble_regression(teacher_models,
                                               silo_train_features,
-                                              silo_test_features, k):
+                                              silo_test_features, k,
+                                              groups=None):
     """Quality-weighted regression ensemble: weight by inverse cross-val RMSE.
 
     Privacy: each silo shares one scalar (its RMSE), not data.
@@ -2099,7 +2133,8 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
         try:
             y_cv = cross_val_predict(
                 reg, X_train_t, y_train_t,
-                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
+                **_quality_cv_kwargs(n_cv, groups, len(y_train_t),
+                                     classification=False))
             rmses[t] = float(np.sqrt(mean_squared_error(y_train_t, y_cv)))
         except Exception:
             rmses[t] = float('inf')
@@ -2231,7 +2266,8 @@ def predict_fluid_similarity_ensemble_classification(
 
 
 def predict_fluid_quality_ensemble_classification(
-        teacher_models, silo_train_features, silo_test_features, k):
+        teacher_models, silo_train_features, silo_test_features, k,
+        groups=None):
     """Quality-weighted classification ensemble: weight by cross-val MCC.
 
     Mirrors predict_fluid_quality_ensemble_regression but uses classifiers.
@@ -2272,7 +2308,8 @@ def predict_fluid_quality_ensemble_classification(
         try:
             y_cv = cross_val_predict(
                 clf, X_train_t, y_train_t,
-                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
+                **_quality_cv_kwargs(n_cv, groups, len(y_train_t),
+                                     classification=True))
             mccs[t] = max(0.0, float(matthews_corrcoef(y_train_t, y_cv)))
         except Exception:
             mccs[t] = 0.0
