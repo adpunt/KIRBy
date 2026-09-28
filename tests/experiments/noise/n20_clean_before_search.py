@@ -1941,6 +1941,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                         fold_i, base_sp,
                                                         cleanup, rate, mname),
                                         is_clf=is_clf,
+                                        # The random twin re-runs THIS cleanup
+                                        # on randomly chosen molecules, as the
+                                        # similarity sweep above and n17, n18
+                                        # and n21 do. Without it random_twin
+                                        # deals one molecule's label change to
+                                        # another, and on a 0/1 class label
+                                        # that makes -1 and 2 (controls.py
+                                        # random_twin docstring): on
+                                        # humanness_therapeutic the twins of
+                                        # label_smooth, knn_smooth and
+                                        # prox_smooth were fitted on four
+                                        # classes.
+                                        rerun=(lambda sc_, r_, _c=cleanup,
+                                               _X=_Xa: _on_hybrid(
+                                                   cleaned_training_set(
+                                                       _c, X_base_tr, y0,
+                                                       sc_, r_,
+                                                       is_clf=is_clf,
+                                                       groups=g_tr,
+                                                       targets=_targets),
+                                                   _X, y0)),
                                         score_D={mname: _D},
                                         score_clean=(
                                             {mname: clean_by_model[mname]}
