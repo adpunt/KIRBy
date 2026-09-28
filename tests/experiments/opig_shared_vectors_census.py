@@ -550,9 +550,17 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True,
     # Per-representation allocation scores over every molecule, one set per
     # (internal evaluator, representation set). A recipe with rep_count below
     # its pool size keeps only the rep_count representations these rank
-    # highest, as the search did on each of its folds. The stored recipes carry
-    # rep_scores=None, so build_fold_hybrid cannot rank without these.
+    # highest, as the search did on each of its folds. The stored recipes DO
+    # carry rep_scores (checked on herg_ki 2026-09-28), but those are each
+    # representation's best cross-validated score over the downstream models,
+    # not the internal evaluator's allocation score the search ranks by, so
+    # they are not used for the ranking here.
     _alloc_scores = {}
+    # One rebuild per distinct recipe. Under the local setting (one
+    # configuration, internal evaluator rf, no downstream model in the rebuild)
+    # rf, svm and lightgbm hold the SAME recipe, so their rows are the same
+    # hybrid; 'same_recipe_as' says so on the row instead of rebuilding it.
+    _built = {}
 
     def _scores_for(bp, base):
         key = (bp.internal_evaluator, tuple(sorted(base)))
@@ -599,14 +607,25 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True,
                           f'{_missing or bp.reps}, not loaded here -- no row',
                           flush=True)
                 continue
+            _label = f'hybrid[{model_name}#{rank}]'
             try:
-                _pre = None
-                _rc = getattr(bp, 'rep_count', None)
-                if _rc is not None and int(_rc) < len(base):
-                    _pre = _scores_for(bp, base)
-                X, _Xv, _info = build_fold_hybrid(
-                    base, base, y_all, bp, groups=groups,
-                    precomputed_alloc_scores=_pre)
+                _recipe_key = repr(sorted(vars(bp).items()))
+            except TypeError:
+                _recipe_key = None
+            try:
+                if _recipe_key is not None and _recipe_key in _built:
+                    X, _info, _same_as = _built[_recipe_key]
+                else:
+                    _pre = None
+                    _rc = getattr(bp, 'rep_count', None)
+                    if _rc is not None and int(_rc) < len(base):
+                        _pre = _scores_for(bp, base)
+                    X, _Xv, _info = build_fold_hybrid(
+                        base, base, y_all, bp, groups=groups,
+                        precomputed_alloc_scores=_pre)
+                    _same_as = None
+                    if _recipe_key is not None:
+                        _built[_recipe_key] = (X, _info, _label)
             except Exception as exc:
                 if verbose:
                     print(f'  hybrid {model_name} rank {rank}: could not build '
@@ -626,8 +645,9 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True,
             tied = int(groups_attr['n_representation_merged'])
             out.append({
                 'dataset': dataset_name,
-                'representation': f'hybrid[{model_name}#{rank}]',
+                'representation': _label,
                 'is_hybrid': True,
+                'same_recipe_as': _same_as,
                 'downstream_model': model_name,
                 'rank_within_model': rank,
                 'budget': bp.budget,
