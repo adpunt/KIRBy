@@ -171,6 +171,14 @@ SCHEMES = {
 }
 
 CAVEATS = [
+    "2026-09-28: pool sizing uses the engine's origin rule (_apply_origin_rule) "
+    "on each inner fold, averaged. Before this date the raw direction-corrected "
+    "scores were shifted by the pool minimum, so on rmse datasets the worst "
+    "representation got zero weight under linear and power_law. Files written "
+    "before this date sized the pool differently from the engine.",
+    "2026-09-28: a requested pool size larger than the representations loaded is "
+    "cut to that number and coinciding sizes run once. pool_sizes_used says what "
+    "ran; keys carry the size used.",
     "ITEM 4 (per-fold sizing): pool-sizing weights are computed INSIDE each "
     "outer fold's TRAIN split via an inner group-aware CV (N_INNER folds), "
     "removing the prior whole-data leak (the old hib read rep scores measured "
@@ -221,7 +229,7 @@ CAVEATS = [
     "PROXY, NOT a CI on the headline mean-of-per-fold R2. The rigorous "
     "shuffled-label control (Option B) is NOT implemented here (it doubles the "
     "whole-pipeline cost); only the cheap bootstrap ships.",
-    "Only NFOLDS=5 paired folds, so any per-fold sign/Wilcoxon test is "
+    f"Only {NFOLDS} paired outer folds, so any per-fold sign/Wilcoxon test is "
     "underpowered — the bootstrap over stored predictions is used instead.",
     "R-squared is per held-out fold on that fold's predictions (OOF-per-fold "
     "R2), averaged/paired vs target — NOT a single pooled-OOF R2. Native "
