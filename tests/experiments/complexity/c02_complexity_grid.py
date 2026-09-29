@@ -22,7 +22,7 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_model_factories, cv_split, _cv_split,
+    get_model_factories, cv_split, _cv_split, DOWNSTREAM_MODELS,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
@@ -53,6 +53,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     budgets = list(FULL_BUDGETS)
     allocation_methods = config['allocations']
     importance_methods = config['importance_methods']
+    # THE 12 FAST-SPEED DATASETS (dataset_policy.FAST_SPEED_DATASETS) were
+    # precomputed on the fast grid: 3 allocation methods, lightgbm_gain only,
+    # the fast evaluators and representation counts, the five models named.
+    # c02 passed the full lists itself, which beat speed= inside
+    # find_best_hybrid, so on herg it asked for 8,160 configurations the
+    # precompute never stored and was refused (server check 2026-09-29).
+    # Owner's decision 2026-09-29: c02 follows the dataset's speed.
+    from experiments.dataset_policy import dataset_search_speed as _ds_speed
+    from kirby.find_best_hybrid import (
+        FAST_ALLOCATION_METHODS as _FA, FAST_IMPORTANCE_METHODS as _FI,
+        FAST_INTERNAL_EVALUATORS as _FE, FAST_REP_COUNTS as _FR)
+    _c02_fast = _ds_speed(dataset_name) == 'fast'
+    _search_models = list(DOWNSTREAM_MODELS) if _c02_fast else None
+    _c02_evaluators = list(_FE) if _c02_fast else INTERNAL_EVALUATORS
+    _c02_speed_kw = ({'speed': 'fast', 'rep_counts': list(_FR)}
+                     if _c02_fast else {})
+    if _c02_fast:
+        allocation_methods = list(_FA)
+        importance_methods = list(_FI)
     n_folds = config['n_splits']
     mode = 'intermediary' if config['n_splits'] == 1 else 'full'
 
@@ -102,14 +121,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         base_reps=reps,
         labels=labels,
         groups=groups,
-        models=None,
+        models=_search_models,
         budgets=full_budgets,
         allocation_methods=allocation_methods,
         importance_methods=importance_methods,
         n_folds=n_folds,
         augmentations=None,
         augmentation_strategy='none',
-        internal_evaluators=INTERNAL_EVALUATORS,
+        internal_evaluators=_c02_evaluators,
+        **_c02_speed_kw,
         metric=metric_name,
         task_type=data['task_type'],
         verbose=True,
@@ -129,14 +149,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             base_reps=reps,
             labels=labels,
             groups=groups,
-            models=None,
+            models=_search_models,
             budgets=full_budgets,
             allocation_methods=allocation_methods,
             importance_methods=importance_methods,
             n_folds=n_folds,
             augmentations=augs,
             augmentation_strategy='uncapped',
-            internal_evaluators=INTERNAL_EVALUATORS,
+            internal_evaluators=_c02_evaluators,
+            **_c02_speed_kw,
             metric=metric_name,
             task_type=data['task_type'],
             verbose=True,
@@ -164,14 +185,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 base_reps=reps,
                 labels=labels,
                 groups=groups,
-                models=None,
+                models=_search_models,
                 budgets=full_budgets,
                 allocation_methods=allocation_methods,
                 importance_methods=importance_methods,
                 n_folds=n_folds,
                 augmentations=augs,
                 augmentation_strategy='capped',
-                internal_evaluators=INTERNAL_EVALUATORS,
+                internal_evaluators=_c02_evaluators,
+                **_c02_speed_kw,
                 metric=metric_name,
                 task_type=data['task_type'],
                 verbose=True,
@@ -214,14 +236,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 base_reps=reps,
                 labels=labels,
                 groups=groups,
-                models=None,
+                models=_search_models,
                 budgets=full_budgets,
                 allocation_methods=allocation_methods,
                 importance_methods=importance_methods,
                 n_folds=n_folds,
                 augmentations=None,
                 augmentation_strategy='none',
-                internal_evaluators=INTERNAL_EVALUATORS,
+                internal_evaluators=_c02_evaluators,
+                **_c02_speed_kw,
                 metric=metric_name,
                 task_type=data['task_type'],
                 verbose=True,
@@ -430,7 +453,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     n_folds=n_folds,
                     augmentations=None,
                     augmentation_strategy='none',
-                    internal_evaluators=INTERNAL_EVALUATORS,
+                    internal_evaluators=_c02_evaluators,
+                    **_c02_speed_kw,
                     metric=metric_name,
                     task_type=data['task_type'],
                     verbose=False,

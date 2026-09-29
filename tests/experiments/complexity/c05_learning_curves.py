@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 
 from experiments._shared import (
+    own_search_kwargs,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, fit_learning_curve,
@@ -370,13 +371,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     n_folds=sub_folds,
                     augmentations=sub_augs,
                     augmentation_strategy=sub_aug_strategy,
-                    internal_evaluators=INTERNAL_EVALUATORS,
                     metric=metric_name,
                     task_type=data['task_type'],
                     verbose=False,
                     cache=True,
                     dataset_name=f"{dataset_name}_n{n_sub}_s{seed}",
                     tier='general',
+                    # Its own search on a row subset: fast grid, adaptive
+                    # pruning, not refused by KIRBY_NO_COLD_SEARCH. Owner,
+                    # 2026-09-29. models stays the list passed above.
+                    **{k: v for k, v in own_search_kwargs(
+                        len(sub_labels), models=model_names).items()
+                       if k != 'models'},
                 )
                 last_search = search
                 last_search_n, last_search_seed = n_sub, seed
