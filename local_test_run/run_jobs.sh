@@ -1,13 +1,15 @@
 #!/bin/bash
 # run_jobs.sh [N]: runs the jobs in jobs.tsv, N at a time (default 6), each capped at 3 hours.
 # Safe to start again after the srun ends: finished jobs are skipped; a job cut off by the end
-# of the allocation has no .done file, so it runs again from the start.
+# of the allocation has no .done file, so it runs again. Noise jobs skip noise levels already on
+# disk and every job reads hybrid searches already in the cache, so a rerun resumes rather than restarts.
 set -u
 N=${1:-6}; CAP=${JOB_CAP_S:-10800}
 cd /data/stat-ecr/scat9264/KIRBy_localtest
 say(){ echo "$(date '+%F %T') $*" | tee -a $RUN/run.log; }
 run_one(){ name=$1; cmd=$2; log=$RUN/logs/$name.log; t0=$(date +%s); start=$(date '+%F %T')
-  echo "### $name start $(date '+%F %T') cap ${CAP}s" > $log; echo "### $cmd" >> $log
+  # Appends: an attempt cut off by the end of an srun keeps its output above the next attempt's.
+  echo "### $name attempt start $(date '+%F %T') cap ${CAP}s" >> $log; echo "### $cmd" >> $log
   timeout -k 30 $CAP bash -c "$cmd" >> $log 2>&1; rc=$?
   wall=$(( $(date +%s) - t0 )); nan=$(grep -ci '\bnan\b' $log)
   to=0; [ $wall -ge $CAP ] && to=1
