@@ -2,7 +2,7 @@
 Reuses tests/experiments/noise/_local_run.py (its sweep_cuts: 4 noise levels, 1 draw,
 per-experiment cuts) but with the default-hybrid grid: evaluator rf, rep_count 5,
 budget 250, models rf/svm/lightgbm, 3 search folds, 3 experiment folds.
-usage: dirty_noise.py <dataset> <nXX> <outdir> [--condition C]"""
+usage: noise_runner.py <dataset> <nXX> <outdir> [--condition C]"""
 import sys, time
 sys.argv, _args = sys.argv[:1], sys.argv[1:]
 ds, exp, out = _args[0], _args[1], _args[2]
@@ -22,5 +22,11 @@ cfg['internal_evaluators'] = ['rf']
 from experiments.noise import noise_helpers as NH
 kw = {'noise_condition': cond} if cond else {}
 t0 = time.time()
-NH.run_all(dataset_name=ds, output_dir=out, experiments=[exp], config=cfg, force_rerun=True, **kw)
+# Server copy: resume instead of recomputing. Each noise level is written to disk as it finishes and
+# a level already on disk (same input fingerprint) is skipped, so a job cut off by the end of a
+# 4-hour srun picks up where it stopped. LT_FORCE_RERUN=1 recomputes everything.
+import os
+force = os.environ.get('LT_FORCE_RERUN', '0') == '1'
+print('FORCE_RERUN:', force)
+NH.run_all(dataset_name=ds, output_dir=out, experiments=[exp], config=cfg, force_rerun=force, **kw)
 print(f"\nTOTAL {time.time() - t0:.0f}s")
