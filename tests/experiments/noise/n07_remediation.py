@@ -373,6 +373,15 @@ DEFAULT_CONDITION = 'outlier_p05'
 AS_THEY_COME = 'as_they_come'
 
 
+# Scaffold groups for the grouped noise conditions, one entry per dataset, set
+# at the top of _run_one_condition from dataset_policy.noise_groups_for(data).
+# grouped_shifted and grouped_wider RAISE without them (noise_spec.py:407-412),
+# and none of n07's four injection calls passed any -- so n07 crashed on both
+# grouped conditions of its own sweep until 2026-09-29. n24 already passes
+# them the same way (n24:733, :1041-1043).
+_NOISE_GROUPS = {}
+
+
 def _inject_or_recorded(y_all, spec, *, train_idx, is_clf, dataset_name):
     """inject_train_labels, or the recorded labels when spec is None
     (AS_THEY_COME). Same return shape: (y_train, moved_mask, provenance)."""
@@ -381,7 +390,8 @@ def _inject_or_recorded(y_all, spec, *, train_idx, is_clf, dataset_name):
         return (y_tr, np.zeros(len(y_tr), dtype=bool),
                 {'condition': AS_THEY_COME, 'injected': False})
     return inject_train_labels(y_all, spec, train_idx=train_idx,
-                               is_clf=is_clf, dataset_name=dataset_name)
+                               is_clf=is_clf, dataset_name=dataset_name,
+                               groups=_NOISE_GROUPS.get(dataset_name))
 
 
 def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False,
@@ -2375,6 +2385,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     """N07: Noise remediation strategies, ONE condition."""
+    from experiments.dataset_policy import noise_groups_for as _ngf
+    _NOISE_GROUPS[dataset_name] = _ngf(data)[0]
+
     print("\n" + "=" * 70)
     print("EXPERIMENT N07: NOISE REMEDIATION STRATEGIES")
     print("=" * 70)
@@ -3368,10 +3381,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 _spec = _noise_spec(dataset_name, noise_fraction, noise_level,
                                     noise_seed=noise_seed,
                                     is_clf=is_clf, condition=condition)
-                # TODO(similarity-sweep 2026-09-25): plan section 4 -- this
-                # call (and the two like it below) passes no scaffold groups,
-                # so grouped_shifted and grouped_wider raise here
-                # (noise_spec.py:407-412). Not changed in this wiring pass.
+                # Scaffold groups reach the grouped conditions through
+                # _NOISE_GROUPS (set at the top of _run_one_condition).
                 y_tr_noisy, _cmask, _prov = _inject_or_recorded(
                     labels, _spec, train_idx=train_idx, is_clf=is_clf,
                     dataset_name=dataset_name)
