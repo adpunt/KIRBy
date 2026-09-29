@@ -57,6 +57,11 @@ STAMP = '20260918'
 # by name through load_data, so it has to be handled on its own. Name it with
 # --datasets once that path exists.
 POOL_DATASETS = ('adme_hlm', 'adme_mdr1', 'adme_rlm', 'caco2', 'herg_ki')
+# Which representation this run audits. pdv by default (the tool's origin);
+# --rep chemberta etc. added 2026-09-29 for herg_ki's stale chemberta, which
+# opig_shared_vectors_remedy refuses (92 of 150 sampled rows differ). The
+# z-score verdict below only means something for pdv.
+REP = 'pdv'
 
 
 def cache_root():
@@ -85,7 +90,7 @@ def find_for(dataset):
     from experiments._shared import load_data
     root = cache_root()
     out = {'dataset': dataset,
-           'rep_cache': root / 'rep_cache' / dataset / 'pdv.npy',
+           'rep_cache': root / 'rep_cache' / dataset / f'{REP}.npy',
            'reps': None, 'error': None}
     try:
         data = load_data(dataset, rep_preset='full', rep_names=['ecfp4'])
@@ -96,7 +101,7 @@ def find_for(dataset):
     if smiles is None:
         out['error'] = f"load_data returned no 'smiles'; keys are {sorted(data)}"
         return out
-    out['reps'] = root / 'reps' / smiles_hash(smiles) / 'pdv.npy'
+    out['reps'] = root / 'reps' / smiles_hash(smiles) / f'{REP}.npy'
     return out
 
 
@@ -122,7 +127,7 @@ def report(entries):
 
 
 def quarantine(entries):
-    dest = cache_root() / f'pdv_stale_{STAMP}'
+    dest = cache_root() / f'{REP}_stale_{STAMP}'
     dest.mkdir(parents=True, exist_ok=True)
     moved = 0
     for e in entries:
@@ -130,7 +135,7 @@ def quarantine(entries):
             p = e[layer]
             if p is None or not p.exists():
                 continue
-            target = dest / f'{layer}_{e["dataset"]}_{p.parent.name}_pdv.npy'
+            target = dest / f'{layer}_{e["dataset"]}_{p.parent.name}_{REP}.npy'
             shutil.move(str(p), str(target))
             print(f'  moved {p}  ->  {target.name}')
             moved += 1
@@ -151,7 +156,7 @@ def rebuild(datasets):
     still_zscored, could_not_load = [], []
     for ds in datasets:
         try:
-            X = load_data(ds, rep_preset='full', rep_names=['pdv'])['reps']['pdv']
+            X = load_data(ds, rep_preset='full', rep_names=[REP])['reps'][REP]
         except Exception as exc:
             print(f'{ds:14s} COULD NOT LOAD — {type(exc).__name__}: {exc}')
             could_not_load.append(ds)
@@ -170,11 +175,14 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--datasets', nargs='+', default=list(POOL_DATASETS))
+    ap.add_argument('--rep', default='pdv',
+                    help='representation to audit (default pdv)')
     ap.add_argument('--quarantine', action='store_true',
                     help='move both cache layers aside (files are moved, never deleted)')
     ap.add_argument('--rebuild', action='store_true',
                     help='rebuild pdv and say whether it came back raw')
     args = ap.parse_args()
+    REP = args.rep
 
     print(f'cache root: {cache_root()}')
     entries = [find_for(ds) for ds in args.datasets]
