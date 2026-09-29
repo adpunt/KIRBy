@@ -583,6 +583,14 @@ def precompute_dataset(dataset_name, tiers=('general',),
             conditions.append(('general_distance', general_reps, None, 'none'))
             if aug_reps:
                 conditions.append(('general_distance', general_reps, aug_reps, 'uncapped'))
+                # Capped as well, on datasets under 10,000 molecules (owner,
+                # 2026-09-29). Every experiment's pool already asked for this
+                # search and none existed, so it was refused on every run
+                # (herg: 325 of 720 stored, from old runs). Estimated from the
+                # uncapped distance pass: about 13-19 core-hours per full-speed
+                # dataset, about 3 on herg.
+                if len(labels) < 10000:
+                    conditions.append(('general_distance', general_reps, aug_reps, 'capped'))
     else:
         # Standard conditions on the 10-rep pool: {none, uncapped, capped}.
         # The 250-row gate on capped was REMOVED 2026-08-27. It existed because
@@ -630,6 +638,7 @@ def precompute_dataset(dataset_name, tiers=('general',),
             'general_capped': ('general', 'capped'),
             'general_distance_none': ('general_distance', 'none'),
             'general_distance_uncapped': ('general_distance', 'uncapped'),
+            'general_distance_capped': ('general_distance', 'capped'),
         }
         if condition_filter in _cond_map:
             want_tier, want_strat = _cond_map[condition_filter]
@@ -964,7 +973,8 @@ def main():
                         help="Retired flag — one 10-rep pool ('general') per dataset")
     parser.add_argument('--condition', type=str, default=None,
                         choices=['general_none', 'general_uncapped', 'general_capped',
-                                 'general_distance_none', 'general_distance_uncapped'],
+                                 'general_distance_none', 'general_distance_uncapped',
+                                 'general_distance_capped'],
                         help='Run a single specific condition (for per-job SLURM)')
     parser.add_argument('--with-knn', action='store_true',
                         help='Score the main conditions over the default model '

@@ -8272,6 +8272,11 @@ def _find_best_hybrid_inner(
     #
     # In the cache key: a run that keeps its tuned k is a different search.
     tune_knn_k: bool = False,
+    # An experiment whose design IS its own search: a subset of the rows
+    # (c05, c07), one outer fold's training rows (c33). Nothing the precompute
+    # stores can ever match it, so KIRBY_NO_COLD_SEARCH must not refuse it.
+    # Owner's decision 2026-09-29. Not part of any cache key.
+    own_search: bool = False,
     # A budget above the training-fold row count is SEARCHED, not swapped.
     # DEFAULT FLIPPED 2026-09-10 (FRAMEWORK_FINALIZATION.md 4). It used to be
     # False, which dropped any budget above n_samples and appended the fold's
@@ -9285,7 +9290,16 @@ def _find_best_hybrid_inner(
     # Before any model is fitted and before the per-representation baselines.
     # No-op unless KIRBY_NO_COLD_SEARCH is set; never fires on a label-noise
     # tier, a tuned run or an experiment-local tier. See _refuse_cold_search.
-    if cache:
+    # A dataset name carrying '__' is an experiment-local search by the
+    # naming convention in _shared._apply_dataset_search_speed (c15c's
+    # <dataset>__c15c_b<budget>, c16's <dataset>__c16_...); base dataset names
+    # never contain it. Until 2026-09-29 the refusal read only the tier, so
+    # those, and c05/c07's subset searches, were refused too.
+    _own = own_search or '__' in str(dataset_name or '')
+    if _own and verbose and os.environ.get('KIRBY_NO_COLD_SEARCH'):
+        print(f"[KIRBY_NO_COLD_SEARCH] {dataset_name}: the experiment's own "
+              f"search, built here by design -- not refused.")
+    if cache and not _own:
         _refuse_cold_search(
             tier=tier, objective=objective, dataset_name=dataset_name,
             result_db_identity=result_db_identity,

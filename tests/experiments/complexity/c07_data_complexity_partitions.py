@@ -15,6 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
+    own_search_kwargs,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
     get_model_factories, get_domain_metric,
@@ -283,13 +284,16 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     budgets=budgets,
                     augmentations=sub_augs,
                     augmentation_strategy=sub_aug_strategy,
-                    internal_evaluators=INTERNAL_EVALUATORS,
                     metric=metric_name,
                     task_type=data['task_type'],
                     verbose=False,
                     cache=True,
                     dataset_name=f"{dataset_name}_{partition_name}_{subpop_name}",
                     tier='general',
+                    # Its own search on one subpopulation: fast grid, adaptive
+                    # pruning, the five downstream models named, not refused by
+                    # KIRBY_NO_COLD_SEARCH. Owner, 2026-09-29.
+                    **own_search_kwargs(len(sub_labels)),
                 )
                 top3 = extract_top3_base_reps(search)
                 if top3:

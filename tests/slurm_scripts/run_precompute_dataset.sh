@@ -46,7 +46,8 @@
 #   KIRBY_PRUNING   force a pruning mode. Unset: from the class.
 #   KIRBY_SMALL_DATASETS / KIRBY_LARGE_DATASETS  override the class lists
 #   KIRBY_PRUNING   calibrated (default) | no_pruning | default_pruning | aggressive_pruning
-#   KIRBY_PASSES    space-separated subset of: sim dist knn ridge  (default: all four)
+#   KIRBY_PASSES    space-separated subset of: sim dist knn ridge distcap
+#                   (default: sim dist knn ridge; dist includes distcap)
 
 set -uo pipefail
 DS=${1:?usage: sbatch run_precompute_dataset.sh <dataset>}
@@ -400,6 +401,11 @@ has_pass dist && run_one general_distance_none --distance
 has_pass sim  && run_one general_uncapped           --objectives ${SIM_OBJ} ${MODEL_FLAG}
 has_pass sim  && run_one general_capped             --objectives ${SIM_OBJ} ${MODEL_FLAG}
 has_pass dist && run_one general_distance_uncapped  --distance
+# The capped distance search, datasets under 10,000 molecules only
+# (precompute_hybrids.py builds no condition above that). Added 2026-09-29.
+# 'distcap' runs this pass alone, for datasets whose chain already finished:
+#   KIRBY_PASSES=distcap bash tests/slurm_scripts/extend_precompute_chain.sh ...
+{ has_pass dist || has_pass distcap; } && run_one general_distance_capped --distance
 
 # 6-7: the two single-experiment passes, last because they block only s02 and c16.
 for c in general_none general_uncapped general_capped; do

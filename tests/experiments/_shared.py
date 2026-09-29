@@ -775,6 +775,38 @@ def apply_pruning_gate(model_overrides, n_samples, min_samples_gate):
     return model_overrides
 
 
+def own_search_kwargs(n_samples, models=None, dataset_label=None):
+    """find_best_hybrid kwargs for an experiment that builds its OWN search.
+
+    c05 and c07 search a subset of the rows, c33 searches inside each outer
+    fold, c15c searches one budget at a time. Nothing the precompute stores can
+    ever match those searches. Owner's decision 2026-09-29: they run on the
+    fast grid with adaptive pruning on (PRUNING_MODE, default calibrated), and
+    KIRBY_NO_COLD_SEARCH does not refuse them (own_search=True).
+
+    speed='fast' cuts the models to three when models is None
+    (find_best_hybrid.py, the `if models is None` branch), so the five
+    downstream models are named unless the caller passes its own list.
+    """
+    # An explicit list beats speed= inside find_best_hybrid (_norm_alloc etc.,
+    # find_best_hybrid.py ~8593-8612), so the fast lists are passed by name.
+    # A caller must therefore not pass its own allocation_methods,
+    # importance_methods, internal_evaluators or rep_counts.
+    from kirby.find_best_hybrid import (
+        FAST_ALLOCATION_METHODS, FAST_IMPORTANCE_METHODS,
+        FAST_INTERNAL_EVALUATORS, FAST_REP_COUNTS)
+    kw = {'own_search': True, 'speed': 'fast',
+          'models': list(models) if models is not None else list(DOWNSTREAM_MODELS),
+          'allocation_methods': list(FAST_ALLOCATION_METHODS),
+          'importance_methods': list(FAST_IMPORTANCE_METHODS),
+          'internal_evaluators': list(FAST_INTERNAL_EVALUATORS),
+          'rep_counts': list(FAST_REP_COUNTS)}
+    kw.update(resolve_pruning_kwargs(os.environ.get('PRUNING_MODE', 'calibrated'),
+                                     n_samples, verbose=False,
+                                     dataset_label=dataset_label))
+    return kw
+
+
 def resolve_pruning_kwargs(pruning_mode, n_samples, verbose=True,
                            dataset_label=None):
     """Convenience helper for scripts that call find_best_hybrid directly.

@@ -57,6 +57,7 @@ from experiments._shared import make_nearest_neighbors  # honours --distance-met
 from kirby.find_best_hybrid import _predict_for_metric
 
 from experiments._shared import (
+    own_search_kwargs,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
@@ -846,6 +847,11 @@ def _run_double_descent(data, config, dataset_name=None):
                 augmentation_strategy=_aug_strat,
                 speed='fast',
                 verbose=False,
+                # Adaptive pruning on, as for every experiment that builds its
+                # own search (owner, 2026-09-29). speed and models stay as set
+                # above.
+                **{k: v for k, v in own_search_kwargs(len(labels)).items()
+                   if k not in ('speed', 'models')},
             )
         except Exception as _e:
             print(f"    c15c fast search at b={_b} failed: {_e}")

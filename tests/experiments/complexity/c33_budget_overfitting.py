@@ -121,6 +121,7 @@ import numpy as np
 from scipy.stats import spearmanr
 
 from experiments._shared import (
+    own_search_kwargs, DOWNSTREAM_MODELS,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, run_nested_cv,
@@ -595,7 +596,10 @@ def run(data, config, output_dir, dataset_name):
     groups = data['groups']
     task_type = data['task_type']
     augs = data.get('augmentations') or None
-    n_outer_folds = config['n_splits']
+    # 3 outer folds, owner's decision 2026-09-29 (was config['n_splits'], 5).
+    # Each outer fold runs its own search, so this sets how many searches c33
+    # builds.
+    n_outer_folds = 3
     seed = config.get('seed', 42)
     # UNION, not replacement. The suite runner hands every experiment
     # config['budgets'] = FULL_BUDGETS and config['models'] = DOWNSTREAM_MODELS,
@@ -705,10 +709,16 @@ def run(data, config, output_dir, dataset_name):
         domain=data.get('domain'),
         tier='general',
         budgets=budgets,
-        models=models,
+        # speed='fast' with models=None cuts to three models; name the five.
+        models=(models if models is not None else list(DOWNSTREAM_MODELS)),
         n_outer_folds=n_outer_folds,
         seed=seed,
         verbose=True,
+        # Each outer fold's search is c33's own: fast grid, adaptive pruning,
+        # not refused by KIRBY_NO_COLD_SEARCH. Owner, 2026-09-29. models stays
+        # what run_nested_cv sets unless c33 passes a list.
+        **{k: v for k, v in own_search_kwargs(len(labels)).items()
+           if k != 'models'},
     )
 
     lower = bool(result.lower_is_better)
