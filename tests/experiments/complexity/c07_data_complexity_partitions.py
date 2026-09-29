@@ -272,6 +272,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # raised. Today it's guarded by the `if best_config` short-circuit,
             # but None is the safe default. (CXA-17)
             search = None
+            # Read after this block (part_result below) but assigned only
+            # inside the try, so a search that raised -- e.g. refused by
+            # KIRBY_NO_COLD_SEARCH -- crashed c07 with "UnboundLocalError:
+            # ... 'sel'" (server check, 2026-09-29).
+            sel = None
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
