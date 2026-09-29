@@ -1281,6 +1281,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # the same at :335-340.
         ent_reps = {name: np.asarray(mat[stats['row_index']], dtype=np.float64)
                     for name, mat in reps.items()}
+        # The augmentation representations, one row per molecule by the same
+        # row_index. An augmented recipe was rebuilt without them until
+        # 2026-09-29, i.e. narrower than the recipe the search chose.
+        ent_augs = ({name: np.asarray(mat[stats['row_index']], dtype=np.float64)
+                     for name, mat in (data.get('augmentations') or {}).items()}
+                    or None)
 
         draw_block = {'per_label_build': {}}
         if _st0.get('draw') == draw:
@@ -1460,7 +1466,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             else model_factories[_mnames[0]](),
                             metric_fn, lower_is_better,
                             model_name=None if _shareable else _mnames[0],
-                            metric_name=metric_name, train_idx=tr)
+                            metric_name=metric_name, train_idx=tr,
+                            augmentations_train=(
+                                {k: v[tr] for k, v in ent_augs.items()}
+                                if ent_augs else None),
+                            augmentations_val=(
+                                {k: v[va_graded] for k, v in ent_augs.items()}
+                                if ent_augs else None))
                         if X_tr_h is not None:
                             sc_h = StandardScaler()
                             _hcells.append((

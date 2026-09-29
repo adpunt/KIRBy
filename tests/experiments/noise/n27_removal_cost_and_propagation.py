@@ -243,7 +243,7 @@ def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
                   recipe_for_space_by_model, downstream_models,
                   model_factories, metric_fn, lower_is_better, *,
                   dataset_name=None, reps=None, train_idx=None, val_idx=None,
-                  metric_name=None):
+                  metric_name=None, augmentations=None):
     """{space: [(training matrix, held-out matrix, models scored on it)]}.
 
     base_k holds one matrix per distinct representation at rank k, shared by
@@ -275,6 +275,15 @@ def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
             cells.append((sc.fit_transform(train_reps[rn]),
                           sc.transform(val_reps[rn]), list(ms)))
         out[bsp] = cells
+    # The augmentation representations for this fold. An augmented recipe was
+    # rebuilt without them until 2026-09-29, i.e. narrower than the recipe
+    # the search chose.
+    aug_tr = aug_va = None
+    if augmentations and train_idx is not None and val_idx is not None:
+        aug_tr = {k: np.asarray(v[train_idx], dtype=np.float64)
+                  for k, v in augmentations.items()}
+        aug_va = {k: np.asarray(v[val_idx], dtype=np.float64)
+                  for k, v in augmentations.items()}
     for sp in spaces:
         if sp in BASE_SPACES:
             continue
@@ -287,12 +296,14 @@ def _build_spaces(train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
                     dataset_name, train_reps, val_reps, y_tr, bp_m, g_tr,
                     None if shareable else mnames[0],
                     None if shareable else model_factories[mnames[0]](),
-                    (metric_name, metric_fn, lower_is_better), train_idx)
+                    (metric_name, metric_fn, lower_is_better), train_idx,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
             else:
                 X_tr_h, X_va_h = hybrid_for_fold(
                     train_reps, val_reps, y_tr, bp_m, g_tr,
                     None if shareable else model_factories[mnames[0]](),
-                    metric_fn, lower_is_better)
+                    metric_fn, lower_is_better,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
             if X_tr_h is not None:
                 sh = StandardScaler()
                 cells.append((sh.fit_transform(X_tr_h), sh.transform(X_va_h),
@@ -540,7 +551,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             train_reps, val_reps, y_tr, g_tr, base_by_model, spaces,
             recipe_for_space_by_model, downstream_models, model_factories,
             metric_fn, lower_is_better, train_idx=train_idx, val_idx=val_idx,
-            **_cache_kw)
+            augmentations=data.get('augmentations'), **_cache_kw)
         for sp in spaces:
             if sp not in clean_spaces:
                 errors[f'{sp}|{fkey}|build'] = (
@@ -704,6 +715,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         recipe_for_space_by_model, downstream_models,
                         model_factories, metric_fn, lower_is_better,
                         train_idx=train_idx, val_idx=val_idx,
+                        augmentations=data.get('augmentations'),
                         **_cache_kw).items()
                     if sp not in BASE_SPACES})
             for space, cells in noisy_spaces.items():
