@@ -1,0 +1,201 @@
+{
+ "dataset": "logd",
+ "metric": "rmse",
+ "lower_is_better": true,
+ "pool_full": [
+  "avalon",
+  "chembert",
+  "ecfp4",
+  "graphmvp",
+  "grover",
+  "mhg_gnn",
+  "molformer",
+  "mordred",
+  "smited",
+  "top_torsion"
+ ],
+ "baselines": {
+  "mhg_gnn": {
+   "rf": 0.6262,
+   "svm": 0.5022,
+   "lightgbm": 0.5221
+  },
+  "mordred": {
+   "rf": 0.6286,
+   "svm": 0.5286,
+   "lightgbm": 0.5191
+  },
+  "grover": {
+   "rf": 0.6755,
+   "svm": 0.5271,
+   "lightgbm": 0.5772
+  },
+  "ecfp4": {
+   "rf": 0.6678,
+   "svm": 0.5451,
+   "lightgbm": 0.5786
+  },
+  "smited": {
+   "rf": 0.7316,
+   "svm": 0.5267,
+   "lightgbm": 0.6115
+  },
+  "molformer": {
+   "rf": 0.7762,
+   "svm": 0.5234,
+   "lightgbm": 0.6461
+  },
+  "avalon": {
+   "rf": 0.6717,
+   "svm": 0.607,
+   "lightgbm": 0.5614
+  },
+  "top_torsion": {
+   "rf": 0.706,
+   "svm": 0.6129,
+   "lightgbm": 0.622
+  },
+  "chembert": {
+   "rf": 0.7643,
+   "svm": 0.6006,
+   "lightgbm": 0.6805
+  },
+  "graphmvp": {
+   "rf": 0.7487,
+   "svm": 0.6935,
+   "lightgbm": 0.7152
+  }
+ },
+ "top": {
+  "rf": [
+   "mhg_gnn",
+   "mordred",
+   "ecfp4",
+   "avalon",
+   "grover"
+  ],
+  "svm": [
+   "mhg_gnn",
+   "molformer"
+  ],
+  "lightgbm": [
+   "mordred",
+   "mhg_gnn"
+  ]
+ },
+ "hybrid": {
+  "rf": {
+   "score_mean": 0.5925356601106738,
+   "reps": [
+    "mhg_gnn",
+    "mordred",
+    "grover",
+    "ecfp4",
+    "smited",
+    "molformer",
+    "avalon",
+    "top_torsion",
+    "chembert",
+    "graphmvp"
+   ],
+   "rep_count": 5,
+   "budget": 250,
+   "allocation": "performance_weighted",
+   "importance": "lightgbm_gain",
+   "evaluator": "rf"
+  },
+  "svm": {
+   "score_mean": 0.4597488202130296,
+   "reps": [
+    "mhg_gnn",
+    "mordred",
+    "grover",
+    "ecfp4",
+    "smited",
+    "molformer",
+    "avalon",
+    "top_torsion",
+    "chembert",
+    "graphmvp"
+   ],
+   "rep_count": 5,
+   "budget": 250,
+   "allocation": "performance_weighted",
+   "importance": "lightgbm_gain",
+   "evaluator": "rf"
+  },
+  "lightgbm": {
+   "score_mean": 0.5067450902950313,
+   "reps": [
+    "mhg_gnn",
+    "mordred",
+    "grover",
+    "ecfp4",
+    "smited",
+    "molformer",
+    "avalon",
+    "top_torsion",
+    "chembert",
+    "graphmvp"
+   ],
+   "rep_count": 5,
+   "budget": 250,
+   "allocation": "performance_weighted",
+   "importance": "lightgbm_gain",
+   "evaluator": "rf"
+  }
+ },
+ "top_scores": {
+  "rf": [
+   [
+    "mhg_gnn",
+    0.6262
+   ],
+   [
+    "mordred",
+    0.6286
+   ],
+   [
+    "ecfp4",
+    0.6678
+   ],
+   [
+    "avalon",
+    0.6717
+   ],
+   [
+    "grover",
+    0.6755
+   ]
+  ],
+  "svm": [
+   [
+    "mhg_gnn",
+    0.5022
+   ],
+   [
+    "molformer",
+    0.5234
+   ]
+  ],
+  "lightgbm": [
+   [
+    "mordred",
+    0.5191
+   ],
+   [
+    "mhg_gnn",
+    0.5221
+   ]
+  ]
+ },
+ "pool_dirty": [
+  "avalon",
+  "ecfp4",
+  "grover",
+  "mhg_gnn",
+  "molformer",
+  "mordred"
+ ],
+ "seconds": 4683
+}

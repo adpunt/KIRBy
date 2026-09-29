@@ -1,0 +1,200 @@
+{
+ "dataset": "caco2",
+ "metric": "rmse",
+ "lower_is_better": true,
+ "pool_full": [
+  "atom_pair",
+  "avalon",
+  "ecfp4",
+  "graph_kernel",
+  "grover",
+  "mhg_gnn",
+  "molformer",
+  "pdv",
+  "smited",
+  "top_torsion"
+ ],
+ "baselines": {
+  "graph_kernel": {
+   "rf": 0.3179,
+   "svm": 0.3207,
+   "lightgbm": 0.3102
+  },
+  "mhg_gnn": {
+   "rf": 0.3307,
+   "svm": 0.311,
+   "lightgbm": 0.3155
+  },
+  "ecfp4": {
+   "rf": 0.3242,
+   "svm": 0.3049,
+   "lightgbm": 0.3141
+  },
+  "pdv": {
+   "rf": 0.3169,
+   "svm": 0.3004,
+   "lightgbm": 0.3082
+  },
+  "grover": {
+   "rf": 0.3321,
+   "svm": 0.3059,
+   "lightgbm": 0.3154
+  },
+  "avalon": {
+   "rf": 0.3246,
+   "svm": 0.3181,
+   "lightgbm": 0.307
+  },
+  "top_torsion": {
+   "rf": 0.3314,
+   "svm": 0.3118,
+   "lightgbm": 0.3308
+  },
+  "smited": {
+   "rf": 0.3412,
+   "svm": 0.3129,
+   "lightgbm": 0.3318
+  },
+  "atom_pair": {
+   "rf": 0.3304,
+   "svm": 0.3149,
+   "lightgbm": 0.322
+  },
+  "molformer": {
+   "rf": 0.3511,
+   "svm": 0.3114,
+   "lightgbm": 0.3378
+  }
+ },
+ "top": {
+  "rf": [
+   "pdv",
+   "graph_kernel",
+   "ecfp4",
+   "avalon",
+   "atom_pair"
+  ],
+  "svm": [
+   "pdv",
+   "ecfp4"
+  ],
+  "lightgbm": [
+   "avalon",
+   "pdv"
+  ]
+ },
+ "hybrid": {
+  "rf": {
+   "score_mean": 0.3129162883860706,
+   "reps": [
+    "graph_kernel",
+    "mhg_gnn",
+    "ecfp4",
+    "pdv",
+    "grover",
+    "avalon",
+    "top_torsion",
+    "smited",
+    "atom_pair",
+    "molformer"
+   ],
+   "rep_count": 5,
+   "budget": 250,
+   "allocation": "performance_weighted",
+   "importance": "lightgbm_gain",
+   "evaluator": "rf"
+  },
+  "svm": {
+   "score_mean": 0.29022371826448096,
+   "reps": [
+    "graph_kernel",
+    "mhg_gnn",
+    "ecfp4",
+    "pdv",
+    "grover",
+    "avalon",
+    "top_torsion",
+    "smited",
+    "atom_pair",
+    "molformer"
+   ],
+   "rep_count": 5,
+   "budget": 250,
+   "allocation": "performance_weighted",
+   "importance": "lightgbm_gain",
+   "evaluator": "rf"
+  },
+  "lightgbm": {
+   "score_mean": 0.3056754152586209,
+   "reps": [
+    "graph_kernel",
+    "mhg_gnn",
+    "ecfp4",
+    "pdv",
+    "grover",
+    "avalon",
+    "top_torsion",
+    "smited",
+    "atom_pair",
+    "molformer"
+   ],
+   "rep_count": 5,
+   "budget": 250,
+   "allocation": "performance_weighted",
+   "importance": "lightgbm_gain",
+   "evaluator": "rf"
+  }
+ },
+ "top_scores": {
+  "rf": [
+   [
+    "pdv",
+    0.3169
+   ],
+   [
+    "graph_kernel",
+    0.3179
+   ],
+   [
+    "ecfp4",
+    0.3242
+   ],
+   [
+    "avalon",
+    0.3246
+   ],
+   [
+    "atom_pair",
+    0.3304
+   ]
+  ],
+  "svm": [
+   [
+    "pdv",
+    0.3004
+   ],
+   [
+    "ecfp4",
+    0.3049
+   ]
+  ],
+  "lightgbm": [
+   [
+    "avalon",
+    0.307
+   ],
+   [
+    "pdv",
+    0.3082
+   ]
+  ]
+ },
+ "pool_dirty": [
+  "atom_pair",
+  "avalon",
+  "ecfp4",
+  "graph_kernel",
+  "pdv"
+ ],
+ "seconds": 1255
+}
