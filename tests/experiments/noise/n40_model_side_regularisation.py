@@ -807,9 +807,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     y0, cmask, prov = inject_relative_train_labels(
                         labels, train_idx=train_idx, condition=condition,
                         level=level, resid_sd=resid_sd_by_fold[fold_i],
-                        seed=_seed(dataset_name, condition, draw, fold_i),
-                        heavy_atoms=(heavy[train_idx] if heavy is not None
-                                     else None))
+                        draw=draw, heavy_atoms=heavy)
                 else:
                     y0, cmask, prov = inject_train_labels(
                         labels, spec, train_idx=train_idx, is_clf=False,

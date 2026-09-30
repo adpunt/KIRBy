@@ -144,11 +144,15 @@ def test_shift_and_counts():
     tr = np.arange(150)
     y0, m, prov = inject_shift_train_labels(y, train_idx=tr,
                                             condition='shift_only_p10',
-                                            delta_sd=2.0, seed=4)
+                                            delta_sd=2.0, draw=4)
     d = y0 - y[tr]
-    check('2. the shift moves 10% of the training molecules up by 2 SDs and '
-          'nothing else',
-          int(m.sum()) == 15 and np.allclose(d[m], 2.0 * np.std(y))
+    # Since 2026-09-30 the moved set is drawn over the WHOLE column and the
+    # shift is in SDs of the TRAINING labels, so the share within the fold is
+    # 10% up to sampling rather than exactly.
+    check('2. the shift moves about 10% of the training molecules up by 2 '
+          'training-label SDs and nothing else',
+          0.05 * len(tr) <= int(m.sum()) <= 0.15 * len(tr)
+          and np.allclose(d[m], 2.0 * np.std(y[tr]))
           and np.all(d[~m] == 0.0),
           f"{int(m.sum())} moved by {prov['shift_label_units']:.3f}")
     keep = n32.lowest_share(np.arange(100.0), 0.9)
@@ -164,7 +168,7 @@ def test_itlm_and_shrink():
     tr = np.arange(200)
     y0, m, _ = inject_shift_train_labels(y, train_idx=tr,
                                          condition='shift_only_p10',
-                                         delta_sd=2.0, seed=0)
+                                         delta_sd=2.0, draw=0)
     keep, loss, rounds = n32.itlm(X, y0, np.arange(200), 0.9, rounds=3,
                                   oof_splits=3)
     removed = ~keep

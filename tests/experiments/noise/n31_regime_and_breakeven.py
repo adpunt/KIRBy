@@ -439,10 +439,9 @@ def _passes(dataset_name, conditions, levels=None, draws=None):
     return out
 
 
-def _shift_seed(condition, draw, fold_i):
-    """The same molecules shifted at every delta of one (condition, draw, fold)."""
-    key = f'{condition}|{draw}|{fold_i}'
-    return int(zlib.crc32(key.encode('utf-8')) & 0x7FFFFFFF)
+# _shift_seed (crc32 of condition|draw|fold) was removed 2026-09-30: every
+# experiment now seeds shift noise through noise_helpers.noise_draw_seed, and
+# the fold is not in it.
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -674,7 +673,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if is_shift:
                     y0, mask, prov = inject_shift_train_labels(
                         labels, train_idx=train_idx, condition=condition,
-                        delta_sd=level, seed=_shift_seed(condition, draw, fold_i))
+                        delta_sd=level, draw=draw)
                 else:
                     y0, mask, prov = inject_train_labels(
                         labels, spec, train_idx=train_idx, is_clf=False,

@@ -607,9 +607,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     y0, cmask, prov = inject_relative_train_labels(
                         y_col, train_idx=train_idx, condition=condition,
                         level=level, resid_sd=rsd,
-                        seed=replicate_seed(condition, base, draw, fold_i),
-                        heavy_atoms=(None if heavy_all is None
-                                     else heavy_all[train_idx]))
+                        # One seed rule for every experiment (noise_helpers.
+                        # noise_draw_seed), so 'real' and 'semi_synthetic'
+                        # get the same noise draw. Whole-column heavy atoms.
+                        draw=draw, heavy_atoms=heavy_all)
                 except Exception as exc:
                     errors[f'{base}|{lvl_key}|d{draw}|f{fold_i}|inject'] = (
                         f'{type(exc).__name__}: {exc}')

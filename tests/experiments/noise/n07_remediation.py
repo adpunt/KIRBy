@@ -405,9 +405,10 @@ def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False,
     methods behave under different noise had to come through here and could
     not be asked.
 
-    `noise_fraction` OVERRIDES p, AND ONLY FOR THE OUTLIER FAMILY. p is the
+    `noise_fraction` NO LONGER OVERRIDES p (removed 2026-09-30, see the body).
+    Until then: p is the
     share of training molecules given an error about three times as wide as
-    every other molecule's, and it is the knob n07's own design turns. The
+    every other molecule's, and it was the knob n07's own design turned. The
     other conditions have no p: gaussian and the heavy tails give every
     molecule the same width, grouped_wider takes a group fraction, censoring
     takes a clipped fraction. Forcing p onto them would either raise or be
@@ -430,17 +431,20 @@ def _noise_spec(dataset_name, noise_fraction, level, noise_seed, is_clf=False,
     molecule's corruption depends on which fold it lands in. See
     noise_helpers.noise_spec_for.
     """
-    from dataclasses import replace
     if condition == AS_THEY_COME:
         return None
     if is_clf:
         return noise_spec_for(dataset_name, 'uniform', noise_fraction,
                               noise_seed=noise_seed, is_clf=True)
-    spec = noise_spec_for(dataset_name, condition, level,
+    # ⛔ THE p OVERRIDE WAS REMOVED 2026-09-30 (owner: every experiment injects
+    # noise the same way). It forced p = noise_fraction (0.10) onto every
+    # outlier condition, so outlier_p01 and outlier_p05 -- and the two
+    # outlier_only ones -- were injected with 10% wide errors under names that
+    # say 1% and 5%. Each condition now carries its own registry p, exactly as
+    # noise_spec_for gives it to every other experiment. noise_fraction still
+    # sets how many molecules the cleanups flag; it no longer touches the noise.
+    return noise_spec_for(dataset_name, condition, level,
                           noise_seed=noise_seed)
-    if str(condition).startswith('outlier') and noise_fraction is not None:
-        return replace(spec, params=(('p', float(noise_fraction)),))
-    return spec
 
 
 def _predict_for_metric(model, X, metric_name):

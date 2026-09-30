@@ -1547,7 +1547,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 if condition in SHIFT_ONLY_CONDITIONS:
                     y0, cmask, prov = inject_shift_train_labels(
                         labels, train_idx=train_idx, condition=condition,
-                        delta_sd=level, seed=draw * 1000 + fold_i)
+                        delta_sd=level, draw=draw)
                 elif condition in RELATIVE_CONDITIONS:
                     if resid_sd_rep is None:
                         raise RuntimeError(results['resid_sd_rep_chosen_as'])
@@ -1557,7 +1557,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         y_clean_tr, groups=g_tr, n_splits=OOF_SPLITS)
                     y0, cmask, prov = inject_relative_train_labels(
                         labels, train_idx=train_idx, condition=condition,
-                        level=level, seed=draw * 1000 + fold_i, resid_sd=s_r)
+                        level=level, draw=draw, resid_sd=s_r)
                 else:
                     y0, cmask, prov = inject_train_labels(
                         labels, spec, train_idx=train_idx, is_clf=False,

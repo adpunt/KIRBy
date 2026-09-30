@@ -212,11 +212,14 @@ def test_shift_injector():
     tr = np.arange(250)
     y0, m, prov = inject_shift_train_labels(y, train_idx=tr,
                                             condition='shift_only_p10',
-                                            delta_sd=1.0, seed=4)
+                                            delta_sd=1.0, draw=4)
     d = y0 - y[tr]
-    check('6. a tenth of the training labels moved, up by one label SD, '
-          'the rest untouched',
-          int(m.sum()) == 25 and np.allclose(d[m], np.std(y))
+    # Whole-column draw and training-label SD since 2026-09-30 (noise_helpers.
+    # inject_shift_train_labels), so the share in the fold is about a tenth.
+    check('6. about a tenth of the training labels moved, up by one '
+          'training-label SD, the rest untouched',
+          0.05 * len(tr) <= int(m.sum()) <= 0.15 * len(tr)
+          and np.allclose(d[m], np.std(y[tr]))
           and np.all(d[~m] == 0), f'{int(m.sum())} moved')
 
 

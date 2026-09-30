@@ -236,7 +236,7 @@ NOISY_SEARCH_SEED = 0  # kept for readers; the sweep uses NOISY_SEARCH_SEEDS bel
 NOISY_SEARCH_SEEDS = (0, 1, 2)
 
 
-def noisy_search_specs(task_type: str, noise_seeds=None):
+def noisy_search_specs(task_type: str, noise_seeds=None, dataset_name=None):
     """The NoiseSpec list n15 sweeps, for this task type.
 
     THREE DRAWS PER LEVEL, not one. Owner's decision 2026-09-12. n07, n09, n11,
@@ -256,8 +256,9 @@ def noisy_search_specs(task_type: str, noise_seeds=None):
     0.0 — measured at 0.001953 on 200 labels and 0.0078125 on 400 — so a few
     labels flip there, and a different number of them on every draw.
     """
-    from kirby.noise_spec import default_spec
+    from kirby.noise_spec import DEFAULT_STRATEGY_CLF, DEFAULT_STRATEGY_REG
     is_clf = (task_type == 'classification')
+    cond = DEFAULT_STRATEGY_CLF if is_clf else DEFAULT_STRATEGY_REG
     seeds = tuple(NOISY_SEARCH_SEEDS if noise_seeds is None else noise_seeds)
     # The shared grid for THIS task type, so n15's levels line up with every
     # other noise experiment's and the numbers can be read against each other.
@@ -273,8 +274,13 @@ def noisy_search_specs(task_type: str, noise_seeds=None):
     for lvl in levels:
         lvl_seeds = seeds if (lvl > 0 or is_clf) else seeds[:1]
         for sd in lvl_seeds:
-            out.append(default_spec(is_clf=is_clf, target_effective_noise=lvl,
-                                    noise_seed=int(sd)))
+            # noise_spec_for, the suite's one rule, since 2026-09-30 (owner:
+            # every experiment injects noise the same way). default_spec seeded
+            # the draw with the bare draw index (0, 1, 2), so n15's gaussian
+            # noise was a different draw from every other experiment's at the
+            # same condition, level and draw.
+            out.append(noise_spec_for(dataset_name, cond, lvl,
+                                      noise_seed=int(sd), is_clf=is_clf))
     return out
 
 
@@ -284,6 +290,24 @@ def noisy_search_specs(task_type: str, noise_seeds=None):
 # range, n09/n11/n12 added Gaussian noise to every row at a fraction of the range,
 # and n13 had four distributions of its own. None went through noiseInject. They are
 # replaced by the two functions below.
+
+def noise_draw_seed(condition, draw, base_seed=42):
+    """THE seed of one noise draw: condition, draw index and base seed only.
+
+    The level is not in it and the fold is not in it (noise_spec_for's notes
+    below say why). Every injector in the suite uses this number -- the
+    registry conditions through noise_spec_for, the shift and relative
+    conditions through inject_shift_train_labels / inject_relative_train_labels
+    -- so the same (condition, level, draw) is the same noise in every
+    experiment. Made the one rule on 2026-09-30 (owner: "make it uniform");
+    before that n31, n32/n41, n38 and n40 each seeded shift and relative
+    conditions their own way, with the fold inside the seed.
+    """
+    import zlib
+    digest = zlib.crc32(str(condition).encode('utf-8'))
+    return (int(base_seed) * 1000003 + digest
+            + int(draw) * 15485863) & 0x7FFFFFFF
+
 
 def noise_spec_for(dataset_name, condition, level, base_seed=42,
                    noise_seed=0, is_clf=False):
@@ -337,9 +361,7 @@ def noise_spec_for(dataset_name, condition, level, base_seed=42,
         # CLASSIFICATION_STRATEGIES instead.
         condition = DEFAULT_STRATEGY_CLF
 
-    digest = zlib.crc32(str(condition).encode('utf-8'))
-    selection_seed = (int(base_seed) * 1000003 + digest
-                      + int(noise_seed) * 15485863) & 0x7FFFFFFF
+    selection_seed = noise_draw_seed(condition, noise_seed, base_seed)
     # THE LEVEL IS NOT IN THE SEED. It used to be, as
     # `selection_seed + round(level*1000)*7919`, so going from level 0.15 to
     # level 0.30 threw the first set of label errors away and rolled a fresh
@@ -604,14 +626,24 @@ DETECTION_IS_DEFINED = ('outlier_p01', 'outlier_p05', 'outlier_p10',
 DETECTION_DEFINED_WITHOUT_INJECTION = ('curator_flag',)
 
 
-def inject_shift_train_labels(y_all, *, train_idx, condition, delta_sd, seed):
-    """Move a random share of one fold's training labels up by delta_sd label SDs.
+def inject_shift_train_labels(y_all, *, train_idx, condition, delta_sd, draw,
+                              base_seed=42):
+    """Move a share of the labels up by delta_sd label SDs; return one fold's rows.
 
     y_all      the FULL clean label column
     train_idx  this fold's training rows
     condition  a key of SHIFT_ONLY_CONDITIONS; it sets the share moved
-    delta_sd   the shift, in SDs of the full clean label column
-    seed       the draw; the same seed picks the same molecules in every arm
+    delta_sd   the shift, in SDs of this fold's TRAINING labels (the unit
+               inject_train_labels scales every registry condition by)
+    draw       the draw index; the seed is noise_draw_seed(condition, draw)
+
+    WHICH MOLECULES MOVE IS DRAWN OVER THE WHOLE COLUMN and the fold's training
+    rows are then taken, as inject_training_rows does for the registry
+    conditions. So a molecule is moved or not whatever fold it trains in, and
+    the share moved within a fold is the condition's share up to sampling.
+    Until 2026-09-30 the draw was over the training slice with a seed each
+    caller built itself (n31 crc32 with the fold, n32/n41 draw*1000+fold), and
+    the shift was in SDs of the whole column.
 
     Returns (y_noisy_train, moved_mask_train, provenance), the same shape as
     inject_train_labels, so detection_scores grades it the same way.
@@ -622,20 +654,24 @@ def inject_shift_train_labels(y_all, *, train_idx, condition, delta_sd, seed):
     y_all = np.asarray(y_all, dtype=float).ravel()
     train_idx = np.asarray(train_idx)
     share = SHIFT_ONLY_CONDITIONS[condition]
-    n_train = len(train_idx)
-    n_move = int(round(share * n_train))
-    rng = np.random.RandomState(int(seed))
-    moved = np.zeros(n_train, dtype=bool)
+    n_all = len(y_all)
+    seed = noise_draw_seed(condition, draw, base_seed)
+    moved_all = np.zeros(n_all, dtype=bool)
+    n_move = int(round(share * n_all))
     if n_move > 0 and float(delta_sd) != 0.0:
-        moved[rng.choice(n_train, size=n_move, replace=False)] = True
-    label_sd = float(np.std(y_all))
-    shift = float(delta_sd) * label_sd
+        rng = np.random.RandomState(seed ^ 0x5CA1E)
+        moved_all[rng.choice(n_all, size=n_move, replace=False)] = True
     y_train = y_all[train_idx].copy()
+    label_sd = float(np.std(y_train))
+    shift = float(delta_sd) * label_sd
+    moved = moved_all[train_idx]
     y_train[moved] += shift
     return y_train, moved, {
         'condition': condition, 'share': share, 'delta_sd': float(delta_sd),
-        'shift_label_units': shift, 'label_sd': label_sd,
-        'n_moved': int(moved.sum()), 'n_training': int(n_train), 'seed': int(seed),
+        'shift_label_units': shift, 'label_sd_training': label_sd,
+        'n_moved': int(moved.sum()), 'n_training': int(len(train_idx)),
+        'seed': int(seed), 'draw': int(draw),
+        'drawn_over': 'whole column, then training rows',
     }
 
 
@@ -675,25 +711,52 @@ def oof_residual_sd(X, y, groups=None, n_splits=5, seed=0):
     return float(np.std(y - p)), p
 
 
-def inject_relative_train_labels(y_all, *, train_idx, condition, level, seed,
-                                 resid_sd, heavy_atoms=None):
+def inject_relative_train_labels(y_all, *, train_idx, condition, level, draw,
+                                 resid_sd, heavy_atoms=None, base_seed=42,
+                                 y_base_train=None):
     """One fold's training labels through noiseInject's RelativeNoiseInjector.
 
-    Thin plumbing shared by n38, n40 and n41: slices the fold's training rows
-    out of the FULL clean label column, injects `condition` at `level` in units
-    of `resid_sd`, and returns (y_noisy_train, moved_mask_train, provenance) --
-    the same shape as inject_train_labels. `seed` is noiseInject's random_state
-    (its selection seed defaults to it). heavy_atoms: one per training
-    molecule, hetero_seen only.
+    Shared by n32, n38, n40, n41 and n42. `level` is in units of `resid_sd`,
+    this fold's out-of-fold residual SD. The seed is
+    noise_draw_seed(condition, draw).
+
+    THE NOISE IS DRAWN OVER THE WHOLE COLUMN and the fold's training rows are
+    then taken, as inject_training_rows does for the registry conditions, so a
+    molecule's noise does not depend on its fold. noiseInject's noise does not
+    read the label values (relative.py: epsilon from rng, unit, heavy_atoms),
+    so drawing it over the column and adding the training rows' share to the
+    fold's labels is the same as injecting into those labels.
+    Until 2026-09-30 the draw was over the training slice and each caller built
+    its own seed with the fold inside it (n32/n41 draw*1000+fold, n38
+    crc32(...fold), n40 crc32(dataset|...fold)).
+
+    heavy_atoms   one per molecule of the WHOLE column (hetero_seen only)
+    y_base_train  optional replacement for the fold's clean training labels
+                  (n38's semi-synthetic labels); the noise is added to these.
+
+    Returns (y_noisy_train, moved_mask_train, provenance).
     """
     import numpy as np
-    y_train = np.asarray(y_all, dtype=float).ravel()[np.asarray(train_idx)]
+    y_all = np.asarray(y_all, dtype=float).ravel()
+    train_idx = np.asarray(train_idx)
+    seed = noise_draw_seed(condition, draw, base_seed)
+    if heavy_atoms is not None and len(np.asarray(heavy_atoms).ravel()) != len(y_all):
+        raise ValueError('inject_relative_train_labels: heavy_atoms must have one '
+                         'entry per molecule of the whole column, got '
+                         f'{len(np.asarray(heavy_atoms).ravel())} for {len(y_all)}')
     res = RelativeNoiseInjector.from_condition(
         condition, random_state=int(seed)).inject_verbose(
-            y_train, level=level, unit=resid_sd, heavy_atoms=heavy_atoms)
+            y_all, level=level, unit=resid_sd, heavy_atoms=heavy_atoms)
+    eps_tr = np.asarray(res.epsilon)[train_idx]
+    base = (np.asarray(y_base_train, dtype=float).ravel()
+            if y_base_train is not None else y_all[train_idx])
+    y_noisy = base + eps_tr
+    moved = np.asarray(res.moved_mask)[train_idx]
     prov = res.as_row()
-    prov['resid_sd'] = float(resid_sd)
-    return res.y_noisy, res.moved_mask, prov
+    prov.update({'resid_sd': float(resid_sd), 'seed': int(seed), 'draw': int(draw),
+                 'drawn_over': 'whole column, then training rows',
+                 'n_moved_training': int(moved.sum())})
+    return y_noisy, moved, prov
 
 
 def cleanlab_suspicion(X, y, model_name='lightgbm', seed=0, cv_n_folds=5):

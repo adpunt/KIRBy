@@ -231,13 +231,16 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
         """
         if float(level) == 0.0:
             return None
-        digest = zlib.crc32(strategy.encode('utf-8'))
-        selection_seed = (int(noise_seed) * 1000003 + digest) & 0x7FFFFFFF
-        seed = (selection_seed
-                + int(round(float(level) * 1000)) * 7919) & 0x7FFFFFFF
-        return NoiseSpec(strategy=strategy, target_effective_noise=float(level),
-                         noise_seed=seed, selection_seed=selection_seed,
-                         dose_units=dose_units)
+        # THE SUITE'S ONE RULE since 2026-09-30 (owner: every experiment injects
+        # noise the same way): noise_helpers.noise_spec_for, draw 0, with
+        # --noise-seed as the base seed (42 by default, the same as every other
+        # experiment). Until then c10 put the level into the draw seed
+        # (+ round(level*1000)*7919), which noise_spec_for removed on
+        # 2026-09-12 because it re-drew the errors at every level instead of
+        # scaling one draw.
+        from experiments.noise.noise_helpers import noise_spec_for
+        return noise_spec_for(dataset_name, strategy, level,
+                              base_seed=int(noise_seed), noise_seed=0)
 
     def _noisy_column(spec):
         """The noise source for one condition: `src[train_idx]` is that fold's
