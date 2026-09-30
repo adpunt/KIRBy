@@ -424,7 +424,7 @@ SEARCH_SCORES_ON = 'asis'
 BASE_RANK_MODEL = 'rf'
 
 
-def search_settings(n_samples, pruning_mode='aggressive_pruning'):
+def search_settings(n_samples, pruning_mode='calibrated'):
     """The settings BOTH searches run under. n15's, for n15's reason.
 
     speed='fast' keeps the fast-tier allocation methods, importance methods,
@@ -886,8 +886,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ranked inside each fold, from that fold's own uncleaned search; see the
     # module docstring. {regime|level|fold: {base_1: rep, base_2: rep}}.
     base_reps_by_fold = {}
+    # calibrated, not aggressive_pruning: owner's decision 2026-09-30 (every
+    # experiment that builds its own search runs the fast grid with the
+    # calibrated schedule, the only one measured to lose no winner).
     settings = search_settings(len(labels),
-                               kwargs.get('pruning_mode', 'aggressive_pruning'))
+                               kwargs.get('pruning_mode', 'calibrated'))
     # A caller may narrow the search, and the smoke does — it checks the
     # machinery, not the cost. What it narrowed is written to the result file
     # under 'search_settings', so a narrowed run reads as a narrowed run.
