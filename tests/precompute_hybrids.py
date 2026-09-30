@@ -730,6 +730,24 @@ def precompute_dataset(dataset_name, tiers=('general',),
             if not model_lists:
                 model_lists = [None]
 
+        # gp on the small datasets, for EVERY named list here (owner's
+        # decision 2026-09-30). The experiments add dataset_policy's extras
+        # (gp, under 1,000 molecules) to whatever list they ask for, distance,
+        # knn and ridge included (_shared._apply_small_dataset_models), but
+        # until now this file added them only to the sim pass. So every
+        # distance, knn and ridge read on those twelve datasets missed and
+        # fitted gp live.
+        try:
+            from experiments.dataset_policy import small_dataset_extra_models
+            _small_extra = list(small_dataset_extra_models(dataset_name) or [])
+        except Exception:
+            _small_extra = []
+        if _small_extra:
+            model_lists = [
+                (ml if ml is None
+                 else list(ml) + [m for m in _small_extra if m not in ml])
+                for ml in model_lists]
+
         # speed picks the default three lists; an explicit list wins.
         _extra = {'speed': speed}
         if allocation_methods is not None:
