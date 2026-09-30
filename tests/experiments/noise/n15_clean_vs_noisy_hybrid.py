@@ -358,7 +358,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         downstream_models, task_type=task_type, n_samples=len(labels))
     sample_X = next(iter(reps.values()))
 
-    specs = kwargs.get('noise_specs') or noisy_search_specs(task_type)
+    specs = kwargs.get('noise_specs') or noisy_search_specs(
+        task_type, dataset_name=dataset_name)
     # The models the search fits are the models this run will hand recipes to.
     search_settings = _search_settings(len(labels), list(model_factories))
     print(f"  search settings, both arms: {search_settings.get('speed')} tier, "
