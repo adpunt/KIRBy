@@ -22,6 +22,7 @@ run on the fast speed tier.
 """
 import sys
 import os
+import time as _time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -112,7 +113,60 @@ def _family_evaluators(fam_name):
             continue  # no plain model name for this family; nothing to pass
         if name not in names:
             names.append(name)
+    if not names:
+        # MEASURED 2026-09-25, local debug grid only. _local_grid.apply() sets
+        # FAST_INTERNAL_EVALUATORS to ['match'] alone. Lasso has no plain model
+        # name for 'match' to resolve to, so the loop above dropped its only
+        # entry and this returned []. find_best_hybrid was then handed an EMPTY
+        # internal_evaluators list for all four Lasso variants. Under the
+        # shipped list ['rf', 'match', 'dnn', 'lightgbm'] Lasso still gets
+        # ['rf', 'dnn', 'lightgbm'], so this branch never fires on the server.
+        # 'rf' is the evaluator every other family's list already contains.
+        names = ['rf']
+        print(f"    {fam_name}: the evaluator list resolved to nothing "
+              f"(base={list(base)}, no matched name), falling back to ['rf']")
     return names
+
+
+def _apply_model_njobs(est, fam_name, var_name):
+    """Set the estimator's worker-process count, when it has one.
+
+    MEASURED 2026-09-25, cProfile over one c06 search on flab_thermo_tresanco
+    (672 antibodies, 5 representations at 1000 features each, 2 budgets, 3
+    allocation methods, 1 importance method, 1 internal evaluator, 3 folds =
+    18 downstream fits). The search took 175.4s. 157.9s of that was the 18
+    RandomForestRegressor.fit calls, at 8.8s each. The trees are not the cost:
+
+      102.1s  time.sleep inside joblib's _retrieve — the parent process
+              polling for worker processes
+       53.5s  sklearn's _make_estimator / clone / get_params /
+              inspect.signature — 1800 estimator clones, 100 trees x 18 fits
+
+    get_model_family_variants builds RF, kNN and XGBoost with n_jobs=-1, so one
+    fit asks for one worker per core. The local env file already pins every
+    other thread pool to one (OMP_NUM_THREADS=1, KIRBY_LGBM_THREADS=1) because
+    this laptop runs several experiments at once; n_jobs=-1 was the one place
+    left oversubscribing it, and the workers then spent their time waiting on
+    each other.
+
+    This changes no condition and no row: same estimator, same
+    hyperparameters, same molecules, same folds, identical predictions. It
+    changes only how many processes one fit spawns.
+
+    KIRBY_C06_MODEL_NJOBS sets the value. Unset, the estimator is left exactly
+    as get_model_family_variants built it EXCEPT under the local debug grid,
+    where it defaults to 1. The server is unchanged.
+    """
+    _default = '1' if os.environ.get('KIRBY_LOCAL_GRID') else ''
+    _njobs = os.environ.get('KIRBY_C06_MODEL_NJOBS', _default).strip()
+    if not _njobs:
+        return est
+    try:
+        if 'n_jobs' in est.get_params():
+            est.set_params(n_jobs=int(_njobs))
+    except (AttributeError, ValueError, TypeError) as _e:
+        print(f"      {fam_name}/{var_name}: n_jobs not set ({_e})")
+    return est
 
 
 def _evaluator_label(fam_name, evaluator):
@@ -166,14 +220,46 @@ def run(data, config, output_dir, dataset_name, families=None):
     # See COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
     max_dim = max((v.shape[1] for v in reps.values()), default=n_samples)
     viable_cap = min(n_samples, max_dim)
-    if len(eff_budgets) < 4:
+    #
+    # KIRBY_C06_BUDGET_WIDEN: '1' widens as described above, '0' uses exactly
+    # the budgets handed in. The default is '1' — the shipped behaviour, so the
+    # server is unchanged — EXCEPT under the local debug grid, where
+    # KIRBY_LOCAL_BUDGETS is already the whole budget axis and widening it
+    # undoes the cut the owner made in env.sh.
+    #
+    # MEASURED 2026-09-25 on flab_thermo_tresanco (672 antibodies, 5
+    # representations capped at 1000 features each): with KIRBY_LOCAL_BUDGETS
+    # =100,250 this printed [33, 67, 100, 134, 235, 250, 336] — 7 budgets where
+    # the grid asked for 2. Each search is allocations x importance methods x
+    # internal evaluators x budgets, so that is 3.5x the configurations, and
+    # c06 runs 28 searches per dataset (7 families x 4 capacity variants).
+    #
+    # What the cut costs: each variant's peak budget is located to one of 2
+    # levels instead of 7, so the capacity-vs-budget rho below is coarser. It
+    # is still defined — the test below is n_distinct_budgets >= 2.
+    _widen_default = '0' if os.environ.get('KIRBY_LOCAL_GRID') else '1'
+    _widen = os.environ.get('KIRBY_C06_BUDGET_WIDEN', _widen_default) == '1'
+    if _widen and len(eff_budgets) < 4:
         data_rel = sorted({max(5, int(viable_cap * f))
                            for f in (0.05, 0.1, 0.2, 0.35, 0.5)})
         eff_budgets = sorted({b for b in (eff_budgets + data_rel)
                               if 5 <= b <= viable_cap})
         print(f"  Small-data budget grid widened to {eff_budgets}")
+    elif not _widen:
+        print(f"  Budget grid left at {eff_budgets} "
+              f"(KIRBY_C06_BUDGET_WIDEN=0; widening is off under the local "
+              f"debug grid)")
 
     all_families = get_model_family_variants()
+
+    # KIRBY_C06_FAMILIES: comma-separated family names, same effect as
+    # --families. Unset, every family runs, so the server is unchanged. An
+    # explicit --families on the command line wins over it.
+    _fams_env = os.environ.get('KIRBY_C06_FAMILIES', '').strip()
+    if _fams_env and not families:
+        families = [f.strip() for f in _fams_env.split(',') if f.strip()]
+        print(f"  KIRBY_C06_FAMILIES={_fams_env}: running {families} only")
+
     if families:
         _unknown = [f for f in families if f not in all_families]
         if _unknown:
@@ -187,6 +273,41 @@ def run(data, config, output_dir, dataset_name, families=None):
     # Compute aug_strategy first so we can pass it to the family gate
     # (matches the strategy each per-variant find_best_hybrid call will use).
     augs = data.get('augmentations')
+
+    # c06 took data['augmentations'] straight and searched 'uncapped' whenever
+    # the dataset had any, so KIRBY_LOCAL_AUG_CONDITIONS never reached it. c02
+    # and c05 both call _local_aug_conditions for exactly this reason
+    # (c02_complexity_grid.py:73, c05_learning_curves.py:157) and c06 was the
+    # one left out. _shared._local_aug_conditions states the cost of the
+    # augmented conditions: an 'uncapped' or 'capped' configuration-fold is
+    # about eight model fits where 'none' is one, because the extra feature
+    # block is offered at several widths and each one is fitted and scored on
+    # the internal split.
+    #
+    # MEASURED 2026-09-25 on flab_thermo_tresanco, all 672 antibodies: one
+    # search under 'uncapped' — 2 budgets, 3 allocation methods, 1 importance
+    # method, 1 internal evaluator, 3 folds — took 572.3s, and c06 runs one per
+    # capacity variant.
+    #
+    # WHAT IT COSTS: with KIRBY_LOCAL_AUG_CONDITIONS set, the augmentation
+    # question has no answer in this run. Every family's heatmap, optimal
+    # budget and capacity correlation is then measured on the base
+    # representations alone. Every antibody is still used. It also changes
+    # which families run: _DATASET_STRATEGY_SKIPS skips gp for
+    # flab_thermo_tresanco under 'uncapped' and not under 'none', so the GP
+    # family comes BACK when the augmentations are dropped. Unset — the
+    # cluster — this block does nothing and no server run changes.
+    from experiments._shared import _local_aug_conditions
+    _aug_kept = _local_aug_conditions(['none', 'uncapped', 'capped'])
+    if augs and 'uncapped' not in _aug_kept:
+        print(f"  [local] KIRBY_LOCAL_AUG_CONDITIONS keeps {_aug_kept} and c06 "
+              f"asked for 'uncapped', so the augmentation representations are "
+              f"dropped from every search here. All {n_samples} antibodies are "
+              f"still used; the augmentation question has no answer in this "
+              f"run.")
+        augs = None
+    results_aug_conditions_kept = list(_aug_kept)
+
     aug_strategy = 'uncapped' if augs else 'none'
 
     # Family-level canonical gate via _resolve_models (LIST form).
@@ -269,7 +390,38 @@ def run(data, config, output_dir, dataset_name, families=None):
     except Exception as _e:
         print(f"  Could not load precompute importance_cache: {_e}")
 
-    results = {'families': {}}
+    results = {'families': {},
+               'augmentation_conditions_kept': results_aug_conditions_kept}
+
+    # KIRBY_C06_VARIANTS_PER_FAMILY: how many capacity settings of each family
+    # are searched. Unset (the shipped value) every family keeps all four, so
+    # the server is unchanged. Set to k, each family keeps k settings evenly
+    # spaced along its capacity index INCLUDING both ends, so the gradient
+    # still spans the family's full capacity range — the lowest-capacity and
+    # highest-capacity variant are always kept.
+    #
+    # What it costs: the capacity-vs-optimal-budget rho below is computed over
+    # k points instead of 4, and the code refuses to compute it at all below 3
+    # points ('insufficient_variants'). So 3 is the floor. It is a CONDITION
+    # cut: every variant still trains on every molecule.
+    _vpf = os.environ.get('KIRBY_C06_VARIANTS_PER_FAMILY', '').strip()
+    if _vpf:
+        _k = int(_vpf)
+        if _k < 3:
+            raise ValueError(
+                f"KIRBY_C06_VARIANTS_PER_FAMILY={_k}: spearmanr over capacity "
+                f"and optimal budget needs at least 3 variants, and c06 records "
+                f"'insufficient_variants' below that. Use 3 or more.")
+        for _fam in list(all_families):
+            _vs = all_families[_fam]
+            if len(_vs) > _k:
+                _idx = sorted({round(i * (len(_vs) - 1) / (_k - 1))
+                               for i in range(_k)})
+                _kept = [_vs[i] for i in _idx]
+                print(f"  {_fam}: {len(_vs)} capacity settings cut to {_k} "
+                      f"({[v[0] for v in _kept]}); "
+                      f"dropped {[v[0] for v in _vs if v not in _kept]}")
+                all_families[_fam] = _kept
 
     for fam_name, variants in all_families.items():
         # DECIDED 2026-09-12: the family's own evaluator name goes in the list
@@ -288,6 +440,7 @@ def run(data, config, output_dir, dataset_name, families=None):
 
         for var_name, var_factory, capacity_idx in variants:
             print(f"\n    Variant: {var_name} (capacity={capacity_idx})")
+            _t_var = _time.time()
             fam_result['heatmap'][var_name] = {}
 
             # Family-unique downstream-model name. The result cache keys on the
@@ -305,7 +458,8 @@ def run(data, config, output_dir, dataset_name, families=None):
                     base_reps=reps,
                     labels=labels,
                     groups=groups,
-                    models={model_key: var_factory()},
+                    models={model_key: _apply_model_njobs(
+                        var_factory(), fam_name, var_name)},
                     budgets=eff_budgets,
                     task_type='regression',
                     metric=metric_name,
@@ -332,6 +486,28 @@ def run(data, config, output_dir, dataset_name, families=None):
                     verbose=False,
                     importance_cache=_precompute_importance,
                 )
+            except SystemExit as e:
+                # SystemExit is NOT an Exception, so the handler below does not
+                # see it. A library that calls sys.exit() inside a search --
+                # AntiFold's loader does -- would otherwise walk straight past
+                # this loop and kill the process with no traceback and no line
+                # saying which variant it died on, taking the other six
+                # families with it. Same remedy as complexity_helpers.py:1240.
+                print(f"      search failed: a library called sys.exit({e.code}) "
+                      f"instead of raising. Recorded; the remaining variants "
+                      f"still run.")
+                import traceback
+                traceback.print_exc()
+                fam_result['optimal_budget'][var_name] = {
+                    'budget': None, 'r2': float('nan'),
+                    'capacity_index': capacity_idx,
+                    'error': f'SystemExit({e.code})',
+                    'error_kind': 'SystemExit',
+                    'evaluator': None, 'evaluator_label': None,
+                    'fold_scores': None,
+                    'n_folds_scored': None, 'n_folds_asked': None,
+                }
+                continue
             except Exception as e:
                 print(f"      search failed: {e}")
                 fam_result['optimal_budget'][var_name] = {
@@ -345,6 +521,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                 }
                 continue
 
+            print(f"      search done in {_time.time() - _t_var:.1f}s")
             per_budget = search.best_by_model_budget.get(model_key, {})
             per_budget_val = {}
             # Iterate keys actually present (find_best_hybrid may append n_samples

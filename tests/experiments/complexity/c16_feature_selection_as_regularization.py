@@ -28,12 +28,14 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge, LogisticRegression
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.svm import SVR, SVC
 from experiments._shared import (
+    _local_aug_conditions,
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
@@ -49,6 +51,56 @@ from experiments._shared import (
     RIDGE_MODELS,
 )
 from kirby.find_best_hybrid import _predict_for_metric, _resolve_models, DEFAULT_MODELS
+
+
+# =========================================================================
+# WHERE THE WALL CLOCK GOES
+# =========================================================================
+# Every line c16 prints about its own progress carries seconds since run()
+# started. Added 2026-09-25 after a local run sat for 25 minutes between the
+# experiment banner and its first heatmap row with nothing printed, so there
+# was no way to tell a slow recipe lookup from a slow cell.
+_C16_T0 = [None]
+
+# =========================================================================
+# TWO QUANTITIES EVERY CELL RECOMPUTES AND THAT DO NOT DEPEND ON THE CELL
+# =========================================================================
+# Measured 2026-09-25 on flab_thermo_tresanco (672 antibodies, 5
+# representations capped at 1000 features each, 3 folds). One cell is one
+# (regularisation setting, budget) pair and it calls build_fold_hybrid once per
+# fold, so the heatmap is 14 settings x 3 budgets x 3 folds = 126 builds. Two
+# things inside each of those builds are paid for again every time:
+#
+#  1. per-feature importance over the five representations. create_hybrid's own
+#     comment (_shared.py, where precomputed_importance is forwarded) says it
+#     depends on the fold and the importance method and on NOTHING else -- not
+#     the allocation, not the downstream model, not the budget. 126 builds
+#     recompute what is 3 distinct vectors, one per fold.
+#  2. the per-representation baseline scores the allocation turns into a budget
+#     split. Those depend on the fold and on the estimator, and NOT on the
+#     budget or the allocation method -- hybrid.py:6656 says recomputing them
+#     costs ~240s and hands them back on feature_info['allocation_baseline_
+#     scores'] so a caller sweeping budgets can pass them straight back in.
+#     Each (regularisation setting, fold) pays for them 3 times, once per
+#     budget, where 1 would do.
+#
+# Neither is a condition of this experiment and neither changes a number: they
+# are the same vectors, computed once instead of 126 and 3 times. f31's
+# verification block (f31_internal_evaluator_tuning.py:548) is the existing
+# check that precomputed_importance gives the identical allocation.
+#
+# Default: ON for a local run (KIRBY_LOCAL_GRID set by
+# /Volumes/seagate/kirby_localrun/env.sh), OFF everywhere else, so a cluster
+# run recomputes exactly as it did before and is bit-identical.
+_C16_REUSE_FOLD_WORK = os.environ.get(
+    'KIRBY_C16_REUSE_FOLD_WORK',
+    '1' if os.environ.get('KIRBY_LOCAL_GRID') else '0') == '1'
+
+
+def _c16_t():
+    if _C16_T0[0] is None:
+        _C16_T0[0] = time.time()
+    return time.time() - _C16_T0[0]
 
 
 # =========================================================================
@@ -168,8 +220,22 @@ def _score_prediction(model, X_val, y_val, metric_fn, task_type):
 
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
                    metric_fn, augmentations=None, blueprint=None,
-                   task_type='regression'):
+                   task_type='regression',
+                   importance_by_fold=None, alloc_scores_by_fold=None):
     """Evaluate one (model, budget) cell. Returns (score, train_score, fold_scores).
+
+    importance_by_fold: {(fold, importance_method): {rep: scores}} shared by the
+        WHOLE heatmap and filled here on first use. Per-feature importance over
+        the base representations depends on the fold and the importance method
+        and on nothing else, so every cell can read the same vector.
+    alloc_scores_by_fold: {(fold, internal_evaluator): {rep: score}} shared by
+        the budgets of ONE (family, regularisation setting) and filled from
+        feature_info['allocation_baseline_scores'] on first use. Those scores
+        depend on the fold and the estimator, so they may not be shared across
+        regularisation settings -- alpha=0.001 and alpha=100 are different
+        estimators and score the representations differently.
+    Both None (the cluster default) recomputes everything inside create_hybrid,
+    which is what this file did before 2026-09-25.
 
     fold_scores is the list of per-fold VALIDATION scores (same values that are
     averaged into `score`). It is threaded out so the honest leave-one-fold-out
@@ -211,6 +277,34 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
             continue
         if budget is None or budget >= sum(v.shape[1] for v in reps.values()):
             continue
+        # Per-feature importance for this fold, computed on the rows
+        # create_hybrid itself would use: it carves an internal holdout out of
+        # the fold's training rows with internal_holdout_split and ranks
+        # features on the training side of that carve. Computing it on the
+        # whole fold would rank features on rows create_hybrid holds out.
+        _pre_imp = None
+        if importance_by_fold is not None and blueprint is not None:
+            _imeth = getattr(blueprint, 'importance_method', None)
+            _ikey = (_fold_i, _imeth)
+            if _ikey not in importance_by_fold:
+                from kirby.hybrid import (compute_feature_importance,
+                                          internal_holdout_split)
+                _inner_tr, _ = internal_holdout_split(
+                    len(y_train), y_train,
+                    (groups[train_idx] if groups is not None else None))
+                importance_by_fold[_ikey] = compute_feature_importance(
+                    {k: v[_inner_tr] for k, v in train_reps.items()},
+                    y_train[_inner_tr], method=_imeth)
+            _pre_imp = importance_by_fold[_ikey]
+
+        # The per-representation baseline scores this fold's estimator gives.
+        # Keyed by the internal evaluator as well as the fold, because a
+        # blueprint naming a different evaluator scores the representations
+        # with a different model.
+        _akey = (_fold_i, getattr(blueprint, 'internal_evaluator', None))
+        _pre_alloc = (alloc_scores_by_fold.get(_akey)
+                      if alloc_scores_by_fold is not None else None)
+
         try:
             # ⛔ budget_override, OR THE ROW IS NOT THE BUDGET IT IS LABELLED.
             # get_best_for_downstream returns the exact-budget entry when there
@@ -227,7 +321,13 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
                 groups=(groups[train_idx] if groups is not None else None),
                 budget_override=budget,
                 model=model_factory(),
-                metric_fn=metric_fn)
+                metric_fn=metric_fn,
+                precomputed_importance=_pre_imp,
+                precomputed_alloc_scores=_pre_alloc)
+            if (alloc_scores_by_fold is not None and _pre_alloc is None):
+                _sc = (fi or {}).get('allocation_baseline_scores')
+                if _sc:
+                    alloc_scores_by_fold[_akey] = dict(_sc)
             _bp_budget = getattr(blueprint, 'budget', None)
             if _bp_budget is not None and int(_bp_budget) != int(budget):
                 blueprint_budget_mismatch.add((int(budget), int(_bp_budget)))
@@ -264,6 +364,7 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
 
 def run(data, config, output_dir, dataset_name, **kwargs):
     """C16: Feature selection as regularization."""
+    _C16_T0[0] = time.time()
     print("\n" + "=" * 70)
     print("EXPERIMENT C16: FEATURE SELECTION AS REGULARIZATION")
     print("=" * 70)
@@ -326,9 +427,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The owner's 2026-09-12 decision says c16 asks the pool for 'svm' for SVR;
     # this makes the named list carry what that decision asks for.
     C16_MODELS = sorted(set(RIDGE_MODELS) | set(_family_to_canonical.values()))
-    # c16 evaluates on a fixed blueprint pulled via aug-aware pool helper;
-    # 'uncapped' when augs present, 'none' otherwise.
-    _c16_strategy = 'uncapped' if augmentations else 'none'
+    # ⛔ THE TWO ENDS OF THE BUDGET AXIS WERE CHOSEN UNDER DIFFERENT
+    # AUGMENTATION CONDITIONS. Fixed 2026-09-25.
+    #
+    # This file names an augmentation condition in two places: here, and again
+    # for the fast search at capped_full below. Both said 'uncapped' whenever
+    # the dataset carries augmentation representations. The POOL side does not:
+    # _pool_conditions runs its list through _local_aug_conditions, so with
+    # KIRBY_LOCAL_AUG_CONDITIONS=none the recipes at budgets 100 and 250 come
+    # from a search with no extra features while the recipe at the
+    # full-dimension budget came from a search that pooled the 48 mutation
+    # features on top of the five representations. The heatmap's x-axis is the
+    # budget, and its last column was built under a different condition from
+    # the rest of the row.
+    #
+    # It is also what made the run unfinishable. _local_aug_conditions' own
+    # docstring: an 'uncapped' or 'capped' configuration-fold costs about eight
+    # model fits where 'none' costs one. Measured 2026-09-25 on
+    # flab_thermo_tresanco: one family's capped_full=1344 search took 28
+    # minutes under 'uncapped', and there are three of them, so 84 minutes went
+    # by before the first heatmap cell.
+    #
+    # Naming it once, through the same filter the pool uses, makes the two ends
+    # agree. KIRBY_LOCAL_AUG_CONDITIONS is unset on the cluster, where
+    # _local_aug_conditions returns its input untouched, so a cluster run still
+    # says 'uncapped' in both places and is unchanged.
+    _c16_strategy = (_local_aug_conditions(['uncapped'])[0]
+                     if augmentations else 'none')
+    # What the fast search at capped_full is allowed to pool. None under
+    # 'none', mirroring get_precomputed_search, which passes the augmentations
+    # only when its condition is not 'none'.
+    _c16_augs = augmentations if _c16_strategy != 'none' else None
     for fam_name in list(families.keys()):
         canonical = _family_to_canonical.get(fam_name)
         if canonical is None or canonical not in DEFAULT_MODELS:
@@ -387,6 +516,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 f'no pool model name for family {fam_name}')
             continue
         for budget in pool_budgets:
+            _t_look = time.time()
             try:
                 search, meta = get_best_search_for_downstream(
                     reps, labels, groups,
@@ -405,6 +535,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             if meta:
                 blueprints[fam_name][budget] = meta['best_config']['blueprint']
+            print(f"  [c16 {_c16_t():.0f}s] recipe lookup {fam_name}/"
+                  f"{pool_model} budget={budget}: "
+                  f"{'found' if meta else 'none'} in {time.time() - _t_look:.0f}s",
+                  flush=True)
 
     # Fast search for the capped_full slot (not in FULL_BUDGETS), one per family.
     # capped_full_error is now keyed by family — it was a single string while one
@@ -418,9 +552,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         capped_full_error[fam_name] = None
         if pool_model is None or capped_full in blueprints[fam_name]:
             continue
+        _t_cf = time.time()
         try:
             from kirby.find_best_hybrid import find_best_hybrid as _fbh16
-            _aug_strat_c16 = 'uncapped' if augmentations else 'none'
             cf_search = _fbh16(
                 base_reps=reps, labels=labels, groups=groups,
                 # The model NAME, not a hand-built estimator. The previous
@@ -435,8 +569,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # family, and they must not overwrite each other.
                 dataset_name=f"{dataset_name}__c16_capped{capped_full}__{pool_model}",
                 tier='c16_fast',
-                augmentations=augmentations,
-                augmentation_strategy=_aug_strat_c16,
+                augmentations=_c16_augs,
+                augmentation_strategy=_c16_strategy,
                 verbose=False,
             )
             cf_best = (cf_search.best_by_model_budget.get(pool_model, {}).get(capped_full)
@@ -457,6 +591,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             capped_full_error[fam_name] = f'{type(e).__name__}: {e}'
             print(f"  c16 fast search at capped_full={capped_full} "
                   f"[{fam_name}/{pool_model}] failed: {e}")
+        print(f"  [c16 {_c16_t():.0f}s] capped_full={capped_full} search "
+              f"{fam_name}/{pool_model} took {time.time() - _t_cf:.0f}s",
+              flush=True)
 
     # Say out loud which budgets each family got a recipe for. A family with an
     # empty list here produces a blank column, and on a binary-classification
@@ -515,6 +652,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reselection_candidates = {}  # {family: [{"name": <budget id>, "fold_scores": [...]}, ...]}
     reselected_baselines = {}   # {family: {<reg id>: [fold_scores], ...}}
 
+    # Shared by every cell of every family: one importance vector per (fold,
+    # importance method). Empty and unused when _C16_REUSE_FOLD_WORK is off.
+    _importance_by_fold = {} if _C16_REUSE_FOLD_WORK else None
+
     for fam_name, variants in families.items():
         print(f"\n  --- {fam_name} ({len(variants)} regularization levels × {len(budgets)} budgets) ---")
         param_name = variants[0][0]
@@ -523,14 +664,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         fam_blueprints = blueprints.get(fam_name, {})
 
         heatmap = {}  # {budget: {param_value: {'val': score, 'train': score}}}
+        # One entry per regularisation setting of this family, reused across
+        # this family's budgets and across nothing else. The scores belong to
+        # the estimator, and the estimator is what the setting changes.
+        _alloc_by_setting = {}
         for budget in budgets:
             heatmap[budget] = {}
             for pname, pval, factory in variants:
+                _t_cell = time.time()
+                if _C16_REUSE_FOLD_WORK:
+                    _alloc_cache = _alloc_by_setting.setdefault(str(pval), {})
+                else:
+                    _alloc_cache = None
                 val_score, train_score, fold_scores = _evaluate_cell(
                     reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
                     augmentations=augmentations,
                     blueprint=fam_blueprints.get(budget),
-                    task_type=task_type)
+                    task_type=task_type,
+                    importance_by_fold=_importance_by_fold,
+                    alloc_scores_by_fold=_alloc_cache)
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
                     'train': train_score,
@@ -543,6 +695,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # (leave-one-fold-out budget / reg selection). Additive.
                     'fold_scores': list(fold_scores),
                 }
+                print(f"    [c16 {_c16_t():.0f}s] cell {fam_name} "
+                      f"budget={budget} {pname}={pval}: "
+                      f"{time.time() - _t_cell:.0f}s", flush=True)
             # Print row
             scores_str = ', '.join(f'{pval}={heatmap[budget][str(pval)]["val"]:.4f}'
                                    for _, pval, _ in variants

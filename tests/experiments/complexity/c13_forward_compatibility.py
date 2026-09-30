@@ -85,6 +85,7 @@ Usage:
 """
 import sys
 import os
+import time as _time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -122,6 +123,191 @@ from experiments._shared import (
 
 from experiments.complexity.forward_compat_reps import (
     forward_compat_rep_names, forward_compat_entry)
+
+
+# =============================================================================
+# THE ONE CONDITION LIST THIS FILE CUTS FOR A LAPTOP RUN
+# =============================================================================
+# ⛔ NOTHING HERE CUTS A ROW. Every fold still sees all 672 antibodies on
+# flab_thermo_tresanco, and the outer fold count is untouched. What is cut is
+# how many SUBJECTS c13 scores — how many embedding models get the A/B/C/D/
+# D_random ablation run on them.
+#
+# WHAT IT CONTROLS. `new_reps` has two sources: the dataset's own pool members
+# the rule calls learned embedding models, and the candidate list in
+# forward_compat_reps.py. This knob decides whether the candidate list is
+# loaded at all. The pool subjects are never touched by it.
+#
+# WHY. Measured 2026-09-25 on flab_thermo_tresanco, the whole dataset, on this
+# laptop: from the candidate load starting to the kill was 26 minutes and no
+# hybrid search had begun. The antibody block holds 9 candidates. ism and
+# igbert came back from cache in seconds. mint, abcdr_esmc and abmpnn raised
+# (packages absent, or no builder written). antifold called sys.exit. Those
+# five raising forced the batch load to fall back to one load_data call per
+# name, and the two that then had to be BUILT dominated everything: p_iggen
+# took about 14 minutes to embed 556 unique heavy chains on CPU and antiberta2
+# was still building at the 26-minute mark. Adding the five that do arrive
+# also takes c13 from 5 subjects to 10, and each candidate subject costs 3
+# more live hybrid searches (its C, D and D_random) against the pool
+# subjects' 2.
+#
+# WHAT CUTTING IT COSTS. c13 then reports forward compatibility for the
+# dataset's own embedding models only. The question the candidate list exists
+# to answer — does a model that is NOT in the pool earn budget when it is
+# added — is not answered on this run, and `candidates_requested` in the
+# output is 0 rather than 9. Nothing about the five pool subjects changes: the
+# pool is the same pool, the without-sides are the same representations and
+# the numbers are the ones a full run would print for those five.
+#
+# ⛔ A COMPUTE CUT FOR A LAPTOP, NOT A FINDING. Nothing run under it says
+# anything about whether a new embedding model helps.
+#
+# Default: the whole candidate block on the server (KIRBY_LOCAL_GRID unset),
+# no candidates under the laptop grid. KIRBY_C13_CANDIDATES overrides either
+# way: 'all', 'none', or a comma-separated list of candidate names.
+
+def _c13_local_grid():
+    """True when the laptop grid in env.sh is active (KIRBY_LOCAL_GRID)."""
+    return bool(os.environ.get('KIRBY_LOCAL_GRID'))
+
+
+def _c13_candidate_policy():
+    """('all'|'none'|list-of-names, where the choice came from)."""
+    raw = (os.environ.get('KIRBY_C13_CANDIDATES') or '').strip()
+    if raw:
+        low = raw.lower()
+        if low in ('all', 'none'):
+            return low, f'KIRBY_C13_CANDIDATES={low}'
+        picked = [x.strip() for x in raw.split(',') if x.strip()]
+        if picked:
+            return picked, f'KIRBY_C13_CANDIDATES={raw}'
+    if _c13_local_grid():
+        return 'none', 'KIRBY_LOCAL_GRID'
+    return 'all', 'shipped'
+
+
+# How many embedding models get the ablation run on them, at most. Shipped: all
+# of them. Under the laptop grid: 1.
+#
+# WHY 1 AND NOT 2. Measured 2026-09-25 on flab_thermo_tresanco, whole dataset,
+# 672 antibodies, 3 folds, on this laptop while 810 other processes were
+# queued on its 8 cores. One subject's three hybrid conditions took
+# 425 s, 260 s and 396 s, so 18 minutes, and the dataset load plus the
+# precompute that runs before c13 took 6 more. A second subject repeats all
+# three (its condition-B winner was rf where the first's was svm, so the
+# whole-pool search is not shared) and lands the run at about 48 minutes,
+# past the 40-minute wall. At 1 the run is about 26 minutes.
+#
+# WHAT ONE SUBJECT COSTS, counted in live hybrid searches. Side 1 runs three
+# conditions per subject: the pool without it (C), the pool with it (D) and the
+# pool with a random-Gaussian matrix of its width (D_random). D carries the
+# suffix "c13_whole_pool" for every pool subject, so all of them share one
+# search; C and D_random are named after the subject and are its own. So the
+# 5 embedding models in flab_thermo_tresanco's pool cost 5 + 1 + 5 = 11
+# searches, and each additional subject costs 2 more.
+#
+# WHAT CUTTING IT COSTS. The win rates at the bottom of the summary count
+# subjects: "D > D_random" over 2 subjects is 2 numbers, not 5, and the
+# per-subject rows for the ones left out are absent from the table and from
+# per_rep in the output. Nothing changes for the subjects that do run — same
+# pool, same without-sides, same folds, same rows.
+#
+# ⛔ A COMPUTE CUT FOR A LAPTOP, NOT A FINDING. Which embedding models survive
+# the cut is alphabetical order, not a ranking.
+def _c13_max_subjects():
+    """(limit or None, where the choice came from)."""
+    raw = (os.environ.get('KIRBY_C13_MAX_SUBJECTS') or '').strip()
+    if raw:
+        try:
+            n = int(raw)
+        except ValueError:
+            n = -1
+        if n > 0:
+            return n, f'KIRBY_C13_MAX_SUBJECTS={n}'
+        if n == 0:
+            return None, 'KIRBY_C13_MAX_SUBJECTS=0'
+    if _c13_local_grid():
+        return 1, 'KIRBY_LOCAL_GRID'
+    return None, 'shipped'
+
+
+# =============================================================================
+# REUSING ONE ROW SET'S FEATURE-IMPORTANCE VECTORS ACROSS c13's CONDITIONS
+# =============================================================================
+# ⛔ THIS CHANGES NO NUMBER. It hands build_fold_hybrid the vectors it would
+# otherwise have computed itself, over the same rows and by the same method.
+#
+# WHY IT IS SAFE. compute_feature_importance fits ONE model per representation
+# and never looks at the others: every branch of it is a
+# `for rep_name, X in base_reps.items()` loop (hybrid.py:4683 onwards), so
+# saprot's gain vector on a given set of rows is the same vector whether it was
+# asked for alongside three representations or four. c13 asks for it many
+# times over: on flab_thermo_tresanco the 11 conditions each rebuild the hybrid
+# on 3 folds over 4 or 5 representations, which is about 145 importance fits
+# over only 30 distinct (rows, representation) pairs.
+#
+# ⛔ THE ROWS MATTER, AND SO DOES THE CONTENT. create_hybrid carves an internal
+# holdout out of the rows it is given and ranks features on the TRAINING side
+# of that carve, so the cache computes over exactly that side. And the
+# D_random condition swaps a representation's matrix for Gaussian noise of the
+# SAME NAME and SAME WIDTH, so a key made of the name alone would hand the real
+# representation's importance to the noise arm and destroy the null. The key
+# therefore carries a hash of the matrix itself.
+#
+# Same pattern and same reasoning as c24's KIRBY_C24_REUSE_FOLD_WORK and c16's
+# KIRBY_C16_REUSE_FOLD_WORK. Default: ON under the laptop grid, OFF everywhere
+# else, so a cluster run recomputes exactly as it did before.
+_C13_REUSE_FOLD_WORK = os.environ.get(
+    'KIRBY_C13_REUSE_FOLD_WORK',
+    '1' if os.environ.get('KIRBY_LOCAL_GRID') else '0') == '1'
+
+
+def _c13_rep_key(name, method, X):
+    """A key that separates a representation from noise wearing its name."""
+    import hashlib
+    a = np.ascontiguousarray(X)
+    return (method, name, a.shape,
+            hashlib.md5(a.tobytes()).hexdigest())
+
+
+def _c13_fold_importance(cache, train_reps, y_train, groups_train, blueprint):
+    """Importance vectors for this fold's representations, computed once.
+
+    Returns None when reuse is off, the recipe names no importance method, or
+    any representation could not be scored — in which case build_fold_hybrid
+    computes its own exactly as before.
+    """
+    if cache is None or blueprint is None:
+        return None
+    method = getattr(blueprint, 'importance_method', None)
+    if not method:
+        return None
+    try:
+        from kirby.hybrid import (compute_feature_importance,
+                                  internal_holdout_split)
+        inner_tr, _ = internal_holdout_split(
+            len(y_train), y_train, groups_train)
+        out, missing = {}, {}
+        for name, X in train_reps.items():
+            Xi = X[inner_tr]
+            key = _c13_rep_key(name, method, Xi)
+            if key in cache:
+                out[name] = cache[key]
+            else:
+                missing[name] = (key, Xi)
+        if missing:
+            fresh = compute_feature_importance(
+                {n: v[1] for n, v in missing.items()},
+                y_train[inner_tr], method=method)
+            for n, (key, _Xi) in missing.items():
+                if n in fresh:
+                    cache[key] = fresh[n]
+                    out[n] = fresh[n]
+        return out if len(out) == len(train_reps) else None
+    except Exception as e:
+        print(f"      importance reuse off for this fold ({type(e).__name__}: "
+              f"{e}); build_fold_hybrid computes its own")
+        return None
 
 
 # =============================================================================
@@ -451,7 +637,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                            metric_fn, augmentations=None,
                            metric_name='r2', dataset_name=None,
                            task_type='regression', condition_suffix=None,
-                           downstream_model=None):
+                           downstream_model=None, importance_cache=None):
     """Run find_best_hybrid and evaluate the best config per fold.
 
     Returns (per_fold_scores, search_result_dict).
@@ -485,6 +671,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     # 'extra' that day, so two of the five could never return a blueprint, and
     # the bare `except Exception: continue` below meant they dropped out with
     # no message.
+    _t_search0 = _time.time()
     best = None
     best_search = None
     best_meta = None
@@ -509,6 +696,36 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             # real arm scored 0.440540 spearman and the noise arm 0.354353.
             # See loops/c13/nullcheck.py.
             _extra = {'condition_suffix': condition_suffix} if condition_suffix else {}
+            # NAME THE MODEL THE SEARCH MUST SCORE. Measured 2026-09-25 on
+            # flab_thermo_tresanco: condition C ran an 18-minute live search
+            # and then threw it away, printing
+            #   [pool] no usable hybrid for model=svm budget=None
+            #   svm: no search metadata returned
+            # and writing spearman = nan. Both without-sides of esm2_cdr came
+            # back nan the same way.
+            #
+            # The two things that disagree. c13 picks the model that scored the
+            # new representation best on its own (condition B, svm here) and
+            # asks get_best_search_for_downstream for that model's recipe. The
+            # search underneath is run with models=None, and under
+            # speed='fast' models=None keeps only the models in the 'fast'
+            # tier, rf and lightgbm (find_best_hybrid.py:3194). So the search
+            # scored rf and lightgbm and was asked for svm, and svm is not a
+            # slower version of rf — it is a model the search never ran. The
+            # note below this line used to say the filter did not apply
+            # because _candidates is an explicit list; _candidates is the list
+            # c13 ASKS for, not the models= the search RUNS, and c13 passed no
+            # models= at all.
+            #
+            # Passing it makes the search score exactly the model that then
+            # rebuilds and scores the recipe, which is what this function's
+            # docstring already promises. It also halves the search: one model
+            # instead of the two the fast tier holds.
+            #
+            # ⛔ THIS CHANGES SERVER NUMBERS. Every condition whose condition-B
+            # winner is svm, xgboost or dnn is nan today and is a number after
+            # this. Conditions whose winner is rf or lightgbm are unaffected.
+            _extra['models'] = [candidate_model]
             # ⛔ speed='fast' SINCE 2026-09-18, OWNER'S DECISION.
             #
             # Every search c13 runs is built live. Each condition carries a
@@ -523,14 +740,13 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             # representation builds, so it was about 19 million model fits per
             # dataset.
             #
-            # ⛔ THIS DOES NOT SHORTEN THE MODEL LIST. The filter that drops
-            # xgboost and svm under fast runs only when models=None
-            # (find_best_hybrid.py:8221-8232), and _candidates above is an
-            # explicit list. So the (model, evaluator) pair count stays at 17
-            # and the grid lands at 2,160 configurations, not 432 -- about 9
-            # times fewer, not 19. Shortening _candidates as well would take it
-            # the rest of the way, and that is a decision about which models
-            # c13 reports, not a compute setting.
+            # WHAT IT DOES TO THE MODEL LIST, corrected 2026-09-25. The
+            # filter that keeps only the fast tier runs when models=None
+            # (find_best_hybrid.py:3194). c13 passed no models= until the line
+            # below was added, so that filter DID run and the search scored rf
+            # and lightgbm only -- see the note at _extra['models']. With the
+            # model named, the search scores one model, the one that rebuilds
+            # and scores the recipe.
             #
             # Nothing c13 reads is lost: it takes best_config and its
             # score_mean, and a fast search produces both.
@@ -582,6 +798,9 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     if blueprint is None:
         return [], {'error': 'no blueprint in best_config'}
 
+    _search_seconds = _time.time() - _t_search0
+    _t_build0 = _time.time()
+
     scores = []
     allocation_dicts = []
     last_feature_info = None
@@ -594,14 +813,19 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         y_train, y_val = labels[train_idx], labels[val_idx]
         train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
         val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+        groups_train = (groups[train_idx] if groups is not None else None)
+
+        _precomp_imp = _c13_fold_importance(
+            importance_cache, train_reps, y_train, groups_train, blueprint)
 
         try:
             X_train, X_val, feature_info = build_fold_hybrid(
                 train_reps, val_reps, y_train, blueprint,
                 augmentations_train=train_augs, augmentations_val=val_augs,
-                groups=(groups[train_idx] if groups is not None else None),
+                groups=groups_train,
                 model=model_factory(),
-                metric_fn=metric_fn)
+                metric_fn=metric_fn,
+                precomputed_importance=_precomp_imp)
         except Exception:
             continue
 
@@ -627,7 +851,13 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         for k in sorted(all_keys):
             avg_alloc[k] = float(np.mean([ad.get(k, 0) for ad in allocation_dicts]))
 
+    _build_seconds = _time.time() - _t_build0
+    print(f"      {_search_seconds:.0f}s searching the recipe, "
+          f"{_build_seconds:.0f}s rebuilding and scoring it on {n_folds} folds")
+
     result_info = {
+        'search_seconds': float(_search_seconds),
+        'fold_rebuild_seconds': float(_build_seconds),
         # The model this recipe was searched for. It is the model that scored
         # it too, whenever the caller named one.
         'downstream_model': downstream_model or (best_meta or {}).get('model'),
@@ -798,10 +1028,23 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     else:
         candidate_names = None  # the whole block for this domain
 
+    # Which candidates this run loads, and why (see _c13_candidate_policy).
+    # --new-reps naming a candidate always wins: an explicit request is not a
+    # default and is never overridden by the knob.
+    _cand_policy, _cand_why = _c13_candidate_policy()
+    if candidate_names is None and isinstance(_cand_policy, list):
+        candidate_names = list(_cand_policy)
+
     # Candidates load at the dataset's FULL row count, so the size-gate index has
     # to be applied to them too or every one of them lands row-misaligned.
     if requested is not None and not candidate_names:
         candidate_reps, missing_candidates = {}, []
+    elif _cand_policy == 'none' and requested is None:
+        candidate_reps, missing_candidates = {}, []
+        print(f"\n  Candidate embedding models: none loaded ({_cand_why}). "
+              f"Only this dataset's own {len(subject_names)} learned embedding "
+              f"model(s) are scored. Set KIRBY_C13_CANDIDATES=all for the "
+              f"whole '{domain}' block.")
     else:
         candidate_reps, missing_candidates = load_forward_compat_reps(
             dataset_name, domain, n_rows=_n_full,
@@ -820,6 +1063,21 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     new_reps = dict(pool_subjects)
     new_reps.update({k: v for k, v in candidate_reps.items()
                      if k not in new_reps})
+
+    # How many of them actually get the ablation run (see _c13_max_subjects).
+    _max_subjects, _max_why = _c13_max_subjects()
+    if _max_subjects is not None and len(new_reps) > _max_subjects:
+        _kept = sorted(new_reps)[:_max_subjects]
+        _dropped_subjects = sorted(set(new_reps) - set(_kept))
+        new_reps = {k: new_reps[k] for k in _kept}
+        print(f"\n  Embedding models scored: {len(_kept)} of "
+              f"{len(_kept) + len(_dropped_subjects)} ({_max_why}). "
+              f"Scored: {', '.join(_kept)}. Not scored: "
+              f"{', '.join(_dropped_subjects)}. The pool itself is unchanged — "
+              f"every one of them is still on the without-side of the ones that "
+              f"do run.")
+    else:
+        _dropped_subjects = []
 
     if not new_reps:
         print("\n  No embedding model to test on this dataset.")
@@ -885,6 +1143,10 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     # memo returns the identical numbers instead of searching them again. The
     # key is the condition_suffix, which names the rep set, plus the model.
     _hybrid_memo = {}
+    # One importance cache for the whole dataset. Keyed by method, name, shape
+    # and a hash of the matrix, so the Gaussian null never reads the real
+    # representation's vector. Off unless _C13_REUSE_FOLD_WORK.
+    _importance_cache = {} if _C13_REUSE_FOLD_WORK else None
 
     def _hybrid(rep_dict, model_factory, model_name, suffix):
         key = (suffix, model_name)
@@ -904,6 +1166,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 # sees all labels in its internal CV.
                 dataset_name=dataset_name,
                 condition_suffix=suffix,
+                importance_cache=_importance_cache,
                 task_type=data['task_type'])
         return _hybrid_memo[key]
 
@@ -1438,6 +1701,13 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'subject_reps_from_pool': sorted(pool_subjects.keys()),
                 'subject_reps_from_candidate_list': sorted(
                     k for k in candidate_reps if k not in pool_subjects),
+                # Embedding models the rule named as subjects that this run did
+                # NOT score, and why. Empty on a shipped run. Without this a
+                # win rate over 2 subjects reads as though the dataset had 2.
+                'subject_reps_not_scored': list(_dropped_subjects),
+                'subject_limit': _max_subjects,
+                'subject_limit_source': _max_why,
+                'candidate_policy': _cand_why,
                 # The two without-sides, by name.
                 'without_side_1': 'the dataset\'s other representations',
                 'without_side_2_reps': sorted(established_reps.keys()),

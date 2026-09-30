@@ -109,10 +109,80 @@ DEFAULT_N_SEEDS = 3
 # large near-tied pool does not shatter the budget into per-rep dust.
 HYBRID_REF_ALLOCATION = 'weighted_global'
 HYBRID_REF_IMPORTANCE = 'lightgbm_gain'
-HYBRID_REF_BUDGETS = (500, 1000, 2000)
 # Pre-registered headline budget, fixed BEFORE seeing any result so that
 # quoting it is not a selection.
 HYBRID_REF_HEADLINE_BUDGET = 1000
+HYBRID_REF_BUDGETS_SHIPPED = (500, 1000, 2000)
+
+# ── LOCAL CONDITION CUTS ────────────────────────────────────────────────────
+# What follows cuts THIS FILE'S OWN condition lists, and nothing else. No row
+# is ever dropped: all 672 flab_thermo_tresanco antibodies, all 2,158 caco2
+# molecules and so on are in every fold of every arm below, before and after.
+#
+# WHY. c21 has never once run to completion on the laptop grid. Its last
+# attempt on flab_thermo_tresanco, the smallest dataset at 672 antibodies,
+# died at 05:10 on 2026-09-25 after 4022 s having finished four arms of the
+# hundred and ten it had queued: ten base representations x eleven arms each.
+#
+# WHAT ONE ARM COSTS, profiled here 2026-09-25 on flab_thermo_tresanco,
+# saprot as the base, random forest, one of the three folds. One
+# build_fold_hybrid call took 112 s and split four ways:
+#     33 s  scoring the representation so performance_weighted can weight it
+#     22 s  lightgbm_gain importance over the base representation's features
+#     28 s  the out-of-fold residuals the candidate features are ranked against
+#     25 s  the five block sizes the admission rule scores, 0/5/10/20/40
+# plus the three downstream seeds fitted on the finished matrix. The first of
+# those four is removed outright below -- one representation cannot be
+# out-weighted by itself -- and the same call then took 74.5 s against 161.3 s,
+# with an identical matrix out of both. The other three are per arm and there
+# is no way to reach them from this file: build_fold_hybrid forwards no
+# aug_precomputed_ranking, so the residuals are recomputed for every arm of the
+# same base representation and fold even though hybrid.py says in its own
+# comment that they cannot differ.
+#
+# The machine was running eight other experiments throughout, so every second
+# above is a busy-laptop second, not a clean one.
+#
+# HOW THE KNOBS BEHAVE. Each is read from the environment. Unset, and with
+# KIRBY_LOCAL_GRID unset too, every one of them is the value the cluster has
+# always run, so a server run is byte-for-byte unchanged. Under
+# KIRBY_LOCAL_GRID the local default applies, and an explicit KIRBY_C21_* var
+# beats both. Whatever ends up in force is printed at the top of the run under
+# "local condition cuts", so no result exists without its cuts beside it.
+
+
+def _local_grid():
+    """True when the laptop grid in env.sh is active (KIRBY_LOCAL_GRID)."""
+    return bool(os.environ.get('KIRBY_LOCAL_GRID'))
+
+
+def _env_list(name, shipped, local=None, cast=str):
+    """One condition list: explicit environment variable, else the local
+    default when the laptop grid is on, else the shipped value."""
+    raw = os.environ.get(name)
+    if raw:
+        picked = tuple(cast(x.strip()) for x in raw.split(',') if x.strip())
+        if picked:
+            return picked, f'{name}={raw}'
+    if local is not None and _local_grid():
+        return tuple(local), 'KIRBY_LOCAL_GRID'
+    return tuple(shipped), 'shipped'
+
+
+# Budgets for the H0/H1 multi-representation reference arms. Each budget is a
+# separate fixed arm costing one build per model per fold, and an H build
+# ranks lightgbm_gain over the WHOLE pool -- five representations at 1000
+# features each here, not one. Measured on flab_thermo_tresanco 2026-09-25,
+# budget 1000, random forest, one fold: 250.8 s for H0 and 276.4 s for H1,
+# against 97 s for a whole single-representation arm on the same fold. Three
+# budgets is three times that.
+#
+# Local runs keep the single pre-registered headline budget of 1000. What is
+# lost is the shape of the H curve across budgets, which nothing in this
+# file's summary claims.
+HYBRID_REF_BUDGETS, HYBRID_REF_BUDGETS_SOURCE = _env_list(
+    'KIRBY_C21_HYBRID_BUDGETS', HYBRID_REF_BUDGETS_SHIPPED,
+    local=(HYBRID_REF_HEADLINE_BUDGET,), cast=int)
 
 # The five ways of deciding which extra features to keep. This used to be the
 # single hardcoded string 'uncapped', so c21 answered "where do extras go"
@@ -127,8 +197,6 @@ HYBRID_REF_HEADLINE_BUDGET = 1000
 # 'greedy_ablation' was CUT on 2026-08-26 -- "No greedy at all" -- and is not in
 # this list. The engine still dispatches the name so old recipes do not crash,
 # and naming it explicitly here still works so the cut can be checked.
-#
-# Default stays 'uncapped' so an unflagged run reproduces the old behaviour.
 ALL_STRATEGIES = ('none', 'all', 'capped', 'uncapped')
 CUT_STRATEGIES = ('greedy_ablation',)   # dispatchable, never selected
 # Both admission rules by default (owner's decision, 2026-09-10): the showcase
@@ -136,7 +204,96 @@ CUT_STRATEGIES = ('greedy_ablation',)   # dispatchable, never selected
 # curated augmentation pool and from the other base representations. The
 # curated-versus-full axis is already the B / C / D conditions; this line is the
 # capped-versus-uncapped half, and it ran uncapped only until 2026-09-12.
-DEFAULT_STRATEGIES = ('capped', 'uncapped')
+DEFAULT_STRATEGIES_SHIPPED = ('capped', 'uncapped')
+# Every admission method doubles the arm count, and an arm is a build per model
+# per fold. Local runs keep 'capped' alone: it is the harder of the two, since
+# extras have to displace base features rather than being appended outside the
+# budget, so a win under it is the one worth seeing first. What is lost is the
+# capped-versus-uncapped comparison itself, which is the 2026-09-12 half of the
+# showcase and has to come back from a server run.
+DEFAULT_STRATEGIES, DEFAULT_STRATEGIES_SOURCE = _env_list(
+    'KIRBY_C21_STRATEGIES', DEFAULT_STRATEGIES_SHIPPED, local=('capped',))
+
+# Which of the non-baseline conditions are built. A_baseline is not optional --
+# every delta in the file is measured against it.
+#   B   base + the curated augmentation representations, uncapped
+#   C   base + the top-N features of each other base representation
+#   D   B and C together
+#   Rc  the matched-width random-column control for C
+#   Rb  the matched-width random-column control for B
+# MEASURED, flab_thermo_tresanco 2026-09-25, one base representation, one
+# admission method, three folds, the two models rf and svm, the whole run timed
+# end to end with eight other experiments sharing the laptop:
+#     106 s  python start-up, loading 672 antibodies and the search precompute
+#     201 s  A_baseline, both models
+#     315 s  B under rf          213 s  B under svm
+#     704 s  C under rf          ~500 s C under svm (killed before it landed)
+#     750 s  H0, the hybrid reference, rf only, at budget 1000
+# C costs 2.2x what B does because its donors are the other four base
+# representations at a thousand features each, against the curated pool's
+# forty-eight, and the candidate ranking scores every one of those columns.
+# A + B + C + H0 comes to about 2790 s, which is 46 minutes; the cap is 40.
+#
+# So the local default is B alone, with H0. That runs in about 1585 s, 26
+# minutes, measured from the pieces above.
+#
+# ⛔ WHAT IS LOST, and these are the cuts to argue with first.
+#   C   the other base representations as donors -- "can other top reps donate
+#       a few good features". Under rf it was the LARGER effect of the two:
+#       delta +0.0223 against B's +0.0080, and it took nothing from the
+#       pure-noise donor. It is also the only condition that runs at all on a
+#       dataset whose survey found no augmentation representation helps.
+#   Rc, Rb  the matched-width random-column controls. Without them a positive
+#       delta in B or C cannot be told apart from the model having been handed
+#       more features, so nothing the local grid produces is readable as a
+#       selection effect.
+#   D   the union of B and C.
+# Both alternatives fit the cap if the other half is given up, and both are one
+# environment variable:
+#     KIRBY_C21_CONDITIONS=B,C       with KIRBY_C21_HYBRID_ARMS=  -> ~34 min
+#     KIRBY_C21_CONDITIONS=B,C,Rc,Rb                              -> needs a
+#       longer cap than forty minutes on this machine.
+ALL_CONDITION_KEYS = ('B', 'C', 'D', 'Rc', 'Rb')
+CONDITION_KEYS, CONDITION_KEYS_SOURCE = _env_list(
+    'KIRBY_C21_CONDITIONS', ALL_CONDITION_KEYS, local=('B',))
+
+# How many base representations the survey loop covers, as a count taken off
+# the front of the pool in DATASET_REPS order, or a comma-separated list of
+# names. The whole pool is the shipped behaviour and the docstring already
+# calls it "a 10x more expensive survey". Local runs take one: the base-
+# representation loop is a pure multiplier on everything above, so one base is
+# one tenth of the run. What is lost is the survey -- whether the answer holds
+# for every base representation or only the first. --base-reps still overrides
+# this from the command line.
+C21_BASE_REP_LIMIT = os.environ.get('KIRBY_C21_BASE_REPS') or (
+    '1' if _local_grid() else '')
+
+# The multi-representation reference arms, and how many downstream models they
+# are scored under.
+#
+# ⛔ THESE TWO ARE THE EXPENSIVE ONES AND THE CUT NEEDS A DECISION. Measured on
+# flab_thermo_tresanco 2026-09-25, five representations at 1000 features each,
+# budget 1000, random forest, one fold: ONE H build took 250.8 s, against 97 s
+# for a whole single-representation arm on the same fold. H0 over two models
+# and three folds is 1506 s on its own, H1 more, and the two together are
+# roughly fifty minutes before a single single-representation arm has run. The
+# difference is the pool: an H build ranks lightgbm_gain over five thousand
+# features and scores five representations against each other, a
+# single-representation build ranks one thousand and scores nothing.
+#
+# The local default keeps H0, the hybrid with no extras, under the first model
+# only, and drops H1. What that costs is the half of the placement question
+# that asks whether extras do more ON the hybrid -- H0 still gives the
+# single-representation arms a hybrid to be compared against, but nothing local
+# measures the hybrid WITH extras. There is no arrangement of this file that
+# fits both H arms and a readable single-representation set into forty minutes
+# on this laptop; which half to keep is the user's call, and both are one
+# environment variable away:
+#     KIRBY_C21_HYBRID_ARMS=h0,h1   KIRBY_C21_HYBRID_MODELS=2
+HYBRID_ARMS, HYBRID_ARMS_SOURCE = _env_list(
+    'KIRBY_C21_HYBRID_ARMS', ('h0', 'h1'), local=('h0',))
+HYBRID_MODEL_LIMIT = os.environ.get('KIRBY_C21_HYBRID_MODELS') or (
+    '1' if _local_grid() else '')
 
 # Features copied out of the base representation to build the near-copy decoy,
 # and how hard they are roughed up (as a multiple of each feature's own
@@ -172,6 +329,31 @@ def _fit_score_seeds(Xtr, ytr, Xva, yva, factory, metric_fn, n_seeds):
         # difference of two of these scores.
         vals.append(float(metric_fn(yva, _predict_for_metric(m, Xva, metric_fn))))
     return float(np.mean(vals)), vals
+
+
+def _baseline_fold_scores(X_base, labels, groups, n_folds, mode,
+                          model_factory, metric_fn, n_seeds):
+    """Fold scores for the base representation ALONE, no donors anywhere.
+
+    Split out of the arm loop so it is computed once per (base
+    representation, model) instead of once per arm. It reads no condition, no
+    admission method and no donor pool, and the model seeds are fixed at
+    42..42+n_seeds-1, so every arm that shared a base representation and a
+    model was refitting the identical three folds and getting the identical
+    numbers. NOTHING in any result changes: the same list is now stored
+    against each arm instead of recomputed for it.
+    """
+    out = []
+    for train_idx, val_idx in cv_split(groups, n_folds, X_base, labels,
+                                       mode=mode):
+        scaler = StandardScaler()
+        Xtr = scaler.fit_transform(X_base[train_idx])
+        Xva = scaler.transform(X_base[val_idx])
+        mean_b, _ = _fit_score_seeds(Xtr, labels[train_idx], Xva,
+                                     labels[val_idx], model_factory,
+                                     metric_fn, n_seeds)
+        out.append(mean_b)
+    return out
 
 
 def _effective_donor_width(donors, per_source_budget):
@@ -213,7 +395,7 @@ def _plant_capped_decoys(donors, base_X, rng, per_source_budget,
 
 
 def _build_conditions(base_name, top_tier_reps, aug_reps, top_n, rng=None,
-                      with_controls=True):
+                      with_controls=True, condition_keys=None):
     """Return {condition_name: (aug_pool, per_source_budget)}.
 
     per_source_budget is a dict so the wide top-tier reps get capped to top_n
@@ -238,14 +420,18 @@ def _build_conditions(base_name, top_tier_reps, aug_reps, top_n, rng=None,
     """
     other_top = {k: v for k, v in top_tier_reps.items() if k != base_name}
     aug_only = {k: v for k, v in aug_reps.items() if k != base_name}
+    # Which non-baseline conditions to build. None means every one of them,
+    # which is what a caller that knows nothing about the local knobs gets.
+    wanted = set(condition_keys if condition_keys is not None
+                 else ALL_CONDITION_KEYS)
 
     conditions = {'A_baseline': (None, None)}
-    if aug_only:
+    if aug_only and 'B' in wanted:
         conditions['B_aug'] = (aug_only, None)
-    if other_top:
+    if other_top and 'C' in wanted:
         conditions[f'C_topreps_n{top_n}'] = (
             other_top, {k: top_n for k in other_top})
-    if aug_only and other_top:
+    if aug_only and other_top and 'D' in wanted:
         both = {**aug_only, **other_top}
         conditions[f'D_both_n{top_n}'] = (
             both, {k: top_n for k in other_top})
@@ -260,11 +446,12 @@ def _build_conditions(base_name, top_tier_reps, aug_reps, top_n, rng=None,
         n_take = min(top_n, v.shape[1])
         cols = rng.choice(v.shape[1], size=n_take, replace=False)
         rand_pool[f'{k}__rand'] = v[:, np.sort(cols)]
-    conditions[f'R_rand_n{top_n}'] = (rand_pool, None)
+    if 'Rc' in wanted:
+        conditions[f'R_rand_n{top_n}'] = (rand_pool, None)
 
     # Control for B: as many random columns as the curated pool is wide,
     # spread evenly over the other base reps.
-    if aug_only:
+    if aug_only and 'Rb' in wanted:
         aug_width = sum(v.shape[1] for v in aug_only.values())
         per_donor = max(1, int(np.ceil(aug_width / len(other_top))))
         randaug, taken = {}, 0
@@ -499,7 +686,18 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
         raise ValueError(
             f"Unknown candidate_ranking {candidate_ranking!r}. Choose from: "
             f"'residual_correlation', 'rf_importance'.")
-    print(f"  Admission methods: {', '.join(strategies)}")
+    print(f"  Admission methods: {', '.join(strategies)} "
+          f"[{DEFAULT_STRATEGIES_SOURCE}]")
+    # Every condition list this file cut, and what set it. A result produced
+    # under a cut says so in its own log.
+    print(f"  local condition cuts: conditions="
+          f"{','.join(CONDITION_KEYS)} [{CONDITION_KEYS_SOURCE}]; "
+          f"hybrid reference budgets="
+          f"{','.join(str(b) for b in HYBRID_REF_BUDGETS)} "
+          f"[{HYBRID_REF_BUDGETS_SOURCE}]; base representations="
+          f"{C21_BASE_REP_LIMIT or 'the whole pool'}; reference arms="
+          f"{','.join(HYBRID_ARMS)} [{HYBRID_ARMS_SOURCE}] under "
+          f"{HYBRID_MODEL_LIMIT or 'every'} model")
     print(f"  Candidate ranking: {candidate_ranking}  "
           f"(list cut to top {max_candidates})")
     print(f"  Planted decoys: {'noise + near-copy' if with_decoys else 'none'}")
@@ -522,7 +720,23 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
 
     ds_config = DATASET_REPS.get(dataset_name, {})
     # The 10-rep pool (the retired 'top_tier' == 'general'); var name kept.
-    top_tier_names = ds_config.get('general', [])
+    #
+    # cut_pool is the same representation cut complexity run_all applies to
+    # the pool it loads, and it is a no-op when KIRBY_LOCAL_REPS is unset, so
+    # the cluster runs all ten as before. This file read DATASET_REPS
+    # directly, so a local run that had cut the pool to five watched c21 load
+    # the other five straight back in and run the whole ten-representation
+    # survey -- the log line "Loading 5 reps not already in memory" on
+    # flab_thermo_tresanco 2026-09-25 is that happening.
+    #
+    # WHAT THE CUT COSTS. The base-representation loop is the survey, so five
+    # is half the bases; and the donors in C_topreps and D_both are the OTHER
+    # bases, so it also takes each donor pool from nine representations to
+    # four. It is a compute cut for a laptop and says nothing about which
+    # representations belong in the pool. ROWS ARE NOT TOUCHED: all 672
+    # antibodies are in every fold either way.
+    from experiments._local_grid import cut_pool
+    top_tier_names = cut_pool(dataset_name, ds_config.get('general', []))
     aug_rep_names = ds_config.get('augmentation', [])
 
     # Augmentation reps: prefer the ones run_all already loaded. complexity
@@ -578,9 +792,28 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
               f"(pool has {len(top_tier_reps)}; donors still come from all of it)")
     else:
         base_loop = top_tier_reps
+        # KIRBY_C21_BASE_REPS: a count off the front of the pool, or names.
+        # Empty means the whole pool, which is the shipped survey.
+        _lim = (C21_BASE_REP_LIMIT or '').strip()
+        if _lim:
+            if _lim.isdigit():
+                _keep = list(top_tier_reps)[:int(_lim)]
+            else:
+                _asked = [x.strip() for x in _lim.split(',') if x.strip()]
+                _keep = [r for r in top_tier_reps if r in _asked]
+            if _keep and len(_keep) < len(top_tier_reps):
+                _dropped = [r for r in top_tier_reps if r not in _keep]
+                print(f"  [local] base-representation loop cut to {_keep}; "
+                      f"not run as a base: {_dropped}. Every one of them is "
+                      f"still a donor in C and D, and every molecule is still "
+                      f"in every fold.")
+                base_loop = {r: top_tier_reps[r] for r in _keep}
 
     rng = np.random.RandomState(0)
     rep_results = []
+    # {(base representation, model): [one score per fold]} for the base
+    # representation on its own. See _baseline_fold_scores.
+    base_score_cache = {}
 
     if skip_single_rep:
         print("  Single-rep arms SKIPPED (skip_single_rep) — "
@@ -592,7 +825,8 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
         print(f"\n  {base_name} ({base_dim}D)")
 
         conditions = _build_conditions(base_name, top_tier_reps, aug_reps, top_n,
-                                       rng=rng, with_controls=with_controls)
+                                       rng=rng, with_controls=with_controls,
+                                       condition_keys=CONDITION_KEYS)
         if len(conditions) == 1:
             print(f"    only baseline available (no aug reps, no other top reps)")
 
@@ -645,7 +879,21 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                 # model only enters at SCORING below.
                 bp_model = bp
 
-                scores_base = []
+                # The base-alone score depends on the base representation, the
+                # model and the fold and on nothing else, so it is computed
+                # once per (base representation, model) and reused by every
+                # arm built on it. It used to be refitted inside this loop for
+                # all eleven arms: identical inputs, identical seeds,
+                # identical numbers. Measured on flab_thermo_tresanco
+                # 2026-09-25, 3 folds x 3 seeds: 45 s for rf and 34 s for svm
+                # per pass, and eleven arms x two models paid it ten more
+                # times than once. No stored number moves.
+                _bkey = (base_name, model_name)
+                if _bkey not in base_score_cache:
+                    base_score_cache[_bkey] = _baseline_fold_scores(
+                        X_base, labels, groups, n_folds, mode,
+                        model_factory, metric_fn, n_seeds)
+                scores_base = list(base_score_cache[_bkey])
                 scores_aug = []
                 fold_aug_info = []
 
@@ -653,13 +901,6 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     cv_split(groups, n_folds, X_base, labels, mode=mode)
                 ):
                     y_train, y_val = labels[train_idx], labels[val_idx]
-
-                    scaler_b = StandardScaler()
-                    Xtr_b = scaler_b.fit_transform(X_base[train_idx])
-                    Xva_b = scaler_b.transform(X_base[val_idx])
-                    mean_b, _ = _fit_score_seeds(Xtr_b, y_train, Xva_b, y_val,
-                                                 model_factory, metric_fn, n_seeds)
-                    scores_base.append(mean_b)
 
                     if is_baseline or bp is None:
                         scores_aug.append(float('nan'))
@@ -704,7 +945,29 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                             groups=(groups[train_idx] if groups is not None else None),
                             model=model_factory(),
                             metric_fn=metric_fn,
-                            lower_is_better=lower_is_better)
+                            lower_is_better=lower_is_better,
+                            # THERE IS ONE REPRESENTATION HERE. An allocation
+                            # proportional to how the representations score
+                            # against each other has nothing to compare, so the
+                            # one representation takes the whole budget
+                            # whatever its score is. Left to itself
+                            # allocate_performance_weighted fits the model on
+                            # it anyway to produce that number.
+                            #
+                            # Measured on flab_thermo_tresanco 2026-09-25,
+                            # saprot as the base, random forest, fold 0, the
+                            # same call run both ways back to back: 161.3 s
+                            # without this line and 74.5 s with it. The two
+                            # builds came back with identical selected feature
+                            # indices, an identical training matrix, an
+                            # identical validation matrix, the same budget
+                            # split {saprot: 1000} and the same ten admitted
+                            # mutation_features columns.
+                            # ⛔ Single-representation arms ONLY. The H arms
+                            # below have five or ten representations and the
+                            # score decides how the budget splits between them,
+                            # so they must measure it.
+                            precomputed_alloc_scores={base_name: 1.0})
 
                         scaler_h = StandardScaler()
                         Xtr_h = scaler_h.fit_transform(Xtr_h)
@@ -841,12 +1104,33 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
     #    plus augmentation features. Scored on the SAME folds and the SAME
     #    models as the single-rep arms, so the numbers compare directly.
     hybrid_results = []
-    if len(top_tier_reps) >= 2:
+    # Which downstream models the reference arms are scored under. One H build
+    # over the whole pool cost 250.8 s against 97 s for a whole
+    # single-representation arm (flab_thermo_tresanco, 2026-09-25), so the
+    # model axis is the difference between the H arms fitting in a local run
+    # and not. Unset, this is every model the run uses, which is the shipped
+    # behaviour.
+    h_models = models
+    _hm = (HYBRID_MODEL_LIMIT or '').strip()
+    if _hm:
+        if _hm.isdigit():
+            _hkeep = list(models)[:int(_hm)]
+        else:
+            _hasked = [x.strip() for x in _hm.split(',') if x.strip()]
+            _hkeep = [m for m in models if m in _hasked]
+        if _hkeep and len(_hkeep) < len(models):
+            print(f"  [local] reference arms scored under {_hkeep} only; "
+                  f"{[m for m in models if m not in _hkeep]} has "
+                  f"single-representation arms but no hybrid to read them "
+                  f"against.")
+            h_models = {m: models[m] for m in _hkeep}
+    if len(top_tier_reps) >= 2 and 'h0' in HYBRID_ARMS:
         print(f"\n  HYBRID reference arms ({len(top_tier_reps)} top-tier reps)")
         hybrid_results += _score_hybrid_condition(
             'H0_hybrid', top_tier_reps, None, 'none',
-            labels, groups, models, metric_fn, lower_is_better,
+            labels, groups, h_models, metric_fn, lower_is_better,
             n_folds, mode, data, dataset_name, task_type, metric_name, budgets=hybrid_budgets, n_seeds=n_seeds)
+    if len(top_tier_reps) >= 2 and 'h1' in HYBRID_ARMS:
         if aug_reps:
             # USE CASE A: small augmented blocks added to the MULTI-REP hybrid.
             # One arm per admission method, so the placement question (extras
@@ -857,7 +1141,7 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     continue  # H0_hybrid already is that arm
                 hybrid_results += _score_hybrid_condition(
                     f'H1_hybrid_aug__{_strat}', top_tier_reps, aug_reps, _strat,
-                    labels, groups, models, metric_fn, lower_is_better,
+                    labels, groups, h_models, metric_fn, lower_is_better,
                     n_folds, mode, data, dataset_name, task_type, metric_name,
                     budgets=hybrid_budgets, n_seeds=n_seeds,
                     candidate_ranking=candidate_ranking,
@@ -866,9 +1150,14 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
                     with_decoys=with_decoys)
         else:
             print("    H1_hybrid_aug: skipped (no augmentation reps configured)")
-    else:
+    if len(top_tier_reps) < 2:
         print(f"\n  HYBRID reference arms: skipped "
               f"({len(top_tier_reps)} top-tier rep — a hybrid needs >= 2)")
+    elif set(HYBRID_ARMS) != {'h0', 'h1'}:
+        print(f"  [local] reference arms run: {','.join(HYBRID_ARMS)} "
+              f"[{HYBRID_ARMS_SOURCE}]. "
+              f"{'H1, the hybrid WITH extras, did not run.' if 'h1' not in HYBRID_ARMS else ''}"
+              f"{'H0, the hybrid with no extras, did not run, so H1 has no reference.' if 'h0' not in HYBRID_ARMS else ''}")
 
     # ── Summary ──
     print(f"\n{'=' * 70}")
@@ -929,9 +1218,15 @@ def run(data, config, output_dir, dataset_name, top_n=DEFAULT_TOP_N,
         hurt = sum(1 for r in aug_results if sign * r['delta'] < 0)
         mean_delta = float(np.mean([sign * r['delta'] for r in aug_results]))
         all_conditions = sorted(set(r['condition'] for r in aug_results))
+        # The BASE REPRESENTATIONS ACTUALLY LOOPED, not the size of the pool.
+        # This line read len(top_tier_reps) and so announced "5 top-tier reps"
+        # on a run whose base-representation loop had been cut to one -- the
+        # three numbers multiplied to something other than the count beside
+        # them. The pool is printed separately above, as donors.
         print(f"  Total evaluable tests: {n_tests} "
-              f"({len(top_tier_reps)} top-tier reps x {len(models)} models x "
-              f"{len(all_conditions)} conditions)")
+              f"({len(base_loop)} base representations x {len(models)} models "
+              f"x {len(all_conditions)} conditions; donors come from the "
+              f"{len(top_tier_reps)}-representation pool)")
         print(f"  Augmentation improved: {improved}/{n_tests}")
         print(f"  Augmentation hurt:     {hurt}/{n_tests}")
         print(f"  Mean delta:            {mean_delta:+.4f}")

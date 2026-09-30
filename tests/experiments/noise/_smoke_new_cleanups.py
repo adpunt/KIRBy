@@ -25,6 +25,13 @@ each check below shows the new cleanup doing something the old one does not.
                  when the caller hoists none, because n07 hoists none at all --
                  declining there made it look broken rather than untested.
 
+  invvar_weight  against every other name in the file. It reads no suspicion
+                 score and no label at all: the weight is how many times the
+                 molecule was measured, which is known before any model is
+                 fitted. Where the loader kept no measurement count it DECLINES
+                 -- a flat weight there would be the no-cleaning column under
+                 another name.
+
 Cheap by design: pure functions on in-memory arrays, no find_best_hybrid, no
 result store, no dataset. Runs while every store is stale.
 
@@ -48,7 +55,8 @@ import numpy as np
 
 from experiments.noise.n07_remediation import (
     cleaned_training_set, CLEANUPS, REGRESSION_ONLY_CLEANUPS,
-    PROX_SMOOTH_MAX_ROWS, CLEANUP_TARGETS, targets_needed)
+    PROX_SMOOTH_MAX_ROWS, CLEANUP_TARGETS, targets_needed,
+    SCORE_DRIVEN_CLEANUPS, SCORE_FREE_CLEANUPS)
 
 _FAILS = []
 
@@ -85,7 +93,7 @@ def _contract(name, out, n_rows):
 
 
 def test_registered():
-    for nm in ('huber_weight', 'js_shrink', 'prox_smooth'):
+    for nm in ('huber_weight', 'js_shrink', 'prox_smooth', 'invvar_weight'):
         _check(f'{nm} is in CLEANUPS', nm in CLEANUPS)
     _check('js_shrink is regression-only, because there is no halfway point '
            'between two nominal classes',
@@ -93,6 +101,15 @@ def test_registered():
     _check('huber_weight is NOT regression-only, because a weight is defined '
            'on any label',
            'huber_weight' not in REGRESSION_ONLY_CLEANUPS)
+    _check('invvar_weight is NOT regression-only either, for the same reason: '
+           'it sets a row weight and never touches the label',
+           'invvar_weight' not in REGRESSION_ONLY_CLEANUPS)
+    _check('invvar_weight reads no suspicion score',
+           'invvar_weight' in SCORE_FREE_CLEANUPS
+           and 'invvar_weight' not in SCORE_DRIVEN_CLEANUPS)
+    _check('invvar_weight declares no hoistable target, because a measurement '
+           'count is not built from the features, labels and groups',
+           'invvar_weight' not in CLEANUP_TARGETS)
 
 
 def test_huber_has_a_flat_region():
@@ -210,6 +227,92 @@ def test_js_shrink_builds_its_own_target_when_none_is_hoisted():
                f"label units")
 
 
+def test_invvar_weight_honours_the_contract():
+    """THE HEADLINE for invvar_weight, and the thing every caller relies on.
+
+    The weight is the measurement count, normalised to mean one. Nothing else
+    moves: the features and the labels come back exactly as they went in,
+    because this cleanup weights rows and rewrites nothing.
+    """
+    X, y, scores, groups, _bad = _fixture()
+    rng = np.random.RandomState(7)
+    counts = rng.choice([1, 2, 4], size=len(y)).astype(float)
+
+    out = cleaned_training_set('invvar_weight', X, y, None, 0.1,
+                               groups=groups, measurement_counts=counts,
+                               dataset_name='herg_ic50')
+    _contract('invvar_weight', out, len(y))
+    if out is None:
+        return
+    w = out['sample_weight']
+    _check('invvar_weight gives one weight per training molecule',
+           w is not None and len(w) == len(y),
+           f"{0 if w is None else len(w)} weights for {len(y)} molecules")
+    _check('invvar_weight normalises the weights to mean one, the convention '
+           'huber_weight already uses',
+           abs(float(w.mean()) - 1.0) < 1e-12,
+           f"mean {float(w.mean()):.12f}")
+    _check('invvar_weight hands back the features bit-identical',
+           out['X'] is X or np.array_equal(out['X'], X))
+    _check('invvar_weight hands back the labels bit-identical',
+           out['y'] is y or np.array_equal(out['y'], y))
+    _check('invvar_weight rewrites no label column and removes no molecule',
+           out['label_column'] is None and out['keep'] is None)
+
+    # ⛔ THE RATIO IS THE METHOD. The variance of the mean of k measurements
+    # falls as 1/k, so the inverse-variance weight is proportional to k and a
+    # molecule measured 4 times weighs FOUR times one measured once. A weight
+    # proportional to 1/standard-error would weigh it twice. The number below
+    # says which of the two this file computes.
+    ratio = float(w[counts == 4].mean() / w[counts == 1].mean())
+    _check('a molecule measured 4 times weighs 4 times one measured once, '
+           'because the variance of a mean of k falls as 1/k',
+           abs(ratio - 4.0) < 1e-12,
+           f"{ratio:.4f} to 1")
+
+
+def test_invvar_weight_declines_when_there_is_no_count():
+    """⛔ THE REFUSAL IS THE POINT.
+
+    Every dataset but herg_ic50 averaged a molecule's repeat measurements into
+    one number before any experiment saw it, so there is no count to weight by.
+    A flat weight there would produce an `invvar_weight` column bit-identical
+    to the no-cleaning column, under a name saying a method ran.
+    """
+    import io
+    import contextlib
+    X, y, scores, groups, _bad = _fixture()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out = cleaned_training_set('invvar_weight', X, y, None, 0.1,
+                                   groups=groups, measurement_counts=None,
+                                   dataset_name='logd')
+    said = buf.getvalue()
+    _check('invvar_weight declines when no measurement count exists',
+           out is None)
+    _check('and names the dataset it was asked for',
+           'logd' in said, said.strip()[:80])
+    _check('and says a measurement count is what is missing',
+           'measurement count' in said, said.strip()[:80])
+
+
+def test_invvar_weight_refuses_a_count_column_of_the_wrong_length():
+    """A length mismatch is a caller bug, not a fact about the dataset. The
+    counts and the training rows index the same molecules, so a mismatch would
+    give every molecule after the first gap another one's weight."""
+    X, y, scores, groups, _bad = _fixture()
+    try:
+        cleaned_training_set('invvar_weight', X, y, None, 0.1,
+                             groups=groups,
+                             measurement_counts=np.ones(len(y) - 3),
+                             dataset_name='herg_ic50')
+        raised = False
+    except ValueError:
+        raised = True
+    _check('invvar_weight raises on a count column that does not match the '
+           'training molecules', raised)
+
+
 def test_every_cleanup_declares_the_target_it_needs():
     """The mapping that stops the next method hitting the same gap.
 
@@ -282,15 +385,18 @@ def test_prox_smooth_refuses_a_training_block_it_cannot_hold():
     """The proximity is a square matrix, so its memory is quadratic. Above the
     cap it is refused, not subsampled: a proximity over a subsample is a
     different quantity from one over the fold."""
-    _check('PROX_SMOOTH_MAX_ROWS is set', PROX_SMOOTH_MAX_ROWS > 0,
-           f"{PROX_SMOOTH_MAX_ROWS} molecules")
-    n = PROX_SMOOTH_MAX_ROWS + 1
+    # The cap was removed on 2026-09-28 (owner's decision; n07's
+    # PROX_SMOOTH_MAX_ROWS is None), so prox_smooth now runs at any size.
+    # This checks that, on a fold above the old 2,000-molecule cap.
+    _check('PROX_SMOOTH_MAX_ROWS is None (no cap)', PROX_SMOOTH_MAX_ROWS is None,
+           f"{PROX_SMOOTH_MAX_ROWS!r}")
+    n = 2001
     rng = np.random.RandomState(1)
     X = rng.randn(n, 4).astype(np.float32)
     y = rng.randn(n)
     out = cleaned_training_set('prox_smooth', X, y, np.abs(y), 0.1)
-    _check('prox_smooth declines above the cap rather than building the matrix',
-           out is None, f"at {n} molecules")
+    _check('prox_smooth runs above the old cap', out is not None,
+           f"at {n} molecules")
 
 
 def main():
@@ -304,6 +410,10 @@ def main():
     print("\nprox_smooth — the forest's own similarity, not Euclidean:")
     test_prox_smooth_beats_euclidean_where_most_features_are_noise()
     test_prox_smooth_refuses_a_training_block_it_cannot_hold()
+    print("\ninvvar_weight — the weight is the measurement count, not a score:")
+    test_invvar_weight_honours_the_contract()
+    test_invvar_weight_declines_when_there_is_no_count()
+    test_invvar_weight_refuses_a_count_column_of_the_wrong_length()
     print("\njs_shrink — the shrink is derived, not chosen:")
     test_js_shrink_moves_the_suspect_labels_most()
     test_js_shrink_builds_its_own_target_when_none_is_hoisted()
