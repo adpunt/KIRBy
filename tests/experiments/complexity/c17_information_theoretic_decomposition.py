@@ -13,6 +13,7 @@ Usage:
 """
 import sys
 import os
+import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -32,6 +33,24 @@ from experiments._shared import (
 from experiments._shared import (
     build_fold_hybrid, get_best_search_for_downstream,
 )
+
+
+# =========================================================================
+# COST KNOBS (2026-09-25) — every default is the shipped value, so a server
+# run with none of these set is bit-identical to before.
+# =========================================================================
+
+def _env_int(name, default):
+    """Read an integer environment override, falling back to the shipped value."""
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == '':
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        print(f"  [c17] ignoring {name}={raw!r} (not an integer); "
+              f"using {default}")
+        return default
 
 
 # =========================================================================
@@ -88,15 +107,27 @@ def _greedy_mrmr(X, y, budget, k_mi=5, max_features=None):
         feature_indices = top_idx
         X = X[:, top_idx]
         n_features = max_features
+        # COST-3 (2026-09-25): the pre-filter above already estimated
+        # MI(x_j, y) for every feature it kept, on exactly these rows, and
+        # MI(x_j, y) is what `relevance` holds. The loop below used to
+        # re-estimate it, paying max_features estimates a second time for
+        # numbers already in pre_mi. Carrying them over is exact -- same rows,
+        # same estimator, same k -- and saves max_features estimates per fold.
+        prefilter_relevance = pre_mi[top_idx]
+    else:
+        prefilter_relevance = None
 
-    # Pre-compute MI(x_j, y) for all features
-    relevance = np.zeros(n_features)
-    for j in range(n_features):
-        try:
-            relevance[j] = estimate_mutual_information_knn(
-                X[:, j:j+1], y, k=k_mi)
-        except Exception:
-            relevance[j] = 0.0
+    # MI(x_j, y) for every candidate feature.
+    if prefilter_relevance is not None:
+        relevance = prefilter_relevance
+    else:
+        relevance = np.zeros(n_features)
+        for j in range(n_features):
+            try:
+                relevance[j] = estimate_mutual_information_knn(
+                    X[:, j:j+1], y, k=k_mi)
+            except Exception:
+                relevance[j] = 0.0
 
     selected = []
     remaining = list(range(n_features))
@@ -149,6 +180,102 @@ def _greedy_mrmr(X, y, budget, k_mi=5, max_features=None):
 
     # Map back to original feature indices if pre-filtered
     return [int(feature_indices[s]) for s in selected]
+
+
+# =========================================================================
+# HYBRID ARM: per-fold feature importance, computed once
+# =========================================================================
+
+_C17_FOLD_IMPORTANCE = {}
+
+
+def _hybrid_fold_importance(fold_idx, train_reps, y_train, groups_train,
+                            blueprint, augs_train, dataset_name):
+    """Per-feature importance for one fold of the hybrid arm, computed once.
+
+    WHAT THIS REPLACES. create_hybrid recomputes per-feature importance over
+    the base representations on every call. That quantity depends on the fold
+    and the importance method and on nothing else -- not the budget. c17 calls
+    build_fold_hybrid once per (fold, budget), so with 3 folds and the budgets
+    100 and 250 it paid for the same three importance vectors twice.
+
+    Measured 2026-09-25 on flab_thermo_tresanco, 672 rows, 5 representations of
+    1000 features each: the hybrid arm took 746 s for its 3 folds at budget 100,
+    about 249 s per fold, and _shared.py:5258 records 261.9 s for one such build
+    on this dataset with augmentation off. Handing the vector in removes the
+    second pass entirely -- about 750 s of the run.
+
+    SAME NUMBERS, NOT SIMILAR ONES. The recipe here is create_hybrid's own
+    (hybrid.py:5988 and :6125): carve the fold's training rows with
+    internal_holdout_split at its default 0.2, then run compute_feature_importance
+    on the carve's training part with the blueprint's importance method.
+    build_fold_hybrid passes neither validation_split nor apply_filters, so both
+    defaults hold and no feature filter is in play.
+
+    Before computing anything it looks for the vector find_best_hybrid's
+    pre-pass already wrote to disk (find_best_hybrid.py:6456). That file is
+    keyed by a hash of the exact matrices and labels the score is computed
+    from, so a hit can only be the right vector and a miss only costs a fresh
+    computation. On the run measured here that pre-pass reported "3/3
+    successful, 3 read from disk" in 1.3 s.
+
+    Returns None -- which puts create_hybrid back on its own computation -- in
+    the three cases this has not been checked against:
+      - augmentations are present (importance is then taken over a different
+        set of matrices);
+      - the recipe was searched over fewer representations than the pool holds,
+        so build_fold_hybrid drops some before create_hybrid sees them;
+      - the blueprint names no importance method.
+    """
+    if augs_train:
+        return None
+    _rc = getattr(blueprint, 'rep_count', None)
+    if _rc is not None and int(_rc) < len(train_reps):
+        return None
+    method = getattr(blueprint, 'importance_method', None)
+    if not method:
+        return None
+
+    key = (dataset_name, fold_idx, method)
+    if key in _C17_FOLD_IMPORTANCE:
+        return _C17_FOLD_IMPORTANCE[key]
+
+    from kirby.hybrid import compute_feature_importance, internal_holdout_split
+    y_train = np.asarray(y_train)
+    inner_tr, _inner_va = internal_holdout_split(
+        len(y_train), y_train, groups_train)
+    reps_in = {k: np.asarray(v)[inner_tr] for k, v in train_reps.items()}
+    y_in = y_train[inner_tr]
+
+    imp = None
+    if dataset_name:
+        try:
+            from kirby.find_best_hybrid import (
+                _fold_input_hash, _fold_score_cache_path,
+                _load_cache_with_meta)
+            _h = _fold_input_hash(reps_in, y_in)
+            imp = _load_cache_with_meta(
+                _fold_score_cache_path(dataset_name, 'importance', fold_idx,
+                                       method, _h),
+                {'kind': 'fold_importance', 'method': method,
+                 'fold_idx': fold_idx, 'input_hash': _h},
+                kind='search', verbose=False)
+            if imp is not None:
+                print(f"      fold {fold_idx} importance ({method}): read the "
+                      f"vector the search already wrote")
+        except Exception as _ce:
+            print(f"      fold {fold_idx} importance ({method}): the search's "
+                  f"store could not be read ({_ce}); computing it here")
+            imp = None
+
+    if imp is None:
+        _t0 = time.time()
+        imp = compute_feature_importance(reps_in, y_in, method=method)
+        print(f"      fold {fold_idx} importance ({method}): computed in "
+              f"{time.time() - _t0:.1f}s")
+
+    _C17_FOLD_IMPORTANCE[key] = imp
+    return imp
 
 
 # =========================================================================
@@ -249,6 +376,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT C17: INFORMATION-THEORETIC DECOMPOSITION")
     print("=" * 70)
+    _t_run0 = time.time()
 
     task_type = data['task_type']
     if task_type != 'regression':
@@ -285,7 +413,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     budgets = [b for b in FULL_BUDGETS if b < total_dim]
     # mRMR is O(budget * n_features * n_samples). For large feature sets,
     # pre-filter to top 2000 features by univariate MI before greedy selection.
-    mrmr_prefilter = 2000
+    #
+    # ⛔ THE CANDIDATE COUNT IS WHAT c17 COSTS. Measured 2026-09-25 on
+    # flab_thermo_tresanco (672 rows, whole dataset, nothing dropped), five
+    # representations at 1000 features each, 3 folds, budgets 100 and 250.
+    #
+    # The greedy loop measures every surviving candidate against the feature it
+    # just picked, so the number of mutual-information estimates it pays per
+    # fold is about (features it builds) x (candidates the pre-filter kept):
+    #   pre-filter over the whole width   ~5,000 estimates
+    #   redundancy against the first pick ~2,000
+    #   greedy loop, 99 further picks     ~193,000
+    #   = about 200,000 estimates per fold, 600,000 over three folds.
+    # One estimate on 448 training rows x 1 feature is ~12 ms on an idle
+    # laptop core, which is the ~40 min/fold this experiment was measured at.
+    #
+    # ⛔ MEASURED AGAIN 2026-09-25 WHILE THE LAPTOP CARRIED 24 OTHER
+    # EXPERIMENTS (load average 670): the SAME estimate took 547 ms, 45x the
+    # idle figure. At the pre-filter set to 200 one fold's ranking had not
+    # finished after 35 minutes. The count below is what this file controls;
+    # how long a count takes is the machine's, and on a contended laptop no
+    # setting of this knob brings c17 inside 40 minutes.
+    #
+    # KIRBY_C17_MRMR_PREFILTER sets how many candidates survive the
+    # max-relevance pre-filter. It is c17's own condition, not a swept axis,
+    # and the greedy cost is linear in it. Lowering it to 200 takes the greedy
+    # loop from ~193,000 estimates per fold to ~14,900 and the fold total from
+    # ~200,000 to ~20,000, about 10x.
+    #
+    # WHAT THAT COSTS, SAID PLAINLY: the mrmr arm then picks its 100 features
+    # out of the 200 highest-relevance features instead of the 2,000 highest.
+    # Its relevance ordering is unchanged; what shrinks is how much room the
+    # redundancy term has to move a feature up. The other four strategies --
+    # hybrid, pca, rfe, random -- still see the full width and are untouched.
+    # NO ROW IS DROPPED by this or by anything else in c17: all 672 rows of
+    # flab_thermo_tresanco are used, split into 3 group-aware folds.
+    #
+    # The default stays 2000, so a server run is unchanged.
+    mrmr_prefilter = _env_int('KIRBY_C17_MRMR_PREFILTER', 2000)
 
     # ⛔ THE mRMR RANKING STOPS AT 200 FEATURES. Owner's decision 2026-09-18.
     #
@@ -314,7 +479,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # cliff nothing was standing on.
     #
     # The OTHER four strategies are unaffected and still run at every budget.
-    MRMR_MAX_BUDGET = 200
+    #
+    # KIRBY_C17_MRMR_MAX_BUDGET overrides the cap. Default 200 = shipped value.
+    MRMR_MAX_BUDGET = _env_int('KIRBY_C17_MRMR_MAX_BUDGET', 200)
 
     print(f"  Total dim: {total_dim}, budgets: {budgets}")
     if total_dim > mrmr_prefilter:
@@ -355,7 +522,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # This is a feature-selection row subsample, NOT an evaluation split.
     MRMR_MAX_ROWS = 2000
     fold_mrmr_ranking = []
+    _t_mrmr0 = time.time()
     for _fi, (_tr, _va) in enumerate(splits):
+        _t_fold0 = time.time()
         _rank = None
         if budgets:
             _Xtr_s = fold_scalers[_fi].transform(X_concat[_tr])
@@ -396,7 +565,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                      k_mi=5, max_features=_mf)
             except Exception as _e:
                 print(f"  mRMR ranking failed on fold {_fi}: {_e}")
+        print(f"    [timing] mRMR ranking fold {_fi}: "
+              f"{time.time() - _t_fold0:.1f}s")
         fold_mrmr_ranking.append(_rank)
+    print(f"  [timing] mRMR ranking, all {len(splits)} folds: "
+          f"{time.time() - _t_mrmr0:.1f}s")
 
     strategies = ['hybrid', 'pca', 'mrmr', 'rfe', 'random']
 
@@ -430,6 +603,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # labels, which is what this loop fixes.
         augmentations = data.get('augmentations')
         hybrid_bp = None
+        _t_bp0 = time.time()
         try:
             _hsearch, _hmeta = get_best_search_for_downstream(
                 reps, labels, groups,
@@ -442,6 +616,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 hybrid_bp = _hmeta['best_config']['blueprint']
         except Exception as _he:
             print(f"    hybrid blueprint lookup failed: {_he}")
+        print(f"    [timing] hybrid blueprint lookup, budget={budget}: "
+              f"{time.time() - _t_bp0:.1f}s")
 
         def _fold_index(train_idx):
             for _i, (_tr, _va) in enumerate(splits):
@@ -458,14 +634,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if augmentations else None)
             va_a = ({k: v[val_idx] for k, v in augmentations.items()}
                     if augmentations else None)
+            _groups_tr = (groups[train_idx] if groups is not None else None)
+            # The importance over this fold's representations does not depend
+            # on the budget, and this function is called once per budget. See
+            # _hybrid_fold_importance.
+            _imp = _hybrid_fold_importance(
+                _fold_index(train_idx), tr_reps, labels[train_idx],
+                _groups_tr, hybrid_bp, tr_a, dataset_name)
             X_tr, X_va, _fi = build_fold_hybrid(
                 tr_reps, va_reps, labels[train_idx], hybrid_bp,
                 augmentations_train=tr_a, augmentations_val=va_a,
                 budget_override=budget,
-                groups=(groups[train_idx] if groups is not None else None),
+                groups=_groups_tr,
                 model=RandomForestRegressor(n_estimators=100, random_state=42,
                                             n_jobs=-1),
-                metric_fn=metric_fn, lower_is_better=lower_is_better)
+                metric_fn=metric_fn, lower_is_better=lower_is_better,
+                precomputed_importance=_imp)
             return X_tr, X_va
 
         def _sel_pca(train_idx, val_idx):
@@ -524,6 +708,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         for strategy in strategies:
             print(f"    {strategy}...", end='', flush=True)
+            _t_strat0 = time.time()
 
             try:
                 metrics = _evaluate_strategy(selectors[strategy], labels,
@@ -539,6 +724,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception as e:
                 print(f" FAILED: {e}")
                 budget_results[strategy] = {'error': str(e)}
+            print(f"      [timing] budget={budget} {strategy}: "
+                  f"{time.time() - _t_strat0:.1f}s")
 
         results['per_budget'][budget] = convert_numpy(budget_results)
 
@@ -573,6 +760,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"\n  Budget={budget} MI density: {per_budget_density[budget]}")
         print(f"  Budget={budget} best strategy: {best_per_budget[budget]}")
 
+    print(f"\n  [timing] c17 total: {time.time() - _t_run0:.1f}s")
     return results
 
 

@@ -33,6 +33,7 @@ Usage:
 """
 import sys
 import os
+import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -44,6 +45,19 @@ from experiments._shared import (
     get_model_factories, get_domain_metric,
     DOWNSTREAM_MODELS, FULL_BUDGETS)
 from kirby.find_best_hybrid import nested_cv_evaluate
+
+
+# Debug only, off unless KIRBY_C23_STACKDUMP is set to a number of seconds.
+# c23 runs every arm with verbose=False, so a slow arm prints nothing at all
+# between "A_matched (eval=rf)..." and its score. This writes the interpreter
+# stack to stderr on that interval so a stalled arm says where it is standing.
+# Costs nothing when the variable is unset.
+def _arm_stack_sampler():
+    _every = os.environ.get('KIRBY_C23_STACKDUMP', '').strip()
+    if not _every:
+        return
+    import faulthandler
+    faulthandler.dump_traceback_later(float(_every), repeat=True, exit=False)
 
 
 # ── Evaluator mismatch configurations ──
@@ -102,6 +116,87 @@ NN_PAIRS = [
 # Quick default set — Condition E
 QUICK_EVALUATORS = ['rf', 'lightgbm', 'xgboost']
 
+
+# ── Two local-run knobs. Both default to the shipped behaviour. ──────────────
+#
+# WHY THEY EXIST. c23 has never written a result file on the laptop grid. What
+# it asks for, counted in model fits:
+#
+#   A/B/C arm  1 evaluator  x 2 budgets x 3 allocation methods =  6 configs
+#   E arm      3 evaluators x 2 budgets x 3 allocation methods = 18 configs
+#
+# and every config is fitted on 3 inner folds inside each of 3 outer folds, so
+# an A/B/C arm is 54 model fits and an E arm is 162. With the two downstream
+# models the local grid leaves (rf, svm) that is 6 A/B/C arms + 2 E arms =
+# 648 model fits, before the per-outer-fold baselines and rebuilds.
+#
+# Measured on flab_thermo_tresanco (672 antibodies, 5 representations capped at
+# 1000 features each) on 2026-09-25: one random forest fit at 448 training rows
+# x 250 features takes 3.5s on this machine, so the 648 fits alone are 38
+# minutes, and the first A/B/C arm had not finished after 24 minutes of wall
+# clock. Nothing was broken — the laptop is a 4-core 1.4 GHz i5 and seven to
+# eleven other experiment processes were running at the same time.
+#
+# ⛔ NEITHER KNOB IS A FINDING. Nothing run under them says which evaluator
+# family wins. They are wall-clock cuts for a laptop; a cluster run leaves
+# KIRBY_LOCAL_GRID unset and gets the shipped conditions and the shipped
+# budgets.
+
+def _c23_conditions():
+    """Which of A/B/C/D/E to run. Comma list of letters, or 'all'.
+
+    KIRBY_C23_CONDITIONS wins wherever it is set. Unset, every condition runs
+    — EXCEPT under KIRBY_LOCAL_GRID, where E is dropped.
+
+    WHAT DROPPING E COSTS. E is the only condition that asks whether the
+    shipped three-evaluator default set {rf, lightgbm, xgboost} beats naming
+    the matched evaluator, so that question goes unanswered locally. It is the
+    condition to drop first because it is the most expensive one by a long way:
+    its search carries 3 evaluators where A, B and C each carry 1, so the two E
+    arms are 324 of c23's 648 model fits — half the experiment's whole cost for
+    one row of five. A, B and C, the matched-vs-mismatched deltas c23 exists
+    for, are untouched.
+    """
+    raw = os.environ.get('KIRBY_C23_CONDITIONS', '').strip()
+    if not raw:
+        return {'A', 'B', 'C', 'D'} if os.environ.get(
+            'KIRBY_LOCAL_GRID') else {'A', 'B', 'C', 'D', 'E'}
+    if raw.lower() == 'all':
+        return {'A', 'B', 'C', 'D', 'E'}
+    return {t.strip().upper()[:1] for t in raw.split(',') if t.strip()}
+
+
+def _c23_budgets(shipped):
+    """The budget list every arm searches.
+
+    KIRBY_C23_BUDGETS wins wherever it is set. Unset, the shipped list is used
+    — EXCEPT under KIRBY_LOCAL_GRID, where only the widest budget is kept.
+
+    WHAT KEEPING ONE BUDGET COSTS. Each arm's recipe is then chosen from 3
+    configurations instead of 6, so every condition's score comes out of a
+    narrower search, and the per-budget rows nested_cv_evaluate stores carry
+    one budget instead of two. It does NOT bend any comparison c23 reports:
+    the narrowing is identical in A, B, C and E, and c23's published quantity
+    is the fold-by-fold delta between two conditions, never a
+    budget-against-budget difference. (c09, c16, c17 and c18 DO compare across
+    budgets and must keep both levels; c23 is not one of them.)
+
+    250 rather than 100, from the flab_thermo_tresanco precompute of
+    2026-09-25: rf scored 0.6443 spearman at budget 250 against 0.6041 at 100,
+    and svm 0.6320 at 250 against 0.6351 at 100. So 250 is much the better of
+    the two for rf and all but level for svm.
+
+    ⛔ THIS CUTS CONFIGURATIONS, NEVER ROWS. All 672 antibodies are used in
+    every fold either way.
+    """
+    raw = os.environ.get('KIRBY_C23_BUDGETS', '').strip()
+    if raw:
+        return [int(b.strip()) for b in raw.split(',') if b.strip()]
+    if os.environ.get('KIRBY_LOCAL_GRID') and len(shipped) > 1:
+        return [max(int(b) for b in shipped)]
+    return list(shipped)
+
+
 # The study's downstream models, one list shared with every other experiment.
 TEST_MODELS = list(DOWNSTREAM_MODELS)
 
@@ -123,6 +218,7 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
     was inflated on both sides before the subtraction.
     """
     models = {model_name: model_factory()}
+    _t0 = time.time()
     try:
         ncv = nested_cv_evaluate(
             reps, labels, groups,
@@ -150,6 +246,8 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
             augmentations=augmentations,
             augmentation_strategy=aug_strategy,
             tier='general')
+        print(f"[c23 timing] {model_name}/{evaluator} nested_cv {time.time()-_t0:.1f}s",
+              flush=True)
         entry = (ncv.by_model or {}).get(model_name)
         if entry:
             rep_row = ncv.best_by_model.get(model_name, {})
@@ -171,7 +269,7 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
                 'recipe_is_from_fold': 'first outer fold with a winner',
             }
     except Exception as e:
-        print(f"      FAILED: {e}")
+        print(f"      FAILED after {time.time()-_t0:.1f}s: {e}")
     return None
 
 
@@ -196,6 +294,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT C23: EVALUATOR-MODEL MATCHING")
     print("=" * 70)
+
+    _arm_stack_sampler()
 
     reps = data['reps']
     labels = data['labels']
@@ -224,7 +324,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     available_models = {k: v for k, v in all_models.items() if k in MATCH_TABLE}
     print(f"  Models: {list(available_models.keys())}")
 
-    budgets = FULL_BUDGETS
+    budgets = _c23_budgets(FULL_BUDGETS)
+    conditions = _c23_conditions()
+    if list(budgets) != list(FULL_BUDGETS):
+        print(f"  Budgets: {budgets} (shipped list is {list(FULL_BUDGETS)}; "
+              f"see _c23_budgets)")
+    if conditions != {'A', 'B', 'C', 'D', 'E'}:
+        print(f"  Conditions running: {sorted(conditions)} of A,B,C,D,E "
+              f"(see _c23_conditions)")
     sign = -1 if lower_is_better else 1
 
     results = []
@@ -238,6 +345,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for cond_name, evaluator in [('A_matched', matched_ev),
                                       ('B_slight_off', slight_ev),
                                       ('C_strong_off', strong_ev)]:
+            if cond_name[0] not in conditions:
+                print(f"    {cond_name}: not in KIRBY_C23_CONDITIONS, skipped")
+                continue
             print(f"    {cond_name} (eval={evaluator})...", end=' ', flush=True)
             r = _run_single_config(
                 reps, labels, groups, model_name, model_factory,
@@ -278,7 +388,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Condition D: NN size mismatch ──
     print(f"\n  NN size mismatch pairs:")
-    for downstream, evaluator in NN_PAIRS:
+    for downstream, evaluator in (NN_PAIRS if 'D' in conditions else []):
         if downstream not in available_models:
             continue
         model_factory = available_models[downstream]
@@ -323,10 +433,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # rows it never saw, so the sign is no longer forced — the containment is
     # still recorded per row as evaluator_set_contains_matched.
     print(f"\n  Quick default set: {QUICK_EVALUATORS}")
-    for model_name, model_factory in available_models.items():
+    for model_name, model_factory in (available_models.items()
+                                      if 'E' in conditions else []):
         # Run with the quick evaluator set (all 3 evaluated, best wins)
         models = {model_name: model_factory()}
         print(f"    {model_name}...", end=' ', flush=True)
+        _tq = time.time()
         try:
             ncv = nested_cv_evaluate(
                 reps, labels, groups,
@@ -343,6 +455,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=augmentations,
                 augmentation_strategy=aug_strategy,
                 tier='general')
+            print(f"[c23 timing] E_quick/{model_name} nested_cv "
+                  f"{time.time()-_tq:.1f}s", flush=True)
             entry = (ncv.by_model or {}).get(model_name)
             if entry:
                 rep_row = ncv.best_by_model.get(model_name, {})
@@ -423,6 +537,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'models_tested': list(available_models.keys()),
         'budgets': budgets,
         'n_outer_folds': n_outer_folds,
+        # What this run actually asked for, so a result file can never be read
+        # as the shipped conditions when it is not. See _c23_conditions and
+        # _c23_budgets for what each omission costs.
+        'conditions_run': sorted(conditions),
+        'conditions_shipped': ['A', 'B', 'C', 'D', 'E'],
+        # The list _c23_budgets was handed, i.e. before its own cut. On a
+        # cluster run that IS the shipped list; locally _shared has already
+        # replaced it with KIRBY_LOCAL_BUDGETS.
+        'budgets_before_c23_cut': list(FULL_BUDGETS),
         # Every score_mean in results is a mean over outer folds whose recipe
         # search never saw them, and every delta_vs_matched is the fold-by-fold
         # difference of two such scores, averaged.

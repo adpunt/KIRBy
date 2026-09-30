@@ -61,6 +61,24 @@ def apply():
     _set('DEFAULT_REP_COUNTS', _counts('KIRBY_LOCAL_REP_COUNTS'))
     _set('FAST_REP_COUNTS', _counts('KIRBY_LOCAL_REP_COUNTS'))
 
+    # ⛔ THE FOLD COUNT IS A CONDITION, NOT A SAMPLE SIZE. Every configuration
+    # in a search is scored once per inner fold, so this multiplies the whole
+    # grid. get_config only offers 5 (--mode full) or 1 (--mode intermediary),
+    # and 1 is not usable: cv_split falls to a single GroupShuffleSplit and
+    # c24 refuses outright with 'insufficient_folds'. The project's own rule is
+    # 3-5 fold, group-aware, so 3 is inside it.
+    #
+    # NOTHING HERE TOUCHES THE ROW COUNT. Every fold still sees every molecule.
+    _folds = os.environ.get('KIRBY_LOCAL_FOLDS')
+    if _folds:
+        n = int(_folds)
+        if n < 2:
+            raise ValueError(
+                f"KIRBY_LOCAL_FOLDS={n}: a single fold is not a fold count. "
+                f"cv_split degenerates to one GroupShuffleSplit and c24 "
+                f"refuses with insufficient_folds. Use 3 or more.")
+        _set('DEFAULT_N_FOLDS', n)
+
     # A search that is handed models=None reads the tier labels, so the model
     # list is cut by relabelling rather than by a second filter the cache key
     # would not see.
@@ -80,6 +98,44 @@ def apply():
         print("  [local grid] " + "; ".join(
             f"{k}={v}" for k, v in sorted(changed.items())))
     return changed
+
+
+def cap_rep_width(reps):
+    """Cut every representation to KIRBY_LOCAL_MAX_FEATURES_PER_REP columns.
+
+    ⛔ A COMPUTE CUT FOR THE LOCAL RUN, NEVER A FINDING. The columns kept are
+    the highest-variance ones, chosen WITHOUT the labels, so nothing here is
+    supervised selection and no row is dropped: every molecule keeps every row.
+
+    Why it exists. Measured 2026-09-24 on flab: importance computation is 62%
+    of every create_hybrid call (93s of 150s), and it scales with the total
+    width of the pool. The molecular pools are dominated by one representation
+    -- grover is 4800 features, 57% of caco2's 8389 and 49% of herg_ki's 9761 --
+    so a per-representation cap is the only cut that attacks the real cost
+    while leaving every representation in the pool and every experiment's axes
+    intact.
+
+    Unset, returns the matrices unchanged.
+    """
+    cap = os.environ.get('KIRBY_LOCAL_MAX_FEATURES_PER_REP')
+    if not cap or not reps:
+        return reps
+    import numpy as np
+    n = int(cap)
+    out, notes = {}, []
+    for name, X in reps.items():
+        if X is None or X.ndim != 2 or X.shape[1] <= n:
+            out[name] = X
+            continue
+        v = np.nanvar(np.asarray(X, dtype=np.float64), axis=0)
+        v[~np.isfinite(v)] = -np.inf
+        keep = np.sort(np.argsort(v)[-n:])
+        out[name] = X[:, keep]
+        notes.append(f"{name} {X.shape[1]}->{n}")
+    if notes and os.environ.get('KIRBY_LOCAL_GRID'):
+        print(f"  [local width cap] top-{n} by variance, labels not used: "
+              + ", ".join(notes))
+    return out
 
 
 def cut_pool(dataset_name, rep_names):
