@@ -66,6 +66,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         FAST_INTERNAL_EVALUATORS as _FE, FAST_REP_COUNTS as _FR)
     _c02_fast = _ds_speed(dataset_name) == 'fast'
     _search_models = list(DOWNSTREAM_MODELS) if _c02_fast else None
+    # gp on the datasets under 1,000 molecules, as the precompute stores them
+    # (dataset_policy.SMALL_DATASET_EXTRA_MODELS). c02 calls find_best_hybrid
+    # directly, so _shared never added it and c02's search missed the stored
+    # one on those datasets (model-list audit, 2026-09-29).
+    from experiments._shared import _apply_small_dataset_models as _asm
+    _search_models = _asm({'models': _search_models, 'tier': 'general'},
+                          dataset_name)['models']
     _c02_evaluators = list(_FE) if _c02_fast else INTERNAL_EVALUATORS
     _c02_speed_kw = ({'speed': 'fast', 'rep_counts': list(_FR)}
                      if _c02_fast else {})

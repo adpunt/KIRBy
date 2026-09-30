@@ -1081,7 +1081,8 @@ def run_all(dataset_name: str, output_dir: str,
     # ── Precompute distance-tier searches (for c03_cross_dataset_transfer) ──
     # c03 is the only complexity experiment that uses the distance pool. Populate
     # so the pool helper can read in-memory dicts when distance=True.
-    from experiments._shared import DISTANCE_EVALUATORS, DISTANCE_BUDGETS
+    from experiments._shared import (DISTANCE_EVALUATORS, DISTANCE_BUDGETS,
+                                     DISTANCE_MODELS)
     _dist_cfg = {**config, 'budgets': DISTANCE_BUDGETS}
     if len(data['reps']) >= 2:
         print(f"\n  Precomputing distance-tier (general_distance, {len(data['reps'])} reps)...")
@@ -1097,6 +1098,11 @@ def run_all(dataset_name: str, output_dir: str,
                 dataset_name=dataset_name, tier='general_distance',
                 internal_evaluators=DISTANCE_EVALUATORS,
                 budgets=DISTANCE_BUDGETS,
+                # The distance models the precompute stored (5 + knn), as
+                # similarity_helpers passes them. With none named, a full-speed
+                # dataset asked for the five and missed the stored search
+                # (model-list audit, 2026-09-29).
+                models=DISTANCE_MODELS,
                 adaptive_pruning_schedule=_sched,
                 model_pruning_aggressiveness=_model_overrides,
             )

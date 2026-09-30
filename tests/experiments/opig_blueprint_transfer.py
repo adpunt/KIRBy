@@ -186,17 +186,39 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     _eval_list = ['rf'] if _is_smoke else INTERNAL_EVALUATORS
     _smoke_imp = ({'importance_methods': ['lightgbm_gain']} if _is_smoke else {})
 
+    def _speed_kw(ds):
+        from experiments._shared import _apply_dataset_search_speed
+        kw = _apply_dataset_search_speed({'tier': 'general'}, ds)
+        kw.pop('tier', None)
+        return kw
+
+    def _evals_for(ds):
+        # An explicit evaluator list beats speed= inside find_best_hybrid, so
+        # a fast-speed dataset gets the fast list by name.
+        if _is_smoke:
+            return _eval_list
+        from experiments.dataset_policy import dataset_search_speed
+        if dataset_search_speed(ds) == 'fast':
+            from kirby.find_best_hybrid import FAST_INTERNAL_EVALUATORS
+            return list(FAST_INTERNAL_EVALUATORS)
+        return _eval_list
+
     print(f"\n  Step 1: Hybrid search on source ({source_name})")
     source_search = find_best_hybrid(
         base_reps=src, labels=source_labels, groups=source_groups,
         budgets=search_budgets,
         augmentation_strategy='none',
-        internal_evaluators=_eval_list,
+        internal_evaluators=_evals_for(source_name),
         metric=metric_name, task_type=task_type,
         verbose=False, cache=True,
         dataset_name=source_name, tier='general',
         **_smoke_imp,
         **_src_pkw,
+        # The dataset's speed and model list, as the precompute stored them:
+        # fast grid and the five models on the fast-speed datasets, + gp under
+        # 1,000 molecules. This call went straight to find_best_hybrid and
+        # missed the stored search on both (model-list audit, 2026-09-29).
+        **_speed_kw(source_name),
     )
 
     print(f"\n  Step 2: Hybrid search on target ({target_name})")
@@ -204,12 +226,17 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         base_reps=tgt, labels=target_labels, groups=target_groups,
         budgets=search_budgets,
         augmentation_strategy='none',
-        internal_evaluators=_eval_list,
+        internal_evaluators=_evals_for(target_name),
         metric=metric_name, task_type=task_type,
         verbose=False, cache=True,
         dataset_name=target_name, tier='general',
         **_smoke_imp,
         **_tgt_pkw,
+        # The dataset's speed and model list, as the precompute stored them:
+        # fast grid and the five models on the fast-speed datasets, + gp under
+        # 1,000 molecules. This call went straight to find_best_hybrid and
+        # missed the stored search on both (model-list audit, 2026-09-29).
+        **_speed_kw(target_name),
     )
 
     # ── Step 3: Per-model evaluation ────────────────────────────────────
