@@ -180,7 +180,7 @@ def model_signature(model) -> dict:
 # Store, counters, report
 # ---------------------------------------------------------------------------
 
-_COUNTS = defaultdict(lambda: {'hits': 0, 'misses': 0, 'bypass': 0})
+_COUNTS = defaultdict(lambda: {'hits': 0, 'misses': 0, 'bypass': 0, 'unreadable': 0})
 
 
 def enabled() -> bool:
@@ -217,7 +217,7 @@ def _atomic_write(path: Path, writer):
         raise
 
 
-def _load(dataset, kind, digest):
+def _load_once(dataset, kind, digest):
     p = _path(dataset, kind, digest, 'npz')
     if p.exists():
         with np.load(p, allow_pickle=False) as z:
@@ -226,6 +226,32 @@ def _load(dataset, kind, digest):
     if p.exists():
         with open(p, 'rb') as fh:
             return True, pickle.load(fh)
+    return False, None
+
+
+def _load(dataset, kind, digest, attempts=3):
+    """A stored entry, or (False, None). Never raises on an unreadable file.
+
+    On the shared filesystem another job can replace an entry while this one
+    reads it (_atomic_write's os.replace), and the reader then gets
+    "OSError: [Errno 116] Stale file handle" or "File is not a zip file".
+    That crashed n07 on the server (traceback through
+    cached_detector_scores, 2026-09-28). Re-open a few times; if it still cannot be read, treat
+    it as a miss -- the value is recomputed and the entry rewritten.
+    """
+    import time
+    import zipfile
+    last = None
+    for i in range(attempts):
+        try:
+            return _load_once(dataset, kind, digest)
+        except (OSError, EOFError, zipfile.BadZipFile, ValueError,
+                pickle.UnpicklingError, KeyError) as exc:
+            last = exc
+            time.sleep(0.5 * (i + 1))
+    _COUNTS[kind]['unreadable'] += 1
+    print(f"  [noise_cache] {kind}/{digest}: unreadable after {attempts} tries "
+          f"({type(last).__name__}: {last}); recomputing")
     return False, None
 
 
