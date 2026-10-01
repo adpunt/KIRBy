@@ -1469,8 +1469,14 @@ def _import_experiment(exp_id: str):
         'n41': 'n41_conformal_fdr_detection',
         'n42': 'n42_similarity_noise_sweep',
     }
-    mod_name = module_map[exp_id]
     import importlib
+    # Framework experiments that run on the noise suite's loading and
+    # precompute. Their files live in framework/, not noise/.
+    framework_map = {'f36': 'f36_label_smoothing_portfolio'}
+    if exp_id in framework_map:
+        return importlib.import_module(
+            f'experiments.framework.{framework_map[exp_id]}')
+    mod_name = module_map[exp_id]
     return importlib.import_module(f'experiments.noise.{mod_name}')
 
 
@@ -1517,6 +1523,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'n40': 'n40_model_side_regularisation',
         'n41': 'n41_conformal_fdr_detection',
         'n42': 'n42_similarity_noise_sweep',
+        'f36': 'f36_label_smoothing_portfolio',
     }
     return name_map.get(exp_id, exp_id)
 
