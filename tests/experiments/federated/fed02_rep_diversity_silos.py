@@ -236,7 +236,28 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                   f"this budget and it is recorded as unsearched")
             _s, _m = None, None
         _b = _m['best_config']['blueprint'] if _m else None
-        # ── Phase 1: Setup ───────────────────────────────────────────────────
+        # 01e309a cut this function off at the line above, so it returned None
+        # and the unpack at the top of the budget loop raised "cannot unpack
+        # non-iterable NoneType object" on the server (herg, 2026-09-29).
+        # Restored from the resolution that commit replaced: meta's
+        # aug_condition is the authoritative winning condition, then the
+        # blueprint, then the hard defaults.
+        if _m is not None:
+            _aug = _m.get('aug_condition',
+                          _b.augmentation_strategy if _b else
+                          ('uncapped' if augs else 'none'))
+        else:
+            _aug = 'uncapped' if augs else 'none'
+        _al = _b.allocation_method if _b else 'performance_weighted'
+        _im = _b.importance_method if _b else 'treeshap'
+        _ie = _b.internal_evaluator if _b else 'match'
+        return _s, _m, _b, _aug, _al, _im, _ie
+
+    recipe_source_by_budget = {}
+    # No budget named: the best recipe across every budget the search holds.
+    _top2_search, _ = _recipe_for(None)[:2]
+
+    # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")
 
     # Resolve silo reps
