@@ -127,6 +127,33 @@ def test_c10_refuses_three_levels():
               baseline_threshold=None)['auc_norm']))
 
 
+def test_c10_searches_every_downstream_model():
+    """2026-10-01: c10 searched models=['rf'] alone until then. It now names
+    DOWNSTREAM_MODELS, plus gp where small_dataset_extra_models adds it, at
+    speed='fast'. Checks the model list the search is handed, with no fit."""
+    print("\nc10's model list")
+    import importlib
+    import inspect
+    c10 = importlib.import_module('experiments.noise.c10_noise_robustness')
+    from experiments._shared import (
+        DOWNSTREAM_MODELS, _apply_dataset_search_speed)
+    src = inspect.getsource(c10)
+    check("c10 no longer passes models=['rf'] to find_best_hybrid",
+          "models=['rf']," not in src)
+    check("c10 writes one block per model under results['by_model']",
+          "results['by_model'][_m] = _analyse_model(_m)" in src)
+    for ds, want_gp in (('herg_ki', False), ('ginkgo_hic', True)):
+        kw = {'tier': 'general', 'speed': 'fast',
+              'models': list(DOWNSTREAM_MODELS)}
+        _apply_dataset_search_speed(kw, ds)
+        check(f"{ds}: speed stays fast and the five downstream models are named"
+              + (", plus gp" if want_gp else ", no gp"),
+              kw['speed'] == 'fast'
+              and kw['models'][:len(DOWNSTREAM_MODELS)] == list(DOWNSTREAM_MODELS)
+              and (('gp' in kw['models']) == want_gp),
+              f"models={kw['models']}")
+
+
 def test_the_finished_run_is_unchanged():
     """The 171 curves c10 wrote for flab_thermo_tresanco all had positive clean
     scores, so the zero rule must leave every one of them exactly as reported."""
@@ -170,6 +197,7 @@ if __name__ == '__main__':
     test_lower_is_better_side_unchanged()
     test_explicit_threshold_still_works_for_callers_that_pass_one()
     test_c10_refuses_three_levels()
+    test_c10_searches_every_downstream_model()
     test_the_finished_run_is_unchanged()
     print("\n" + "=" * 66)
     if FAILURES:
