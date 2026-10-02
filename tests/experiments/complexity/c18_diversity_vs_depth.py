@@ -11,7 +11,9 @@ Conditions at fixed budget:
   - depth_2: all features split between top-2 reps
   - depth_3: all features from top-3 reps
   - uniform_all: equal allocation across all reps
-  - natural: let the hybrid allocate freely (greedy)
+  - natural: let the hybrid allocate freely (the search's recipe)
+  - natural__general2, natural__distance1: owner's set (2026-10-02) -- the
+    2nd-best general hybrid and the best distance hybrid for rf, each its own arm
 
 Usage:
     python c18_diversity_vs_depth.py --dataset logd --mode intermediary
@@ -38,6 +40,7 @@ from experiments._shared import (
     get_best_search_for_downstream,
     build_fold_reselection_input,
     top_base_reps, top_hybrids, hybrid_deltas,
+    get_rule_hybrids, fold_hybrid_scoring_kwargs,
 )
 
 
@@ -206,6 +209,30 @@ def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget,
 # RUN
 # =========================================================================
 
+def _natural_arm_name(entry):
+    """Arm name for one hybrid of the owner's set.
+
+    general1 under the predictive family keeps the old name 'natural', so a
+    reader of per_budget[budget]['natural'] reads what it always read. The
+    other slots get the slot (and the family, when it is not predictive).
+    """
+    slot = entry.get('slot') or 'general1'
+    fam = entry.get('objective') or 'predictive'
+    if slot == 'general1' and fam == 'predictive':
+        return 'natural'
+    return f'natural__{slot}' + ('' if fam == 'predictive' else f'__{fam}')
+
+
+def _describe_rule_entry(entry):
+    """The JSON-safe fields of one get_rule_hybrids entry (no blueprint)."""
+    keep = ('slot', 'lineage', 'lineage_rank', 'tier', 'aug_condition',
+            'objective', 'recipe', 'name', 'allocation_method',
+            'importance_method', 'internal_evaluator', 'budget',
+            'budget_relaxed', 'metric_name', 'lower_is_better',
+            'score_other_folds', 'n_other_folds', 'fold_scores')
+    return {k: entry.get(k) for k in keep}
+
+
 def _score_prediction(model, X_val, y_val, metric_fn, task_type):
     """Score model predictions appropriately for the metric.
 
@@ -348,6 +375,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # The two reference numbers for the top hybrid at that budget:
         # delta_vs_source_mean and delta_vs_best_rep. {budget: hybrid_deltas(...)}.
         'hybrid_deltas_by_budget': {},
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+        # model, per family. c18 fits RandomForest only, so the model is 'rf'.
+        # Each of the three is built and scored per fold as its own arm in
+        # per_budget[budget]: 'natural' (general1, the old arm),
+        # 'natural__general2' and 'natural__distance1'. This key lists the
+        # three recipes per budget; 'rule_base_reps_by_budget' the top 2
+        # single representations for rf; 'rule_missing' every slot the rule
+        # asked for and did not get, and why.
+        'rule_hybrids_by_budget': {},
+        'rule_base_reps_by_budget': {},
+        'rule_missing': [],
     }
 
     # Per-budget blueprint discovery via pool helper (best (tier, aug_cond)
@@ -399,9 +437,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         #
         # 'search' means the search chose it. 'fallback' means the lookup
         # returned nothing or raised and the arms ran on the default anyway.
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+        # model, per family. Each one becomes a 'natural' arm below. The
+        # hand-built arms follow general1's importance method, as they followed
+        # the single winner's before; general2 and distance1 may have chosen
+        # another method, and each arm records the method it used.
+        rule_entries = []
+        try:
+            _rule = get_rule_hybrids(
+                reps, labels, groups, downstream_model='rf', budget=budget,
+                dataset_name=dataset_name, augmentations=augmentations,
+                task_type=task_type, data=data)
+            rule_entries = [h for h in _rule['hybrids']
+                            if h.get('blueprint') is not None]
+            results['rule_hybrids_by_budget'][budget] = [
+                _describe_rule_entry(h) for h in _rule['hybrids']]
+            results['rule_base_reps_by_budget'][budget] = convert_numpy(
+                _rule['base_reps'])
+            results['rule_missing'] += [f'budget={budget}: {m}'
+                                        for m in _rule['missing']]
+        except Exception as e:
+            print(f"  WARNING: owner's hybrid set read failed: {e}")
+            results['rule_missing'].append(
+                f'budget={budget}: the read of the owner\'s hybrid set raised '
+                f'{type(e).__name__}: {e}; no natural arm was built from it')
+
         fold_imp_method = 'lightgbm_gain'
         fold_imp_source = 'fallback'
-        if meta is not None:
+        _g1 = [h for h in rule_entries if h.get('slot') == 'general1']
+        if _g1:
+            fold_imp_method = _g1[0]['blueprint'].importance_method
+            fold_imp_source = 'search'
+        elif meta is not None:
             try:
                 fold_imp_method = meta['best_config']['blueprint'].importance_method
                 fold_imp_source = 'search'
@@ -565,40 +632,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_scores.setdefault('uniform_all', []).append(
                     _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
 
-            # Natural hybrid (per-fold via search blueprint).
+            # Natural hybrids (per-fold via each search blueprint).
             # depth_N and uniform_all operate on base reps only, so the natural
-            # arm must also be base-reps-only to keep the comparison apples-to-
+            # arms must also be base-reps-only to keep the comparison apples-to-
             # apples. Augmentations were inflating natural's feature pool.
-            if meta is not None:
+            # Owner's set (2026-10-02): one natural arm per hybrid of the set
+            # (top 2 general + top 1 distance for rf), not only the winner.
+            for _entry in rule_entries:
+                _arm = _natural_arm_name(_entry)
                 try:
-                    best_config = meta['best_config']
-                    if 'blueprint' in best_config:
-                        bp = best_config['blueprint']
-                        _nt0 = time.time()
-                        X_tr_h, X_va_h, _fi = build_fold_hybrid(
-                            train_reps, val_reps_fold, y_train, bp,
-                            augmentations_train=None,
-                            augmentations_val=None,
-                            groups=(groups[train_idx] if groups is not None else None),
+                    bp = _entry['blueprint']
+                    _nt0 = time.time()
+                    X_tr_h, X_va_h, _fi = build_fold_hybrid(
+                        train_reps, val_reps_fold, y_train, bp,
+                        augmentations_train=None,
+                        augmentations_val=None,
+                        groups=(groups[train_idx] if groups is not None else None),
+                        **fold_hybrid_scoring_kwargs(
+                            bp,
                             model=_RF(n_estimators=100, random_state=42, n_jobs=-1),
-                            metric_fn=metric_fn)
-                        _natural_secs += time.time() - _nt0
-                        scaler = StandardScaler()
-                        X_tr_s = scaler.fit_transform(X_tr_h)
-                        X_va_s = scaler.transform(X_va_h)
-                        rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
-                        rf.fit(X_tr_s, y_train)
-                        _arm_widths.setdefault('natural', []).append(
-                            {'built': int(X_tr_h.shape[1]),
-                             'scored_above_zero': None,
-                             'would_be_if_cut': int(X_tr_h.shape[1])})
-                        fold_scores.setdefault('natural', []).append(
-                            _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
+                            metric_fn=metric_fn))
+                    _natural_secs += time.time() - _nt0
+                    scaler = StandardScaler()
+                    X_tr_s = scaler.fit_transform(X_tr_h)
+                    X_va_s = scaler.transform(X_va_h)
+                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf.fit(X_tr_s, y_train)
+                    _arm_widths.setdefault(_arm, []).append(
+                        {'built': int(X_tr_h.shape[1]),
+                         'scored_above_zero': None,
+                         'would_be_if_cut': int(X_tr_h.shape[1])})
+                    fold_scores.setdefault(_arm, []).append(
+                        _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
                 except Exception as e:
-                    print(f"    natural fold FAILED: {e}")
+                    print(f"    {_arm} fold FAILED: {e}")
 
         # Aggregate per-fold scores
         conditions = {}
+        _arm_entry = {_natural_arm_name(h): h for h in rule_entries}
         for cond_name, scores in fold_scores.items():
             score = float(np.mean(scores)) if scores else float('nan')
             _w = _arm_widths.get(cond_name) or []
@@ -618,12 +689,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # the mean is no longer the only signal downstream.
                 'fold_scores': [float(s) for s in scores],
             }
+            # Owner's set (2026-10-02): a natural arm says which hybrid of the
+            # set it is, and the importance method its recipe ranked with.
+            _src = _arm_entry.get(cond_name)
+            if _src is not None:
+                conditions[cond_name].update({
+                    'slot': _src.get('slot'), 'lineage': _src.get('lineage'),
+                    'tier': _src.get('tier'), 'objective': _src.get('objective'),
+                    'aug_condition': _src.get('aug_condition'),
+                    'recipe_budget': _src.get('budget'),
+                    'budget_relaxed': _src.get('budget_relaxed'),
+                    'importance_method': _src['blueprint'].importance_method,
+                })
             print(f"    {cond_name}: {metric_name}={score:.4f}")
 
         _budget_secs = time.time() - _budget_t0
         print(f"    [budget {budget}: {_budget_secs:.0f}s over {n_folds} "
               f"folds, of which {_natural_secs:.0f}s rebuilding the "
-              f"natural arm's hybrid]")
+              f"{len(rule_entries)} natural arms' hybrids]")
         results['per_budget'][budget] = convert_numpy(conditions)
 
     return results

@@ -6,7 +6,9 @@ Core thesis: The hybrid selects features that maximize MI with the target per un
     dimension — it finds the minimum description length representation. Compare against
     PCA (variance-based), mRMR (MI-greedy), RFE (model-based), and random.
 
-5 strategies × multiple budgets → MI density curves.
+5 strategies × multiple budgets → MI density curves. The hybrid strategy is
+three arms since 2026-10-02 (owner's set: top 2 general + top 1 distance
+hybrids for rf): hybrid, hybrid__general2, hybrid__distance1.
 
 Usage:
     python c17_information_theoretic_decomposition.py --dataset logd --mode intermediary
@@ -31,8 +33,16 @@ from experiments._shared import (
     cv_split, get_domain_metric,
 )
 from experiments._shared import (
-    build_fold_hybrid, get_best_search_for_downstream,
+    build_fold_hybrid, get_rule_hybrids, fold_hybrid_scoring_kwargs,
 )
+
+# Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per model,
+# per family. c17 fits RandomForest only, so the model is 'rf' and there are
+# three hybrid strategies instead of one. 'hybrid' keeps its old name and is
+# general1, so a reader of per_budget[budget]['hybrid'] reads what it always
+# read.
+_C17_HYBRID_ARMS = {'general1': 'hybrid', 'general2': 'hybrid__general2',
+                    'distance1': 'hybrid__distance1'}
 
 
 # =========================================================================
@@ -571,7 +581,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  [timing] mRMR ranking, all {len(splits)} folds: "
           f"{time.time() - _t_mrmr0:.1f}s")
 
-    strategies = ['hybrid', 'pca', 'mrmr', 'rfe', 'random']
+    # Owner's set (2026-10-02): three hybrid arms, see _C17_HYBRID_ARMS.
+    strategies = (list(_C17_HYBRID_ARMS.values())
+                  + ['pca', 'mrmr', 'rfe', 'random'])
 
     # Every strategy now chooses its features on each fold's training rows and
     # is measured on that fold's validation rows. Before, hybrid, mRMR and
@@ -591,6 +603,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'selection_rows': "each fold's training rows",
         'measured_on': 'held-out rows',
         'per_budget': {},
+        # Owner's set (2026-10-02): the three hybrid recipes per budget, and
+        # every slot the rule asked for and did not get, with the reason.
+        'rule_hybrids_by_budget': {},
+        'rule_base_reps_by_budget': {},
+        'rule_missing': [],
     }
 
     for budget in budgets:
@@ -602,20 +619,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # FEATURES are re-selected inside each fold from that fold's training
         # labels, which is what this loop fixes.
         augmentations = data.get('augmentations')
-        hybrid_bp = None
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
+        # rf, one strategy each. Above the largest distance budget (500) the
+        # distance read ranks over every budget it holds and sets
+        # budget_relaxed; the arm is still built at this cell's budget
+        # (budget_override below), and the flag is recorded.
+        hybrid_bp_by_arm = {}
         _t_bp0 = time.time()
         try:
-            _hsearch, _hmeta = get_best_search_for_downstream(
+            _rule = get_rule_hybrids(
                 reps, labels, groups,
                 downstream_model='rf', budget=budget,
                 augmentations=augmentations,
                 data=data, dataset_name=dataset_name,
                 task_type=task_type, metric=metric_name,
             )
-            if _hmeta:
-                hybrid_bp = _hmeta['best_config']['blueprint']
+            _desc = []
+            for _h in _rule['hybrids']:
+                _arm = _C17_HYBRID_ARMS.get(_h.get('slot'))
+                if _h.get('objective') not in (None, 'predictive'):
+                    _arm = f"{_arm}__{_h.get('objective')}"
+                if _arm and _h.get('blueprint') is not None:
+                    hybrid_bp_by_arm[_arm] = _h['blueprint']
+                _desc.append({k: _h.get(k) for k in (
+                    'slot', 'lineage', 'tier', 'aug_condition', 'objective',
+                    'recipe', 'budget', 'budget_relaxed', 'score_other_folds',
+                    'fold_scores')} | {'arm': _arm})
+            results['rule_hybrids_by_budget'][budget] = _desc
+            results['rule_base_reps_by_budget'][budget] = convert_numpy(
+                _rule['base_reps'])
+            results['rule_missing'] += [f'budget={budget}: {m}'
+                                        for m in _rule['missing']]
         except Exception as _he:
             print(f"    hybrid blueprint lookup failed: {_he}")
+            results['rule_missing'].append(
+                f'budget={budget}: the read of the owner\'s hybrid set raised '
+                f'{type(_he).__name__}: {_he}')
         print(f"    [timing] hybrid blueprint lookup, budget={budget}: "
               f"{time.time() - _t_bp0:.1f}s")
 
@@ -625,9 +664,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     return _i
             raise KeyError('fold not found')
 
-        def _sel_hybrid(train_idx, val_idx):
+        def _sel_hybrid(train_idx, val_idx, arm='hybrid'):
+            hybrid_bp = hybrid_bp_by_arm.get(arm)
             if hybrid_bp is None:
-                raise RuntimeError('no hybrid blueprint for this budget')
+                raise RuntimeError(f'no hybrid blueprint for {arm} at this budget')
             tr_reps = {k: v[train_idx] for k, v in reps.items()}
             va_reps = {k: v[val_idx] for k, v in reps.items()}
             tr_a = ({k: v[train_idx] for k, v in augmentations.items()}
@@ -646,10 +686,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations_train=tr_a, augmentations_val=va_a,
                 budget_override=budget,
                 groups=_groups_tr,
-                model=RandomForestRegressor(n_estimators=100, random_state=42,
-                                            n_jobs=-1),
-                metric_fn=metric_fn, lower_is_better=lower_is_better,
-                precomputed_importance=_imp)
+                precomputed_importance=_imp,
+                **fold_hybrid_scoring_kwargs(
+                    hybrid_bp,
+                    model=RandomForestRegressor(n_estimators=100,
+                                                random_state=42, n_jobs=-1),
+                    metric_fn=metric_fn, lower_is_better=lower_is_better))
             return X_tr, X_va
 
         def _sel_pca(train_idx, val_idx):
@@ -703,8 +745,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             return (sc.transform(X_concat[train_idx])[:, idxs],
                     sc.transform(X_concat[val_idx])[:, idxs])
 
-        selectors = {'hybrid': _sel_hybrid, 'pca': _sel_pca, 'mrmr': _sel_mrmr,
+        selectors = {'pca': _sel_pca, 'mrmr': _sel_mrmr,
                      'rfe': _sel_rfe, 'random': _sel_random}
+        # Owner's set (2026-10-02): one selector per hybrid arm.
+        for _arm in _C17_HYBRID_ARMS.values():
+            selectors[_arm] = (lambda tr, va, _a=_arm: _sel_hybrid(tr, va, _a))
 
         for strategy in strategies:
             print(f"    {strategy}...", end='', flush=True)
@@ -713,7 +758,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 metrics = _evaluate_strategy(selectors[strategy], labels,
                                              splits, metric_fn)
-                if strategy == 'hybrid':
+                if strategy in _C17_HYBRID_ARMS.values():
                     metrics['recipe_selected_on'] = 'all rows'
                     metrics['features_selected_on'] = "each fold's training rows"
                 budget_results[strategy] = metrics

@@ -64,7 +64,11 @@ from experiments._shared import (
     compute_effective_rank,
     get_fitted_hybrid, get_precomputed_search, build_fold_hybrid,
     get_best_for_downstream,
-    get_best_search_for_downstream, get_fitted_pool_hybrid,
+    get_best_search_for_downstream,
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family.
+    get_rule_hybrids, build_hybrid_from_entry, top_hybrids,
+    DISTANCE_EVALUATORS, DISTANCE_MODELS,
     # 2026-09-28. c15 scores a Ridge on hybrid features, and 'ridge' carries
     # tier 'off' in DEFAULT_MODELS, so a search that names no models scores no
     # ridge and every ridge lookup here came back empty. RIDGE_MODELS is
@@ -131,41 +135,75 @@ def _fold_importance(train_idx, train_reps, y_train, groups_train, method,
     return imp
 
 
-# 2. The whole-dataset hybrid behind 15a's and 15b's budget sweeps.
+# 2. The whole-dataset hybrids behind 15a's and 15b's budget sweeps.
 #
-# Both sub-analyses ask for the same thing: the pool's best recipe for
+# Both sub-analyses ask for the same thing: the pool's recipes for
 # (rf, budget) rebuilt over every row. 15a asks at each budget, then 15b asks
-# again at the same budgets, and get_fitted_pool_hybrid rebuilds it from
-# nothing every time -- on flab_thermo_tresanco one rebuild did not finish
-# inside 20 minutes while the machine was carrying three other experiments.
-# Same arguments in, same matrix out, so the second ask is served from here.
+# again at the same budgets, and a rebuild from nothing took more than 20
+# minutes on flab_thermo_tresanco while the machine was carrying three other
+# experiments. Same arguments in, same matrices out, so the second ask is
+# served from here.
 _POOL_HYBRID_MEMO = {}
 
+# Owner's set (2026-10-02): every slot the rule asked for and did not get, and
+# why. run() resets it and writes it to results['rule_missing'].
+_RULE_MISSING = []
 
-def _pool_hybrid_once(reps, labels, groups, *, downstream_model, budget,
-                      augmentations, dataset_name, task_type, data=None):
-    """The pool's best recipe for (model, budget), rebuilt over every row.
+
+def _rule_hybrids_once(reps, labels, groups, *, downstream_model, budget,
+                       augmentations, dataset_name, task_type, data=None):
+    """Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
+    (model, budget), each rebuilt over every row.
+
+    Returns [(entry, X_hybrid), ...] in slot order general1, general2,
+    distance1. general1 is the recipe 15a and 15b used alone before. A slot
+    the pool could not fill is absent here and named in _RULE_MISSING.
 
     `data` is the loaded dataset dict and is what carries the searches the run
-    already precomputed at start-up. get_best_search_for_downstream reads them
-    from data['precomputed_searches'] (_shared.py:6191) and, without `data`,
-    sets that store to None and re-runs find_best_hybrid instead.
-
-    15a and 15b were the two callers in this file that left `data` out, and
-    every other caller in it passes it. Measured on flab_thermo_tresanco
-    2026-09-25, 672 rows, 5 representations, budgets 100 and 250: the two
-    budgets ran a search each, 12.9 minutes and 12.9 minutes, on top of 9.2
-    minutes of hybrid building apiece. Both searches reported 0 cache misses on
-    the per-representation scores, so what they spent was rebuilding the same
-    recipe the start-up precompute had already found in 3 seconds.
+    already precomputed at start-up. Without it the read re-runs
+    find_best_hybrid instead (measured on flab_thermo_tresanco 2026-09-25:
+    two 12.9-minute searches for a recipe the precompute had already found).
     """
     key = (downstream_model, int(budget))
     if key not in _POOL_HYBRID_MEMO:
-        _POOL_HYBRID_MEMO[key] = get_fitted_pool_hybrid(
+        rule = get_rule_hybrids(
             reps, labels, groups, downstream_model=downstream_model,
             budget=budget, augmentations=augmentations,
             dataset_name=dataset_name, task_type=task_type, data=data)
+        _RULE_MISSING.extend(f'{downstream_model} budget={budget}: {m}'
+                             for m in rule['missing'])
+        built = []
+        for entry in rule['hybrids']:
+            if entry.get('blueprint') is None:
+                continue
+            try:
+                X_h, _fi = build_hybrid_from_entry(
+                    reps, labels, groups, entry, augmentations=augmentations)
+                built.append((entry, X_h))
+            except Exception as e:
+                _RULE_MISSING.append(
+                    f'{downstream_model} budget={budget} {entry.get("slot")}: '
+                    f'the rebuild over every row raised '
+                    f'{type(e).__name__}: {e}')
+        _POOL_HYBRID_MEMO[key] = built
     return _POOL_HYBRID_MEMO[key]
+
+
+def _slot_key(entry):
+    """'' for general1 (the old keys), '__general2' / '__distance1' else."""
+    slot = entry.get('slot') or 'general1'
+    fam = entry.get('objective') or 'predictive'
+    sfx = '' if slot == 'general1' else f'__{slot}'
+    return sfx + ('' if fam == 'predictive' else f'__{fam}')
+
+
+def _slot_fields(entry):
+    """Which hybrid of the owner's set a row is (JSON-safe)."""
+    return {'slot': entry.get('slot'), 'lineage': entry.get('lineage'),
+            'tier': entry.get('tier'), 'objective': entry.get('objective'),
+            'aug_condition': entry.get('aug_condition'),
+            'recipe_budget': entry.get('budget'),
+            'budget_relaxed': entry.get('budget_relaxed')}
 
 
 def _env_floats(var, default, local_default=None):
@@ -245,25 +283,36 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
     X_concat_s = StandardScaler().fit_transform(X_concat)
 
     # --- Per-budget analysis (hybrid at each budget) ---
+    # Owner's set (2026-10-02): every hybrid of the set for rf is measured.
+    # per_budget holds general1 (the old rows); per_budget_rule holds every
+    # slot, keyed '<budget>' + '' / '__general2' / '__distance1'.
+    results['per_budget_rule'] = {}
     print(f"\n    Budget sweep (hybrid):")
     for budget in sorted(budgets):
         try:
-            X_hybrid, _, _search, _meta = _pool_hybrid_once(
+            _built = _rule_hybrids_once(
                 reps, labels, groups, downstream_model='rf',
                 budget=budget, augmentations=data.get('augmentations'),
                 dataset_name=dataset_name, task_type=task_type, data=data)
-            X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
-            metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
-            results['per_budget'][budget] = {
-                'dim': X_hybrid.shape[1],
-                **metrics,
-            }
-            print(f"      budget={budget:>4}  dim={X_hybrid.shape[1]:>4}  "
-                  f"beyer={metrics['beyer_ratio']:.4f}  "
-                  f"cv={metrics['distance_cv']:.4f}  "
-                  f"hubness={metrics['hubness_skewness']:.3f}")
         except Exception as e:
             print(f"      budget={budget}: FAILED - {e}")
+            continue
+        for _entry, X_hybrid in _built:
+            try:
+                X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
+                metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
+                row = {'dim': X_hybrid.shape[1], **metrics}
+                results['per_budget_rule'][f'{budget}{_slot_key(_entry)}'] = {
+                    **row, **_slot_fields(_entry), 'budget': budget}
+                if _entry.get('slot') == 'general1' and not _slot_key(_entry):
+                    results['per_budget'][budget] = row
+                print(f"      budget={budget:>4} {_entry.get('slot'):<9} "
+                      f"dim={X_hybrid.shape[1]:>4}  "
+                      f"beyer={metrics['beyer_ratio']:.4f}  "
+                      f"cv={metrics['distance_cv']:.4f}  "
+                      f"hubness={metrics['hubness_skewness']:.3f}")
+            except Exception as e:
+                print(f"      budget={budget} {_entry.get('slot')}: FAILED - {e}")
 
     # --- PCA baselines at matching dimensions ---
     print(f"\n    PCA baselines (unsupervised):")
@@ -417,6 +466,9 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     n = len(sub_labels)
     sub_groups = np.asarray(groups)[idx] if groups is not None else None
     results = {'per_rep': {}, 'per_budget': {}}
+    # Held-out alignment splits of the budget-50 hybrids, by slot key, for the
+    # gamma sweep below.
+    _b50_split = {}
 
     # Kernel-target alignment is a score against the labels, and the hybrid's
     # features are chosen to fit those same labels while the representations
@@ -483,13 +535,22 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     X_concat_s = StandardScaler().fit_transform(X_concat)
 
     # --- Per-budget hybrid ---
+    # Owner's set (2026-10-02): every hybrid of the set for rf. per_budget
+    # holds general1 (the old rows); per_budget_rule holds every slot.
+    results['per_budget_rule'] = {}
+    _augs_15b = data.get('augmentations')
     print(f"\n    Budget sweep (hybrid kernel):")
     for budget in sorted(budgets):
         try:
-            X_hybrid, _, _search, _meta = _pool_hybrid_once(
+            _built = _rule_hybrids_once(
                 reps, labels, groups, downstream_model='rf',
-                budget=budget, augmentations=data.get('augmentations'),
+                budget=budget, augmentations=_augs_15b,
                 dataset_name=dataset_name, task_type=task_type, data=data)
+        except Exception as e:
+            print(f"      budget={budget}: FAILED - {e}")
+            continue
+        for _entry, X_hybrid in _built:
+          try:
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid_sub)
@@ -500,12 +561,11 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
             # them. The recipe itself still came from a whole-dataset search,
             # which is a separate finding — recipe_selected_on records it.
             align_ho = float('nan')
-            if _align_te is not None and _meta:
+            if _align_te is not None:
                 try:
-                    bp_15b = _meta['best_config']['blueprint']
+                    bp_15b = _entry['blueprint']
                     _tr_reps = {k: v[_align_tr] for k, v in sub_reps.items()}
                     _te_reps = {k: v[_align_te] for k, v in sub_reps.items()}
-                    _augs_15b = data.get('augmentations')
                     _tr_augs = _te_augs = None
                     if _augs_15b:
                         _sub_augs = {k: v[idx] for k, v in _augs_15b.items()}
@@ -527,22 +587,28 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                             bp_15b.importance_method, _tr_augs,
                             space='15b_alignment'))
                     align_ho = _heldout_alignment(X_h_tr, X_h_te)
+                    if budget == 50:
+                        _b50_split[_slot_key(_entry)] = (X_h_tr, X_h_te)
                 except Exception as _be:
-                    print(f"      budget={budget}: held-out alignment "
-                          f"unavailable - {_be}")
+                    print(f"      budget={budget} {_entry.get('slot')}: "
+                          f"held-out alignment unavailable - {_be}")
 
             row = {'dim': X_hybrid.shape[1], **metrics}
             row['kernel_target_alignment_all_rows'] = row['kernel_target_alignment']
             row['kernel_target_alignment_heldout'] = align_ho
             row['recipe_selected_on'] = 'all rows'
-            results['per_budget'][budget] = row
-            print(f"      budget={budget:>4}  dim={X_hybrid.shape[1]:>4}  "
+            results['per_budget_rule'][f'{budget}{_slot_key(_entry)}'] = {
+                **row, **_slot_fields(_entry), 'budget': budget}
+            if not _slot_key(_entry):
+                results['per_budget'][budget] = row
+            print(f"      budget={budget:>4} {_entry.get('slot'):<9} "
+                  f"dim={X_hybrid.shape[1]:>4}  "
                   f"cond={metrics['log_condition']:>7.1f}  "
                   f"k_cv={metrics['kernel_cv']:.4f}  "
                   f"align_heldout={align_ho:.4f}  "
                   f"align_all_rows={metrics['kernel_target_alignment']:.4f}")
-        except Exception as e:
-            print(f"      budget={budget}: FAILED - {e}")
+          except Exception as e:
+            print(f"      budget={budget} {_entry.get('slot')}: FAILED - {e}")
 
     # --- RBF length-scale sensitivity (Moesser 2023 Ch.2, p.84) ---
     # Moesser found kernel length-scale critically affects GP/BO performance.
@@ -565,37 +631,22 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
         if _align_te is not None:
             sweep_splits[highest_rep] = (sub_reps[highest_rep][_align_tr],
                                          sub_reps[highest_rep][_align_te])
-    if 50 in results['per_budget']:
+    # Owner's set (2026-10-02): every hybrid of the set at budget 50 for rf,
+    # 'hybrid_b50' (general1, the old row), 'hybrid_b50__general2',
+    # 'hybrid_b50__distance1'. Rebuilt matrices come from the same memo 15a
+    # and the budget sweep above used, so nothing is built twice.
+    if any(k.split('__')[0] == '50' for k in results['per_budget_rule']):
         try:
-            X_h50, _, _search, _meta = _pool_hybrid_once(
-                reps, labels, groups, downstream_model='rf',
-                budget=50, augmentations=data.get('augmentations'),
-                dataset_name=dataset_name, task_type=task_type, data=data)
-            X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
-            sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
-            if _align_te is not None and _meta:
-                bp50 = _meta['best_config']['blueprint']
-                _tr_reps = {k: v[_align_tr] for k, v in sub_reps.items()}
-                _te_reps = {k: v[_align_te] for k, v in sub_reps.items()}
-                _augs50 = data.get('augmentations')
-                _tr_a = _te_a = None
-                if _augs50:
-                    _sa = {k: v[idx] for k, v in _augs50.items()}
-                    _tr_a = {k: v[_align_tr] for k, v in _sa.items()}
-                    _te_a = {k: v[_align_te] for k, v in _sa.items()}
-                Xh_tr, Xh_te, _ = build_fold_hybrid(
-                    _tr_reps, _te_reps, sub_labels[_align_tr], bp50,
-                    augmentations_train=_tr_a, augmentations_val=_te_a,
-                    groups=(sub_groups[_align_tr]
-                            if sub_groups is not None else None),
-                    budget_override=50,
-                    precomputed_importance=_fold_importance(
-                        _align_tr, _tr_reps, sub_labels[_align_tr],
-                        (sub_groups[_align_tr]
-                         if sub_groups is not None else None),
-                        bp50.importance_method, _tr_a,
-                        space='15b_alignment'))
-                sweep_splits['hybrid_b50'] = (Xh_tr, Xh_te)
+            for _entry, X_h50 in _rule_hybrids_once(
+                    reps, labels, groups, downstream_model='rf',
+                    budget=50, augmentations=data.get('augmentations'),
+                    dataset_name=dataset_name, task_type=task_type, data=data):
+                _sk = _slot_key(_entry)
+                X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
+                sweep_spaces[f'hybrid_b50{_sk}'] = (
+                    StandardScaler().fit_transform(X_h50_sub))
+                if _sk in _b50_split:
+                    sweep_splits[f'hybrid_b50{_sk}'] = _b50_split[_sk]
         except Exception:
             pass
 
@@ -856,6 +907,72 @@ def _run_double_descent(data, config, dataset_name=None):
         except Exception as _e:
             print(f"    c15c fast search at b={_b} failed: {_e}")
 
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model. This file runs its own search per budget, so the distance
+    # counterpart is its own search too: the same fast search with the
+    # distance searches' internal evaluators (DISTANCE_EVALUATORS, which add
+    # knn) under its own tier, so the two never share a cache file. Only rf is
+    # scored on it: ridge is not in DISTANCE_MODELS, so ridge's distance slot is
+    # recorded missing, not filled from another model.
+    _dist_searches_per_budget = {}
+    _c15c_missing = []
+    for _b in all_budgets:
+        try:
+            _dist_searches_per_budget[_b] = _fbh(
+                base_reps=reps, labels=labels, groups=groups,
+                models={'rf': _RF15(n_estimators=100, max_depth=None,
+                                    random_state=42, n_jobs=-1)},
+                budgets=[_b],
+                task_type='regression', metric=metric_name,
+                cache=True,
+                dataset_name=f"{dataset_name}__c15c_b{_b}",
+                tier='c15c_fast_distance',
+                augmentations=_augs,
+                augmentation_strategy=_aug_strat,
+                speed='fast',
+                verbose=False,
+                internal_evaluators=list(DISTANCE_EVALUATORS),
+                **{k: v for k, v in own_search_kwargs(len(labels)).items()
+                   if k not in ('speed', 'models', 'internal_evaluators')},
+            )
+        except Exception as _e:
+            print(f"    c15c distance fast search at b={_b} failed: {_e}")
+            _c15c_missing.append(
+                f'15c budget={_b} rf distance1: the distance search raised '
+                f'{type(_e).__name__}: {_e}')
+    if 'ridge' not in DISTANCE_MODELS:
+        _c15c_missing.append(
+            '15c ridge distance1: ridge is not in DISTANCE_MODELS, so no '
+            'distance search scores it; every budget has no ridge distance arm')
+
+    def _c15c_slots(model, budget):
+        """[(slot, blueprint)] for one model at one budget: general1 and
+        general2 from the per-budget search, distance1 from the distance one."""
+        out = []
+        for slot_prefix, srch, n in (
+                ('general', _searches_per_budget.get(budget), 2),
+                ('distance', (_dist_searches_per_budget.get(budget)
+                              if model in DISTANCE_MODELS else None), 1)):
+            if srch is None:
+                continue
+            try:
+                sel = top_hybrids(srch, model, n, budget=budget,
+                                  require_full=False,
+                                  context=f'c15c {dataset_name} {model} '
+                                          f'b={budget} {slot_prefix}')['selected']
+            except Exception as _te:
+                sel = []
+                _c15c_missing.append(
+                    f'15c budget={budget} {model} {slot_prefix}: '
+                    f'{type(_te).__name__}: {_te}')
+            for i, e in enumerate(sel, 1):
+                out.append((f'{slot_prefix}{i}', e['blueprint']))
+            if len(sel) < n:
+                _c15c_missing.append(
+                    f'15c budget={budget} {model} {slot_prefix}: asked for {n}, '
+                    f'the search scored {len(sel)}')
+        return out
+
     results = {
         'n_samples': n_samples,
         'total_dim': total_dim,
@@ -867,6 +984,15 @@ def _run_double_descent(data, config, dataset_name=None):
         'random_scores': [],
         'ridge_on_hybrid': [],
         'ridge_on_pca': [],
+        # Owner's set (2026-10-02). 'hybrid_scores' and 'ridge_on_hybrid' are
+        # general1. The other hybrids of the set sit beside them, one entry per
+        # budget in the same order, nan where that slot had no recipe:
+        # hybrid_scores__general2, hybrid_scores__distance1,
+        # ridge_on_hybrid__general2. Ridge has no distance arm.
+        'hybrid_scores__general2': [],
+        'hybrid_scores__distance1': [],
+        'ridge_on_hybrid__general2': [],
+        'rule_missing': _c15c_missing,
     }
 
     from sklearn.linear_model import Ridge
@@ -876,13 +1002,25 @@ def _run_double_descent(data, config, dataset_name=None):
         n_feat = min(budget, total_dim, n_samples - 1)
 
         # --- Hybrid ---
-        hybrid_score, hybrid_w, _ = _eval_at_budget(
-            reps, labels, groups, n_folds, mode, metric_fn,
-            budget=budget, method='hybrid',
-            data=data,
-            dataset_name=dataset_name, task_type=task_type,
-            prefetched_search=_searches_per_budget.get(budget),
-        )
+        # Owner's set (2026-10-02): each hybrid of the set for rf and ridge is
+        # built and scored. slot -> (score, width).
+        _rule_scores = {}
+        for _m in ('rf', 'ridge'):
+            for _slot, _bp in _c15c_slots(_m, budget):
+                _rule_scores[(_m, _slot)] = _eval_at_budget(
+                    reps, labels, groups, n_folds, mode, metric_fn,
+                    budget=budget, method='hybrid', model_name=_m,
+                    data=data, dataset_name=dataset_name,
+                    task_type=task_type, blueprint=_bp)[:2]
+        _nan2 = (float('nan'), 0)
+        hybrid_score, hybrid_w = _rule_scores.get(('rf', 'general1'), _nan2)
+        for _sl in ('general2', 'distance1'):
+            _sc, _w = _rule_scores.get(('rf', _sl), _nan2)
+            results[f'hybrid_scores__{_sl}'].append(_sc)
+            results.setdefault(f'realised_width_hybrid__{_sl}', []).append(_w)
+        _sc, _w = _rule_scores.get(('ridge', 'general2'), _nan2)
+        results['ridge_on_hybrid__general2'].append(_sc)
+        results.setdefault('realised_width_ridge_hybrid__general2', []).append(_w)
 
         # --- PCA ---
         pca_score, pca_w, _ = _eval_at_budget_pca(
@@ -897,13 +1035,8 @@ def _run_double_descent(data, config, dataset_name=None):
         )
 
         # --- Ridge only (most sensitive to interpolation) ---
-        ridge_hybrid, ridge_hybrid_w, _ = _eval_at_budget(
-            reps, labels, groups, n_folds, mode, metric_fn,
-            budget=budget, method='hybrid', model_name='ridge',
-            data=data,
-            dataset_name=dataset_name, task_type=task_type,
-            prefetched_search=_searches_per_budget.get(budget),
-        )
+        ridge_hybrid, ridge_hybrid_w = _rule_scores.get(('ridge', 'general1'),
+                                                        _nan2)
         ridge_pca, ridge_pca_w, _ = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
             n_components=n_feat, model_name='ridge'
@@ -962,16 +1095,24 @@ def _run_double_descent(data, config, dataset_name=None):
         print(f"\n    PCA instability near p≈n: variance_ratio={instability_ratio:.2f} "
               f"({_stability_word(instability_ratio)})")
 
-    hybrid_arr = np.array(results['hybrid_scores'])
-    if np.sum(near_n_mask) >= 2 and far_ok:
-        near_n_hyb = hybrid_arr[near_n_mask]
-        near_n_var_hyb = float(np.var(near_n_hyb))
-        far_hyb = hybrid_arr[far_mask]
-        far_var_hyb = float(np.var(far_hyb))
-        instability_hybrid = near_n_var_hyb / (far_var_hyb + 1e-10)
-        results['instability_ratio_hybrid'] = instability_hybrid
-        print(f"    Hybrid instability near p≈n: variance_ratio={instability_hybrid:.2f} "
-              f"({_stability_word(instability_hybrid)})")
+    # Owner's set (2026-10-02): the instability ratio for every hybrid arm.
+    # 'instability_ratio_hybrid' is general1 (the old key).
+    for _key, _out in (('hybrid_scores', 'instability_ratio_hybrid'),
+                       ('hybrid_scores__general2',
+                        'instability_ratio_hybrid__general2'),
+                       ('hybrid_scores__distance1',
+                        'instability_ratio_hybrid__distance1')):
+        hybrid_arr = np.array(results[_key])
+        if np.sum(near_n_mask) >= 2 and far_ok and len(hybrid_arr) == len(ratios):
+            near_n_hyb = hybrid_arr[near_n_mask]
+            near_n_var_hyb = float(np.var(near_n_hyb))
+            far_hyb = hybrid_arr[far_mask]
+            far_var_hyb = float(np.var(far_hyb))
+            instability_hybrid = near_n_var_hyb / (far_var_hyb + 1e-10)
+            results[_out] = instability_hybrid
+            print(f"    Hybrid{_key[len('hybrid_scores'):]} instability near "
+                  f"p≈n: variance_ratio={instability_hybrid:.2f} "
+                  f"({_stability_word(instability_hybrid)})")
 
     return results
 
@@ -992,8 +1133,11 @@ def _stability_word(ratio):
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                     budget, method='hybrid', model_name='rf',
                     data=None, dataset_name=None, task_type=None,
-                    prefetched_search=None):
+                    prefetched_search=None, blueprint=None):
     """Evaluate a hybrid at a given budget with a given model.
+
+    `blueprint`, when given, is the recipe to build, and neither lookup below
+    runs. The owner's set (2026-10-02) hands each of its hybrids in this way.
 
     If `prefetched_search` is provided, pull blueprint for `model_name`
     from that result (c15c fast-search path). Otherwise fall back to the
@@ -1015,7 +1159,9 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: RandomForestRegressor(
             n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
 
-    if prefetched_search is not None:
+    if blueprint is not None:
+        bp = blueprint
+    elif prefetched_search is not None:
         # c15c fast-search path: blueprint comes from the per-budget fast search.
         _best_by_model = getattr(prefetched_search, 'best_by_model', {}) or {}
         best = _best_by_model.get(model_name)
@@ -1255,6 +1401,14 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         'real_score_hybrid': [],
         'real_score_pca': [],
         'real_score_full': None,
+        # Owner's set (2026-10-02). The two lists above are ridge general1.
+        # general2 sits beside them, one entry per budget, nan where the slot
+        # had no recipe. Ridge is never scored on the distance searches
+        # (it is not in DISTANCE_MODELS), so there is no distance1 arm and
+        # rule_missing says so.
+        'rademacher_hybrid__general2': [],
+        'real_score_hybrid__general2': [],
+        'rule_missing': [],
     }
 
     # KIRBY_C15_RADEMACHER_TRIALS overrides this. Unset it is 5, the shipped
@@ -1290,15 +1444,48 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
 
         # Hybrid — use per-fold creation to avoid label leakage
         # Rademacher: estimate on per-fold hybrid features (no leakage)
-        rad_hybrid = _estimate_rademacher_hybrid(
-            reps, labels, groups, n_folds, mode, n_random_trials,
-            np.random.RandomState(42), budget, data=data,
-            task_type=task_type, dataset_name=dataset_name)
-        real_hybrid, _rh_w, _ = _eval_at_budget(
-            reps, labels, groups, n_folds, mode, metric_fn,
-            budget=budget, method='hybrid', model_name='ridge',
-            data=data, dataset_name=dataset_name,
-            task_type=task_type)
+        # Owner's set (2026-10-02): ridge's top 2 general hybrids, read with
+        # RIDGE_MODELS (the list that puts ridge into the search). n_distance=0
+        # because the distance read must not get that list, and ridge is not
+        # scored on the distance searches anyway.
+        _ridge_bps = {}
+        try:
+            _rr = get_rule_hybrids(
+                reps, labels, groups, downstream_model='ridge', budget=budget,
+                augmentations=data.get('augmentations'), data=data,
+                dataset_name=dataset_name, task_type=task_type,
+                n_distance=0, models=list(RIDGE_MODELS))
+            results['rule_missing'] += [f'budget={budget}: {m}'
+                                        for m in _rr['missing']]
+            for _h in _rr['hybrids']:
+                if (_h.get('blueprint') is not None
+                        and (_h.get('objective') or 'predictive') == 'predictive'):
+                    _ridge_bps.setdefault(_h['slot'], _h['blueprint'])
+        except Exception as _re:
+            results['rule_missing'].append(
+                f'budget={budget}: the ridge read raised '
+                f'{type(_re).__name__}: {_re}')
+        results['rule_missing'].append(
+            f'budget={budget}: ridge distance1 -- ridge is not in '
+            f'DISTANCE_MODELS, so no distance search scores it')
+        _rad, _real = {}, {}
+        for _sl in ('general1', 'general2'):
+            if _sl not in _ridge_bps:
+                _rad[_sl], _real[_sl] = float('nan'), float('nan')
+                continue
+            _rad[_sl] = _estimate_rademacher_hybrid(
+                reps, labels, groups, n_folds, mode, n_random_trials,
+                np.random.RandomState(42), budget, data=data,
+                task_type=task_type, dataset_name=dataset_name,
+                blueprint=_ridge_bps[_sl])
+            _real[_sl] = _eval_at_budget(
+                reps, labels, groups, n_folds, mode, metric_fn,
+                budget=budget, method='hybrid', model_name='ridge',
+                data=data, dataset_name=dataset_name,
+                task_type=task_type, blueprint=_ridge_bps[_sl])[0]
+        rad_hybrid, real_hybrid = _rad['general1'], _real['general1']
+        results['rademacher_hybrid__general2'].append(_rad['general2'])
+        results['real_score_hybrid__general2'].append(_real['general2'])
 
         # PCA — fresh RNG per budget for fair comparison
         rad_pca = _estimate_rademacher_pca(
@@ -1393,11 +1580,14 @@ def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng,
 
 def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
                                 budget, data=None, task_type='regression',
-                                dataset_name=None):
+                                dataset_name=None, blueprint=None):
     """Estimate Rademacher complexity of hybrid features WITHOUT label leakage.
 
     Creates the hybrid per-fold on training data only, then measures how well
     a linear model can fit random labels on those features.
+
+    `blueprint`, when given, is the recipe to build and the pool lookup below
+    does not run (owner's set, 2026-10-02).
     """
     # Pool helper: best (tier, aug_cond) cache file for (ridge, budget).
     #
@@ -1407,19 +1597,22 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     # number about a different model. RIDGE_MODELS names ridge into the search;
     # without the precompute's --with-ridge pass this builds that search live.
     augs = data.get('augmentations') if data is not None else None
-    _search, meta = get_best_search_for_downstream(
-        reps, y, groups,
-        downstream_model='ridge', budget=budget,
-        augmentations=augs, data=data,
-        dataset_name=dataset_name, task_type=task_type,
-        models=list(RIDGE_MODELS),
-    )
-    if meta is None:
-        print(f"    [c15] no ridge recipe at budget={budget} -- Rademacher "
-              f"complexity not computed (nan). The dataset needs the "
-              f"precompute's --with-ridge pass.")
-        return float('nan')
-    bp = meta['best_config']['blueprint']
+    if blueprint is not None:
+        bp = blueprint
+    else:
+        _search, meta = get_best_search_for_downstream(
+            reps, y, groups,
+            downstream_model='ridge', budget=budget,
+            augmentations=augs, data=data,
+            dataset_name=dataset_name, task_type=task_type,
+            models=list(RIDGE_MODELS),
+        )
+        if meta is None:
+            print(f"    [c15] no ridge recipe at budget={budget} -- Rademacher "
+                  f"complexity not computed (nan). The dataset needs the "
+                  f"precompute's --with-ridge pass.")
+            return float('nan')
+        bp = meta['best_config']['blueprint']
 
     sample_X = next(iter(reps.values()))
     folds = list(cv_split(groups, n_folds, sample_X, y, mode=mode))
@@ -1548,6 +1741,9 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None, **kwargs):
     budgets = config['budgets']
     all_subs = sub_analyses or ['15a', '15b', '15c', '15d']
     results = {}
+    # Owner's set (2026-10-02): slots 15a/15b asked for and did not get.
+    _RULE_MISSING.clear()
+    _POOL_HYBRID_MEMO.clear()
 
     if '15a' in all_subs:
         _t0 = _time.time()
@@ -1573,6 +1769,9 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None, **kwargs):
             data, budgets, config, dataset_name=dataset_name)
         _stage('15d', _t0)
 
+    # Owner's set (2026-10-02): every slot 15a/15b asked for and did not get.
+    # 15c and 15d carry their own 'rule_missing' inside their blocks.
+    results['rule_missing'] = list(_RULE_MISSING)
     return results
 
 

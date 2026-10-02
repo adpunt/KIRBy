@@ -125,7 +125,12 @@ from experiments._shared import (
     # rows the search already stored: 0 new model fits.
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     resolve_comparison_models,
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family.
+    get_rule_hybrids,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
 )
+import copy as _copy
 from kirby.find_best_hybrid import (
     find_best_hybrid, nested_cv_cache_namespace, DEFAULT_N_FOLDS,
 )
@@ -463,67 +468,161 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         ('capped', augmentations)] if augmentations
                        else [('none', None)])
 
-    def _search_one_fold(fold_i, tr_idx):
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family. The distance counterpart of the per-fold search runs
+    # on the distance tier with the distance evaluators and budgets, the same
+    # settings precompute_hybrids.py gives the distance searches. Its
+    # augmentation conditions follow _pool_conditions' distance branch: 'none',
+    # plus 'uncapped' and (under 10,000 molecules) 'capped' when the dataset
+    # has augmentation representations. Downstream models are this run's
+    # models that are in DISTANCE_MODELS; any other is a missing slot.
+    _dist_aug_conditions = [('none', None)]
+    if augmentations:
+        _dist_aug_conditions.append(('uncapped', augmentations))
+        if len(labels) < 10000:
+            _dist_aug_conditions.append(('capped', augmentations))
+    _dist_budgets = [b for b in DISTANCE_BUDGETS if b <= total_dim]
+    _dist_model_names = [n for n in models if n in DISTANCE_MODELS]
+    rule_missing = []
+    for _n in models:
+        if _n not in DISTANCE_MODELS:
+            rule_missing.append(
+                f'distance1 for {_n}: {_n} is not in DISTANCE_MODELS, so the '
+                f'distance searches never score it')
+
+    def _search_one_fold(fold_i, tr_idx, distance=False):
         """Run the recipe pool on ONE outer fold's training rows.
 
         Returns [(aug_condition, SearchResult)]. Each search is cached under
         its own namespace, one per outer fold, so the folds do not evict each
-        other and a re-run reuses them.
+        other and a re-run reuses them. distance=True runs the distance tier.
         """
         tr_reps = {k: v[tr_idx] for k, v in reps.items()}
         y_tr = labels[tr_idx]
         g_tr = groups[tr_idx] if groups is not None else None
         out = []
-        for cond, aug in _aug_conditions:
+        if distance:
+            conds = _dist_aug_conditions
+            tier_kw = dict(
+                models={n: models[n]() for n in _dist_model_names},
+                budgets=_dist_budgets,
+                internal_evaluators=DISTANCE_EVALUATORS,
+                tier='general_distance')
+        else:
+            conds = _aug_conditions
+            tier_kw = dict(
+                models={n: f() for n, f in models.items()},
+                budgets=budgets,
+                internal_evaluators=INTERNAL_EVALUATORS,
+                tier='general')
+        if distance and (not _dist_model_names or not _dist_budgets):
+            return out
+        for cond, aug in conds:
             aug_tr = ({k: v[tr_idx] for k, v in aug.items()} if aug else None)
             try:
                 s_f = find_best_hybrid(
                     base_reps=tr_reps, labels=y_tr, groups=g_tr,
-                    models={n: f() for n, f in models.items()},
-                    budgets=budgets,
                     augmentations=aug_tr,
                     augmentation_strategy=cond,
-                    internal_evaluators=INTERNAL_EVALUATORS,
                     metric=metric_name,
                     task_type=task_type,
                     cache=True,
                     verbose=False,
                     dataset_name=dataset_name,
                     cache_namespace=nested_cv_cache_namespace(fold_i, n_out, 42),
-                    tier='general',
+                    **tier_kw,
                 )
                 out.append((cond, s_f))
             except Exception as e:
-                print(f"    fold {fold_i} recipe search ({cond}) failed: {e}")
+                print(f"    fold {fold_i} {'distance ' if distance else ''}"
+                      f"recipe search ({cond}) failed: {e}")
         return out
 
     fold_searches = []
+    fold_searches_dist = []
     if recipe_search == 'per_fold':
         print(f"  Searching the recipe inside each of {n_out} outer training "
-              f"folds, {len(_aug_conditions)} augmentation condition(s) each.")
+              f"folds, {len(_aug_conditions)} augmentation condition(s) each, "
+              f"plus the distance tier ({len(_dist_aug_conditions)} "
+              f"condition(s)).")
         for f_i, (tr_idx, _va) in enumerate(folds):
             fold_searches.append(_search_one_fold(f_i, tr_idx))
+            fold_searches_dist.append(
+                _search_one_fold(f_i, tr_idx, distance=True))
             n_found = len(fold_searches[-1])
             print(f"    fold {f_i}: {n_found}/{len(_aug_conditions)} "
-                  f"search(es) available")
+                  f"search(es) available, "
+                  f"{len(fold_searches_dist[-1])} distance search(es)")
+
+    # Owner's set (2026-10-02): the three hybrid slots every model gets.
+    RULE_SLOTS = ('general1', 'general2', 'distance1')
+    search_fits_by_slot = {'general1': 0, 'general2': 0, 'distance1': 0}
+    rule_budget_relaxed = []   # (model, slot, fold or None, budget) relaxed
+
+    def _better_score(a, b):
+        return a < b if lower_is_better else a > b
+
+    def _ident(row, cond):
+        """Recipe identity of a search row or a top_hybrids entry."""
+        return (row.get('allocation_method'), row.get('importance_method'),
+                row.get('budget'), row.get('internal_evaluator'),
+                row.get('step_size'), cond)
+
+    def _ranked(pool, model_name, budget, n):
+        """Top-n configurations for this model at this budget, merged across
+        the augmentation conditions of one fold's searches. Each item is
+        (score, cond, entry, search)."""
+        items = []
+        for cond, s_f in pool:
+            try:
+                sel = top_hybrids(s_f, model_name, n, budget=budget,
+                                  require_full=False,
+                                  context=f'c11 {dataset_name}/{model_name}')
+            except Exception as e:
+                print(f"    ranking failed ({model_name}, {cond}, "
+                      f"b={budget}): {e}")
+                continue
+            for e in sel['selected']:
+                if e.get('blueprint') is None:
+                    continue
+                items.append((e['score_mean'], cond, e, s_f))
+        items.sort(key=lambda t: t[0], reverse=not lower_is_better)
+        return items
+
+    def _with_cond(bp, cond):
+        """A copy of the blueprint carrying the condition that loaded it."""
+        bp = _copy.deepcopy(bp)
+        bp.augmentation_strategy = cond
+        return bp
+
+    def _fits_of(search, row_fold_scores):
+        n_cfg = len(getattr(search, 'all_results', None) or [])
+        n_search_folds = len(row_fold_scores or []) or DEFAULT_N_FOLDS
+        return n_cfg * n_out * n_search_folds
 
     def _blueprints_for(model_name):
-        """Hybrid recipe per budget for this downstream model.
+        """Hybrid recipe per slot per budget for this downstream model.
 
-        Under 'per_fold' the return is {fold_idx: {budget: blueprint}} — each
-        fold's own winner, picked on that fold's training rows across the same
-        augmentation conditions the whole-dataset pool compares.
+        Returns {slot: X} for slot in RULE_SLOTS. Under 'per_fold' X is
+        {fold_idx: {budget: blueprint}} — each fold's own picks, made on that
+        fold's training rows across the same augmentation conditions the
+        whole-dataset pool compares. Under 'whole_data' X is
+        {budget: blueprint}, one recipe set for every fold, chosen with every
+        row's label.
 
-        Under 'whole_data' it is {budget: blueprint}, one recipe for every
-        fold, chosen with every row's label.
+        general1 is picked exactly as before this change (the best row per
+        budget in best_by_model_budget, or get_best_search_for_downstream).
+        general2 is the next-best configuration that is not general1.
+        distance1 is the best configuration of the distance searches.
         """
         nonlocal last_search, search_fits
+        out = {sl: {} for sl in RULE_SLOTS}
         if recipe_search == 'per_fold':
-            per_fold = {}
             for f_i, pool in enumerate(fold_searches):
-                bps_f = {}
+                for sl in RULE_SLOTS:
+                    out[sl][f_i] = {}
                 for budget in budgets:
-                    best_row, best_search = None, None
+                    best_row, best_search, best_cond = None, None, None
                     for _cond, s_f in pool:
                         row = (s_f.best_by_model_budget.get(model_name, {})
                                .get(budget))
@@ -535,11 +634,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         if best_row is None or (
                                 sc < best_row['score_mean'] if lower_is_better
                                 else sc > best_row['score_mean']):
-                            best_row, best_search = row, s_f
+                            best_row, best_search, best_cond = row, s_f, _cond
                     if best_row is not None:
-                        bps_f[budget] = best_row['blueprint']
+                        out['general1'][f_i][budget] = best_row['blueprint']
                         last_search = best_search
-                        n_cfg = len(getattr(best_search, 'all_results', None) or [])
                         # One search per outer fold, each over its OWN folds:
                         # the fits the process itself burns. The second factor
                         # is the search's fold count, read off the winning
@@ -547,15 +645,57 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # 5 by default and coincide, but on --mode intermediary
                         # n_out is 1 while the search still runs
                         # DEFAULT_N_FOLDS, and n_out squared is then 5x low.
-                        n_search_folds = (len(best_row.get('fold_scores') or [])
-                                          or DEFAULT_N_FOLDS)
-                        search_fits = max(search_fits,
-                                          n_cfg * n_out * n_search_folds)
-                per_fold[f_i] = bps_f
-            return per_fold
+                        _fits = _fits_of(best_search, best_row.get('fold_scores'))
+                        search_fits = max(search_fits, _fits)
+                        search_fits_by_slot['general1'] = max(
+                            search_fits_by_slot['general1'], _fits)
+                        # general2: the best ranked configuration that is not
+                        # general1, across the same conditions.
+                        g1_id = _ident(best_row, best_cond)
+                        g2 = next((it for it in _ranked(pool, model_name,
+                                                        budget, 3)
+                                   if _ident(it[2], it[1]) != g1_id), None)
+                        if g2 is not None:
+                            out['general2'][f_i][budget] = _with_cond(
+                                g2[2]['blueprint'], g2[1])
+                            search_fits_by_slot['general2'] = max(
+                                search_fits_by_slot['general2'],
+                                _fits_of(g2[3], g2[2].get('fold_scores')))
+                        else:
+                            rule_missing.append(
+                                f'general2 for {model_name}, fold {f_i}, '
+                                f'budget {budget}: the fold searches ranked no '
+                                f'second configuration')
+                    # distance1: best distance configuration at this budget;
+                    # a budget the distance searches never scored (above
+                    # max(DISTANCE_BUDGETS)) ranks over every budget they hold.
+                    if model_name not in DISTANCE_MODELS:
+                        continue
+                    dpool = (fold_searches_dist[f_i]
+                             if f_i < len(fold_searches_dist) else [])
+                    d = _ranked(dpool, model_name, budget, 1)
+                    relaxed = False
+                    if not d:
+                        d = _ranked(dpool, model_name, None, 1)
+                        relaxed = bool(d)
+                    if d:
+                        out['distance1'][f_i][budget] = _with_cond(
+                            d[0][2]['blueprint'], d[0][1])
+                        search_fits_by_slot['distance1'] = max(
+                            search_fits_by_slot['distance1'],
+                            _fits_of(d[0][3], d[0][2].get('fold_scores')))
+                        if relaxed:
+                            rule_budget_relaxed.append(
+                                (model_name, 'distance1', f_i, budget))
+                    else:
+                        rule_missing.append(
+                            f'distance1 for {model_name}, fold {f_i}, budget '
+                            f'{budget}: the distance searches on this fold '
+                            f'scored no configuration for it')
+            return out
 
-        bps = {}
         for budget in budgets:
+            g1_recipe = None
             try:
                 search, meta = get_best_search_for_downstream(
                     reps, labels, groups,
@@ -564,16 +704,57 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     dataset_name=dataset_name, task_type=task_type, data=data)
             except Exception as e:
                 print(f"    Blueprint lookup failed ({model_name}, b={budget}): {e}")
-                continue
+                search, meta = None, None
             if meta:
-                bps[budget] = meta['best_config']['blueprint']
+                out['general1'][budget] = meta['best_config']['blueprint']
                 last_search = search
                 n_cfg = len(getattr(search, 'all_results', None) or [])
                 search_fits = max(search_fits, n_cfg * n_out)
-        return bps
+                search_fits_by_slot['general1'] = search_fits
+                _bc = meta['best_config']
+                g1_recipe = ("{}|{}|b{}|{}|s{}".format(
+                    _bc.get('allocation_method'), _bc.get('importance_method'),
+                    _bc.get('budget'), _bc.get('internal_evaluator'),
+                    _bc.get('step_size')), meta.get('aug_condition'))
+            # general2 and distance1 from the stored pool, ranked on every
+            # fold (fold_i=None): the whole-dataset set.
+            try:
+                rule = get_rule_hybrids(
+                    reps, labels, groups, downstream_model=model_name,
+                    budget=budget, dataset_name=dataset_name,
+                    augmentations=augmentations, task_type=task_type,
+                    data=data, metric=metric_name)
+            except Exception as e:
+                rule_missing.append(
+                    f'general2/distance1 for {model_name}, budget {budget}: '
+                    f'get_rule_hybrids raised {type(e).__name__}: {e}')
+                continue
+            rule_missing.extend(f'budget {budget}: {w}'
+                                for w in rule.get('missing') or [])
+            gens = [h for h in rule['hybrids'] if h['lineage'] == 'general']
+            if g1_recipe is None:
+                g2 = gens[1] if len(gens) > 1 else None
+            else:
+                g2 = next((h for h in gens
+                           if (h['recipe'], h['aug_condition']) != g1_recipe),
+                          None)
+            if g2 is not None:
+                out['general2'][budget] = g2['blueprint']
+                search_fits_by_slot['general2'] = search_fits
+            dists = [h for h in rule['hybrids'] if h['lineage'] == 'distance']
+            if dists:
+                out['distance1'][budget] = dists[0]['blueprint']
+                if dists[0].get('budget_relaxed'):
+                    rule_budget_relaxed.append(
+                        (model_name, 'distance1', None, budget))
+        return out
 
     results = []
     reselection_candidates = {}      # hybrid recipes -> fold_reselection
+    # Owner's set (2026-10-02): the same, one dict per hybrid slot.
+    # reselection_candidates above IS the 'general1' entry.
+    reselection_candidates_by_slot = {'general1': reselection_candidates,
+                                      'general2': {}, 'distance1': {}}
     reselected_baselines = {}       # single reps    -> fold_reselection
     reselection_ens_candidates = {}  # ensemble procs -> fold_reselection
     cost_rows = []
@@ -595,17 +776,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for model_name, model_factory in models.items():
         print(f"\n  --- {model_name} ---")
-        blueprints = _blueprints_for(model_name)
+        blueprints_by_slot = _blueprints_for(model_name)
+        blueprints = blueprints_by_slot['general1']
 
-        def _bp_at(fold_i, budget):
-            """This fold's recipe at this budget, or None.
+        def _bp_at(fold_i, budget, slot='general1'):
+            """This fold's recipe for this slot at this budget, or None.
 
             Under 'per_fold' each fold has its own; under 'whole_data' every
             fold is handed the same one.
             """
+            bps = blueprints_by_slot.get(slot) or {}
             if recipe_search == 'per_fold':
-                return blueprints.get(fold_i, {}).get(budget)
-            return blueprints.get(budget)
+                return bps.get(fold_i, {}).get(budget)
+            return bps.get(budget)
 
         _have_bp = (any(bps for bps in blueprints.values())
                     if recipe_search == 'per_fold' else bool(blueprints))
@@ -625,7 +808,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_rep = None
         single_results = {}
         baseline_folds = {}
-        hybrid_cands = []
 
         for rep_name in rep_names:
             X = reps[rep_name]
@@ -724,7 +906,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'total_fit_time_s': bs['fit_time_s'],
             'total_predict_time_s': bs['predict_time_s'],
             'fold_scores': bs['fold_scores'],
-            'detail': {'best_rep': best_rep, 'all_reps': single_results},
+            'detail': {'best_rep': best_rep, 'all_reps': single_results,
+                       # Owner's set (2026-10-02): the model's top 2 single
+                       # representations, by the same fold mean.
+                       'top2_reps': [
+                           r for r, _v in sorted(
+                               ((r, v['score_mean'])
+                                for r, v in single_results.items()
+                                if np.isfinite(v['score_mean'])),
+                               key=lambda t: t[1],
+                               reverse=not lower_is_better)[:2]]},
             'cost': _cost_row(1, bs['dim'], 1, bs['dim'], bs['model_bytes'],
                               bs['fit_time_s'], bs['predict_time_s'], bs['dim']),
         })
@@ -784,126 +975,151 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # =================================================================
         # 3. Hybrid. build_fold_hybrid refits the selection on TRAIN only.
         # =================================================================
-        for budget in budgets:
-            if not any(_bp_at(f_i, budget) is not None
-                       for f_i in range(len(folds))):
-                continue
-            # One entry per OUTER FOLD, always, in fold order. A fold this arm
-            # cannot score records NaN and keeps its slot: the baseline arm
-            # above does the same, and the per-fold reselection pairs the two arms
-            # by fold INDEX. Dropping the entry instead shifted every later
-            # fold's hybrid score up one position and paired it against the
-            # wrong fold of the single-representation arm.
-            f_s = [float('nan')] * len(folds)
-            f_fit = [float('nan')] * len(folds)
-            f_pred = [float('nan')] * len(folds)
-            n_feat = 0
-            hyb_bytes = 0
-            touched = set()
-            recipes_this_budget = []
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+        # model. Each slot is built and scored as its own arm, per budget.
+        # general1 keeps the method name 'hybrid' and the candidate names
+        # 'hybrid_b<budget>' it always had; general2 and distance1 are
+        # 'hybrid_general2' / 'hybrid_distance1'.
+        hybrid_cands_by_slot = {sl: [] for sl in RULE_SLOTS}
+        for slot in RULE_SLOTS:
+            _method = 'hybrid' if slot == 'general1' else f'hybrid_{slot}'
 
-            for f_i, (tr_idx, va_idx) in enumerate(folds):
-                bp_f = _bp_at(f_i, budget)
-                if bp_f is None:
-                    print(f"    fold {f_i} b={budget}: no recipe - fold recorded "
-                          f"as missing.")
+            def _arm(b_lab, _slot=slot):
+                return (f'hybrid_b{b_lab}' if _slot == 'general1'
+                        else f'hybrid_{_slot}_b{b_lab}')
+            for budget in budgets:
+                if not any(_bp_at(f_i, budget, slot) is not None
+                           for f_i in range(len(folds))):
                     continue
-                recipes_this_budget.append({
-                    'fold': f_i,
-                    'allocation': bp_f.allocation_method,
-                    'importance': bp_f.importance_method,
-                    'internal_evaluator': bp_f.internal_evaluator,
-                    'augmentation_strategy': bp_f.augmentation_strategy,
+                # One entry per OUTER FOLD, always, in fold order. A fold this arm
+                # cannot score records NaN and keeps its slot: the baseline arm
+                # above does the same, and the per-fold reselection pairs the two arms
+                # by fold INDEX. Dropping the entry instead shifted every later
+                # fold's hybrid score up one position and paired it against the
+                # wrong fold of the single-representation arm.
+                f_s = [float('nan')] * len(folds)
+                f_fit = [float('nan')] * len(folds)
+                f_pred = [float('nan')] * len(folds)
+                n_feat = 0
+                hyb_bytes = 0
+                touched = set()
+                recipes_this_budget = []
+
+                for f_i, (tr_idx, va_idx) in enumerate(folds):
+                    bp_f = _bp_at(f_i, budget, slot)
+                    if bp_f is None:
+                        print(f"    fold {f_i} b={budget}: no recipe - fold recorded "
+                              f"as missing.")
+                        continue
+                    recipes_this_budget.append({
+                        'fold': f_i,
+                        'allocation': bp_f.allocation_method,
+                        'importance': bp_f.importance_method,
+                        'internal_evaluator': bp_f.internal_evaluator,
+                        'augmentation_strategy': bp_f.augmentation_strategy,
+                    })
+                    tr_reps = {k: v[tr_idx] for k, v in reps.items()}
+                    va_reps = {k: v[va_idx] for k, v in reps.items()}
+                    y_tr = labels[tr_idx]
+                    augs = augmentations or {}
+                    tr_aug = {k: v[tr_idx] for k, v in augs.items()} if augs else None
+                    va_aug = {k: v[va_idx] for k, v in augs.items()} if augs else None
+                    try:
+                        t0 = time.time()
+                        X_tr_h, X_va_h, info = build_fold_hybrid(
+                            tr_reps, va_reps, y_tr, bp_f,
+                            augmentations_train=tr_aug, augmentations_val=va_aug,
+                            groups=(groups[tr_idx] if groups is not None else None),
+                            model=model_factory(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better)
+                        build_s = time.time() - t0
+                    except Exception as e:
+                        print(f"    fold {f_i} b={budget}: hybrid build failed "
+                              f"({e}) - fold recorded as missing.")
+                        continue
+
+                    # THE reviewer's question: how many featurisers does the hybrid
+                    # still need? Measured from the blueprint, never assumed.
+                    alloc = info.get('allocation') or {}
+                    touched |= {r for r, n in alloc.items()
+                                if isinstance(n, (int, float)) and n > 0}
+                    aug_info = info.get('augmentation_info') or {}
+                    if isinstance(aug_info, dict):
+                        touched |= {k for k in aug_info if k in reps}
+
+                    sc = StandardScaler()
+                    X_tr_s = sc.fit_transform(X_tr_h)
+                    X_va_s = sc.transform(X_va_h)
+                    n_feat = X_tr_h.shape[1]
+                    try:
+                        model, agg, _h, a, b = _fit_predict(
+                            model_factory, X_tr_s, y_tr, X_va_s, task_type)
+                    except Exception as e:
+                        print(f"    fold {f_i} b={budget}: hybrid fit failed "
+                              f"({e}) - fold recorded as missing.")
+                        continue
+                    scored = _to_metric_space(agg, task_type, metric_needs_proba,
+                                              classes)
+                    f_s[f_i] = float(metric_fn(labels[va_idx], scored))
+                    f_fit[f_i] = a + build_s
+                    f_pred[f_i] = b
+                    hyb_bytes = max(hyb_bytes, _model_bytes(model))
+
+                # NaNs are dropped here, at scoring time, not at collection time.
+                valid_s = [s for s in f_s if np.isfinite(s)]
+                if not valid_s:
+                    continue
+                valid_fit = [t for t in f_fit if np.isfinite(t)]
+                valid_pred = [t for t in f_pred if np.isfinite(t)]
+                b_lab = 'full' if budget == total_dim else str(budget)
+                score = float(np.mean(valid_s))
+                n_touch = len(touched) if touched else n_reps
+                touch_dim = sum(rep_dims.get(r, 0) for r in touched) or total_dim
+                _missing = len(f_s) - len(valid_s)
+                print(f"    Hybrid {slot} b={b_lab:<5}: {metric_name}={score:.4f} "
+                      f"dim={n_feat} featurisers={n_touch}/{n_reps}"
+                      + (f" ({len(valid_s)}/{len(f_s)} folds scored)"
+                         if _missing else ""))
+
+                f_s_f = [float(s) for s in f_s]
+                hybrid_cands_by_slot[slot].append(
+                    {'name': _arm(b_lab), 'fold_scores': f_s_f})
+                results.append({
+                    'model': model_name, 'method': _method, 'augmented': False,
+                    # Owner's set (2026-10-02): which of the three hybrids.
+                    'slot': slot,
+                    'lineage': 'distance' if slot == 'distance1' else 'general',
+                    'tier': ('general_distance' if slot == 'distance1'
+                             else 'general'),
+                    'objective': 'predictive',
+                    'budget_relaxed_folds': [
+                        f for (_mm, _sl, f, _b) in rule_budget_relaxed
+                        if _mm == model_name and _sl == slot and _b == budget],
+                    'budget': budget, 'score_mean': score,
+                    'score_std': float(np.std(valid_s)), 'total_dim': n_feat,
+                    'n_models_trained': 1,
+                    'n_folds_scored': len(valid_s),
+                    'total_fit_time_s': float(np.mean(valid_fit)),
+                    'total_predict_time_s': float(np.mean(valid_pred)),
+                    'fold_scores': f_s_f, 'reps_touched': sorted(touched),
+                    # Where this budget's recipe came from, and — under
+                    # 'per_fold' — which recipe each fold actually picked. When
+                    # they differ between folds, one recipe is not the answer.
+                    'recipe_search': recipe_search,
+                    'recipes_per_fold': recipes_this_budget,
+                    'cost': _cost_row(n_touch, touch_dim, 1, n_feat, hyb_bytes,
+                                      float(np.mean(valid_fit)),
+                                      float(np.mean(valid_pred)),
+                                      n_feat,
+                                      selection_fits=search_fits_by_slot[slot]),
                 })
-                tr_reps = {k: v[tr_idx] for k, v in reps.items()}
-                va_reps = {k: v[va_idx] for k, v in reps.items()}
-                y_tr = labels[tr_idx]
-                augs = augmentations or {}
-                tr_aug = {k: v[tr_idx] for k, v in augs.items()} if augs else None
-                va_aug = {k: v[va_idx] for k, v in augs.items()} if augs else None
-                try:
-                    t0 = time.time()
-                    X_tr_h, X_va_h, info = build_fold_hybrid(
-                        tr_reps, va_reps, y_tr, bp_f,
-                        augmentations_train=tr_aug, augmentations_val=va_aug,
-                        groups=(groups[tr_idx] if groups is not None else None),
-                        model=model_factory(),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
-                    build_s = time.time() - t0
-                except Exception as e:
-                    print(f"    fold {f_i} b={budget}: hybrid build failed "
-                          f"({e}) - fold recorded as missing.")
-                    continue
+                cost_rows.append((model_name, _arm(b_lab),
+                                  results[-1]['cost'], score))
 
-                # THE reviewer's question: how many featurisers does the hybrid
-                # still need? Measured from the blueprint, never assumed.
-                alloc = info.get('allocation') or {}
-                touched |= {r for r, n in alloc.items()
-                            if isinstance(n, (int, float)) and n > 0}
-                aug_info = info.get('augmentation_info') or {}
-                if isinstance(aug_info, dict):
-                    touched |= {k for k in aug_info if k in reps}
-
-                sc = StandardScaler()
-                X_tr_s = sc.fit_transform(X_tr_h)
-                X_va_s = sc.transform(X_va_h)
-                n_feat = X_tr_h.shape[1]
-                try:
-                    model, agg, _h, a, b = _fit_predict(
-                        model_factory, X_tr_s, y_tr, X_va_s, task_type)
-                except Exception as e:
-                    print(f"    fold {f_i} b={budget}: hybrid fit failed "
-                          f"({e}) - fold recorded as missing.")
-                    continue
-                scored = _to_metric_space(agg, task_type, metric_needs_proba,
-                                          classes)
-                f_s[f_i] = float(metric_fn(labels[va_idx], scored))
-                f_fit[f_i] = a + build_s
-                f_pred[f_i] = b
-                hyb_bytes = max(hyb_bytes, _model_bytes(model))
-
-            # NaNs are dropped here, at scoring time, not at collection time.
-            valid_s = [s for s in f_s if np.isfinite(s)]
-            if not valid_s:
-                continue
-            valid_fit = [t for t in f_fit if np.isfinite(t)]
-            valid_pred = [t for t in f_pred if np.isfinite(t)]
-            b_lab = 'full' if budget == total_dim else str(budget)
-            score = float(np.mean(valid_s))
-            n_touch = len(touched) if touched else n_reps
-            touch_dim = sum(rep_dims.get(r, 0) for r in touched) or total_dim
-            _missing = len(f_s) - len(valid_s)
-            print(f"    Hybrid b={b_lab:<5}: {metric_name}={score:.4f} "
-                  f"dim={n_feat} featurisers={n_touch}/{n_reps}"
-                  + (f" ({len(valid_s)}/{len(f_s)} folds scored)"
-                     if _missing else ""))
-
-            f_s_f = [float(s) for s in f_s]
-            hybrid_cands.append({'name': f'hybrid_b{b_lab}', 'fold_scores': f_s_f})
-            results.append({
-                'model': model_name, 'method': 'hybrid', 'augmented': False,
-                'budget': budget, 'score_mean': score,
-                'score_std': float(np.std(valid_s)), 'total_dim': n_feat,
-                'n_models_trained': 1,
-                'n_folds_scored': len(valid_s),
-                'total_fit_time_s': float(np.mean(valid_fit)),
-                'total_predict_time_s': float(np.mean(valid_pred)),
-                'fold_scores': f_s_f, 'reps_touched': sorted(touched),
-                # Where this budget's recipe came from, and — under
-                # 'per_fold' — which recipe each fold actually picked. When
-                # they differ between folds, one recipe is not the answer.
-                'recipe_search': recipe_search,
-                'recipes_per_fold': recipes_this_budget,
-                'cost': _cost_row(n_touch, touch_dim, 1, n_feat, hyb_bytes,
-                                  float(np.mean(valid_fit)),
-                                  float(np.mean(valid_pred)),
-                                  n_feat, selection_fits=search_fits),
-            })
-            cost_rows.append((model_name, f'hybrid_b{b_lab}',
-                              results[-1]['cost'], score))
-
-        reselection_candidates[model_name] = hybrid_cands
+        for sl in RULE_SLOTS:
+            reselection_candidates_by_slot[sl][model_name] = (
+                hybrid_cands_by_slot[sl])
 
     # =====================================================================
     # 4/5. ENSEMBLE PROCESSES
@@ -1284,6 +1500,54 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "--recipe-search per_fold")
         print("    for the number that is.")
 
+    # Owner's set (2026-10-02): the same head-to-head for each of the three
+    # hybrids per model. For each slot the budget is reselected per fold over
+    # that slot's own budgets (fold_reselection), then compared with the
+    # self-contained ensemble and the best single representation, paired by
+    # fold. 'general1' repeats head_to_head above under its slot name.
+    head_to_head_by_slot = {}
+    fold_reselection_by_slot = {}
+    for _sl in RULE_SLOTS:
+        _cands = reselection_candidates_by_slot[_sl]
+        if not any(_cands.values()):
+            continue
+        _res = fold_reselection(_cands, reselected_baselines, lower_is_better)
+        fold_reselection_by_slot[_sl] = {
+            'lower_is_better': bool(lower_is_better), 'exclude_folds': [],
+            'candidates_by_model': _cands}
+        head_to_head_by_slot[_sl] = {}
+        for m, _r in _res.items():
+            _h_folds = _r.get('hybrid_fold_scores', [])
+            _a_folds = auto_folds_by_key.get(m, [])
+            _b_folds = _r.get('baseline_fold_scores', [])
+            _ap, _anf = _paired_delta(_a_folds, _h_folds)
+            _sp, _snf = _paired_delta(_h_folds, _b_folds)
+            head_to_head_by_slot[_sl][m] = {
+                'slot': _sl,
+                _h_key: _r.get('hybrid_reselected', float('nan')),
+                'best_single_reselected': _r.get('best_single_reselected',
+                                                 float('nan')),
+                'ensemble_auto': auto_by_key.get(m, float('nan')),
+                f'auto_minus_hybrid_mean_of_folds{_suffix}': _ap,
+                f'hybrid_minus_single_mean_of_folds{_suffix}': _sp,
+                'n_paired_folds': {'auto_minus_hybrid': _anf,
+                                   'hybrid_minus_single': _snf},
+                'hybrid_fold_scores': _h_folds,
+                'hybrid_recipe_per_fold': _r.get('hybrid_winners_per_fold', []),
+            }
+    if head_to_head_by_slot:
+        print("\n  HEAD-TO-HEAD PER HYBRID (owner's set: 2 general + 1 distance)")
+        print(f"    {'Model':<9} {'Slot':<10} {'Hybrid':>9} {'Auto-Hyb':>9} "
+              f"{'Hyb-Single':>10}")
+        for _sl, _per in head_to_head_by_slot.items():
+            for m, hh in _per.items():
+                print(f"    {m:<9} {_sl:<10} {hh[_h_key]:>9.4f} "
+                      f"{hh[f'auto_minus_hybrid_mean_of_folds{_suffix}']:>+9.4f} "
+                      f"{hh[f'hybrid_minus_single_mean_of_folds{_suffix}']:>+10.4f}")
+    if rule_missing:
+        print(f"\n  Owner's set: {len(rule_missing)} slot(s) not filled, "
+              f"reasons in 'rule_missing'.")
+
     # =====================================================================
     # COST + BREAK-EVEN
     # =====================================================================
@@ -1552,6 +1816,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                       if recipe_search == 'per_fold'
                                       else 'all rows'),
         'hybrid_recipe_aug_conditions': [c for c, _a in _aug_conditions],
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+        # model. Every 'results' row of method 'hybrid' (general1),
+        # 'hybrid_general2' or 'hybrid_distance1' carries 'slot', 'lineage'
+        # and 'tier'. The three keys below give the per-slot head-to-head,
+        # the per-slot reselection input, and every slot that was not filled.
+        'rule': 'top 2 general + top 1 distance hybrids per model',
+        'rule_slots': list(RULE_SLOTS),
+        'head_to_head_by_slot': head_to_head_by_slot,
+        'fold_reselection_by_slot': fold_reselection_by_slot,
+        'search_cost_model_fits_by_slot': {
+            k: int(v) for k, v in search_fits_by_slot.items()},
+        'distance_recipe_aug_conditions': [c for c, _a in _dist_aug_conditions],
+        'distance_budgets': _dist_budgets,
+        'rule_budget_relaxed': [
+            {'model': m, 'slot': sl, 'fold': f, 'budget': b}
+            for (m, sl, f, b) in rule_budget_relaxed],
+        'rule_missing': rule_missing,
+        # The top2_* keys above read one search object only; the owner's set
+        # is built and scored in 'results' and 'head_to_head_by_slot'.
+        'top2_keys_note': ("top2_base_reps / top2_hybrids / top2_pairs_by_model "
+                           "read one search and are report rows; the three "
+                           "hybrids per model are scored arms in 'results'"),
     }
 
 

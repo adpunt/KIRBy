@@ -22,6 +22,7 @@ from experiments._shared import (
     get_best_search_for_downstream,
     extract_top3_base_reps,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
+    get_rule_hybrids, MAIN_MODELS_WITH_KNN,
 )
 from kirby.hybrid import apply_augmentation_selection
 from kirby.find_best_hybrid import _predict_for_metric
@@ -299,383 +300,468 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         print(f"  WARNING: calibration conditions collapse (budgets "
               f"{_cond_budgets}) — optimal/underfit/overfit not separated.")
 
-    for cond_name in all_conditions:
-        if cond_name not in condition_specs:
-            continue
-        model_factory, budget, alloc, imp, desc = condition_specs[cond_name]
-        print(f"\n  {cond_name}: {desc}")
-
-        sample_X = next(iter(reps.values()))
-
-        fold_metrics = []
-        # task_type: without it _should_stratify falls back to the integer-dtype
-        # heuristic, which its own docstring calls a poor proxy -- a
-        # classification target stored as 0.0/1.0 gets plain GroupKFold and a
-        # fold can come out single-class.
-        for fold_i, (train_idx, val_idx) in enumerate(
-                _cv_split(groups, n_folds, sample_X, labels,
-                          task_type=task_type)):
-            train_reps = {k: v[train_idx] for k, v in reps.items()}
-            val_reps = {k: v[val_idx] for k, v in reps.items()}
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
-            val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
-
-            try:
-                # model/metric_fn/lower_is_better/is_clf are passed so the
-                # budget split is decided by the estimator and the metric this
-                # fold is actually scored with. Without model, internal
-                # evaluator 'match' resolves to lightgbm for every condition,
-                # including the random-forest ones; without metric_fn the
-                # allocation ranking falls back to r2_score or accuracy instead
-                # of the dataset's own metric.
-                # Cut to the representations the recipe was searched over,
-                # the same way build_fold_hybrid does it (_shared.py:5096):
-                # rank by the blueprint's own rep_scores, break ties by name so
-                # two runs resolve identically.
-                _tr_reps, _va_reps = train_reps, val_reps
-                if (optimal_rep_count is not None
-                        and int(optimal_rep_count) < len(train_reps)):
-                    if not optimal_rep_scores:
-                        raise ValueError(
-                            f"c08: the discovered recipe was searched over "
-                            f"{optimal_rep_count} of the pool's "
-                            f"{len(train_reps)} representations and carries no "
-                            f"rep_scores to say which. Rebuilding on all of "
-                            f"them would score a different feature set under "
-                            f"the winner's name.")
-                    _ranked = sorted(
-                        train_reps,
-                        key=lambda r: (-optimal_rep_scores.get(r, float('-inf')), r))
-                    _keep = set(_ranked[:int(optimal_rep_count)])
-                    _tr_reps = {k: v for k, v in train_reps.items() if k in _keep}
-                    _va_reps = {k: v for k, v in val_reps.items() if k in _keep}
-                X_train, feature_info = create_hybrid(
-                    _tr_reps, y_train, groups=groups[train_idx],
-                    allocation_method=alloc,
-                    budget=budget,
-                    importance_method=imp,
-                    internal_evaluator=optimal_internal_eval,
-                    augmentations=train_augs,
-                    augmentation_strategy=optimal_aug_strategy,
-                    model=model_factory(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better,
-                    is_clf=is_classification,
-                )
-                # ⛔ THE WIDTH BUILT, NOT THE BUDGET ASKED FOR. Two of c08's
-                # four conditions run at budget = total_dim and are read as
-                # "full dimensionality". create_hybrid stops each
-                # representation at its last feature scoring above zero, and
-                # allocate_weighted_global cuts the glued pool the same way
-                # without printing anything, so an "overfit at full dim"
-                # condition can be built on a fraction of the pool -- at which
-                # point it is not an overfit condition and the comparison it
-                # anchors cannot be read. condition_budgets stores the number
-                # asked for; this stores the number built.
-                _built_width = int(X_train.shape[1])
-                _built_widths.setdefault(cond_name, []).append(_built_width)
-                # _va_reps, not val_reps: the same representations the hybrid
-                # was built from, or the column order will not line up.
-                X_val = apply_feature_selection(_va_reps, feature_info)
-                aug_info = feature_info.get('augmentation_info')
-                if aug_info and val_augs:
-                    X_val_aug = apply_augmentation_selection(val_augs, aug_info)
-                    if X_val_aug is not None:
-                        X_val = np.hstack([X_val, X_val_aug])
-            except Exception as e:
-                _fold_errors.setdefault(cond_name, []).append(
-                    f'fold {fold_i}: {type(e).__name__}: {e}')
-                print(f"    fold {fold_i}: hybrid creation failed - {e}")
+    # Owner's set (2026-10-02): the four conditions below are run once for
+    # the recipe chosen as before AND once for each of every downstream
+    # model's rule hybrids (top 2 general + top 1 distance). The fold loop is
+    # this one function so every run is computed the same way.
+    def _run_condition_set(condition_specs, optimal_internal_eval,
+                           optimal_aug_strategy, optimal_rep_count,
+                           optimal_rep_scores, out_conditions, _built_widths,
+                           _fold_errors, recipe_objective=None):
+        for cond_name in all_conditions:
+            if cond_name not in condition_specs:
                 continue
+            model_factory, budget, alloc, imp, desc = condition_specs[cond_name]
+            print(f"\n  {cond_name}: {desc}")
 
-            scaler = StandardScaler()
-            X_train_s = scaler.fit_transform(X_train)
-            X_val_s = scaler.transform(X_val)
+            sample_X = next(iter(reps.values()))
 
-            # Train base model
-            model = model_factory()
-            model.fit(X_train_s, y_train)
+            fold_metrics = []
+            # task_type: without it _should_stratify falls back to the integer-dtype
+            # heuristic, which its own docstring calls a poor proxy -- a
+            # classification target stored as 0.0/1.0 gets plain GroupKFold and a
+            # fold can come out single-class.
+            for fold_i, (train_idx, val_idx) in enumerate(
+                    _cv_split(groups, n_folds, sample_X, labels,
+                              task_type=task_type)):
+                train_reps = {k: v[train_idx] for k, v in reps.items()}
+                val_reps = {k: v[val_idx] for k, v in reps.items()}
+                y_train, y_val = labels[train_idx], labels[val_idx]
+                train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+                val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
 
-            if is_classification:
-                # Conformal classification: split train into proper-train + cal
-                n_train = len(y_train)
-                n_cal = max(20, int(n_train * 0.2))
-                # The calibration rows are cut on scaffold groups, not at
-                # random. A random 20% puts molecules from the same scaffold on
-                # both sides, so the residuals the interval is calibrated from
-                # are easier than the held-out fold the coverage is reported on.
-                ptrain_idx, cal_idx = _cal_split(
-                    groups[train_idx], n_train, n_cal, fold_i)
+                try:
+                    # model/metric_fn/lower_is_better/is_clf are passed so the
+                    # budget split is decided by the estimator and the metric this
+                    # fold is actually scored with. Without model, internal
+                    # evaluator 'match' resolves to lightgbm for every condition,
+                    # including the random-forest ones; without metric_fn the
+                    # allocation ranking falls back to r2_score or accuracy instead
+                    # of the dataset's own metric.
+                    # Cut to the representations the recipe was searched over,
+                    # the same way build_fold_hybrid does it (_shared.py:5096):
+                    # rank by the blueprint's own rep_scores, break ties by name so
+                    # two runs resolve identically.
+                    _tr_reps, _va_reps = train_reps, val_reps
+                    if (optimal_rep_count is not None
+                            and int(optimal_rep_count) < len(train_reps)):
+                        if not optimal_rep_scores:
+                            raise ValueError(
+                                f"c08: the discovered recipe was searched over "
+                                f"{optimal_rep_count} of the pool's "
+                                f"{len(train_reps)} representations and carries no "
+                                f"rep_scores to say which. Rebuilding on all of "
+                                f"them would score a different feature set under "
+                                f"the winner's name.")
+                        _ranked = sorted(
+                            train_reps,
+                            key=lambda r: (-optimal_rep_scores.get(r, float('-inf')), r))
+                        _keep = set(_ranked[:int(optimal_rep_count)])
+                        _tr_reps = {k: v for k, v in train_reps.items() if k in _keep}
+                        _va_reps = {k: v for k, v in val_reps.items() if k in _keep}
+                    X_train, feature_info = create_hybrid(
+                        _tr_reps, y_train, groups=groups[train_idx],
+                        allocation_method=alloc,
+                        budget=budget,
+                        importance_method=imp,
+                        internal_evaluator=optimal_internal_eval,
+                        augmentations=train_augs,
+                        augmentation_strategy=optimal_aug_strategy,
+                        model=model_factory(),
+                        metric_fn=metric_fn,
+                        lower_is_better=lower_is_better,
+                        is_clf=is_classification,
+                        **({'objective': recipe_objective}
+                           if recipe_objective is not None else {}),
+                    )
+                    # ⛔ THE WIDTH BUILT, NOT THE BUDGET ASKED FOR. Two of c08's
+                    # four conditions run at budget = total_dim and are read as
+                    # "full dimensionality". create_hybrid stops each
+                    # representation at its last feature scoring above zero, and
+                    # allocate_weighted_global cuts the glued pool the same way
+                    # without printing anything, so an "overfit at full dim"
+                    # condition can be built on a fraction of the pool -- at which
+                    # point it is not an overfit condition and the comparison it
+                    # anchors cannot be read. condition_budgets stores the number
+                    # asked for; this stores the number built.
+                    _built_width = int(X_train.shape[1])
+                    _built_widths.setdefault(cond_name, []).append(_built_width)
+                    # _va_reps, not val_reps: the same representations the hybrid
+                    # was built from, or the column order will not line up.
+                    X_val = apply_feature_selection(_va_reps, feature_info)
+                    aug_info = feature_info.get('augmentation_info')
+                    if aug_info and val_augs:
+                        X_val_aug = apply_augmentation_selection(val_augs, aug_info)
+                        if X_val_aug is not None:
+                            X_val = np.hstack([X_val, X_val_aug])
+                except Exception as e:
+                    _fold_errors.setdefault(cond_name, []).append(
+                        f'fold {fold_i}: {type(e).__name__}: {e}')
+                    print(f"    fold {fold_i}: hybrid creation failed - {e}")
+                    continue
 
-                X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
-                X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
+                scaler = StandardScaler()
+                X_train_s = scaler.fit_transform(X_train)
+                X_val_s = scaler.transform(X_val)
 
-                model_conf = model_factory()
-                model_conf.fit(X_ptrain, y_ptrain)
+                # Train base model
+                model = model_factory()
+                model.fit(X_train_s, y_train)
 
-                # Compute val_score from model_conf so the performance number
-                # and the calibration metrics come from the SAME model (was a
-                # full-train vs proper-train mismatch).  For AUC metrics, use
-                # predict_proba (hard labels would give a meaningless AUROC).
-                _from_kfh = _predict_for_metric(model_conf, X_val_s, metric_fn)
-                val_score = float(metric_fn(y_val, _from_kfh))
+                if is_classification:
+                    # Conformal classification: split train into proper-train + cal
+                    n_train = len(y_train)
+                    n_cal = max(20, int(n_train * 0.2))
+                    # The calibration rows are cut on scaffold groups, not at
+                    # random. A random 20% puts molecules from the same scaffold on
+                    # both sides, so the residuals the interval is calibrated from
+                    # are easier than the held-out fold the coverage is reported on.
+                    ptrain_idx, cal_idx = _cal_split(
+                        groups[train_idx], n_train, n_cal, fold_i)
 
-                # Conformal classification: nonconformity = 1 - P(true class)
-                if hasattr(model_conf, 'predict_proba'):
-                    cal_probs = model_conf.predict_proba(X_cal)
-                    # Map y_cal labels to column indices in model_conf.classes_.
-                    # Calibration points whose true label was never seen in proper-train
-                    # are reported and assigned worst-case nonconformity (1.0) rather
-                    # than silently dropped (which would bias coverage).
-                    class_to_col = {c: j for j, c in enumerate(model_conf.classes_)}
-                    cal_scores = np.empty(len(y_cal), dtype=float)
-                    n_unseen = 0
-                    for i in range(len(y_cal)):
-                        col = class_to_col.get(int(y_cal[i]))
-                        if col is None:
-                            cal_scores[i] = 1.0
-                            n_unseen += 1
-                        else:
-                            cal_scores[i] = 1 - cal_probs[i, col]
-                    if n_unseen:
-                        print(f"    fold {fold_i}: {n_unseen}/{len(y_cal)} "
-                              f"calibration points have classes unseen in proper-train "
-                              f"(assigned worst-case nonconformity 1.0)")
-                    if len(cal_scores) == 0:
-                        print(f"    fold {fold_i}: no valid calibration scores")
-                        continue
+                    X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
+                    X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
 
+                    model_conf = model_factory()
+                    model_conf.fit(X_ptrain, y_ptrain)
+
+                    # Compute val_score from model_conf so the performance number
+                    # and the calibration metrics come from the SAME model (was a
+                    # full-train vs proper-train mismatch).  For AUC metrics, use
+                    # predict_proba (hard labels would give a meaningless AUROC).
+                    _from_kfh = _predict_for_metric(model_conf, X_val_s, metric_fn)
+                    val_score = float(metric_fn(y_val, _from_kfh))
+
+                    # Conformal classification: nonconformity = 1 - P(true class)
+                    if hasattr(model_conf, 'predict_proba'):
+                        cal_probs = model_conf.predict_proba(X_cal)
+                        # Map y_cal labels to column indices in model_conf.classes_.
+                        # Calibration points whose true label was never seen in proper-train
+                        # are reported and assigned worst-case nonconformity (1.0) rather
+                        # than silently dropped (which would bias coverage).
+                        class_to_col = {c: j for j, c in enumerate(model_conf.classes_)}
+                        cal_scores = np.empty(len(y_cal), dtype=float)
+                        n_unseen = 0
+                        for i in range(len(y_cal)):
+                            col = class_to_col.get(int(y_cal[i]))
+                            if col is None:
+                                cal_scores[i] = 1.0
+                                n_unseen += 1
+                            else:
+                                cal_scores[i] = 1 - cal_probs[i, col]
+                        if n_unseen:
+                            print(f"    fold {fold_i}: {n_unseen}/{len(y_cal)} "
+                                  f"calibration points have classes unseen in proper-train "
+                                  f"(assigned worst-case nonconformity 1.0)")
+                        if len(cal_scores) == 0:
+                            print(f"    fold {fold_i}: no valid calibration scores")
+                            continue
+
+                        alpha = 0.1
+                    # ⛔ A CALIBRATION HALF THIS SMALL CANNOT CARRY THE LEVEL
+                    # ASKED FOR. n_cal above is computed and then IGNORED by the
+                    # group-aware branch of _cal_split, which takes
+                    # make_cv_splitter(1, ...) -- GroupShuffleSplit at test_size
+                    # 0.2 -- so the real size is whatever the groups give. Split
+                    # conformal needs at least (1-alpha)/alpha rows, 9 at
+                    # alpha=0.1: below that ceil((n+1)(1-alpha))/n exceeds 1, the
+                    # min() clamps it, and q becomes the LARGEST calibration
+                    # residual. The interval is then the widest the calibration set
+                    # can produce, not a 90% one, and the PICP printed beside it is
+                    # not coverage at the stated level.
+                        _n_cal_used = len(cal_scores)
+                        _n_cal_actual = _n_cal_used
+                        _raw_level = (np.ceil((_n_cal_actual + 1) * (1 - alpha))
+                                      / _n_cal_actual)
+                        conformal_level = min(1.0, _raw_level)
+                        _level_clamped = bool(_raw_level > 1.0)
+                        if _level_clamped:
+                            print(f"      fold {fold_i}: calibration half has "
+                                  f"{_n_cal_actual} rows, under the "
+                                  f"{int(np.ceil((1 - alpha) / alpha))} that "
+                                  f"alpha={alpha} needs; q is the largest "
+                                  f"residual and the interval is NOT at the "
+                                  f"{100 * (1 - alpha):.0f}% level")
+                        q = np.quantile(cal_scores, conformal_level)
+
+                        # Prediction sets on val
+                        val_probs = model_conf.predict_proba(X_val_s)
+                        classes = model_conf.classes_
+                        pred_sets = []
+                        for i in range(len(y_val)):
+                            pset = [classes[j] for j in range(len(classes))
+                                    if 1 - val_probs[i, j] <= q]
+                            pred_sets.append(pset)
+
+                        # Coverage: true label in prediction set
+                        covered = np.array([y_val[i] in pred_sets[i] for i in range(len(y_val))])
+                        picp = float(np.mean(covered))
+                        avg_set_size = float(np.mean([len(ps) for ps in pred_sets]))
+                        n_classes = len(classes)
+                        # Sharpness: avg set size / n_classes (≈ 1/n_classes ⇒ sharp/decisive;
+                        # 1 ⇒ trivial full-prediction-set). LOWER is better.
+                        sharpness_ratio = avg_set_size / n_classes if n_classes > 0 else float('nan')
+                        cal_error = abs(picp - (1 - alpha))
+
+                        # Uncertainty-error: entropy of predicted probabilities vs correctness
+                        pred_labels = model_conf.predict(X_val_s)
+                        correct = (pred_labels == y_val).astype(float)
+                        entropy = -np.sum(val_probs * np.log(val_probs + 1e-12), axis=1)
+                        ue_corr = float('nan')
+                        if len(entropy) >= 3:
+                            ue_corr_val, _ = spearmanr(entropy, 1 - correct)
+                            ue_corr = float(ue_corr_val)
+
+                        fold_result = {
+                            'val_score': val_score, 'picp': picp,
+                            'avg_set_size': avg_set_size,
+                            'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
+                            'conformal_q': float(q), 'n_val': len(y_val),
+                            'n_cal': int(_n_cal_used),
+                            'conformal_level_clamped': _level_clamped,
+                            'n_classes': n_classes,
+                            'ue_corr': ue_corr,
+                        }
+                    else:
+                        # No predict_proba — report score only
+                        fold_result = {
+                            'val_score': val_score, 'picp': float('nan'),
+                            'avg_set_size': float('nan'),
+                            'sharpness_ratio': float('nan'), 'cal_error': float('nan'),
+                            'conformal_q': float('nan'), 'n_val': len(y_val),
+                            'ue_corr': float('nan'),
+                        }
+                    fold_metrics.append(fold_result)
+                    # Read from fold_result (defined in both branches) — the locals
+                    # picp/avg_set_size/cal_error are only assigned inside the
+                    # predict_proba branch, so a classification model WITHOUT
+                    # predict_proba (e.g. SVC without probability=True) used to crash
+                    # this print with NameError. (OTHER-22)
+                    print(f"    fold {fold_i}: {metric_name}="
+                          f"{fold_result['val_score']:.4f}, "
+                          f"PICP={fold_result['picp']:.3f}, "
+                          f"set_size={fold_result['avg_set_size']:.2f}, "
+                          f"cal_error={fold_result['cal_error']:.3f}")
+                else:
+                    # Regression: conformal prediction intervals.
+                    # val_r2 must come from model_conf (not `model` trained on full
+                    # y_train) so the reported performance number and the
+                    # calibration metrics (PICP/MPIW) are from the same model.
+                    n_train = len(y_train)
+                    n_cal = max(20, int(n_train * 0.2))
+                    # The calibration rows are cut on scaffold groups, not at
+                    # random. A random 20% puts molecules from the same scaffold on
+                    # both sides, so the residuals the interval is calibrated from
+                    # are easier than the held-out fold the coverage is reported on.
+                    ptrain_idx, cal_idx = _cal_split(
+                        groups[train_idx], n_train, n_cal, fold_i)
+
+                    X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
+                    X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
+
+                    model_conf = model_factory()
+                    model_conf.fit(X_ptrain, y_ptrain)
+
+                    y_pred_val = model_conf.predict(X_val_s)
+                    val_r2 = metric_fn(y_val, y_pred_val)
+
+                    y_pred_cal = model_conf.predict(X_cal)
+                    cal_residuals = np.abs(y_cal - y_pred_cal)
+
+                    # Conformal quantile with finite-sample correction (Romano et al. 2019)
                     alpha = 0.1
-                # ⛔ A CALIBRATION HALF THIS SMALL CANNOT CARRY THE LEVEL
-                # ASKED FOR. n_cal above is computed and then IGNORED by the
-                # group-aware branch of _cal_split, which takes
-                # make_cv_splitter(1, ...) -- GroupShuffleSplit at test_size
-                # 0.2 -- so the real size is whatever the groups give. Split
-                # conformal needs at least (1-alpha)/alpha rows, 9 at
-                # alpha=0.1: below that ceil((n+1)(1-alpha))/n exceeds 1, the
-                # min() clamps it, and q becomes the LARGEST calibration
-                # residual. The interval is then the widest the calibration set
-                # can produce, not a 90% one, and the PICP printed beside it is
-                # not coverage at the stated level.
-                    _n_cal_used = len(cal_scores)
-                    _n_cal_actual = _n_cal_used
-                    _raw_level = (np.ceil((_n_cal_actual + 1) * (1 - alpha))
-                                  / _n_cal_actual)
+                    # ⛔ A CALIBRATION HALF THIS SMALL CANNOT CARRY THE LEVEL
+                    # ASKED FOR. n_cal above is computed and then IGNORED by the
+                    # group-aware branch of _cal_split, which takes
+                    # make_cv_splitter(1, ...) -- GroupShuffleSplit at test_size
+                    # 0.2 -- so the real size is whatever the groups give. Split
+                    # conformal needs at least (1-alpha)/alpha rows, 9 at
+                    # alpha=0.1: below that ceil((n+1)(1-alpha))/n exceeds 1, the
+                    # min() clamps it, and q becomes the LARGEST calibration
+                    # residual. The interval is then the widest the calibration set
+                    # can produce, not a 90% one, and the PICP printed beside it is
+                    # not coverage at the stated level.
+                    n_cal = len(cal_residuals)
+                    _n_cal_used = n_cal
+                    _raw_level = np.ceil((n_cal + 1) * (1 - alpha)) / n_cal
                     conformal_level = min(1.0, _raw_level)
                     _level_clamped = bool(_raw_level > 1.0)
                     if _level_clamped:
-                        print(f"      fold {fold_i}: calibration half has "
-                              f"{_n_cal_actual} rows, under the "
+                        print(f"      fold {fold_i}: calibration half has {n_cal} "
+                              f"rows, under the "
                               f"{int(np.ceil((1 - alpha) / alpha))} that "
-                              f"alpha={alpha} needs; q is the largest "
-                              f"residual and the interval is NOT at the "
+                              f"alpha={alpha} needs; q is the largest residual and "
+                              f"the interval is NOT at the "
                               f"{100 * (1 - alpha):.0f}% level")
-                    q = np.quantile(cal_scores, conformal_level)
+                    q = np.quantile(cal_residuals, conformal_level)
 
-                    # Prediction sets on val
-                    val_probs = model_conf.predict_proba(X_val_s)
-                    classes = model_conf.classes_
-                    pred_sets = []
-                    for i in range(len(y_val)):
-                        pset = [classes[j] for j in range(len(classes))
-                                if 1 - val_probs[i, j] <= q]
-                        pred_sets.append(pset)
+                    # Reuse y_pred_val above (same model, same X_val_s).
+                    interval_lo = y_pred_val - q
+                    interval_hi = y_pred_val + q
 
-                    # Coverage: true label in prediction set
-                    covered = np.array([y_val[i] in pred_sets[i] for i in range(len(y_val))])
+                    covered = (y_val >= interval_lo) & (y_val <= interval_hi)
                     picp = float(np.mean(covered))
-                    avg_set_size = float(np.mean([len(ps) for ps in pred_sets]))
-                    n_classes = len(classes)
-                    # Sharpness: avg set size / n_classes (≈ 1/n_classes ⇒ sharp/decisive;
-                    # 1 ⇒ trivial full-prediction-set). LOWER is better.
-                    sharpness_ratio = avg_set_size / n_classes if n_classes > 0 else float('nan')
+                    mpiw = float(np.mean(interval_hi - interval_lo))
+                    target_range = float(np.ptp(y_val))
+                    sharpness_ratio = mpiw / target_range if target_range > 0 else float('nan')
                     cal_error = abs(picp - (1 - alpha))
 
-                    # Uncertainty-error: entropy of predicted probabilities vs correctness
-                    pred_labels = model_conf.predict(X_val_s)
-                    correct = (pred_labels == y_val).astype(float)
-                    entropy = -np.sum(val_probs * np.log(val_probs + 1e-12), axis=1)
+                    errors = np.abs(y_val - y_pred_val)  # 2026-06-04 fix: y_pred_conf was undefined (NameError crashed c08 on every regression dataset); same model/X_val per L376
                     ue_corr = float('nan')
-                    if len(entropy) >= 3:
-                        ue_corr_val, _ = spearmanr(entropy, 1 - correct)
-                        ue_corr = float(ue_corr_val)
+                    if hasattr(model_conf, 'estimators_') and len(errors) >= 3:
+                        tree_preds = np.array([t.predict(X_val_s) for t in model_conf.estimators_])
+                        per_sample_unc = tree_preds.std(axis=0)
+                        ue_corr, _ = spearmanr(per_sample_unc, errors)
+                        ue_corr = float(ue_corr)
 
                     fold_result = {
-                        'val_score': val_score, 'picp': picp,
-                        'avg_set_size': avg_set_size,
+                        'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
                         'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
                         'conformal_q': float(q), 'n_val': len(y_val),
                         'n_cal': int(_n_cal_used),
                         'conformal_level_clamped': _level_clamped,
-                        'n_classes': n_classes,
                         'ue_corr': ue_corr,
                     }
-                else:
-                    # No predict_proba — report score only
-                    fold_result = {
-                        'val_score': val_score, 'picp': float('nan'),
-                        'avg_set_size': float('nan'),
-                        'sharpness_ratio': float('nan'), 'cal_error': float('nan'),
-                        'conformal_q': float('nan'), 'n_val': len(y_val),
-                        'ue_corr': float('nan'),
-                    }
-                fold_metrics.append(fold_result)
-                # Read from fold_result (defined in both branches) — the locals
-                # picp/avg_set_size/cal_error are only assigned inside the
-                # predict_proba branch, so a classification model WITHOUT
-                # predict_proba (e.g. SVC without probability=True) used to crash
-                # this print with NameError. (OTHER-22)
-                print(f"    fold {fold_i}: {metric_name}="
-                      f"{fold_result['val_score']:.4f}, "
-                      f"PICP={fold_result['picp']:.3f}, "
-                      f"set_size={fold_result['avg_set_size']:.2f}, "
-                      f"cal_error={fold_result['cal_error']:.3f}")
-            else:
-                # Regression: conformal prediction intervals.
-                # val_r2 must come from model_conf (not `model` trained on full
-                # y_train) so the reported performance number and the
-                # calibration metrics (PICP/MPIW) are from the same model.
-                n_train = len(y_train)
-                n_cal = max(20, int(n_train * 0.2))
-                # The calibration rows are cut on scaffold groups, not at
-                # random. A random 20% puts molecules from the same scaffold on
-                # both sides, so the residuals the interval is calibrated from
-                # are easier than the held-out fold the coverage is reported on.
-                ptrain_idx, cal_idx = _cal_split(
-                    groups[train_idx], n_train, n_cal, fold_i)
+                    fold_metrics.append(fold_result)
+                    print(f"    fold {fold_i}: {metric_name}={val_r2:.4f}, PICP={picp:.3f}, "
+                          f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
 
-                X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
-                X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
-
-                model_conf = model_factory()
-                model_conf.fit(X_ptrain, y_ptrain)
-
-                y_pred_val = model_conf.predict(X_val_s)
-                val_r2 = metric_fn(y_val, y_pred_val)
-
-                y_pred_cal = model_conf.predict(X_cal)
-                cal_residuals = np.abs(y_cal - y_pred_cal)
-
-                # Conformal quantile with finite-sample correction (Romano et al. 2019)
-                alpha = 0.1
-                # ⛔ A CALIBRATION HALF THIS SMALL CANNOT CARRY THE LEVEL
-                # ASKED FOR. n_cal above is computed and then IGNORED by the
-                # group-aware branch of _cal_split, which takes
-                # make_cv_splitter(1, ...) -- GroupShuffleSplit at test_size
-                # 0.2 -- so the real size is whatever the groups give. Split
-                # conformal needs at least (1-alpha)/alpha rows, 9 at
-                # alpha=0.1: below that ceil((n+1)(1-alpha))/n exceeds 1, the
-                # min() clamps it, and q becomes the LARGEST calibration
-                # residual. The interval is then the widest the calibration set
-                # can produce, not a 90% one, and the PICP printed beside it is
-                # not coverage at the stated level.
-                n_cal = len(cal_residuals)
-                _n_cal_used = n_cal
-                _raw_level = np.ceil((n_cal + 1) * (1 - alpha)) / n_cal
-                conformal_level = min(1.0, _raw_level)
-                _level_clamped = bool(_raw_level > 1.0)
-                if _level_clamped:
-                    print(f"      fold {fold_i}: calibration half has {n_cal} "
-                          f"rows, under the "
-                          f"{int(np.ceil((1 - alpha) / alpha))} that "
-                          f"alpha={alpha} needs; q is the largest residual and "
-                          f"the interval is NOT at the "
-                          f"{100 * (1 - alpha):.0f}% level")
-                q = np.quantile(cal_residuals, conformal_level)
-
-                # Reuse y_pred_val above (same model, same X_val_s).
-                interval_lo = y_pred_val - q
-                interval_hi = y_pred_val + q
-
-                covered = (y_val >= interval_lo) & (y_val <= interval_hi)
-                picp = float(np.mean(covered))
-                mpiw = float(np.mean(interval_hi - interval_lo))
-                target_range = float(np.ptp(y_val))
-                sharpness_ratio = mpiw / target_range if target_range > 0 else float('nan')
-                cal_error = abs(picp - (1 - alpha))
-
-                errors = np.abs(y_val - y_pred_val)  # 2026-06-04 fix: y_pred_conf was undefined (NameError crashed c08 on every regression dataset); same model/X_val per L376
-                ue_corr = float('nan')
-                if hasattr(model_conf, 'estimators_') and len(errors) >= 3:
-                    tree_preds = np.array([t.predict(X_val_s) for t in model_conf.estimators_])
-                    per_sample_unc = tree_preds.std(axis=0)
-                    ue_corr, _ = spearmanr(per_sample_unc, errors)
-                    ue_corr = float(ue_corr)
-
-                fold_result = {
-                    'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
-                    'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
-                    'conformal_q': float(q), 'n_val': len(y_val),
-                    'n_cal': int(_n_cal_used),
-                    'conformal_level_clamped': _level_clamped,
-                    'ue_corr': ue_corr,
+            # ⛔ A CONDITION WHOSE EVERY FOLD FAILED USED TO VANISH. `if
+            # fold_metrics:` alone skipped writing it, so the summary table printed
+            # three rows instead of four and said nothing about the fourth. It is
+            # now written with a reason.
+            if not fold_metrics:
+                out_conditions[cond_name] = {
+                    'description': desc,
+                    'budget': budget,
+                    'avg': {},
+                    'n_folds_in_avg': {},
+                    'n_folds_scored': 0,
+                    'n_folds_requested': int(n_folds),
+                    'folds': [],
+                    'skipped_reason': 'every fold raised or produced no metrics',
+                    'fold_errors': _fold_errors.get(cond_name, []),
                 }
-                fold_metrics.append(fold_result)
-                print(f"    fold {fold_i}: {metric_name}={val_r2:.4f}, PICP={picp:.3f}, "
-                      f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
+                print(f"    {cond_name}: NO FOLD PRODUCED METRICS — recorded as "
+                      f"skipped, not dropped")
+            if fold_metrics:
+                avg = {}
+                # Union of keys across folds, missing-key-tolerant: a classification
+                # model without predict_proba emits fewer keys (no 'n_classes') than
+                # one with it. If folds ever disagree on key sets, indexing
+                # fold_metrics[0] keys with fm[key] would KeyError. (OTHER-22)
+                all_keys = set()
+                for fm in fold_metrics:
+                    all_keys.update(fm.keys())
+                # ⛔ HOW MANY FOLDS EACH AVERAGE IS OVER. avg[key] is the mean of
+                # the folds where that key was finite, so a PICP over 1 fold of 5
+                # and one over 5 of 5 were written identically and compared to each
+                # other as if they were the same measurement.
+                n_avg = {}
+                for key in all_keys:
+                    vals = [fm[key] for fm in fold_metrics
+                            if key in fm and not np.isnan(fm[key])]
+                    avg[key] = float(np.mean(vals)) if vals else float('nan')
+                    n_avg[key] = len(vals)
+                _short = {k: v for k, v in n_avg.items() if v < len(fold_metrics)}
+                if _short:
+                    print(f"    {cond_name}: averaged over fewer than "
+                          f"{len(fold_metrics)} folds for {_short}")
+                out_conditions[cond_name] = {
+                    'description': desc,
+                    'budget': budget,
+                    'avg': avg,
+                    'n_folds_in_avg': n_avg,
+                    'n_folds_scored': len(fold_metrics),
+                    'n_folds_requested': int(n_folds),
+                    'folds': fold_metrics,
+                }
+                score_key = 'val_score' if is_classification else 'val_r2'
+                picp_val = avg.get('picp', float('nan'))
+                if is_classification:
+                    set_key = avg.get('avg_set_size', float('nan'))
+                    print(f"  >> {cond_name} avg: {metric_name}={avg.get(score_key, float('nan')):.4f}, "
+                          f"PICP={picp_val:.3f}, set_size={set_key:.2f}, "
+                          f"cal_error={avg.get('cal_error', float('nan')):.3f}")
+                else:
+                    print(f"  >> {cond_name} avg: {metric_name}={avg.get(score_key, float('nan')):.4f}, "
+                          f"PICP={picp_val:.3f}, MPIW={avg.get('mpiw', float('nan')):.3f}, "
+                          f"cal_error={avg.get('cal_error', float('nan')):.3f}")
 
-        # ⛔ A CONDITION WHOSE EVERY FOLD FAILED USED TO VANISH. `if
-        # fold_metrics:` alone skipped writing it, so the summary table printed
-        # three rows instead of four and said nothing about the fourth. It is
-        # now written with a reason.
-        if not fold_metrics:
-            results['conditions'][cond_name] = {
-                'description': desc,
-                'budget': budget,
-                'avg': {},
-                'n_folds_in_avg': {},
-                'n_folds_scored': 0,
-                'n_folds_requested': int(n_folds),
-                'folds': [],
-                'skipped_reason': 'every fold raised or produced no metrics',
-                'fold_errors': _fold_errors.get(cond_name, []),
+
+    _run_condition_set(condition_specs, optimal_internal_eval,
+                       optimal_aug_strategy, optimal_rep_count,
+                       optimal_rep_scores, results['conditions'],
+                       _built_widths, _fold_errors)
+
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family. Until then c08 took ONE recipe -- the best across
+    # five models -- and built every condition from it. Now each downstream
+    # model's three rule hybrids each get all four conditions, built with that
+    # model. 'conditions' above keeps the single cross-model recipe.
+    results['rule_conditions'] = {}
+    results['rule_missing'] = []
+    results['rule_base_reps'] = {}
+    for _rm in MAIN_MODELS_WITH_KNN:
+        try:
+            _rule = get_rule_hybrids(
+                reps, labels, groups, downstream_model=_rm, budget=None,
+                dataset_name=dataset_name, augmentations=augs,
+                task_type=task_type, data=data, fold_i=None)
+        except Exception as _e:
+            results['rule_missing'].append(
+                f'{_rm}: the owner\'s set could not be read '
+                f'({type(_e).__name__}: {_e})')
+            continue
+        results['rule_missing'] += [f'{_rm}: {m}' for m in _rule['missing']]
+        results['rule_base_reps'][_rm] = [
+            (b.get('rep'), b.get('score_other_folds'))
+            for b in _rule['base_reps']]
+        _fac = get_model_factories([_rm], task_type=task_type,
+                                   n_samples=len(labels)).get(_rm)
+        if _fac is None:
+            results['rule_missing'].append(
+                f'{_rm}: no model factory on this dataset, so its '
+                f'{len(_rule["hybrids"])} rule hybrid(s) were not built')
+            continue
+        for _h in _rule['hybrids']:
+            _bp = _h['blueprint']
+            _key = f"{_h.get('objective')}|{_h.get('slot')}"
+            _desc = (f"{_rm} {_key} at budget={_bp.budget} "
+                     f"[{_bp.importance_method}/{_bp.allocation_method}] "
+                     f"({_h.get('tier')}/{_h.get('aug_condition')})")
+            print(f"\n  === rule hybrid: {_desc} ===")
+            _specs = {
+                'optimal': (_fac, _bp.budget, _bp.allocation_method,
+                            _bp.importance_method, _desc),
+                'underfit': (_fac, underfit_budget, _bp.allocation_method,
+                             _bp.importance_method,
+                             f'Same model at budget={underfit_budget}'),
+                'overfit': (_fac, total_dim, _bp.allocation_method,
+                            _bp.importance_method,
+                            f'Same model at full dim={total_dim}'),
+                'mismatched': (mismatched_factory, total_dim,
+                               _bp.allocation_method, _bp.importance_method,
+                               mismatched_desc),
             }
-            print(f"    {cond_name}: NO FOLD PRODUCED METRICS — recorded as "
-                  f"skipped, not dropped")
-        if fold_metrics:
-            avg = {}
-            # Union of keys across folds, missing-key-tolerant: a classification
-            # model without predict_proba emits fewer keys (no 'n_classes') than
-            # one with it. If folds ever disagree on key sets, indexing
-            # fold_metrics[0] keys with fm[key] would KeyError. (OTHER-22)
-            all_keys = set()
-            for fm in fold_metrics:
-                all_keys.update(fm.keys())
-            # ⛔ HOW MANY FOLDS EACH AVERAGE IS OVER. avg[key] is the mean of
-            # the folds where that key was finite, so a PICP over 1 fold of 5
-            # and one over 5 of 5 were written identically and compared to each
-            # other as if they were the same measurement.
-            n_avg = {}
-            for key in all_keys:
-                vals = [fm[key] for fm in fold_metrics
-                        if key in fm and not np.isnan(fm[key])]
-                avg[key] = float(np.mean(vals)) if vals else float('nan')
-                n_avg[key] = len(vals)
-            _short = {k: v for k, v in n_avg.items() if v < len(fold_metrics)}
-            if _short:
-                print(f"    {cond_name}: averaged over fewer than "
-                      f"{len(fold_metrics)} folds for {_short}")
-            results['conditions'][cond_name] = {
-                'description': desc,
-                'budget': budget,
-                'avg': avg,
-                'n_folds_in_avg': n_avg,
-                'n_folds_scored': len(fold_metrics),
-                'n_folds_requested': int(n_folds),
-                'folds': fold_metrics,
+            _out, _bw, _fe = {}, {}, {}
+            _run_condition_set(
+                _specs, _bp.internal_evaluator,
+                _h.get('aug_condition') or 'none',
+                getattr(_bp, 'rep_count', None),
+                getattr(_bp, 'rep_scores', None),
+                _out, _bw, _fe, recipe_objective=_h.get('objective'))
+            results['rule_conditions'].setdefault(_rm, {})[_key] = {
+                'slot': _h.get('slot'), 'lineage': _h.get('lineage'),
+                'objective': _h.get('objective'), 'tier': _h.get('tier'),
+                'aug_condition': _h.get('aug_condition'),
+                'recipe': _h.get('recipe'), 'budget': _h.get('budget'),
+                'budget_relaxed': _h.get('budget_relaxed'),
+                'score_in_search': _h.get('score_other_folds'),
+                'conditions': _out,
+                'condition_widths_built': _bw,
+                'fold_errors': _fe,
             }
-            score_key = 'val_score' if is_classification else 'val_r2'
-            picp_val = avg.get('picp', float('nan'))
-            if is_classification:
-                set_key = avg.get('avg_set_size', float('nan'))
-                print(f"  >> {cond_name} avg: {metric_name}={avg.get(score_key, float('nan')):.4f}, "
-                      f"PICP={picp_val:.3f}, set_size={set_key:.2f}, "
-                      f"cal_error={avg.get('cal_error', float('nan')):.3f}")
-            else:
-                print(f"  >> {cond_name} avg: {metric_name}={avg.get(score_key, float('nan')):.4f}, "
-                      f"PICP={picp_val:.3f}, MPIW={avg.get('mpiw', float('nan')):.3f}, "
-                      f"cal_error={avg.get('cal_error', float('nan')):.3f}")
 
     # Summary table
     print("\n  CALIBRATION SUMMARY:")
