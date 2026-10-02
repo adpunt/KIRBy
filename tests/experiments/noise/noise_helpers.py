@@ -1612,6 +1612,10 @@ def _error_record(exp_id, exc, kind=None):
             'traceback': traceback.format_exc()}
 
 
+# Datasets that reuse another dataset's DATASET_REPS entry (see run_all).
+REP_LIST_FROM = {'herg_ic50': 'herg_ki'}
+
+
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
@@ -1694,7 +1698,11 @@ def run_all(dataset_name: str, output_dir: str,
 
     # Resolve rep list
     if rep_names is None:
-        ds_reps = DATASET_REPS.get(dataset_name)
+        # herg_ic50 has no DATASET_REPS entry of its own: it takes herg_ki's
+        # representations (same target, same molecule type; user decision).
+        # Mapped here rather than added to DATASET_REPS, so the precompute and
+        # status scripts that loop over every DATASET_REPS key do not pick it up.
+        ds_reps = DATASET_REPS.get(REP_LIST_FROM.get(dataset_name, dataset_name))
         if ds_reps is None:
             raise ValueError(
                 f"No rep list for '{dataset_name}'. Pass rep_names explicitly "
