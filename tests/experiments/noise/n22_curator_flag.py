@@ -61,7 +61,11 @@ this project. Where that search gives no rf ranking, both are skipped and
 `base_reps_missing` says why; there is no fallback list. And the hybrid built
 from that same pool. Features are chosen inside each fold on the
 other folds' rows, and a record keeps a score only in the fold that held it
-out.
+out. Since 2026-10-02 (owner's decision) every other downstream model's own
+top 2 general + top 1 distance hybrids per family and its own top 2 single
+representations are spaces too, named '<rf name>@<model>'; every detector runs
+in every model's spaces, and each model's hybrids are set against that model's
+own single representations.
 
 THE DETECTOR LIST IS n11's, imported rather than copied, for the reason
 recorded at n06_bindingdb_ground_truth.py:87-92 — two hand-kept lists drift,
@@ -135,6 +139,7 @@ from n06_bindingdb_ground_truth import (  # noqa: E402
     resolve_estimators, _canonical, _clean_matrix, _blueprint_for,
     _fold_hybrid_pair, _space_name, SPACE_FOR_FAMILY, FEATURES_CHOSEN_BY,
     rule_hybrid_spaces, rule_entry_summary,
+    model_space_name, recipe_signature, rule_sets_by_model, rule_base_reps,
     POOL_SUBSET_WITH_SIMILARITY, POOL_SUBSET_WITHOUT_SIMILARITY,
     GP_SUBSAMPLED_ESTIMATORS, GP_MAX_ROWS,
 )
@@ -488,6 +493,53 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             space_provenance[name] = {'unavailable': (
                 f'the {o} family is not in the pool subset {pool_subset}')}
 
+    # ── every other downstream model's own hybrids ──
+    # Owner's decision 2026-10-02: each downstream model's own top 2 general +
+    # top 1 distance hybrids per family, not rf's for all. n22 fits no
+    # downstream model, so every detector runs in every model's spaces. rf's
+    # spaces keep their names; another model's are '<name>@<model>'
+    # (n06.model_space_name). The same read gives each model's own top 2
+    # single representations, below.
+    models = list(DOWNSTREAM_MODELS)
+    space_model = {sp: 'rf' for sp in spaces}
+    # The other models are read only when rf's pool lookup answered and
+    # _blueprint_for attached rf's rule read to it. When the lookup itself
+    # failed (its reason is in 'hybrid_family' / space_provenance) the same
+    # stored searches serve every model, so they are not asked again; and
+    # metadata without the rule read means the pool reader was substituted
+    # (a smoke test's stand-in), whose dataset must not reach the real
+    # stored searches. Either way the reason is written per model.
+    if not (isinstance(meta, dict) and 'rule_hybrids' in meta):
+        _why_not = ('not read: rf\'s pool lookup returned no recipe '
+                    f'({meta}), and every model reads the same stored searches'
+                    if not isinstance(meta, dict) else
+                    'not read: the pool reader was substituted (its metadata '
+                    'carries no rule read)')
+        rules = {m: {'hybrids': [], 'by_objective': {}, 'base_reps': [],
+                     'missing': [_why_not]}
+                 for m in models if m != 'rf'}
+    else:
+        rules = rule_sets_by_model(
+            reps, labels, search_groups, [m for m in models if m != 'rf'],
+            budget=budget, dataset_name=dataset_name,
+            augmentations=augmentations, pool_subset=pool_subset,
+            task_type=task_type, data=data)
+    if _rule is not None:
+        rules['rf'] = _rule
+    results['models_whose_hybrids_are_scored'] = list(models)
+    results['rule_missing_by_model'] = {
+        m: list((r or {}).get('missing') or []) for m, r in rules.items()}
+    for m in models:
+        if m == 'rf':
+            continue
+        _rs, _rp, _ = rule_hybrid_spaces(rules.get(m), eligible_families,
+                                         model=m)
+        spaces.update(_rs)
+        space_provenance.update(_rp)
+        for _nm in _rs:
+            space_model[_nm] = m
+        print(f"  {m}: {len(_rs)} hybrid space(s) of its own")
+
     # rf's rank-1 and rank-2 single representations by rf's score in the
     # stored search the pool returned, as spaces base_1 and base_2 (owner's
     # decision 2026-09-25). No fallback list: with no rf ranking the
@@ -507,27 +559,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         base_missing = {'rf': (
             f'the pool lookup returned no stored search ({pool_failure}), so '
             f'there is no rf ranking of the single representations')}
+    # Every other model's own top 2, from the rule read that gave its hybrids
+    # (owner's set, 2026-10-02), as spaces 'base_<k>@<model>'.
+    for m in models:
+        if m == 'rf':
+            continue
+        _names = rule_base_reps(rules.get(m), reps)
+        if _names:
+            base_by_model[m] = _names
+        else:
+            base_missing[m] = (
+                f'the rule read for {m} ranked no single representation this '
+                f'run loaded: ' + ' | '.join(
+                    (rules.get(m) or {}).get('missing') or ['no reason given']))
     results['base_reps_by_model'] = base_by_model
     results['base_reps_missing'] = base_missing
     base_spaces = {}
-    for _k, _rn in enumerate(base_by_model.get('rf', [])
-                             [:NOISE_BASE_REP_COUNT], start=1):
-        base_spaces[f'base_{_k}'] = _rn
+    for m in models:
+        for _k, _rn in enumerate(base_by_model.get(m, [])
+                                 [:NOISE_BASE_REP_COUNT], start=1):
+            _sp = model_space_name(f'base_{_k}', m)
+            base_spaces[_sp] = _rn
+            space_model[_sp] = m
     for _sp, _rn in base_spaces.items():
+        _m = space_model[_sp]
+        _k = _sp.split('@', 1)[0].split('_')[1]
         spaces[_sp] = ('base', _rn, None)
         space_provenance[_sp] = {
             'representation': _rn,
+            'model': _m,
             'features_chosen_by': 'nothing — every feature of one '
                                   'representation',
             'which_representation': (
-                f"rf's rank-{_sp.split('_')[1]} single representation by rf's "
+                f"rf's rank-{_k} single representation by rf's "
                 f"score in the stored search the pool returned (built under "
                 f"the {winner_family} objective), the same search that chose "
-                f"the hybrid recipe"),
+                f"the hybrid recipe" if _m == 'rf' else
+                f"{_m}'s rank-{_k} single representation, from the same read "
+                f"of the stored searches that gave {_m}'s hybrids"),
             'scaling': "z-scored inside each fold on that fold's training rows, "
                        "the same treatment the hybrid arm gets",
         }
-        print(f"  {_sp}: {_rn} (rf's rank {_sp.split('_')[1]})")
+        print(f"  {_sp}: {_rn} ({_m}'s rank {_k})")
     if not base_spaces:
         print(f"  no single-representation space: {base_missing.get('rf')}")
     results['comparator_spaces'] = list(base_spaces)
@@ -675,22 +748,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # The owner's set as report rows (2026-10-02): per downstream model and
     # family, the top 2 general + top 1 distance hybrids and the top 2 single
-    # representations. Reads stored searches only; the detectors above run in
-    # rf's set, since n22 fits no downstream model of its own.
+    # representations. The same reads that built each model's spaces above;
+    # rf's is re-read only when _blueprint_for gave none.
     rule_by_model = {}
     for _m in DOWNSTREAM_MODELS:
-        try:
-            _r = get_rule_hybrids(
-                reps, labels, search_groups, downstream_model=_m,
-                budget=budget, dataset_name=dataset_name,
-                augmentations=augmentations, pool_subset=pool_subset,
-                task_type=task_type, data=data)
-        except Exception as _e:
-            from kirby.result_cache import StaleResultDB as _Stale
-            if isinstance(_e, _Stale):
-                raise
-            rule_by_model[_m] = {'error': f'{type(_e).__name__}: {_e}'}
-            continue
+        _r = rules.get(_m)
+        if _r is None:
+            try:
+                _r = get_rule_hybrids(
+                    reps, labels, search_groups, downstream_model=_m,
+                    budget=budget, dataset_name=dataset_name,
+                    augmentations=augmentations, pool_subset=pool_subset,
+                    task_type=task_type, data=data)
+            except Exception as _e:
+                from kirby.result_cache import StaleResultDB as _Stale
+                if isinstance(_e, _Stale):
+                    raise
+                rule_by_model[_m] = {'error': f'{type(_e).__name__}: {_e}'}
+                continue
         rule_by_model[_m] = {
             'hybrids': {f: [rule_entry_summary(h) for h in fo.get('hybrids')
                             or []]
@@ -736,8 +811,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  {len(folds)} folds, scaffold-grouped, so a molecule's repeats "
           f"never sit on both sides")
 
-    base_matrices = {sp: _clean_matrix(reps[rn])
-                     for sp, rn in base_spaces.items()}
+    # One matrix per representation, shared by every model that ranks it.
+    base_matrices = {rn: _clean_matrix(reps[rn])
+                     for rn in sorted(set(base_spaces.values()))}
     scores = {s: {e: np.full(n_samples, np.nan) for e in estimators}
               for s in spaces}
     failures = {s: {} for s in spaces}
@@ -790,19 +866,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     sim_unavailable = {}
     # {(setting|k, estimator): full-length scores} of the space in flight.
     sim_scores = {}
+    # Per model (owner's set, 2026-10-02): a space of model m has its
+    # neighbours found in m's own similarity settings -- m's top 2 single
+    # representations and m's general rank-1 hybrid per family, built with m
+    # in the accept-or-reject step -- not rf's.
+    _factories = {}
     try:
         from experiments._shared import get_model_factories
-        _rf_factory = get_model_factories(['rf'], task_type=task_type,
-                                          n_samples=n_samples).get('rf')
+        _factories = get_model_factories(models, task_type=task_type,
+                                         n_samples=n_samples)
     except Exception:
-        _rf_factory = None
+        _factories = {}
     _metric = (metric_name, _fn, lower_is_better)
-    _recipes_rf = {}
+    _sim_recipes = {m: {} for m in models}
     for _nm, (_kind, _bp, _aug) in spaces.items():
-        if _kind == 'hybrid' and _nm == _space_name('predictive'):
-            _recipes_rf['hybrid'] = _bp
-        elif _kind == 'hybrid' and _nm == _space_name('similarity'):
-            _recipes_rf['hybrid_similarity'] = _bp
+        _m = space_model.get(_nm)
+        if _kind != 'hybrid' or _m is None:
+            continue
+        if _nm == model_space_name(_space_name('predictive'), _m):
+            _sim_recipes[_m]['hybrid'] = _bp
+        elif _nm == model_space_name(_space_name('similarity'), _m):
+            _sim_recipes[_m]['hybrid_similarity'] = _bp
+    _sim_base_names = {
+        m: [rn for sp, rn in base_spaces.items() if space_model.get(sp) == m]
+        for m in models}
     ck = sx.FoldCheckpoint(
         output_dir, EXP_FULL_NAME, dataset_name,
         sx.run_signature(data, config, {
@@ -820,7 +907,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return row
 
     def _sweep_fold(X_fold, X_tr, X_va, train_idx, val_idx, rows, y_fold,
-                    excl_fold, is_val):
+                    excl_fold, is_val, model='rf'):
         """Every neighbour-reading detector under every setting and k, on
         one fold's rows, X_fold being the rows as the detectors see them.
         Fills sim_scores for the held-out records."""
@@ -837,9 +924,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sp_tr, sp_va, unav = sx.build_spaces(
             dataset_name, sweep, X_model_tr=X_tr, X_model_va=X_va,
             train_reps=train_reps, val_reps=val_reps, train_idx=train_idx,
-            base_names=list(base_spaces.values()), recipes=_recipes_rf,
-            y_train=labels[train_idx], groups_train=g_tr, model_name='rf',
-            model_factory=_rf_factory, metric=_metric, task_type=task_type,
+            base_names=_sim_base_names.get(model, []),
+            recipes=_sim_recipes.get(model, {}),
+            y_train=labels[train_idx], groups_train=g_tr, model_name=model,
+            model_factory=_factories.get(model), metric=_metric,
+            task_type=task_type,
             augmentations_train=aug_tr, augmentations_val=aug_va,
             want_val=True)
         # The fold's rows, training then held out, as the estimators see
@@ -889,11 +978,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         np.full(n_samples, np.nan, dtype=np.float32))
                     arr[rows[is_val]] = sc_[is_val]
 
+    # A space whose features are the same as one already scored (two models
+    # holding the same recipe, or ranking the same representation) is copied
+    # from it rather than built and scored again; 'spaces_copied_from' says
+    # which. While the similarity axis runs, the model is part of the match,
+    # because that axis builds each model's own settings.
+    first_with_signature = {}
+    copied_from = {}
+    _sweep_on = bool(sweep and sim_estimators)
     for space_name, (kind, blueprint, aug) in spaces.items():
         print(f"\n  === {space_name} ===")
+        _sig = ((('base', blueprint) if kind == 'base'
+                 else ('hybrid', recipe_signature(blueprint, aug))),
+                space_model.get(space_name) if _sweep_on else None)
         if ck.is_done(f'{space_name}|done'):
+            first_with_signature.setdefault(_sig, space_name)
             print("    already in the checkpoint, skipped")
             continue
+        _src = first_with_signature.get(_sig)
+        if _src is not None:
+            for est_name in estimators:
+                scores[space_name][est_name] = scores[_src][est_name].copy()
+            failures[space_name] = dict(failures[_src])
+            if _src in sim_graded:
+                sim_graded[space_name] = sim_graded[_src]
+            copied_from[space_name] = _src
+            timings[space_name] = 0.0
+            print(f"    same features as {_src}: copied")
+            continue
+        first_with_signature[_sig] = space_name
         t_space = time.time()
         for fold_i, (train_idx, val_idx) in enumerate(folds):
             if ck.is_done(f'{space_name}|f{fold_i}'):
@@ -912,8 +1025,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"({type(exc).__name__}: {exc})")
                     continue
             else:
-                X_tr = base_matrices[space_name][train_idx]
-                X_va = base_matrices[space_name][val_idx]
+                X_tr = base_matrices[base_spaces[space_name]][train_idx]
+                X_va = base_matrices[base_spaces[space_name]][val_idx]
 
             scaler = StandardScaler().fit(X_tr)
             X_tr, X_va = scaler.transform(X_tr), scaler.transform(X_va)
@@ -974,7 +1087,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 est_seconds[space_name][est_name] += time.time() - t_est
             if sweep and sim_estimators:
                 _sweep_fold(X_fold, X_tr, X_va, train_idx, val_idx, rows,
-                            y_fold, excl_fold, is_val)
+                            y_fold, excl_fold, is_val,
+                            model=space_model.get(space_name, 'rf'))
             ck.save(f'{space_name}|f{fold_i}',
                     (scores, failures, est_seconds, timings, exclusion_note,
                      sim_graded, sim_unavailable, sim_scores))
@@ -995,6 +1109,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                  sim_graded, sim_unavailable, sim_scores))
 
     results['seconds_per_space'] = timings
+    results['space_model'] = space_model
+    results['spaces_copied_from'] = copied_from
     if sweep:
         results['similarity_axis'] = convert_numpy(sim_graded)
         results['similarity_axis_note'] = (
@@ -1061,7 +1177,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     delta = {}
     for base_sp, base_rn in base_spaces.items():
         per_hybrid = {}
+        # Each model's hybrids against that model's own single
+        # representations only (owner's set, 2026-10-02).
         for hs in hybrid_spaces:
+            if space_model.get(hs) != space_model.get(base_sp):
+                continue
             d = {}
             for est_name in estimators:
                 a = (per_space[hs][est_name]['records'] or {}).get(
@@ -1077,6 +1197,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'difference': float(a - b)}
             per_hybrid[hs] = d
         delta[base_sp] = {'comparator_representation': base_rn,
+                          'model': space_model.get(base_sp),
                           'per_hybrid_space': per_hybrid}
     results['hybrid_minus_single_representation'] = convert_numpy(delta)
     results['hybrid_minus_single_representation_note'] = (
