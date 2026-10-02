@@ -142,18 +142,39 @@ def score(d_tr, y_tr, d_va, y_va, k, scheme, task_type, metric_name,
 CHUNK_ELEMENTS = 5e7
 
 
-def _fractional_minkowski(p):
+# ROWS ARE SAVED AS THEY ARE COMPUTED. On herg (7772 molecules) one fractional
+# Minkowski on grover (4800 features) did not finish inside a 220-minute session
+# with 32 tasks running, and a distance cut off part way used to start over, so
+# it could never finish. Each block of ROW_BLOCK rows is now written to
+# <partial_dir> as it completes and read back on the next run.
+ROW_BLOCK = 256
+
+
+def _fractional_minkowski(p, partial_dir=None):
     import torch
 
     def f(X):
         T = torch.from_numpy(np.ascontiguousarray(X, dtype=np.float64))
         n, d = T.shape
         ch = max(1, int(CHUNK_ELEMENTS // max(1, n * d)))
-        D = torch.empty(n, n, dtype=T.dtype)
-        for s in range(0, n, ch):
-            D[s:s + ch] = ((T[s:s + ch, None, :] - T[None, :, :])
-                           .abs_().pow_(p).sum(-1).pow_(1.0 / p))
-        return D.numpy()
+        D = np.empty((n, n), dtype=np.float64)
+        if partial_dir is not None:
+            Path(partial_dir).mkdir(parents=True, exist_ok=True)
+        for b in range(0, n, ROW_BLOCK):
+            path = (Path(partial_dir) / f'rows_{b}_{n}_{d}.npy'
+                    if partial_dir is not None else None)
+            if path is not None and path.exists():
+                D[b:b + ROW_BLOCK] = np.load(path)
+                continue
+            for s in range(b, min(b + ROW_BLOCK, n), ch):
+                e = min(s + ch, b + ROW_BLOCK, n)
+                D[s:e] = ((T[s:e, None, :] - T[None, :, :])
+                          .abs_().pow_(p).sum(-1).pow_(1.0 / p)).numpy()
+            if path is not None:
+                tmp = path.with_suffix('.tmp.npy')
+                np.save(tmp, D[b:b + ROW_BLOCK])
+                tmp.rename(path)
+        return D
     return f
 
 
@@ -254,6 +275,10 @@ def run_task(dataset, space, fold_i, part, out_dir, pool_ask_name):
             continue
         fn, needs_nonneg = fns[cname]
         fn = FAST.get(cname, fn)
+        partial = (Path(out_dir) / dataset / 'partial'
+                   / f'{space}__fold{fold_i}__{cname}')
+        if cname in FRACTIONAL:
+            fn = _fractional_minkowski(float(cname.split('_p')[1]), partial)
         rec = {'dataset': dataset, 'representation': space, 'fold': fold_i,
                'kind': kind, 'n_features': int(Xt.shape[1]),
                'coefficient': cname, 'metric': metric_name,
@@ -281,6 +306,9 @@ def run_task(dataset, space, fold_i, part, out_dir, pool_ask_name):
         rec['seconds'] = round(time.time() - tc, 1)
         with open(out, 'a') as fh:
             fh.write(json.dumps(rec) + '\n')
+        if partial.exists():
+            import shutil
+            shutil.rmtree(partial, ignore_errors=True)
         print(f'  {cname}: {rec["seconds"]}s'
               + (f' SKIPPED {rec["skipped"]}' if 'skipped' in rec else ''),
               flush=True)
@@ -320,7 +348,7 @@ def check(datasets, pool_ask_name):
 
 
 def list_tasks(datasets, path):
-    """One line per task, the slowest first so they start earliest.
+    """One line per task, the cheapest first.
 
     Slowness is estimated as molecules squared x features, times 20 for a
     fractional Minkowski (20 is the scipy cityblock / torch fractional ratio
@@ -342,7 +370,10 @@ def list_tasks(datasets, path):
             for fi in range(len(folds)):
                 for part, w in parts:
                     tasks.append((n * n * d * w, f'{ds} {space} {fi} {part}'))
-    tasks.sort(reverse=True)
+    # CHEAPEST FIRST. Slowest-first filled all 32 cores with herg's largest
+    # continuous representations for a whole session, and the ~400 small tasks
+    # never started.
+    tasks.sort()
     Path(path).write_text('\n'.join(t for _, t in tasks) + '\n')
     print(f'{len(tasks)} tasks written to {path}')
 
