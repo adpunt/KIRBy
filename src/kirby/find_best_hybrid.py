@@ -694,6 +694,27 @@ def _refuse_cold_search(*, tier, objective, dataset_name, result_db_identity,
                   f"stored ({frac:.0%}) — proceeding.")
         return
 
+    # A SMALL SEARCH IS RUN HERE, NOT REFUSED (owner, 2026-10-02: "there
+    # should be instances where the experiments trigger a find_best_hybrid if
+    # the precompute didn't do it and if the search is sufficiently small").
+    # Small = at most KIRBY_COLD_SEARCH_MAX_CONFIGS configurations still to
+    # score, default 500. Measured medians run 0.6 to 115 s a configuration
+    # (precompute_coverage, 2026-10-01), so 500 is about 5 min to 16 h, inside
+    # a 48 h wall. Every row it scores is written to the same result database
+    # the precompute uses, so the next reader finds it stored.
+    _left = max(int(want) - int(have), 0)
+    try:
+        _max_left = int(os.environ.get('KIRBY_COLD_SEARCH_MAX_CONFIGS', '500'))
+    except ValueError:
+        _max_left = 500
+    if _left <= _max_left:
+        print(f"[KIRBY_NO_COLD_SEARCH] {dataset_name} {tier} "
+              f"objective={objective or OBJECTIVE_PREDICTIVE} "
+              f"augmentation={augmentation_strategy}: {have} of {want} "
+              f"configurations stored; the {_left} left are at most "
+              f"{_max_left}, so this search runs here.")
+        return
+
     _cond = {'none': 'general_none', 'uncapped': 'general_uncapped',
              'capped': 'general_capped'}.get(augmentation_strategy, 'general_none')
     if str(tier).startswith('general_distance'):
@@ -723,6 +744,9 @@ def _refuse_cold_search(*, tier, objective, dataset_name, result_db_identity,
         f"  Then check it:\n"
         f"      python tests/precompute_coverage.py {dataset_name}\n"
         f"\n"
+        f"  {want - have} configurations are left, more than the "
+        f"{os.environ.get('KIRBY_COLD_SEARCH_MAX_CONFIGS', '500')} a run builds "
+        f"itself (KIRBY_COLD_SEARCH_MAX_CONFIGS).\n"
         f"  Unset KIRBY_NO_COLD_SEARCH to build it here anyway.")
 
 
