@@ -153,6 +153,39 @@ t0 = time.time()
 n2 = f36.run_unit(passes='once', **kw)
 check(n2 == 0, f'rerun writes nothing ({time.time() - t0:.1f}s)')
 
+# 4b: a job killed mid-unit keeps what it fitted and the rerun finishes it.
+from sklearn.neighbors import KNeighborsRegressor  # noqa: E402
+calls = {'n': 0}
+
+
+def dying():
+    calls['n'] += 1
+    if calls['n'] > 25:
+        raise KeyboardInterrupt('wall clock')
+    return KNeighborsRegressor(5)
+
+
+keep_values = f36.VALUES
+f36.VALUES = ('knn9_mean',)
+unit_k = (1, 0.5, 0, 'rf', 'base_2')
+kw_k = dict(kw, unit=unit_k, factory=dying)
+try:
+    try:
+        f36.run_unit(passes='once', flush_seconds=0.0, **kw_k)
+    except KeyboardInterrupt:
+        pass
+    path_k = f36.unit_rows_path(OUT, 'f36_smoke', 'outlier_p10', unit_k)
+    n_kept = sum(1 for _ in open(path_k))
+    check(n_kept >= 20, f'killed after {calls["n"] - 1} fits, {n_kept} rows '
+                        f'were already on disk')
+    calls['n'] = -10**9
+    n_more = f36.run_unit(passes='once', **kw_k)
+    n_all = sum(1 for _ in open(path_k))
+    check(n_all == 31 * 10 and n_more == 31 * 10 - n_kept,
+          f'rerun fitted only the {n_more} missing, {n_all} rows in all')
+finally:
+    f36.VALUES = keep_values
+
 # 5 -----------------------------------------------------------------------
 keep_values = f36.VALUES
 f36.VALUES = ('knn9_mean', 'lgbm_oof')
