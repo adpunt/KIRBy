@@ -394,18 +394,18 @@ esac
 
 # 1-2: what every experiment reads first.
 has_pass sim  && run_one general_none          --objectives ${SIM_OBJ} ${MODEL_FLAG}
-has_pass dist && run_one general_distance_none --distance
+has_pass dist && run_one general_distance_none --distance --objectives ${SIM_OBJ}
 
 # 3-5: the augmented conditions. A dataset with no augmentation representations
 # runs no condition here and returns in seconds.
 has_pass sim  && run_one general_uncapped           --objectives ${SIM_OBJ} ${MODEL_FLAG}
 has_pass sim  && run_one general_capped             --objectives ${SIM_OBJ} ${MODEL_FLAG}
-has_pass dist && run_one general_distance_uncapped  --distance
+has_pass dist && run_one general_distance_uncapped  --distance --objectives ${SIM_OBJ}
 # The capped distance search, datasets under 10,000 molecules only
 # (precompute_hybrids.py builds no condition above that). Added 2026-09-29.
 # 'distcap' runs this pass alone, for datasets whose chain already finished:
 #   KIRBY_PASSES=distcap bash tests/slurm_scripts/extend_precompute_chain.sh ...
-{ has_pass dist || has_pass distcap; } && run_one general_distance_capped --distance
+{ has_pass dist || has_pass distcap; } && run_one general_distance_capped --distance --objectives ${SIM_OBJ}
 
 # 6-7: the two single-experiment passes, last because they block only s02 and c16.
 for c in general_none general_uncapped general_capped; do

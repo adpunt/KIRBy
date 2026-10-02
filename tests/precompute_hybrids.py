@@ -1262,7 +1262,17 @@ def main():
     # predictive search alone, which is what this script always ran.
     if args.objectives:
         objectives = tuple(_csv(args.objectives) or ())
-    elif args.with_similarity:
+    elif args.with_similarity or args.distance:
+        # ⛔ --distance RAN PREDICTIVE ONLY UNTIL 2026-10-02. Every distance
+        # pass in run_precompute_dataset.sh passed --distance with no
+        # --objectives, so no distance search was ever built under the
+        # similarity objective, and s02/s04/s05/s06/s08/s10/s13 -- which ask
+        # for it -- found nothing and dropped the similarity-chosen hybrid on
+        # every dataset. A distance search now runs both objectives unless
+        # --objectives says otherwise. Done here, not only in the shell
+        # script, because sbatch copies the script at submission: jobs
+        # already queued run the old copy but read this file at run time.
+        # precompute_dataset drops 'similarity' again where it is undefined.
         objectives = (OBJECTIVE_PREDICTIVE, OBJECTIVE_SIMILARITY)
     else:
         objectives = (OBJECTIVE_PREDICTIVE,)

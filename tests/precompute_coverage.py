@@ -203,13 +203,25 @@ def main():
         # augmented ones when the dataset has augmentation representations,
         # the similarity objective unless it is cut for the dataset.
         _has_aug = bool(DATASET_REPS.get(ds, {}).get('augmentation'))
-        _augs = ['none'] + (['uncapped', 'capped'] if _has_aug else [])
+        # kiba and bindingdb_kd build no uncapped search at all
+        # (precompute_hybrids.py UNCAPPED_SKIP_DATASETS), so they are not asked
+        # for one here either. Until 2026-10-02 they were, and read 0%.
+        _unc = [] if ds in ('kiba', 'bindingdb_kd') else ['uncapped']
+        _augs = ['none'] + ((_unc + ['capped']) if _has_aug else [])
         _sim_ok = ds not in SIMILARITY_OBJECTIVE_SKIP_DATASETS
         _expected = [('general', 'predictive', a, '') for a in _augs]
         if _sim_ok:
             _expected += [('general__obj-similarity', 'similarity', a, '') for a in _augs]
-        _expected += [('general_distance', 'predictive', a, '')
-                      for a in (['none', 'uncapped'] if _has_aug else ['none'])]
+        # The distance searches run under the similarity objective too since
+        # 2026-10-02 (they were predictive only, so no similarity-chosen
+        # distance hybrid existed on any dataset). The capped distance search
+        # is built only under 10,000 molecules, which this file cannot see, so
+        # it is listed once it has a row rather than expected here.
+        _daugs = ['none'] + (_unc if _has_aug else [])
+        _expected += [('general_distance', 'predictive', a, '') for a in _daugs]
+        if _sim_ok:
+            _expected += [('general_distance__obj-similarity', 'similarity', a, '')
+                          for a in _daugs]
         for _k in _expected:
             if _k not in passes:
                 passes[_k]   # defaultdict: an empty pass, 0 rows
