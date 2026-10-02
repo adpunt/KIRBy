@@ -79,11 +79,12 @@ from experiments._shared import (
     load_data, get_config, save_experiment_results, convert_numpy,
     get_model_factories, _cv_split, build_fold_hybrid,
     get_domain_metric,
-    get_best_for_downstream,
     DOWNSTREAM_MODELS,
     FULL_BUDGETS, INTERNAL_EVALUATORS,
     select_model_rep_pairs, hybrid_deltas, top_hybrids,
     resolve_comparison_models,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+    RULE_N_GENERAL, RULE_N_DISTANCE, RULE_N_BASE,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 from kirby.hybrid import create_hybrid, apply_feature_selection
@@ -186,11 +187,54 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     _eval_list = ['rf'] if _is_smoke else INTERNAL_EVALUATORS
     _smoke_imp = ({'importance_methods': ['lightgbm_gain']} if _is_smoke else {})
 
-    def _speed_kw(ds):
+    def _speed_kw(ds, distance=False):
         from experiments._shared import _apply_dataset_search_speed
-        kw = _apply_dataset_search_speed({'tier': 'general'}, ds)
+        kw = _apply_dataset_search_speed(
+            {'tier': 'general_distance' if distance else 'general'}, ds)
         kw.pop('tier', None)
         return kw
+
+    # The owner's set (2026-10-02) also needs the DISTANCE lineage, the one the
+    # precompute stores under tier 'general_distance' with the distance
+    # evaluators, budgets and models. Every slot that could not be filled is
+    # named in rule_missing and saved.
+    rule_missing = []
+    _dist_budgets = [b for b in search_budgets if b in DISTANCE_BUDGETS]
+    if not _dist_budgets:
+        _dist_budgets = list(DISTANCE_BUDGETS)
+        rule_missing.append(
+            f'the distance searches stop at {max(DISTANCE_BUDGETS)} features, '
+            f'so they were run over {_dist_budgets} rather than the '
+            f'{search_budgets} this run asked for')
+
+    def _distance_kw(ds):
+        kw = _speed_kw(ds, distance=True)
+        kw.setdefault('models', list(DISTANCE_MODELS))
+        kw['internal_evaluators'] = list(DISTANCE_EVALUATORS)
+        return kw
+
+    def _distance_search(reps_dict, labels_arr, groups_arr, ds_name, pkw,
+                         suffix=None):
+        try:
+            return find_best_hybrid(
+                base_reps=reps_dict, labels=labels_arr, groups=groups_arr,
+                budgets=_dist_budgets,
+                augmentation_strategy='none',
+                metric=metric_name, task_type=task_type,
+                verbose=False, cache=True,
+                dataset_name=ds_name, tier='general_distance',
+                **({'condition_suffix': suffix} if suffix else {}),
+                **_smoke_imp,
+                **pkw,
+                **_distance_kw(ds_name),
+            )
+        except Exception as e:
+            rule_missing.append(
+                f'distance search on {ds_name}'
+                f'{"/" + suffix if suffix else ""} raised '
+                f'{type(e).__name__}: {e}')
+            print(f"      distance search on {ds_name} failed: {e}")
+            return None
 
     def _evals_for(ds):
         # An explicit evaluator list beats speed= inside find_best_hybrid, so
@@ -239,6 +283,12 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         **_speed_kw(target_name),
     )
 
+    print(f"\n  Step 2b: Distance-lineage searches on both datasets")
+    source_distance_search = _distance_search(
+        src, source_labels, source_groups, source_name, _src_pkw)
+    target_distance_search = _distance_search(
+        tgt, target_labels, target_groups, target_name, _tgt_pkw)
+
     # ── Step 3: Per-model evaluation ────────────────────────────────────
     print(f"\n  Step 3: Per-model evaluation ({n_folds}-fold CV)")
 
@@ -278,7 +328,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     # target. recipe_transfer and full_transfer are untouched: their recipe and
     # feature indices come from the SOURCE dataset, which shares no rows with
     # the target folds.
-    def _fold_searches(reps_dict, labels_arr, groups_arr, folds, ds_name):
+    def _fold_searches(reps_dict, labels_arr, groups_arr, folds, ds_name,
+                       distance=False):
         """Search inside each fold's training rows. One entry per fold, None
         where the search raised.
 
@@ -293,6 +344,13 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             pkw = resolve_pruning_kwargs(
                 pruning_mode, len(train_idx),
                 dataset_label=f'{ds_name}/heldout_fold{fold_i}')
+            if distance:
+                # The distance counterpart of this fold's search (owner's set,
+                # 2026-10-02): same training rows, the distance lineage.
+                out.append(_distance_search(
+                    tr_reps, labels_arr[train_idx], tr_groups, ds_name, pkw,
+                    suffix=f'heldout_fold{fold_i}'))
+                continue
             try:
                 out.append(find_best_hybrid(
                     base_reps=tr_reps, labels=labels_arr[train_idx],
@@ -313,9 +371,11 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         return out
 
     def _fold_best_rep(fold_search):
-        """Best single representation for one model, from a fold's own search.
+        """The best single representations for one model, from a fold's own
+        search, best first.
 
-        Returns a {model: rep_name} map. Falls back to nothing when the fold's
+        Returns a {model: [rep_name, ...]} map, as many names as were scored.
+        The owner's set (2026-10-02) takes the top RULE_N_BASE of them. Falls back to nothing when the fold's
         search is missing; the caller then holds that fold out of the arm.
         """
         # ⛔ TIE-BREAK ADDED 2026-09-18, owner's decision. `cmp` is strictly
@@ -336,10 +396,13 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             for mn, sc in (mscores or {}).items():
                 if sc is None or np.isnan(sc):
                     continue
-                cur = picks.get(mn)
-                if cur is None or cmp(sc, cur[1]) or (sc == cur[1] and rn < cur[0]):
-                    picks[mn] = (rn, sc)
-        return {mn: rn for mn, (rn, _sc) in picks.items()}
+                picks.setdefault(mn, []).append((rn, float(sc)))
+        out = {}
+        for mn, rows in picks.items():
+            rows.sort(key=lambda t: ((t[1] if lower_is_better else -t[1]),
+                                     t[0]))
+            out[mn] = [rn for rn, _sc in rows]
+        return out
 
     print(f"\n  Per-fold searches on target ({target_name}), "
           f"{len(target_folds)} folds")
@@ -347,6 +410,9 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         tgt, target_labels, target_groups, target_folds, target_name)
     target_fold_reps = [_fold_best_rep(fs) if fs is not None else {}
                         for fs in target_fold_searches]
+    target_fold_distance_searches = _fold_searches(
+        tgt, target_labels, target_groups, target_folds, target_name,
+        distance=True)
 
     print(f"  Per-fold searches on source ({source_name}), "
           f"{len(source_folds)} folds")
@@ -354,6 +420,42 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         src, source_labels, source_groups, source_folds, source_name)
     source_fold_reps = [_fold_best_rep(fs) if fs is not None else {}
                         for fs in source_fold_searches]
+    source_fold_distance_searches = _fold_searches(
+        src, source_labels, source_groups, source_folds, source_name,
+        distance=True)
+
+    # The owner's set, read off one general search and one distance search
+    # (2026-10-02): the top 2 general recipes and the top 1 distance recipe for
+    # one downstream model. Returns [(slot, blueprint, label)], general first.
+    def _rule_slots(gen_search, dist_search, model_name, where):
+        slots = []
+        for lineage, obj, n in (('general', gen_search, RULE_N_GENERAL),
+                                ('distance', dist_search, RULE_N_DISTANCE)):
+            if obj is None:
+                rule_missing.append(
+                    f'{where}: no {lineage} search, so none of its {n} '
+                    f'recipe(s) for {model_name} was used')
+                continue
+            try:
+                picked = top_hybrids(obj, model_name, n, require_full=False,
+                                     context=f'{where}/{lineage}')
+            except Exception as e:
+                rule_missing.append(f'{where} {lineage} for {model_name}: '
+                                    f'{type(e).__name__}: {e}')
+                continue
+            for e in picked['selected']:
+                slots.append((f"{lineage}{e['rank']}", e['blueprint'],
+                              e['label']))
+            if not picked['complete']:
+                rule_missing.append(
+                    f'{where} {lineage} for {model_name}: '
+                    f"{picked['shortfall_reason']}")
+        return slots
+
+    # general1 keeps the key every reader already uses; the other two slots add
+    # their own suffixed keys.
+    def _slot_key(base, slot):
+        return base if slot == 'general1' else f'{base}__{slot}'
 
     per_model = {}
 
@@ -383,65 +485,81 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                   f"read back")
             continue
 
-        source_best = get_best_for_downstream(source_search, model_name)
-        target_best = get_best_for_downstream(target_search, model_name)
+        # The owner's set (2026-10-02): the source's top 2 general recipes
+        # and its top 1 distance recipe, each transferred to the target in its
+        # own pair of arms, instead of the single general winner.
+        source_slots = _rule_slots(source_search, source_distance_search,
+                                   model_name,
+                                   f'source={source_name}')
+        target_slots_whole = _rule_slots(target_search, target_distance_search,
+                                         model_name,
+                                         f'target={target_name}/context')
 
-        if source_best is None or target_best is None:
-            print(f"\n    {model_name}: skipped (missing search config)")
+        if not source_slots:
+            print(f"\n    {model_name}: skipped (no source recipe)")
             continue
 
-        source_bp = source_best['blueprint']
-        target_bp = target_best['blueprint']
+        source_bp = source_slots[0][1]
+        target_bp = target_slots_whole[0][1] if target_slots_whole else None
 
         print(f"\n    {model_name}:")
-        print(f"      Source BP: budget={source_bp.budget}, "
-              f"alloc={source_bp.allocation_method}, "
-              f"imp={source_bp.importance_method}, "
-              f"eval={source_bp.internal_evaluator}")
-        print(f"      Target BP: budget={target_bp.budget}, "
-              f"alloc={target_bp.allocation_method}, "
-              f"imp={target_bp.importance_method}, "
-              f"eval={target_bp.internal_evaluator}")
+        for _slot, _bp, _lab in source_slots:
+            print(f"      Source {_slot}: budget={_bp.budget}, "
+                  f"alloc={_bp.allocation_method}, "
+                  f"imp={_bp.importance_method}, "
+                  f"eval={_bp.internal_evaluator}")
+        for _slot, _bp, _lab in target_slots_whole:
+            print(f"      Target {_slot} (context): budget={_bp.budget}, "
+                  f"alloc={_bp.allocation_method}, "
+                  f"imp={_bp.importance_method}, "
+                  f"eval={_bp.internal_evaluator}")
 
-        # Build source hybrid on FULL source data -> feature_info for full_transfer
-        try:
-            _, fi_source = create_hybrid(
-                src, source_labels,
-                allocation_method=source_bp.allocation_method,
-                budget=source_bp.budget,
-                importance_method=source_bp.importance_method,
-                internal_evaluator=source_bp.internal_evaluator,
-                # The accept/reject holdout inside create_hybrid is a GroupKFold
-                # fold when groups are given and a RandomState(42) 20% random
-                # split when they are not. These molecules are scaffold-grouped,
-                # so without this the keep/drop decisions were judged on rows
-                # sharing scaffolds with their own training rows.
-                groups=source_groups,
-                # What each representation scored on its own in the source
-                # search, over these same rows. Reused so the budget split is
-                # the one the search settled on, instead of every representation
-                # being scored again here.
-                precomputed_alloc_scores=getattr(source_bp, 'rep_scores', None),
-                # Explicit: this experiment has no augmentations. Default of
-                # 'uncapped' would silently mismatch the search recipe if
-                # any future caller introduces augs without updating here.
-                augmentations=None,
-                augmentation_strategy='none',
-            )
-        except Exception as e:
-            print(f"      Source hybrid build failed: {e}")
+        # One source hybrid per slot, built on FULL source data. Its feature
+        # indices are what the full_transfer arm replays on the target.
+        fi_source_by_slot = {}
+        for _slot, _bp, _lab in source_slots:
+            try:
+                _, _fi = create_hybrid(
+                    src, source_labels,
+                    allocation_method=_bp.allocation_method,
+                    budget=_bp.budget,
+                    importance_method=_bp.importance_method,
+                    internal_evaluator=_bp.internal_evaluator,
+                    # The accept/reject holdout inside create_hybrid is a
+                    # GroupKFold fold when groups are given and a
+                    # RandomState(42) 20% random split when they are not. These
+                    # molecules are scaffold-grouped, so without this the
+                    # keep/drop decisions were judged on rows sharing scaffolds
+                    # with their own training rows.
+                    groups=source_groups,
+                    # What each representation scored on its own in the source
+                    # search, over these same rows. Reused so the budget split
+                    # is the one the search settled on.
+                    precomputed_alloc_scores=getattr(_bp, 'rep_scores', None),
+                    # Explicit: this experiment has no augmentations.
+                    augmentations=None,
+                    augmentation_strategy='none',
+                )
+                fi_source_by_slot[_slot] = _fi
+            except Exception as e:
+                print(f"      Source hybrid build failed for {_slot}: {e}")
+                rule_missing.append(
+                    f'source={source_name} {_slot} for {model_name}: the '
+                    f'hybrid build raised {type(e).__name__}: {e}')
+
+        if not fi_source_by_slot:
+            print(f"    {model_name}: skipped (no source hybrid built)")
             continue
 
-        # Report which features the source blueprint selected
-        print(f"      Source blueprint feature selection:")
-        for rn in sorted(fi_source.keys()):
-            info = fi_source[rn]
-            if isinstance(info, dict) and 'selected_indices' in info:
-                n_sel = len(info['selected_indices'])
-                total = src[rn].shape[1]
-                print(f"        {rn}: {n_sel}/{total}")
+        for _slot, _fi in fi_source_by_slot.items():
+            print(f"      Source {_slot} feature selection:")
+            for rn in sorted(_fi.keys()):
+                info = _fi[rn]
+                if isinstance(info, dict) and 'selected_indices' in info:
+                    print(f"        {rn}: {len(info['selected_indices'])}"
+                          f"/{src[rn].shape[1]}")
 
-        # The best single representation and the native recipe are re-picked
+        # The best single representations and the native recipes are re-picked
         # inside each fold below, from that fold's own training rows. The
         # whole-dataset picks printed here are context only, and no reported
         # score uses them.
@@ -462,11 +580,27 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         print(f"      Best base rep on all target rows (context): {best_tgt_rep}")
         print(f"      Best base rep on all source rows (context): {best_src_rep}")
 
+        def _fit_score(X_tr, X_va, y_tr, y_va, mk):
+            sc = StandardScaler()
+            X_tr = sc.fit_transform(X_tr)
+            X_va = sc.transform(X_va)
+            m = mk()
+            m.fit(X_tr, y_tr)
+            return float(metric_fn(
+                y_va, _predict_for_metric(m, X_va, task_type, metric_name)))
+
         # ── 3a: Evaluate on TARGET ──────────────────────────────────────
-        tgt_fold_scores = {
-            'base_best': [],
-            'native': [], 'recipe_transfer': [], 'full_transfer': [],
-        }
+        # Arm names: base_best is the fold's best single representation and
+        # base_best__rank2 the second; native/recipe_transfer/full_transfer
+        # carry one key per recipe slot, general1 under the original name.
+        _base_keys = ['base_best'] + [f'base_best__rank{i}'
+                                      for i in range(2, RULE_N_BASE + 1)]
+        _tgt_slots = [f'general{i}' for i in range(1, RULE_N_GENERAL + 1)] \
+            + [f'distance{i}' for i in range(1, RULE_N_DISTANCE + 1)]
+        tgt_fold_scores = {k: [] for k in _base_keys}
+        for _c in ('native', 'recipe_transfer', 'full_transfer'):
+            for _slot in _tgt_slots:
+                tgt_fold_scores[_slot_key(_c, _slot)] = []
         tgt_fold_base_reps = []
         tgt_fold_native_bp = []
 
@@ -477,101 +611,100 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             y_tr = target_labels[train_idx]
             y_va = target_labels[val_idx]
             mk = model_factories_tgt[model_name]
+            _tr_groups = (target_groups[train_idx]
+                          if target_groups is not None else None)
 
-            # This fold's own search, over its training rows only.
-            fold_search = target_fold_searches[fold_i]
-            fold_rep = target_fold_reps[fold_i].get(model_name)
-            fold_best = (get_best_for_downstream(fold_search, model_name)
-                         if fold_search is not None else None)
-            fold_bp = fold_best['blueprint'] if fold_best else None
-            tgt_fold_base_reps.append(fold_rep)
-            tgt_fold_native_bp.append(
-                None if fold_bp is None else {
-                    'budget': fold_bp.budget,
-                    'allocation': fold_bp.allocation_method,
-                    'importance': fold_bp.importance_method,
-                    'evaluator': fold_bp.internal_evaluator,
-                })
+            # This fold's own searches, over its training rows only.
+            fold_reps = target_fold_reps[fold_i].get(model_name) or []
+            fold_slots = _rule_slots(
+                target_fold_searches[fold_i],
+                target_fold_distance_searches[fold_i], model_name,
+                f'target={target_name}/heldout_fold{fold_i}')
+            tgt_fold_base_reps.append(fold_reps[:RULE_N_BASE])
+            tgt_fold_native_bp.append({
+                _slot: {'budget': _bp.budget,
+                        'allocation': _bp.allocation_method,
+                        'importance': _bp.importance_method,
+                        'evaluator': _bp.internal_evaluator,
+                        'recipe': _lab}
+                for _slot, _bp, _lab in fold_slots})
 
-            # A: Best single rep, picked on this fold's training rows
-            if fold_rep is None:
-                tgt_fold_scores['base_best'].append(float('nan'))
-            else:
-                sc = StandardScaler()
-                X_tr = sc.fit_transform(tr[fold_rep])
-                X_va = sc.transform(va[fold_rep])
-                m = mk()
-                m.fit(X_tr, y_tr)
-                tgt_fold_scores['base_best'].append(float(metric_fn(
-                    y_va, _predict_for_metric(m, X_va, task_type, metric_name))))
+            # A: the fold's top single representations, picked on its
+            # training rows.
+            for _i, _key in enumerate(_base_keys):
+                _rep = fold_reps[_i] if _i < len(fold_reps) else None
+                if _rep is None:
+                    tgt_fold_scores[_key].append(float('nan'))
+                else:
+                    tgt_fold_scores[_key].append(
+                        _fit_score(tr[_rep], va[_rep], y_tr, y_va, mk))
 
-            # B: Native hybrid, recipe from this fold's training rows
-            if fold_bp is None:
-                print(f"        Fold {fold_i} native: no fold recipe")
-                tgt_fold_scores['native'].append(float('nan'))
-            else:
+            # B: native hybrid, one per recipe slot from this fold's rows.
+            _have = {sl for sl, _b, _l in fold_slots}
+            for _slot, _bp, _lab in fold_slots:
+                _key = _slot_key('native', _slot)
+                if _key not in tgt_fold_scores:
+                    tgt_fold_scores[_key] = [float('nan')] * fold_i
                 try:
-                    X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, fold_bp,
-                        groups=(target_groups[train_idx] if target_groups is not None else None),
-                        model=mk(),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
-                    sc = StandardScaler()
-                    X_tr_h = sc.fit_transform(X_tr_h)
-                    X_va_h = sc.transform(X_va_h)
-                    m = mk()
-                    m.fit(X_tr_h, y_tr)
-                    tgt_fold_scores['native'].append(float(metric_fn(
-                        y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
+                    X_tr_h, X_va_h, _ = build_fold_hybrid(
+                        tr, va, y_tr, _bp, groups=_tr_groups, model=mk(),
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+                    tgt_fold_scores[_key].append(
+                        _fit_score(X_tr_h, X_va_h, y_tr, y_va, mk))
                 except Exception as e:
-                    print(f"        Fold {fold_i} native failed: {e}")
-                    tgt_fold_scores['native'].append(float('nan'))
+                    print(f"        Fold {fold_i} native {_slot} failed: {e}")
+                    tgt_fold_scores[_key].append(float('nan'))
+            for _slot in _tgt_slots:
+                if _slot not in _have:
+                    tgt_fold_scores[_slot_key('native', _slot)].append(
+                        float('nan'))
 
-            # C: Recipe transfer (source recipe, target data)
-            try:
-                X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, source_bp,
-                    groups=(target_groups[train_idx] if target_groups is not None else None),
-                    model=mk(),
-                    metric_fn=metric_fn,
-                    lower_is_better=lower_is_better)
-                sc = StandardScaler()
-                X_tr_h = sc.fit_transform(X_tr_h)
-                X_va_h = sc.transform(X_va_h)
-                m = mk()
-                m.fit(X_tr_h, y_tr)
-                tgt_fold_scores['recipe_transfer'].append(float(metric_fn(
-                    y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
-            except Exception as e:
-                print(f"        Fold {fold_i} recipe failed: {e}")
-                tgt_fold_scores['recipe_transfer'].append(float('nan'))
+            # C and D: the SOURCE recipe (C) and the source's own feature
+            # indices (D), one pair per source slot.
+            for _slot, _bp, _lab in source_slots:
+                _key = _slot_key('recipe_transfer', _slot)
+                try:
+                    X_tr_h, X_va_h, _ = build_fold_hybrid(
+                        tr, va, y_tr, _bp, groups=_tr_groups, model=mk(),
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+                    tgt_fold_scores[_key].append(
+                        _fit_score(X_tr_h, X_va_h, y_tr, y_va, mk))
+                except Exception as e:
+                    print(f"        Fold {fold_i} recipe {_slot} failed: {e}")
+                    tgt_fold_scores[_key].append(float('nan'))
 
-            # D: Full transfer (source feature indices on target)
-            try:
-                X_tr_f = apply_feature_selection(tr, fi_source)
-                X_va_f = apply_feature_selection(va, fi_source)
-                sc = StandardScaler()
-                X_tr_f = sc.fit_transform(X_tr_f)
-                X_va_f = sc.transform(X_va_f)
-                m = mk()
-                m.fit(X_tr_f, y_tr)
-                tgt_fold_scores['full_transfer'].append(float(metric_fn(
-                    y_va, _predict_for_metric(m, X_va_f, task_type, metric_name))))
-            except Exception as e:
-                print(f"        Fold {fold_i} full failed: {e}")
-                tgt_fold_scores['full_transfer'].append(float('nan'))
+                _fkey = _slot_key('full_transfer', _slot)
+                _fi = fi_source_by_slot.get(_slot)
+                if _fi is None:
+                    tgt_fold_scores[_fkey].append(float('nan'))
+                    continue
+                try:
+                    tgt_fold_scores[_fkey].append(_fit_score(
+                        apply_feature_selection(tr, _fi),
+                        apply_feature_selection(va, _fi), y_tr, y_va, mk))
+                except Exception as e:
+                    print(f"        Fold {fold_i} full {_slot} failed: {e}")
+                    tgt_fold_scores[_fkey].append(float('nan'))
+            _src_have = {sl for sl, _b, _l in source_slots}
+            for _slot in _tgt_slots:
+                if _slot not in _src_have:
+                    for _c in ('recipe_transfer', 'full_transfer'):
+                        tgt_fold_scores[_slot_key(_c, _slot)].append(
+                            float('nan'))
 
-            print(f"        Fold {fold_i}: base={tgt_fold_scores['base_best'][-1]:.4f} "
-                  f"({fold_rep}), native={tgt_fold_scores['native'][-1]:.4f}, "
+            print(f"        Fold {fold_i}: "
+                  f"base={tgt_fold_scores['base_best'][-1]:.4f} "
+                  f"({fold_reps[0] if fold_reps else None}), "
+                  f"native={tgt_fold_scores['native'][-1]:.4f}, "
                   f"recipe={tgt_fold_scores['recipe_transfer'][-1]:.4f}, "
                   f"full={tgt_fold_scores['full_transfer'][-1]:.4f}")
 
         # ── 3b: Evaluate on SOURCE (context) ────────────────────────────
-        # Both arms are re-picked inside each source fold. Previously the
-        # hybrid recipe came from a search over every source row and the
-        # baseline from that same search's ten representation scores, so the
-        # hybrid drew its winner from a much larger set than the baseline did
-        # and the gap between them leaned toward the hybrid.
-        src_fold_scores = {'base_best': [], 'hybrid': []}
+        # Both arms are re-picked inside each source fold, and the hybrid arm
+        # runs once per recipe slot.
+        src_fold_scores = {k: [] for k in _base_keys}
+        for _slot in _tgt_slots:
+            src_fold_scores[_slot_key('hybrid', _slot)] = []
         src_fold_base_reps = []
         src_fold_hybrid_bp = []
 
@@ -582,57 +715,53 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             y_tr = source_labels[train_idx]
             y_va = source_labels[val_idx]
             mk = model_factories_src[model_name]
+            _tr_groups = (source_groups[train_idx]
+                          if source_groups is not None else None)
 
-            fold_search = source_fold_searches[fold_i]
-            fold_rep = source_fold_reps[fold_i].get(model_name)
-            fold_best = (get_best_for_downstream(fold_search, model_name)
-                         if fold_search is not None else None)
-            fold_bp = fold_best['blueprint'] if fold_best else None
-            src_fold_base_reps.append(fold_rep)
-            src_fold_hybrid_bp.append(
-                None if fold_bp is None else {
-                    'budget': fold_bp.budget,
-                    'allocation': fold_bp.allocation_method,
-                    'importance': fold_bp.importance_method,
-                    'evaluator': fold_bp.internal_evaluator,
-                })
+            fold_reps = source_fold_reps[fold_i].get(model_name) or []
+            fold_slots = _rule_slots(
+                source_fold_searches[fold_i],
+                source_fold_distance_searches[fold_i], model_name,
+                f'source={source_name}/heldout_fold{fold_i}')
+            src_fold_base_reps.append(fold_reps[:RULE_N_BASE])
+            src_fold_hybrid_bp.append({
+                _slot: {'budget': _bp.budget,
+                        'allocation': _bp.allocation_method,
+                        'importance': _bp.importance_method,
+                        'evaluator': _bp.internal_evaluator,
+                        'recipe': _lab}
+                for _slot, _bp, _lab in fold_slots})
 
-            # Best single rep, picked on this fold's training rows
-            if fold_rep is None:
-                src_fold_scores['base_best'].append(float('nan'))
-            else:
-                sc = StandardScaler()
-                X_tr = sc.fit_transform(tr[fold_rep])
-                X_va = sc.transform(va[fold_rep])
-                m = mk()
-                m.fit(X_tr, y_tr)
-                src_fold_scores['base_best'].append(float(metric_fn(
-                    y_va, _predict_for_metric(m, X_va, task_type, metric_name))))
+            for _i, _key in enumerate(_base_keys):
+                _rep = fold_reps[_i] if _i < len(fold_reps) else None
+                if _rep is None:
+                    src_fold_scores[_key].append(float('nan'))
+                else:
+                    src_fold_scores[_key].append(
+                        _fit_score(tr[_rep], va[_rep], y_tr, y_va, mk))
 
-            # Hybrid, recipe from this fold's training rows
-            if fold_bp is None:
-                print(f"        Fold {fold_i} source hybrid: no fold recipe")
-                src_fold_scores['hybrid'].append(float('nan'))
-            else:
+            _have = {sl for sl, _b, _l in fold_slots}
+            for _slot, _bp, _lab in fold_slots:
+                _key = _slot_key('hybrid', _slot)
                 try:
-                    X_tr_h, X_va_h, _ = build_fold_hybrid(tr, va, y_tr, fold_bp,
-                        groups=(source_groups[train_idx] if source_groups is not None else None),
-                        model=mk(),
-                        metric_fn=metric_fn,
-                        lower_is_better=lower_is_better)
-                    sc = StandardScaler()
-                    X_tr_h = sc.fit_transform(X_tr_h)
-                    X_va_h = sc.transform(X_va_h)
-                    m = mk()
-                    m.fit(X_tr_h, y_tr)
-                    src_fold_scores['hybrid'].append(float(metric_fn(
-                        y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
+                    X_tr_h, X_va_h, _ = build_fold_hybrid(
+                        tr, va, y_tr, _bp, groups=_tr_groups, model=mk(),
+                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+                    src_fold_scores[_key].append(
+                        _fit_score(X_tr_h, X_va_h, y_tr, y_va, mk))
                 except Exception as e:
-                    print(f"        Fold {fold_i} source hybrid failed: {e}")
-                    src_fold_scores['hybrid'].append(float('nan'))
+                    print(f"        Fold {fold_i} source hybrid {_slot} "
+                          f"failed: {e}")
+                    src_fold_scores[_key].append(float('nan'))
+            for _slot in _tgt_slots:
+                if _slot not in _have:
+                    src_fold_scores[_slot_key('hybrid', _slot)].append(
+                        float('nan'))
 
-            print(f"        Fold {fold_i}: base={src_fold_scores['base_best'][-1]:.4f} "
-                  f"({fold_rep}), hybrid={src_fold_scores['hybrid'][-1]:.4f}")
+            print(f"        Fold {fold_i}: "
+                  f"base={src_fold_scores['base_best'][-1]:.4f} "
+                  f"({fold_reps[0] if fold_reps else None}), "
+                  f"hybrid={src_fold_scores['hybrid'][-1]:.4f}")
 
         # ── Aggregate for this model ────────────────────────────────────
         def _agg(scores):
@@ -642,30 +771,38 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
 
         model_res = {
             'target': {},
-            'source': {
-                'base_best': _agg(src_fold_scores['base_best']),
-                'hybrid': _agg(src_fold_scores['hybrid']),
-            },
-            # The recipe transferred to the target. Chosen over every source
+            'source': {k: _agg(v) for k, v in src_fold_scores.items()},
+            # The recipes transferred to the target. Chosen over every source
             # row, which is what recipe_transfer and full_transfer are meant to
-            # test; the target folds share no rows with it.
+            # test; the target folds share no rows with them.
             'source_blueprint': {
                 'budget': source_bp.budget,
                 'allocation': source_bp.allocation_method,
                 'importance': source_bp.importance_method,
                 'evaluator': source_bp.internal_evaluator,
             },
+            'source_blueprints_by_slot': {
+                _slot: {'budget': _bp.budget,
+                        'allocation': _bp.allocation_method,
+                        'importance': _bp.importance_method,
+                        'evaluator': _bp.internal_evaluator,
+                        'recipe': _lab}
+                for _slot, _bp, _lab in source_slots},
             # Context only. Chosen over every target row, so it is not what the
             # native arm was scored with — that is per_fold_native_blueprint.
-            'target_blueprint_whole_data': {
-                'budget': target_bp.budget,
-                'allocation': target_bp.allocation_method,
-                'importance': target_bp.importance_method,
-                'evaluator': target_bp.internal_evaluator,
-            },
+            'target_blueprint_whole_data': (
+                None if target_bp is None else {
+                    'budget': target_bp.budget,
+                    'allocation': target_bp.allocation_method,
+                    'importance': target_bp.importance_method,
+                    'evaluator': target_bp.internal_evaluator,
+                }),
+            'rule': (f'top {RULE_N_GENERAL} general + top {RULE_N_DISTANCE} '
+                     f'distance recipes, top {RULE_N_BASE} single '
+                     f'representations'),
         }
-        for cond in ['base_best', 'native', 'recipe_transfer', 'full_transfer']:
-            model_res['target'][cond] = _agg(tgt_fold_scores[cond])
+        for cond, folds in tgt_fold_scores.items():
+            model_res['target'][cond] = _agg(folds)
         # What each held-out fold actually used, picked on its training rows.
         model_res['target']['per_fold_base_rep'] = tgt_fold_base_reps
         model_res['target']['per_fold_native_blueprint'] = tgt_fold_native_bp
@@ -674,15 +811,18 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         model_res['source']['per_fold_hybrid_blueprint'] = src_fold_hybrid_bp
         model_res['source']['base_rep_whole_data'] = best_src_rep
 
-        # Deltas vs target base, subtracted fold by fold. A fold whose arm
-        # raised holds a nan and the two arms do not lose the same folds, so
-        # differencing two nanmeans could take a 4-fold mean off a 5-fold one.
-        # Only fold positions where BOTH arms are finite enter the difference.
-        # delta_n_folds is how many folds are behind the number and
-        # delta_std their spread — the win threshold below is 0.001 RMSE, far
-        # under that spread, so both have to be readable next to the delta.
+        # Deltas vs the target's best single representation, subtracted fold by
+        # fold. A fold whose arm raised holds a nan and the two arms do not
+        # lose the same folds, so differencing two nanmeans could take a
+        # 4-fold mean off a 5-fold one. Only fold positions where BOTH arms
+        # are finite enter the difference. delta_n_folds is how many folds are
+        # behind the number and delta_std their spread — the win threshold
+        # below is 0.001 RMSE, far under that spread, so both have to be
+        # readable next to the delta.
         base_folds = model_res['target']['base_best']['per_fold']
-        for cond in ['native', 'recipe_transfer', 'full_transfer']:
+        for cond in list(tgt_fold_scores):
+            if cond in _base_keys:
+                continue
             cond_folds = model_res['target'][cond]['per_fold']
             diffs = [((b - c) if lower_is_better else (c - b))
                      for b, c in zip(base_folds, cond_folds)
@@ -885,9 +1025,18 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     # tables above iterates it, and per_model is untouched — a non-model key
     # there would break the three loops at lines 663, 677 and 692-695, each of
     # which reads res['source'] and res['target'] off every value.
+    #
+    # The two distance searches are read here too (owner's set, 2026-10-02),
+    # under their own keys, so the report rows cover the distance lineage and
+    # not only the general one.
     top2_selection = {}
-    for _which, _search_obj, _ds in (('source', source_search, source_name),
-                                     ('target', target_search, target_name)):
+    for _which, _search_obj, _ds in (
+            ('source', source_search, source_name),
+            ('target', target_search, target_name),
+            ('source_distance', source_distance_search, source_name),
+            ('target_distance', target_distance_search, target_name)):
+        if _search_obj is None:
+            continue
         _blk = _top2_for(_search_obj, _which, _ds)
         if _blk is not None:
             top2_selection[_which] = _blk
@@ -919,6 +1068,12 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     # Blueprint into its to_dict form, so the block is JSON-serialisable.
     if top2_selection:
         results['top2_selection'] = convert_numpy(top2_selection)
+    # Every slot the owner's set asked for and did not get, with the reason.
+    results['rule'] = (
+        f'per downstream model: top {RULE_N_GENERAL} general + top '
+        f'{RULE_N_DISTANCE} distance recipes, both datasets, and the top '
+        f'{RULE_N_BASE} single representations')
+    results['rule_missing'] = rule_missing
 
     return results
 

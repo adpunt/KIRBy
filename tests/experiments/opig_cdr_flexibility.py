@@ -82,6 +82,128 @@ from experiments._shared import (
     resolve_comparison_models,
 )
 
+
+# =============================================================================
+# THE OWNER'S HYBRID SET (2026-10-02)
+# =============================================================================
+# For each downstream model: the top 2 hybrids from the general searches plus
+# the top 1 from the distance searches, and the model's top 2 single
+# representations. get_rule_hybrids passes its extra arguments to BOTH reads,
+# and the two searches take different evaluator and budget lists (the distance
+# searches use DISTANCE_EVALUATORS and DISTANCE_BUDGETS by default). So the
+# two lineages are read in two calls here, each with its own arguments, and
+# merged into the shape get_rule_hybrids returns.
+def _rule_set(reps, labels, groups, model, *, general_kw, distance_kw,
+              **common):
+    """get_rule_hybrids for one model, general and distance read separately."""
+    from experiments._shared import get_rule_hybrids
+    g = get_rule_hybrids(reps, labels, groups, downstream_model=model,
+                         n_distance=0, **common, **general_kw)
+    d = get_rule_hybrids(reps, labels, groups, downstream_model=model,
+                         n_general=0, n_base=0, **common, **distance_kw)
+    by_obj = {}
+    for fam in g['objectives']:
+        gf = g['by_objective'].get(fam) or {}
+        df = d['by_objective'].get(fam) or {}
+        f = dict(gf)
+        f['general'] = list(gf.get('general') or [])
+        f['distance'] = list(df.get('distance') or [])
+        f['hybrids'] = f['general'] + f['distance']
+        f['base_reps'] = list(gf.get('base_reps') or [])
+        f['missing'] = (list(gf.get('missing') or [])
+                        + list(df.get('missing') or []))
+        by_obj[fam] = f
+    return {
+        'model': model, 'objectives': list(g['objectives']),
+        'by_objective': by_obj,
+        'hybrids': [h for fam in g['objectives']
+                    for h in by_obj[fam]['hybrids']],
+        'base_reps': g['base_reps'],
+        'missing': list(g['missing']) + list(d['missing']),
+        'warnings': list(g['warnings']) + list(d['warnings']),
+        'rule': 'top 2 general + top 1 distance hybrids per family, '
+                'top 2 single representations',
+    }
+
+
+def _rule_entry_summary(e):
+    """The JSON-safe part of one rule entry (no Blueprint object)."""
+    return {k: e.get(k) for k in (
+        'slot', 'lineage', 'lineage_rank', 'objective', 'tier',
+        'aug_condition', 'recipe', 'allocation_method', 'importance_method',
+        'internal_evaluator', 'budget', 'budget_relaxed', 'metric_name',
+        'lower_is_better', 'score_other_folds', 'score_this_fold',
+        'fold_scores')}
+
+
+def _rule_base_summary(b):
+    return {k: b.get(k) for k in (
+        'rep', 'objective', 'tier', 'aug_condition', 'metric_name',
+        'score_other_folds', 'score_this_fold', 'fold_scores')}
+
+
+def _rule_heldout_scores(reps, labels, groups, models, *, exclude_folds=(),
+                         **rule_kw):
+    """Owner's set (2026-10-02), scored per held-out fold from stored searches.
+
+    For each downstream model and each fold k of the stored search, the set is
+    re-ranked on the OTHER folds (get_rule_hybrids fold_i=k) and each slot's
+    score on fold k is taken. Every configuration in a stored search was built
+    on each fold's training rows and scored on that fold's held-out rows by the
+    search itself, so fold k's score is a held-out score of that hybrid. This is
+    the same treatment fold_reselection gives the single winner. 0 new fits.
+
+    Returns ({model: {'slots': {slot: {'per_fold': [...], 'mean', 'n_folds'}},
+    'top2_base_reps': {...}, 'whole_dataset': [...]}}, missing).
+    """
+    out, missing = {}, []
+    for m in models:
+        try:
+            whole = _rule_set(reps, labels, groups, m, **rule_kw)
+        except Exception as e:
+            missing.append(f'{m}: whole-dataset read raised '
+                           f'{type(e).__name__}: {e}')
+            continue
+        missing += list(whole['missing'])
+        n_pool = max([len(h.get('fold_scores') or [])
+                      for h in whole['hybrids']]
+                     + [len(b.get('fold_scores') or [])
+                        for b in whole['base_reps']] + [0])
+        slots, bases = {}, {}
+        for k in range(n_pool):
+            if k in set(exclude_folds or ()):
+                continue
+            try:
+                r = _rule_set(reps, labels, groups, m, fold_i=k,
+                              drop_folds=list(exclude_folds or ()), **rule_kw)
+            except Exception as e:
+                missing.append(f'{m} fold {k}: read raised '
+                               f'{type(e).__name__}: {e}')
+                continue
+            for h in r['hybrids']:
+                key = f"{h.get('objective')}/{h['slot']}"
+                d = slots.setdefault(key, {'slot': h['slot'],
+                                           'objective': h.get('objective'),
+                                           'per_fold': []})
+                d['per_fold'].append({'fold': k,
+                                      'score': h.get('score_this_fold'),
+                                      **_rule_entry_summary(h)})
+            for i, b in enumerate(r['base_reps'], 1):
+                d = bases.setdefault(f'base{i}', {'per_fold': []})
+                d['per_fold'].append({'fold': k,
+                                      'score': b.get('score_this_fold'),
+                                      'rep': b.get('rep')})
+        for d in list(slots.values()) + list(bases.values()):
+            vals = [x['score'] for x in d['per_fold'] if x['score'] is not None]
+            d['n_folds'] = len(vals)
+            d['mean'] = float(np.mean(vals)) if vals else float('nan')
+        out[m] = {'slots': slots, 'top2_base_reps': bases,
+                  'whole_dataset': [_rule_entry_summary(h)
+                                    for h in whole['hybrids']],
+                  'whole_dataset_top2_base_reps': [
+                      _rule_base_summary(b) for b in whole['base_reps']]}
+    return out, missing
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -320,6 +442,8 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
     reselection_block = None
     reselection_result = None
     top2_block = None
+    rule_heldout = None
+    rule_missing = []
     try:
         from experiments._shared import (
             resolve_pruning_kwargs, get_best_search_for_downstream)
@@ -498,6 +622,34 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
                           f"  minus the best representation "
                           f"({_d['best_rep']}): "
                           f"{'—' if _dbr is None else format(_dbr, '+.4f')}")
+            # Owner's set (2026-10-02): per downstream model, the top 2
+            # general hybrids and the top 1 distance hybrid, each scored per
+            # held-out fold after ranking on the other folds, beside the
+            # model's top 2 single representations scored the same way.
+            # The single-winner comparison above is kept as it was.
+            _gen_kw = dict(internal_evaluators=_smoke.get(
+                               'internal_evaluators', INTERNAL_EVALUATORS),
+                           **{k: v for k, v in _smoke.items()
+                              if k not in ('speed', 'internal_evaluators')},
+                           **_pkw)
+            _dist_kw = dict(**{k: v for k, v in _smoke.items()
+                               if k != 'speed'}, **_pkw)
+            try:
+                rule_heldout, rule_missing = _rule_heldout_scores(
+                    reps, labels, groups, MODELS_LIST,
+                    exclude_folds=hr_exclude_folds(reselection_block),
+                    general_kw=_gen_kw, distance_kw=_dist_kw,
+                    augmentations=None, task_type='classification',
+                    dataset_name='cdr_flexibility',
+                    condition_suffix='_'.join(sorted(cdr_types)),
+                    adaptive_pruning=0.25)
+            except Exception as _e:
+                rule_heldout, rule_missing = None, [
+                    f'{type(_e).__name__}: {_e}']
+            for _m, _r in sorted((rule_heldout or {}).items()):
+                for _k, _d in sorted(_r['slots'].items()):
+                    print(f"  rule × {_m:8s} {_k:24s} held-out "
+                          f"mean={_d['mean']:.4f} over {_d['n_folds']} folds")
             if not top2_block:
                 top2_block = None
         if _meta is not None:
@@ -569,6 +721,11 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         # printed by nothing, which is what an extra is. None when the search
         # returned nothing to rank.
         'top2_selection': top2_block,
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids
+        # and top 2 single representations per model, held-out per fold.
+        'rule_heldout_by_model': rule_heldout,
+        # Every slot of that set that could not be filled, and why.
+        'rule_missing': rule_missing,
     }
 
 

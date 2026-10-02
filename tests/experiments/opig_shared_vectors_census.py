@@ -416,7 +416,7 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
     cannot beat. What is worth knowing is how close a 100 or 500 feature
     selection gets to that floor while dropping most of the features.
 
-    Where the recipes come from: the search the precompute already stored for
+    Where the recipes come from: the searches the precompute already stored for
     this dataset. Nothing is searched here. The precompute saves the recipe --
     which representations, how many features from each, how to rank them -- and
     not the feature list, because a per-fold experiment has to rank on its own
@@ -424,123 +424,123 @@ def hybrid_rows(dataset_name, reps, labels, groups, n_per_model=2, verbose=True)
     So the recipe is applied here, over every molecule, which costs one
     importance ranking per representation and no search.
 
+    WHICH HYBRIDS, changed 2026-10-02 to the owner's set: for each downstream
+    model, the top `n_per_model` (2) hybrids from the general searches plus the
+    top 1 from the distance searches, ranked on every fold
+    (get_rule_hybrids, fold_i=None). Each is built with its full recipe,
+    including the augmentation condition, by build_hybrid_from_entry. Until
+    then this read one general search and rebuilt each recipe with four of its
+    settings, so a recipe that took extra features from the donor
+    representations was counted without them. A slot the stored searches could
+    not fill is written as a row with 'missing_reason' instead of a count.
+
     Returns [] when no search is stored, rather than building one.
     """
     out = []
     try:
-        from experiments._shared import get_best_search_for_downstream, top_hybrids
-        from kirby.hybrid import create_hybrid
+        from experiments._shared import (get_rule_hybrids,
+                                         build_hybrid_from_entry,
+                                         DISTANCE_MODELS, RULE_N_DISTANCE)
+        from experiments.complexity.complexity_helpers import DATASET_REPS
     except Exception as exc:
         if verbose:
             print(f'  hybrid rows skipped: {type(exc).__name__}: {exc}', flush=True)
         return out
 
+    # The searches were run with the pool's general representations as the
+    # base and its donor list as augmentations; read and rebuild the same way.
+    entry = DATASET_REPS.get(dataset_name) or {}
+    donors = set(entry.get('augmentation') or [])
+    base = {k: v for k, v in reps.items() if k not in donors}
+    augs = {k: v for k, v in reps.items() if k in donors} or None
+    if not base:
+        base, augs = dict(reps), None
+
+    n = int(np.asarray(labels).size)
     # Refuse to search. If the precompute has not run for this dataset there is
-    # nothing to read and the row is simply absent.
+    # nothing to read and the slot is reported missing.
     _prev = os.environ.get('KIRBY_NO_COLD_SEARCH')
     os.environ['KIRBY_NO_COLD_SEARCH'] = '1'
     try:
-        try:
-            search, _meta = get_best_search_for_downstream(
-                reps, labels, groups, downstream_model='rf', budget=None,
-                dataset_name=dataset_name, task_type=None)
-        except Exception as exc:
-            if verbose:
-                print(f'  no stored search for {dataset_name} '
-                      f'({type(exc).__name__}) -- no hybrid rows', flush=True)
-            return out
-        if search is None:
-            if verbose:
-                print(f'  no stored search for {dataset_name} -- no hybrid rows',
-                      flush=True)
-            return out
-
-        # The downstream models to loop are the ones this stored search
-        # actually scored, read off the search itself. requested=None asks for
-        # all of them. The search above was fetched for 'rf', which decides
-        # which stored search is read and not which models it holds scores for.
-        #
-        # ⛔ What used to be here: `from kirby.find_best_hybrid import
-        # DOWNSTREAM_MODELS`. That name is not defined anywhere under src/kirby/
-        # -- checked 2026-09-28, zero occurrences -- so the import raised
-        # ImportError, the bare `except Exception: return out` below caught it,
-        # and this function returned an empty list on every dataset with nothing
-        # printed. No hybrid row has ever reached the table.
-        from experiments._shared import resolve_comparison_models
-        _DM, _dropped_models = resolve_comparison_models(search, None)
-    except Exception as exc:
-        if verbose:
-            print(f'  hybrid rows skipped: could not read which downstream '
-                  f'models the stored search scored '
-                  f'({type(exc).__name__}: {exc})', flush=True)
-        return out
+        # DISTANCE_MODELS is the five downstream models plus knn: knn has
+        # distance hybrids, and its general slots are reported missing when no
+        # knn-scored general search is stored.
+        for model_name in DISTANCE_MODELS:
+            try:
+                rule = get_rule_hybrids(
+                    base, np.asarray(labels), groups,
+                    downstream_model=model_name, dataset_name=dataset_name,
+                    augmentations=augs, task_type=None, fold_i=None,
+                    n_general=n_per_model, n_distance=RULE_N_DISTANCE)
+            except Exception as exc:
+                if verbose:
+                    print(f'  hybrid rows for {model_name}: none -- the read '
+                          f'raised {type(exc).__name__}: {exc}', flush=True)
+                out.append({'dataset': dataset_name, 'is_hybrid': True,
+                            'downstream_model': model_name,
+                            'missing_reason': f'{type(exc).__name__}: {exc}'})
+                continue
+            for why in rule['missing']:
+                # This file ranks no base representations (see above), so a
+                # shortfall there is not a missing hybrid.
+                if why.startswith('base representations'):
+                    continue
+                if verbose:
+                    print(f'  hybrid rows for {model_name}: {why}', flush=True)
+                out.append({'dataset': dataset_name, 'is_hybrid': True,
+                            'downstream_model': model_name,
+                            'missing_reason': why})
+            for h in rule['hybrids']:
+                bp = h.get('blueprint')
+                if bp is None:
+                    continue
+                slot = h['slot']
+                try:
+                    X, _info = build_hybrid_from_entry(
+                        base, np.asarray(labels), groups, h,
+                        augmentations=augs)
+                except Exception as exc:
+                    if verbose:
+                        print(f'  hybrid {model_name} {slot}: could not build '
+                              f'({type(exc).__name__}: {exc})', flush=True)
+                    out.append({'dataset': dataset_name, 'is_hybrid': True,
+                                'downstream_model': model_name, 'slot': slot,
+                                'missing_reason': f'build raised '
+                                f'{type(exc).__name__}: {exc}'})
+                    continue
+                inv, sizes = row_partition(np.asarray(X, dtype=np.float64))
+                tied = int((sizes > 1).sum())
+                out.append({
+                    'dataset': dataset_name,
+                    'representation': f'hybrid[{model_name}#{slot}]',
+                    'is_hybrid': True,
+                    'downstream_model': model_name,
+                    # 'general1', 'general2' or 'distance1'; rank_within_model
+                    # is the rank inside that search family.
+                    'slot': slot,
+                    'tier': h.get('tier'),
+                    'objective': h.get('objective'),
+                    'aug_condition': h.get('aug_condition'),
+                    'rank_within_model': h.get('lineage_rank'),
+                    'budget': bp.budget,
+                    'budget_relaxed': h.get('budget_relaxed'),
+                    'allocation_method': bp.allocation_method,
+                    'importance_method': bp.importance_method,
+                    'n_features': int(np.asarray(X).shape[1]),
+                    'n_molecules': n,
+                    'n_representation_merged': tied,
+                    'percent_merged': round(100.0 * tied / n, 4) if n else None,
+                })
+                if verbose:
+                    print(f'    hybrid[{model_name}#{slot}] '
+                          f'{np.asarray(X).shape[1]:>5}f  {tied:>5} of {n} '
+                          f'share a row ({100.0*tied/max(n,1):5.2f}%)',
+                          flush=True)
     finally:
         if _prev is None:
             os.environ.pop('KIRBY_NO_COLD_SEARCH', None)
         else:
             os.environ['KIRBY_NO_COLD_SEARCH'] = _prev
-
-    if not _DM and verbose:
-        print(f'  no downstream model has a score on the stored search for '
-              f'{dataset_name} -- no hybrid rows', flush=True)
-    for _name, _why in _dropped_models:
-        if verbose:
-            print(f'  hybrid rows for {_name}: none -- {_why}', flush=True)
-
-    n = int(np.asarray(labels).size)
-    for model_name in _DM:
-        try:
-            picked = top_hybrids(search, model_name, n_per_model,
-                                 require_full=False,
-                                 context=f'census/{dataset_name}/{model_name}')
-        except Exception as exc:
-            # Say which downstream model has no hybrid row and why. Dropping it
-            # silently made a table of three models look like a table of five.
-            if verbose:
-                print(f'  hybrid rows for {model_name}: none -- top_hybrids '
-                      f'raised {type(exc).__name__}: {exc}', flush=True)
-            continue
-        if picked.get('shortfall_reason') and verbose:
-            print(f'  hybrid rows for {model_name}: '
-                  f'{picked["shortfall_reason"]}', flush=True)
-        for rank, entry in enumerate(picked.get('selected') or [], start=1):
-            bp = entry.get('blueprint')
-            if bp is None:
-                continue
-            try:
-                X, _info = create_hybrid(
-                    reps, np.asarray(labels),
-                    allocation_method=bp.allocation_method,
-                    budget=bp.budget,
-                    importance_method=bp.importance_method,
-                    internal_evaluator=bp.internal_evaluator,
-                    groups=groups,
-                )
-            except Exception as exc:
-                if verbose:
-                    print(f'  hybrid {model_name} rank {rank}: could not build '
-                          f'({type(exc).__name__}: {exc})', flush=True)
-                continue
-            inv, sizes = row_partition(np.asarray(X, dtype=np.float64))
-            tied = int((sizes > 1).sum())
-            out.append({
-                'dataset': dataset_name,
-                'representation': f'hybrid[{model_name}#{rank}]',
-                'is_hybrid': True,
-                'downstream_model': model_name,
-                'rank_within_model': rank,
-                'budget': bp.budget,
-                'allocation_method': bp.allocation_method,
-                'importance_method': bp.importance_method,
-                'n_features': int(np.asarray(X).shape[1]),
-                'n_molecules': n,
-                'n_representation_merged': tied,
-                'percent_merged': round(100.0 * tied / n, 4) if n else None,
-            })
-            if verbose:
-                print(f'    hybrid[{model_name}#{rank}] '
-                      f'{np.asarray(X).shape[1]:>5}f  {tied:>5} of {n} '
-                      f'share a row ({100.0*tied/max(n,1):5.2f}%)', flush=True)
     return out
 
 
@@ -812,9 +812,10 @@ def main():
     # model are counted.
     ap.add_argument('--with-hybrids', type=int, default=2, nargs='?',
                     const=2, dest='with_hybrids',
-                    help='count ties for the top N hybrids per '
-                         'downstream model, read from the search the '
-                         'precompute stored (default 2, 0 = off). Applies each '
+                    help='count ties for the top N general hybrids plus '
+                         'the top 1 distance hybrid per downstream model, '
+                         'read from the searches the precompute stored '
+                         '(default 2, 0 = off). Applies each '
                          'stored recipe over every molecule; it never '
                          'searches.')
     ap.add_argument('--output-dir', default=DEFAULT_OUTPUT)
@@ -849,10 +850,14 @@ def main():
     for ds in datasets:
         print(f'\n=== {ds} ({time.time() - t0:.0f}s) ===', flush=True)
         names = override or pool_for(ds, include_donors=not args.no_donors)
+        # hybrid_set: the hybrid rows became the owner's set on 2026-10-02
+        # (top 2 general + top 1 distance per model), so an earlier attempt's
+        # rows are not read back.
+        _ckkey = dict(dataset=ds, names=list(names),
+                      hybrid_set='top2_general_top1_distance')
         try:
-            if _ck.done(dataset=ds, names=list(names)):
-                rows, pairs, pool_row, meta = _ck.get(dataset=ds,
-                                                      names=list(names))
+            if _ck.done(**_ckkey):
+                rows, pairs, pool_row, meta = _ck.get(**_ckkey)
                 print('  finished in an earlier attempt, read back',
                       flush=True)
             else:
@@ -860,8 +865,7 @@ def main():
                     ds, names, build_missing=args.build_missing,
                     check_freshness=args.check_freshness,
                     with_hybrids=args.with_hybrids)
-                _ck.put((rows, pairs, pool_row, meta), dataset=ds,
-                        names=list(names))
+                _ck.put((rows, pairs, pool_row, meta), **_ckkey)
         except Exception as exc:                      # one dataset must not stop the rest
             print(f'  FAILED: {type(exc).__name__}: {exc}', flush=True)
             all_meta.append({'dataset': ds, 'error': f'{type(exc).__name__}: {exc}'})

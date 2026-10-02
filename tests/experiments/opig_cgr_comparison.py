@@ -77,6 +77,128 @@ from experiments._shared import (
     resolve_comparison_models,
 )
 
+
+# =============================================================================
+# THE OWNER'S HYBRID SET (2026-10-02)
+# =============================================================================
+# For each downstream model: the top 2 hybrids from the general searches plus
+# the top 1 from the distance searches, and the model's top 2 single
+# representations. get_rule_hybrids passes its extra arguments to BOTH reads,
+# and the two searches take different evaluator and budget lists (the distance
+# searches use DISTANCE_EVALUATORS and DISTANCE_BUDGETS by default). So the
+# two lineages are read in two calls here, each with its own arguments, and
+# merged into the shape get_rule_hybrids returns.
+def _rule_set(reps, labels, groups, model, *, general_kw, distance_kw,
+              **common):
+    """get_rule_hybrids for one model, general and distance read separately."""
+    from experiments._shared import get_rule_hybrids
+    g = get_rule_hybrids(reps, labels, groups, downstream_model=model,
+                         n_distance=0, **common, **general_kw)
+    d = get_rule_hybrids(reps, labels, groups, downstream_model=model,
+                         n_general=0, n_base=0, **common, **distance_kw)
+    by_obj = {}
+    for fam in g['objectives']:
+        gf = g['by_objective'].get(fam) or {}
+        df = d['by_objective'].get(fam) or {}
+        f = dict(gf)
+        f['general'] = list(gf.get('general') or [])
+        f['distance'] = list(df.get('distance') or [])
+        f['hybrids'] = f['general'] + f['distance']
+        f['base_reps'] = list(gf.get('base_reps') or [])
+        f['missing'] = (list(gf.get('missing') or [])
+                        + list(df.get('missing') or []))
+        by_obj[fam] = f
+    return {
+        'model': model, 'objectives': list(g['objectives']),
+        'by_objective': by_obj,
+        'hybrids': [h for fam in g['objectives']
+                    for h in by_obj[fam]['hybrids']],
+        'base_reps': g['base_reps'],
+        'missing': list(g['missing']) + list(d['missing']),
+        'warnings': list(g['warnings']) + list(d['warnings']),
+        'rule': 'top 2 general + top 1 distance hybrids per family, '
+                'top 2 single representations',
+    }
+
+
+def _rule_entry_summary(e):
+    """The JSON-safe part of one rule entry (no Blueprint object)."""
+    return {k: e.get(k) for k in (
+        'slot', 'lineage', 'lineage_rank', 'objective', 'tier',
+        'aug_condition', 'recipe', 'allocation_method', 'importance_method',
+        'internal_evaluator', 'budget', 'budget_relaxed', 'metric_name',
+        'lower_is_better', 'score_other_folds', 'score_this_fold',
+        'fold_scores')}
+
+
+def _rule_base_summary(b):
+    return {k: b.get(k) for k in (
+        'rep', 'objective', 'tier', 'aug_condition', 'metric_name',
+        'score_other_folds', 'score_this_fold', 'fold_scores')}
+
+
+def _rule_heldout_scores(reps, labels, groups, models, *, exclude_folds=(),
+                         **rule_kw):
+    """Owner's set (2026-10-02), scored per held-out fold from stored searches.
+
+    For each downstream model and each fold k of the stored search, the set is
+    re-ranked on the OTHER folds (get_rule_hybrids fold_i=k) and each slot's
+    score on fold k is taken. Every configuration in a stored search was built
+    on each fold's training rows and scored on that fold's held-out rows by the
+    search itself, so fold k's score is a held-out score of that hybrid. This is
+    the same treatment fold_reselection gives the single winner. 0 new fits.
+
+    Returns ({model: {'slots': {slot: {'per_fold': [...], 'mean', 'n_folds'}},
+    'top2_base_reps': {...}, 'whole_dataset': [...]}}, missing).
+    """
+    out, missing = {}, []
+    for m in models:
+        try:
+            whole = _rule_set(reps, labels, groups, m, **rule_kw)
+        except Exception as e:
+            missing.append(f'{m}: whole-dataset read raised '
+                           f'{type(e).__name__}: {e}')
+            continue
+        missing += list(whole['missing'])
+        n_pool = max([len(h.get('fold_scores') or [])
+                      for h in whole['hybrids']]
+                     + [len(b.get('fold_scores') or [])
+                        for b in whole['base_reps']] + [0])
+        slots, bases = {}, {}
+        for k in range(n_pool):
+            if k in set(exclude_folds or ()):
+                continue
+            try:
+                r = _rule_set(reps, labels, groups, m, fold_i=k,
+                              drop_folds=list(exclude_folds or ()), **rule_kw)
+            except Exception as e:
+                missing.append(f'{m} fold {k}: read raised '
+                               f'{type(e).__name__}: {e}')
+                continue
+            for h in r['hybrids']:
+                key = f"{h.get('objective')}/{h['slot']}"
+                d = slots.setdefault(key, {'slot': h['slot'],
+                                           'objective': h.get('objective'),
+                                           'per_fold': []})
+                d['per_fold'].append({'fold': k,
+                                      'score': h.get('score_this_fold'),
+                                      **_rule_entry_summary(h)})
+            for i, b in enumerate(r['base_reps'], 1):
+                d = bases.setdefault(f'base{i}', {'per_fold': []})
+                d['per_fold'].append({'fold': k,
+                                      'score': b.get('score_this_fold'),
+                                      'rep': b.get('rep')})
+        for d in list(slots.values()) + list(bases.values()):
+            vals = [x['score'] for x in d['per_fold'] if x['score'] is not None]
+            d['n_folds'] = len(vals)
+            d['mean'] = float(np.mean(vals)) if vals else float('nan')
+        out[m] = {'slots': slots, 'top2_base_reps': bases,
+                  'whole_dataset': [_rule_entry_summary(h)
+                                    for h in whole['hybrids']],
+                  'whole_dataset_top2_base_reps': [
+                      _rule_base_summary(b) for b in whole['base_reps']]}
+    return out, missing
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -601,9 +723,37 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
                       f"  minus the best representation ({_d['best_rep']}): "
                       f"{'—' if _dbr is None else format(_dbr, '+.4f')}")
 
+    # Owner's set (2026-10-02): per downstream model, the top 2 general
+    # hybrids and the top 1 distance hybrid for this pool, each scored per
+    # held-out fold after ranking on the other folds (the treatment the
+    # single-winner comparison above gets), beside the model's top 2 single
+    # representations scored the same way. 0 new model fits; the distance
+    # searches for this pool are read, or built when missing and small.
+    rule_heldout, rule_missing = None, []
+    if search is not None:
+        try:
+            rule_heldout, rule_missing = _rule_heldout_scores(
+                pool_reps, labels, groups, MODELS_LIST,
+                exclude_folds=hr_exclude_folds(reselection_block),
+                general_kw=dict(**_smoke_search, **_pkw),
+                distance_kw=dict(**_smoke_search, **_pkw),
+                augmentations=None, metric='rmse', task_type='regression',
+                dataset_name=dataset_name, condition_suffix=safe_suffix)
+        except Exception as _e:
+            rule_missing = [f'{type(_e).__name__}: {_e}']
+        for _m, _r in sorted((rule_heldout or {}).items()):
+            for _k, _d in sorted(_r['slots'].items()):
+                print(f"    rule × {_m:8s} {_k:24s} held-out "
+                      f"mean={_d['mean']:.4f} over {_d['n_folds']} folds")
+
     return {
         'n_reps': len(pool_reps),
         'rep_names': sorted(pool_reps.keys()),
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids
+        # and top 2 single representations per model, held-out per fold.
+        'rule_heldout_by_model': rule_heldout,
+        # Every slot of that set that could not be filled, and why.
+        'rule_missing': rule_missing,
         'top3_base': [[n, s] for n, s in (top3 or [])],
         'hybrid_eval': hybrid_eval,
         # The random forest's recipe, as the number of features taken from each
@@ -876,6 +1026,31 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
                                         sc[model_name].get('n_folds_used', 0))),
             }
 
+    # The same CGR delta for every slot of the owner's set (2026-10-02): for
+    # each downstream model and each of general1, general2 and distance1, the
+    # SMILES+CGR held-out mean minus the SMILES-only one. Negative = CGR helped.
+    delta_by_model_rule = {}
+    if ('smiles_only' in hybrid_comparison
+            and 'smiles_plus_cgr' in hybrid_comparison):
+        so = hybrid_comparison['smiles_only'].get('rule_heldout_by_model') or {}
+        sc = hybrid_comparison['smiles_plus_cgr'].get('rule_heldout_by_model') or {}
+        for model_name in so:
+            if model_name not in sc:
+                continue
+            for key, d_so in so[model_name]['slots'].items():
+                d_sc = sc[model_name]['slots'].get(key)
+                if d_sc is None:
+                    continue
+                a, b = d_so['mean'], d_sc['mean']
+                if np.isnan(a) or np.isnan(b):
+                    continue
+                delta_by_model_rule.setdefault(model_name, {})[key] = {
+                    'rmse_delta': float(b - a),
+                    'smiles_only_heldout_mean': float(a),
+                    'smiles_plus_cgr_heldout_mean': float(b),
+                    'n_folds_used': int(min(d_so['n_folds'], d_sc['n_folds'])),
+                }
+
     # --- Phase D: Family analysis ---
     family_analysis = analyze_families(individual_results)
 
@@ -898,6 +1073,7 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
         'individual_results': individual_results,
         'hybrid_comparison': hybrid_comparison,
         'delta_by_model': delta_by_model,
+        'delta_by_model_rule': delta_by_model_rule,
         'family_analysis': family_analysis,
         'correlation_matrix': correlation,
     }

@@ -86,6 +86,65 @@ from experiments._shared import (
     resolve_comparison_models,
 )
 
+
+# =============================================================================
+# THE OWNER'S HYBRID SET (2026-10-02)
+# =============================================================================
+# For each downstream model: the top 2 hybrids from the general searches plus
+# the top 1 from the distance searches, and the model's top 2 single
+# representations. get_rule_hybrids passes its extra arguments to BOTH reads,
+# and the two searches take different evaluator and budget lists (the distance
+# searches use DISTANCE_EVALUATORS and DISTANCE_BUDGETS by default). So the
+# two lineages are read in two calls here, each with its own arguments, and
+# merged into the shape get_rule_hybrids returns.
+def _rule_set(reps, labels, groups, model, *, general_kw, distance_kw,
+              **common):
+    """get_rule_hybrids for one model, general and distance read separately."""
+    from experiments._shared import get_rule_hybrids
+    g = get_rule_hybrids(reps, labels, groups, downstream_model=model,
+                         n_distance=0, **common, **general_kw)
+    d = get_rule_hybrids(reps, labels, groups, downstream_model=model,
+                         n_general=0, n_base=0, **common, **distance_kw)
+    by_obj = {}
+    for fam in g['objectives']:
+        gf = g['by_objective'].get(fam) or {}
+        df = d['by_objective'].get(fam) or {}
+        f = dict(gf)
+        f['general'] = list(gf.get('general') or [])
+        f['distance'] = list(df.get('distance') or [])
+        f['hybrids'] = f['general'] + f['distance']
+        f['base_reps'] = list(gf.get('base_reps') or [])
+        f['missing'] = (list(gf.get('missing') or [])
+                        + list(df.get('missing') or []))
+        by_obj[fam] = f
+    return {
+        'model': model, 'objectives': list(g['objectives']),
+        'by_objective': by_obj,
+        'hybrids': [h for fam in g['objectives']
+                    for h in by_obj[fam]['hybrids']],
+        'base_reps': g['base_reps'],
+        'missing': list(g['missing']) + list(d['missing']),
+        'warnings': list(g['warnings']) + list(d['warnings']),
+        'rule': 'top 2 general + top 1 distance hybrids per family, '
+                'top 2 single representations',
+    }
+
+
+def _rule_entry_summary(e):
+    """The JSON-safe part of one rule entry (no Blueprint object)."""
+    return {k: e.get(k) for k in (
+        'slot', 'lineage', 'lineage_rank', 'objective', 'tier',
+        'aug_condition', 'recipe', 'allocation_method', 'importance_method',
+        'internal_evaluator', 'budget', 'budget_relaxed', 'metric_name',
+        'lower_is_better', 'score_other_folds', 'score_this_fold',
+        'fold_scores')}
+
+
+def _rule_base_summary(b):
+    return {k: b.get(k) for k in (
+        'rep', 'objective', 'tier', 'aug_condition', 'metric_name',
+        'score_other_folds', 'score_this_fold', 'fold_scores')}
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -384,22 +443,27 @@ def evaluate_ac_performance(labels, predictions, mmp_pairs, ac_threshold=2.0,
 
 
 def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
-                             target, search_kwargs):
-    """Build a hybrid inside every scaffold fold and predict that fold's held-out rows.
+                             target, search_kwargs, distance_search_kwargs=None):
+    """Build hybrids inside every scaffold fold and predict that fold's held-out rows.
 
-    The recipe for a fold comes from a search over that fold's TRAINING rows
+    The recipes for a fold come from searches over that fold's TRAINING rows
     only. The whole-compound search cannot be used here: its feature indices
     were chosen with the held-out labels in hand, so any cliff number it
     produced would be measured on the rows that built it.
 
-    Returns {model_name: {'qsar': ..., 'predictions': ..., 'per_fold_blueprint':
-    ..., 'per_fold_n_features': ...}}. 'predictions' is one out-of-fold value
-    per compound, indexed like `labels`, nan where a fold produced nothing —
-    the same array evaluate_ac_performance takes for a representation.
+    The owner's hybrid set (2026-10-02): for each downstream model, the top 2
+    hybrids from this fold's general searches and the top 1 from its distance
+    searches are each built and scored. Until then only the single winner of
+    the general searches was. Slots are 'general1', 'general2', 'distance1'.
+
+    Returns ({slot: {model_name: {'qsar': ..., 'predictions': ...,
+    'per_fold_blueprint': ..., 'per_fold_n_features': ...}}}, missing) where
+    missing lists every slot a fold could not fill, and why. 'predictions' is
+    one out-of-fold value per compound, indexed like `labels`, nan where a
+    fold produced nothing -- the same array evaluate_ac_performance takes for
+    a representation.
     """
-    from experiments._shared import (
-        build_fold_hybrid, get_best_for_downstream,
-        get_best_search_for_downstream)
+    from experiments._shared import build_fold_hybrid, fold_hybrid_scoring_kwargs
 
     labels = np.asarray(labels, dtype=np.float64)
     n = len(labels)
@@ -412,17 +476,22 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
     splits = list(GroupKFold(n_splits=n_folds).split(
         np.zeros((n, 1)), labels, groups=groups))
 
-    preds = {mn: np.full(n, np.nan) for mn in models}
+    slots = ('general1', 'general2', 'distance1')
+    preds = {s: {mn: np.full(n, np.nan) for mn in models} for s in slots}
     # Which fold each compound was held out in, so the AC arm can split the
     # matched pairs into Dablander's M_inter and M_test. Filled per model
     # because a model whose search found no recipe on a fold has no prediction
     # for that fold's compounds.
-    held_out = {mn: np.full(n, -1, dtype=int) for mn in models}
-    folds = {mn: {'rmse': [], 'mae': [], 'r2': [], 'spearman': [],
-                  'blueprint': [], 'n_features': []} for mn in models}
+    held_out = {s: {mn: np.full(n, -1, dtype=int) for mn in models}
+                for s in slots}
+    folds = {s: {mn: {'rmse': [], 'mae': [], 'r2': [], 'spearman': [],
+                      'blueprint': [], 'n_features': []} for mn in models}
+             for s in slots}
 
-    # {downstream model: [fold indices where its search scored no configuration]}
+    # {(slot, downstream model): [fold indices where that slot had no recipe]}
     _no_recipe = {}
+    # Every slot a fold's searches could not fill, with the reason, saved.
+    rule_missing = []
     for fold_i, (train_idx, val_idx) in enumerate(splits):
         tr = {k: v[train_idx] for k, v in base.items()}
         va = {k: v[val_idx] for k, v in base.items()}
@@ -431,114 +500,126 @@ def evaluate_hybrid_per_fold(base, aug_dict, labels, groups, n_folds, models,
         y_tr, y_va = labels[train_idx], labels[val_idx]
         g_tr = groups[train_idx] if groups is not None else None
 
-        try:
-            fold_search, _fmeta = get_best_search_for_downstream(
-                tr, y_tr, g_tr,
-                downstream_model='rf', budget=None,
-                augmentations=aug_tr,
-                task_type='regression',
-                dataset_name='chembl_qsar',
-                condition_suffix=f'{target}_heldout_fold{fold_i}',
-                adaptive_pruning=0.25,
-                **search_kwargs,
-            )
-        except Exception as e:
-            print(f"    fold {fold_i} hybrid search failed: "
-                  f"{type(e).__name__}: {e}", flush=True)
-            fold_search = None
-        if fold_search is None:
-            print(f"    fold {fold_i}: no hybrid recipe from this fold's "
-                  f"training rows", flush=True)
-            continue
-
         for model_name, factory in models.items():
-            best = get_best_for_downstream(fold_search, model_name)
-            if best is None:
-                # ⛔ SAID OUT LOUD SINCE 2026-09-18. This was a bare `continue`,
-                # so a downstream model the fold's search never scored simply
-                # had no hybrid row, and the result file did not say which model
-                # or how often. It is not hypothetical: svm's effective row
-                # ceiling drops to 5,000 training molecules under the 'uncapped'
-                # augmentation strategy (_STRATEGY_MAX_SAMPLES at
-                # find_best_hybrid.py:2862), and d2 carries 6,333 compounds, so
-                # on a server run — which passes augmentations, unlike a smoke
-                # run — svm can be scored in the per-representation table below
-                # and absent from the hybrid arm. A reader comparing the two
-                # then reads svm's missing hybrid as a loss rather than as an
-                # absence.
-                _no_recipe.setdefault(model_name, []).append(fold_i)
-                continue
-            bp = best['blueprint']
+            # Owner's set (2026-10-02): top 2 general + top 1 distance for
+            # this model, read from searches over this fold's training rows.
             try:
-                X_tr_h, X_va_h, _fi = build_fold_hybrid(
-                    tr, va, y_tr, bp,
-                    augmentations_train=aug_tr, augmentations_val=aug_va,
-                    groups=g_tr, model=factory(),
-                    metric_fn=mean_absolute_error, lower_is_better=True)
-                scaler = StandardScaler()
-                X_tr_h = scaler.fit_transform(X_tr_h)
-                X_va_h = scaler.transform(X_va_h)
-                m = factory()
-                m.fit(X_tr_h, y_tr)
-                p = m.predict(X_va_h)
+                rule = _rule_set(
+                    tr, y_tr, g_tr, model_name,
+                    general_kw=dict(search_kwargs),
+                    distance_kw=dict(distance_search_kwargs or {}),
+                    augmentations=aug_tr, task_type='regression',
+                    dataset_name='chembl_qsar',
+                    condition_suffix=f'{target}_heldout_fold{fold_i}',
+                    adaptive_pruning=0.25)
             except Exception as e:
-                print(f"    fold {fold_i} {model_name} hybrid failed: "
-                      f"{type(e).__name__}: {e}", flush=True)
+                print(f"    fold {fold_i} {model_name}: hybrid searches "
+                      f"failed: {type(e).__name__}: {e}", flush=True)
+                rule_missing.append(
+                    f'fold {fold_i} {model_name}: searches raised '
+                    f'{type(e).__name__}: {e}')
+                for s in slots:
+                    _no_recipe.setdefault((s, model_name), []).append(fold_i)
                 continue
+            rule_missing += [f'fold {fold_i}: {m}' for m in rule['missing']]
+            got = {e['slot']: e for e in rule['hybrids']}
+            for slot in slots:
+                entry = got.get(slot)
+                if entry is None:
+                    # ⛔ Said out loud since 2026-09-18: a model with no recipe
+                    # on a fold is an absence, not a loss. svm's row ceiling
+                    # falls to 5,000 training molecules under 'uncapped'
+                    # (find_best_hybrid.py:2862) and d2 carries 6,333.
+                    _no_recipe.setdefault((slot, model_name), []).append(fold_i)
+                    continue
+                bp = entry['blueprint']
+                _use_aug = entry.get('aug_condition') not in (None, 'none')
+                try:
+                    X_tr_h, X_va_h, _fi = build_fold_hybrid(
+                        tr, va, y_tr, bp,
+                        augmentations_train=aug_tr if _use_aug else None,
+                        augmentations_val=aug_va if _use_aug else None,
+                        groups=g_tr,
+                        **fold_hybrid_scoring_kwargs(
+                            bp, model=factory(),
+                            metric_fn=mean_absolute_error,
+                            lower_is_better=True))
+                    scaler = StandardScaler()
+                    X_tr_h = scaler.fit_transform(X_tr_h)
+                    X_va_h = scaler.transform(X_va_h)
+                    m = factory()
+                    m.fit(X_tr_h, y_tr)
+                    p = m.predict(X_va_h)
+                except Exception as e:
+                    print(f"    fold {fold_i} {model_name} {slot} hybrid "
+                          f"failed: {type(e).__name__}: {e}", flush=True)
+                    rule_missing.append(
+                        f'fold {fold_i} {model_name} {slot}: build or fit '
+                        f'raised {type(e).__name__}: {e}')
+                    continue
 
-            preds[model_name][val_idx] = p
-            held_out[model_name][val_idx] = fold_i
-            fm = folds[model_name]
-            ss_res = np.sum((y_va - p) ** 2)
-            ss_tot = np.sum((y_va - y_va.mean()) ** 2)
-            fm['r2'].append(1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
-            fm['rmse'].append(np.sqrt(np.mean((y_va - p) ** 2)))
-            fm['mae'].append(mean_absolute_error(y_va, p))
-            if len(y_va) > 2:
-                rho, _ = spearmanr(y_va, p)
-                fm['spearman'].append(rho if not np.isnan(rho) else 0.0)
-            fm['n_features'].append(int(X_tr_h.shape[1]))
-            fm['blueprint'].append({
-                'budget': bp.budget,
-                'allocation': bp.allocation_method,
-                'importance': bp.importance_method,
-                'evaluator': bp.internal_evaluator,
-            })
+                preds[slot][model_name][val_idx] = p
+                held_out[slot][model_name][val_idx] = fold_i
+                fm = folds[slot][model_name]
+                ss_res = np.sum((y_va - p) ** 2)
+                ss_tot = np.sum((y_va - y_va.mean()) ** 2)
+                fm['r2'].append(1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
+                fm['rmse'].append(np.sqrt(np.mean((y_va - p) ** 2)))
+                fm['mae'].append(mean_absolute_error(y_va, p))
+                if len(y_va) > 2:
+                    rho, _ = spearmanr(y_va, p)
+                    fm['spearman'].append(rho if not np.isnan(rho) else 0.0)
+                fm['n_features'].append(int(X_tr_h.shape[1]))
+                fm['blueprint'].append({
+                    'fold': fold_i,
+                    'slot': slot,
+                    'tier': entry.get('tier'),
+                    'aug_condition': entry.get('aug_condition'),
+                    'budget': bp.budget,
+                    'budget_relaxed': entry.get('budget_relaxed'),
+                    'allocation': bp.allocation_method,
+                    'importance': bp.importance_method,
+                    'evaluator': bp.internal_evaluator,
+                    # The model's top 2 single representations on this fold's
+                    # training rows, recorded beside the hybrid.
+                    'top2_base_reps': [b.get('rep') for b in rule['base_reps']],
+                })
 
     if _no_recipe:
         print(f"    ⛔ no hybrid recipe for: " + ", ".join(
-            f"{m} on {len(f)} of {len(splits)} folds" for m, f in sorted(_no_recipe.items())))
+            f"{m} {s} on {len(f)} of {len(splits)} folds"
+            for (s, m), f in sorted(_no_recipe.items())))
         print(f"       Those models are scored in the per-representation table "
-              f"and absent from the hybrid arm. Absence, not a loss.")
+              f"and absent from that hybrid row. Absence, not a loss.")
 
-    out = {}
-    for model_name, fm in folds.items():
-        if not fm['rmse']:
-            continue
-        out[model_name] = {
-            'qsar': {
-                'rmse': {'mean': np.mean(fm['rmse']), 'std': np.std(fm['rmse'])},
-                'mae': {'mean': np.mean(fm['mae']), 'std': np.std(fm['mae'])},
-                'r2': {'mean': np.nanmean(fm['r2']),
-                       'std': np.nanstd(fm['r2'])},
-                'spearman': {
-                    'mean': np.mean(fm['spearman']) if fm['spearman'] else float('nan'),
-                    'std': np.std(fm['spearman']) if fm['spearman'] else float('nan')},
-                # How many of the folds produced a hybrid for this model. A
-                # mean over fewer folds than the representations got is not the
-                # same number, so it travels with the score.
-                'n_folds': len(fm['rmse']),
-            },
-            'predictions': preds[model_name],
-            'held_out_fold': held_out[model_name],
-            'per_fold_blueprint': fm['blueprint'],
-            'per_fold_n_features': fm['n_features'],
-            # Folds where this model's search scored no configuration, so it
-            # got no hybrid. Empty for a model the search covered on every
-            # fold. Travels with the score so a short mean is traceable.
-            'folds_without_a_recipe': sorted(_no_recipe.get(model_name, [])),
-        }
-    return out
+    out = {s: {} for s in slots}
+    for slot in slots:
+        for model_name, fm in folds[slot].items():
+            if not fm['rmse']:
+                continue
+            out[slot][model_name] = {
+                'qsar': {
+                    'rmse': {'mean': np.mean(fm['rmse']), 'std': np.std(fm['rmse'])},
+                    'mae': {'mean': np.mean(fm['mae']), 'std': np.std(fm['mae'])},
+                    'r2': {'mean': np.nanmean(fm['r2']),
+                           'std': np.nanstd(fm['r2'])},
+                    'spearman': {
+                        'mean': np.mean(fm['spearman']) if fm['spearman'] else float('nan'),
+                        'std': np.std(fm['spearman']) if fm['spearman'] else float('nan')},
+                    # How many of the folds produced this hybrid for this
+                    # model. A mean over fewer folds than the representations
+                    # got is not the same number, so it travels with the score.
+                    'n_folds': len(fm['rmse']),
+                },
+                'predictions': preds[slot][model_name],
+                'held_out_fold': held_out[slot][model_name],
+                'per_fold_blueprint': fm['blueprint'],
+                'per_fold_n_features': fm['n_features'],
+                # Folds where this slot had no recipe for this model.
+                'folds_without_a_recipe': sorted(
+                    _no_recipe.get((slot, model_name), [])),
+            }
+    return out, rule_missing
 
 
 def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning'):
@@ -652,11 +733,18 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         # pool and the same search settings as the search above. Pruning is
         # resolved once from the whole compound count and reused per fold; a
         # fold is within a fifth of that count.
+        # The distance searches (owner's set, 2026-10-02) take their own
+        # evaluator and budget lists (DISTANCE_EVALUATORS, DISTANCE_BUDGETS),
+        # so only the pruning settings are shared; a smoke run shrinks them
+        # the same way it shrinks the general search.
+        _dist_kw = dict(**({'internal_evaluators': ['rf']} if _is_smoke
+                           else {}), **_smoke_search, **_pkw)
         hybrid_inputs = {
             'base': base if base else reps,
             'aug_dict': _smoke_augs,
             'search_kwargs': dict(internal_evaluators=_eval_list,
                                   **_smoke_search, **_pkw),
+            'distance_search_kwargs': _dist_kw,
         }
 
         # ── Top-2 rows, read off the search above. 0 new model fits. ───────
@@ -778,6 +866,35 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
                         'no hybrid delta: %s: %s' % (type(_e).__name__, _e))
             if _deltas:
                 top2_block['hybrid_deltas_by_model'] = _deltas
+
+            # Owner's set on the whole-compound searches (2026-10-02): per
+            # downstream model, the top 2 general hybrids, the top 1 distance
+            # hybrid and the top 2 single representations, ranked on every
+            # fold. Report rows only; the per-fold arm below builds and scores
+            # the same set from each fold's training rows.
+            _rule_rows, _rule_missing = {}, []
+            for _m in MODELS_LIST:
+                try:
+                    _r = _rule_set(
+                        base if base else reps, labels, groups, _m,
+                        general_kw=dict(internal_evaluators=_eval_list,
+                                        **_smoke_search, **_pkw),
+                        distance_kw=_dist_kw,
+                        augmentations=_smoke_augs, task_type='regression',
+                        dataset_name='chembl_qsar', condition_suffix=target,
+                        adaptive_pruning=0.25)
+                except Exception as _e:
+                    _rule_missing.append(
+                        f'{_m}: read raised {type(_e).__name__}: {_e}')
+                    continue
+                _rule_rows[_m] = {
+                    'hybrids': [_rule_entry_summary(h) for h in _r['hybrids']],
+                    'top2_base_reps': [_rule_base_summary(b)
+                                       for b in _r['base_reps']],
+                }
+                _rule_missing += list(_r['missing'])
+            top2_block['rule_hybrids_by_model'] = _rule_rows
+            top2_block['rule_missing'] = _rule_missing
             if not top2_block:
                 top2_block = None
     except Exception as e:
@@ -837,54 +954,71 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     if hybrid_inputs is not None:
         print(f"\n  Per-fold hybrid × {len(models)} models × {n_folds}-fold CV...")
         try:
-            hyb = evaluate_hybrid_per_fold(
+            hyb, hyb_missing = evaluate_hybrid_per_fold(
                 hybrid_inputs['base'], hybrid_inputs['aug_dict'],
                 labels, groups, n_folds, models, target,
-                hybrid_inputs['search_kwargs'])
+                hybrid_inputs['search_kwargs'],
+                hybrid_inputs['distance_search_kwargs'])
         except Exception as e:
             print(f"  Per-fold hybrid arm failed: {type(e).__name__}: {e}")
-            hyb = {}
+            hyb, hyb_missing = {}, [f'per-fold hybrid arm raised '
+                                    f'{type(e).__name__}: {e}']
+        rule_missing = hyb_missing
 
-        hybrid_results = {}
-        for model_name, hres in hyb.items():
-            predictions = hres.pop('predictions')
-            ac_res = evaluate_ac_performance(
-                labels, predictions, mmp_pairs, data['ac_threshold'],
-                held_out_fold=hres.pop('held_out_fold', None))
-            model_result = {'qsar': hres['qsar'],
-                            'per_fold_blueprint': hres['per_fold_blueprint'],
-                            'per_fold_n_features': hres['per_fold_n_features']}
-            if ac_res is not None:
-                model_result['ac'] = ac_res
-            hybrid_results[model_name] = model_result
+        # Owner's set (2026-10-02): one row per slot. general1 keeps the
+        # 'kirby_hybrid' name readers already use; general2 and distance1
+        # get their own rows.
+        _row_name = {'general1': 'kirby_hybrid',
+                     'general2': 'kirby_hybrid__general2',
+                     'distance1': 'kirby_hybrid__distance1'}
+        for slot, slot_res in hyb.items():
+            hybrid_results = {}
+            for model_name, hres in slot_res.items():
+                predictions = hres.pop('predictions')
+                ac_res = evaluate_ac_performance(
+                    labels, predictions, mmp_pairs, data['ac_threshold'],
+                    held_out_fold=hres.pop('held_out_fold', None))
+                model_result = {'qsar': hres['qsar'],
+                                'per_fold_blueprint': hres['per_fold_blueprint'],
+                                'per_fold_n_features': hres['per_fold_n_features'],
+                                'folds_without_a_recipe':
+                                    hres['folds_without_a_recipe']}
+                if ac_res is not None:
+                    model_result['ac'] = ac_res
+                hybrid_results[model_name] = model_result
 
-            mae = hres['qsar']['mae']['mean']
-            mcc = ac_res['ac_mcc'] if ac_res else float('nan')
-            print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
-                  f"MAE={mae:.4f}  AC-MCC={mcc:.4f}  "
-                  f"({hres['qsar']['n_folds']}/{n_folds} folds)")
+                mae = hres['qsar']['mae']['mean']
+                mcc = ac_res['ac_mcc'] if ac_res else float('nan')
+                print(f"    {_row_name[slot]:25s} {model_name:8s}  "
+                      f"MAE={mae:.4f}  AC-MCC={mcc:.4f}  "
+                      f"({hres['qsar']['n_folds']}/{n_folds} folds)")
 
-        # ⛔ WHICH DOWNSTREAM MODELS HAVE NO HYBRID ROW, AND WHY. Recorded
-        # 2026-09-18. A model whose search scored no configuration was dropped
-        # in silence, so the per-representation table above could carry svm
-        # while the hybrid arm did not, and a reader comparing the two read the
-        # gap as a loss. svm is the real case: its effective row ceiling falls
-        # to 5,000 training molecules under the 'uncapped' augmentation
-        # strategy (find_best_hybrid.py:2862) and d2 carries 6,333 compounds.
-        _absent = sorted(m for m in models if m not in hybrid_results)
-        if _absent:
-            print(f"    ⛔ no hybrid row at all for: {', '.join(_absent)} "
-                  f"— absent from the search, not beaten by it")
+            # ⛔ WHICH DOWNSTREAM MODELS HAVE NO HYBRID ROW, AND WHY. Recorded
+            # 2026-09-18. A model whose search scored no configuration was
+            # dropped in silence, so a reader read the gap as a loss. svm is
+            # the real case: its row ceiling falls to 5,000 training molecules
+            # under 'uncapped' (find_best_hybrid.py:2862) and d2 has 6,333.
+            _absent = sorted(m for m in models if m not in hybrid_results)
+            if _absent:
+                print(f"    ⛔ no {slot} hybrid row at all for: "
+                      f"{', '.join(_absent)} — absent from the search, not "
+                      f"beaten by it")
 
-        if hybrid_results:
-            # No single feature count: each fold and each model has its own
-            # budget. The counts are stored per model as per_fold_n_features.
-            results['kirby_hybrid'] = {
-                'dim': None,
-                'models': hybrid_results,
-                'models_without_any_hybrid': _absent,
-                'models_asked_for': sorted(models),
-            }
+            if hybrid_results:
+                # No single feature count: each fold and each model has its own
+                # budget. The counts are stored per model as per_fold_n_features.
+                results[_row_name[slot]] = {
+                    'dim': None,
+                    'slot': slot,
+                    'lineage': 'distance' if slot.startswith('distance')
+                               else 'general',
+                    'models': hybrid_results,
+                    'models_without_any_hybrid': _absent,
+                    'models_asked_for': sorted(models),
+                }
+    else:
+        rule_missing = ['no per-fold hybrid arm: the whole-compound search '
+                        'failed before its inputs were set']
 
     target_out = {
         'n_compounds': n,
@@ -893,6 +1027,9 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         'n_acs': data['n_activity_cliffs'],
         'target_name': data['target_name'],
         'results': results,
+        # Every slot of the owner's set (top 2 general + top 1 distance per
+        # model) that a fold could not fill, and why. Never silently dropped.
+        'rule_missing': rule_missing,
     }
     # Attach the per-fold reselection block under the exact contract key name so the
     # reader can load result[target]['fold_reselection'] and call fold_reselection().
@@ -983,7 +1120,7 @@ def print_analysis(all_results):
         n_mae_rows = 0
 
         for rep_name, rep_data in results.items():
-            if rep_name == 'kirby_hybrid':
+            if rep_name.startswith('kirby_hybrid'):
                 continue
             for model_name, model_res in rep_data['models'].items():
                 mae = model_res['qsar']['mae']['mean']

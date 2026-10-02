@@ -114,6 +114,11 @@ import opig_shared_vectors_census as census                        # noqa: E402
 # ===== CONFIGURATION ======================================================
 
 TIER = 'shared_vec'      # a private cache identity; does not touch the shared DBs
+
+# The owner's set (2026-10-02): every arm is run under the general search and
+# under the distance search. The second general recipe per fold is not here —
+# nested_cv_evaluate scores one recipe per model per outer fold.
+RULE_LINEAGES = ('general', 'distance')
 DEFAULT_DATASETS = ['herg_ki']
 
 # The target and the two three-representation sets, agreed 2026-09-16. ECFP4 and
@@ -429,9 +434,21 @@ def _with_ceiling(stats, labels, task_type, metric_name):
 # ===== ONE ARM ============================================================
 
 def run_comparison(name, data, dataset_name, reps, donor_reps, config, args,
-            point=None, verbose=True):
-    """One nested_cv_evaluate call, plus the per-fold tie counts it makes possible."""
-    from experiments._shared import run_nested_cv
+            point=None, verbose=True, lineage='general'):
+    """One nested_cv_evaluate call, plus the per-fold tie counts it makes possible.
+
+    lineage='general' is the search this file always ran. lineage='distance' is
+    the distance counterpart the owner's set asks for (2026-10-02): the same
+    outer folds and the same arm, searched with the distance evaluators, the
+    distance budgets and the distance models, under its own cache tier.
+
+    ⛔ The owner's set also asks for the SECOND general recipe per fold.
+    nested_cv_evaluate scores one recipe per model per outer fold
+    (find_best_hybrid.py:10871, inner.best_by_model[model]), so that slot needs
+    a change in the engine and is not available here.
+    """
+    from experiments._shared import (
+        run_nested_cv, DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS)
     from kirby.find_best_hybrid import nested_cv_outer_folds
 
     labels = np.asarray(data['labels'])
@@ -439,14 +456,26 @@ def run_comparison(name, data, dataset_name, reps, donor_reps, config, args,
     kwargs = dict(engine_kwargs(point or {}))
     suffix = point_slug(point) if point else None
 
+    _is_dist = (lineage == 'distance')
+    _tier = f'{TIER}_distance' if _is_dist else TIER
+    _budgets = args.budgets
+    _models = args.models
+    _extra = {}
+    if _is_dist:
+        _budgets = [b for b in (args.budgets or config.get('budgets') or [])
+                    if b in DISTANCE_BUDGETS] or list(DISTANCE_BUDGETS)
+        _models = args.models or list(DISTANCE_MODELS)
+        _extra['internal_evaluators'] = list(DISTANCE_EVALUATORS)
+
     result = run_nested_cv(
         reps=reps, labels=labels, groups=groups, config=config,
         dataset_name=dataset_name, task_type=data['task_type'],
-        domain=data.get('domain'), tier=TIER,
+        domain=data.get('domain'), tier=_tier,
         augmentations=(donor_reps or None),
-        budgets=args.budgets, n_outer_folds=args.n_outer_folds,
+        budgets=_budgets, n_outer_folds=args.n_outer_folds,
         speed=args.speed,
-        **({'models': args.models} if args.models else {}),
+        **_extra,
+        **({'models': _models} if _models else {}),
         # rep_counts is pinned to the whole pool. A blueprint records the pool it
         # was chosen from, not the subset a rep_count picked, and the outer
         # rebuild re-applies the pool -- so a searched rep_count would make the
@@ -471,7 +500,7 @@ def run_comparison(name, data, dataset_name, reps, donor_reps, config, args,
 
 
 def summarise_comparison(name, point, result, outer_folds, data, reps, donor_reps,
-                  target, args):
+                  target, args, lineage='general'):
     """Scores, paired deltas against A, and the tie counts per fold."""
     labels = np.asarray(data['labels'])
     groups = data['groups']
@@ -514,7 +543,14 @@ def summarise_comparison(name, point, result, outer_folds, data, reps, donor_rep
         admitted = sorted({name for t in ties_per_fold if t
                            for name in t['kept_augmentations']})
         rows.append({
-            'comparison': name, 'sweep_point': point, 'model': model,
+            # Which lineage this row's recipe came from (owner's set,
+            # 2026-10-02). A distance row carries the arm's name with a 'd'
+            # appended, so the two never collapse into one arm.
+            'comparison': (f'{name}d' if lineage == 'distance' else name),
+            'arm': name,
+            'lineage': lineage,
+            'slot': 'distance1' if lineage == 'distance' else 'general1',
+            'sweep_point': point, 'model': model,
             'condition_suffix': point_slug(point) if point else None,
             'metric_name': metric_name, 'lower_is_better': lower,
             'n_outer_folds': result.n_outer_folds,
@@ -776,10 +812,15 @@ def main():
                            + (n_sets if 'D' in args.compare else 0))
             n_c = n_sets if 'C' in args.compare else 0
             print(f'  partner sets: {n_sets}')
+            # Every arm runs under both lineages of the owner's set, so the
+            # count is twice what it was (2026-10-02).
+            _per_lineage = n_c + len(points) * n_augmented
             print(f'  nested-CV runs for this dataset: '
-                  f'{n_c + len(points) * n_augmented} '
+                  f'{_per_lineage * len(RULE_LINEAGES)} '
                   f'({n_c} without a donor, {len(points)} for each of '
-                  f'{n_augmented} swept ones)')
+                  f'{n_augmented} swept ones, times '
+                  f'{len(RULE_LINEAGES)} lineages: '
+                  f'{", ".join(RULE_LINEAGES)})')
             continue
 
         # Every C first: each carries A in its baseline table, and the
@@ -791,14 +832,21 @@ def main():
         run_c = 'C' in args.compare and args.fold_spread is None
         if run_c or 'C' in args.compare:
             for name, rep_pool in hybrid_pools.items():
-                res, folds = run_comparison(name, data, ds, rep_pool, None,
-                                            config, args)
-                c_results[name] = (res, folds, rep_pool)
-                for model, base in (res.baselines_by_model or {}).items():
-                    sd = (base.get(target) or {}).get('std')
-                    if sd is not None and np.isfinite(sd):
-                        spread = (float(sd) if spread is None
-                                  else max(spread, float(sd)))
+                # Both lineages of the owner's set (2026-10-02): the general
+                # search and the distance search, same arm, same outer folds.
+                for _lin in RULE_LINEAGES:
+                    res, folds = run_comparison(name, data, ds, rep_pool, None,
+                                                config, args, lineage=_lin)
+                    c_results[(name, _lin)] = (res, folds, rep_pool)
+                    if _lin != 'general':
+                        # The margin unit stays what it always was: the
+                        # target's spread under the general search.
+                        continue
+                    for model, base in (res.baselines_by_model or {}).items():
+                        sd = (base.get(target) or {}).get('std')
+                        if sd is not None and np.isfinite(sd):
+                            spread = (float(sd) if spread is None
+                                      else max(spread, float(sd)))
         if spread is None and ('B' in args.compare or 'D' in args.compare):
             raise RuntimeError(
                 f'{ds}: no spread for the target across outer folds, so a '
@@ -829,9 +877,10 @@ def main():
                 trimmed.append(p)
             points = trimmed
 
-        for name, (res, folds, rep_pool) in c_results.items():
+        for (name, _lin), (res, folds, rep_pool) in c_results.items():
             all_rows.extend(summarise_comparison(
-                name, None, res, folds, data, rep_pool, None, target, args))
+                name, None, res, folds, data, rep_pool, None, target, args,
+                lineage=_lin))
 
         to_run = [('B', target_only)]
         for name, rep_pool in hybrid_pools.items():
@@ -840,32 +889,39 @@ def main():
             if which[0] not in args.compare:
                 continue
             for i, point in enumerate(points):
-                print(f'  {which} point {i + 1}/{len(points)}: '
-                      f'{point_slug(point)} ({time.time() - t0:.0f}s)', flush=True)
-                _pkey = dict(dataset=ds, comparison=which,
-                             point=point_slug(point),
-                             reps=sorted(which_reps))
-                if _ck.done(**_pkey):
-                    all_rows.extend(_ck.get(**_pkey))
-                    print('    finished in an earlier attempt, read back',
+                # Each swept setting is run under both lineages of the owner's
+                # set (2026-10-02), so one sweep point is two nested-CV runs.
+                for _lin in RULE_LINEAGES:
+                    print(f'  {which} {_lin} point {i + 1}/{len(points)}: '
+                          f'{point_slug(point)} ({time.time() - t0:.0f}s)',
                           flush=True)
-                    continue
-                try:
-                    res, folds = run_comparison(which, data, ds, which_reps,
-                                                donor_reps, config, args,
-                                                point=point, verbose=False)
-                except Exception as exc:
-                    print(f'    FAILED: {type(exc).__name__}: {exc}', flush=True)
-                    all_rows.append({'comparison': which, 'dataset': ds,
-                                     'sweep_point': point,
-                                     'error': f'{type(exc).__name__}: {exc}'})
-                    _failed.append(f'{ds}/{which}/{point_slug(point)}')
-                    continue
-                _new_rows = summarise_comparison(
-                    which, point, res, folds, data, which_reps, donor_reps,
-                    target, args)
-                _ck.put(_new_rows, **_pkey)
-                all_rows.extend(_new_rows)
+                    _pkey = dict(dataset=ds, comparison=which, lineage=_lin,
+                                 point=point_slug(point),
+                                 reps=sorted(which_reps))
+                    if _ck.done(**_pkey):
+                        all_rows.extend(_ck.get(**_pkey))
+                        print('    finished in an earlier attempt, read back',
+                              flush=True)
+                        continue
+                    try:
+                        res, folds = run_comparison(
+                            which, data, ds, which_reps, donor_reps, config,
+                            args, point=point, verbose=False, lineage=_lin)
+                    except Exception as exc:
+                        print(f'    FAILED: {type(exc).__name__}: {exc}',
+                              flush=True)
+                        all_rows.append({
+                            'comparison': which, 'lineage': _lin,
+                            'dataset': ds, 'sweep_point': point,
+                            'error': f'{type(exc).__name__}: {exc}'})
+                        _failed.append(
+                            f'{ds}/{which}/{_lin}/{point_slug(point)}')
+                        continue
+                    _new_rows = summarise_comparison(
+                        which, point, res, folds, data, which_reps, donor_reps,
+                        target, args, lineage=_lin)
+                    _ck.put(_new_rows, **_pkey)
+                    all_rows.extend(_new_rows)
 
         for r in all_rows:
             r.setdefault('dataset', ds)
@@ -886,6 +942,11 @@ def main():
                         if r.get('dataset') == ds and r.get('model') in common],
                        common)
         all_meta.append({'dataset': ds, 'choice': choice,
+                         'rule': ('every arm run under the general search and '
+                                  'the distance search; the second general '
+                                  'recipe per fold needs nested_cv_evaluate '
+                                  'to score more than one recipe per fold'),
+                         'lineages_run': list(RULE_LINEAGES),
                          'fold_spread_used_for_margins': spread,
                          'n_sweep_points': len(points),
                          'models_in_all_four': sorted(common),
