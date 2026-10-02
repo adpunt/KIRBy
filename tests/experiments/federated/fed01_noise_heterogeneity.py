@@ -74,6 +74,90 @@ DETECTORS = smoke_grid([
 
 
 
+# ── The owner's hybrid set (2026-10-02) ──────────────────────────────────────
+# For the downstream model this run trains, the top 2 hybrids from the general
+# searches plus the top 1 hybrid from the distance searches. Each one is built
+# and scored as its own arm. general1 writes the keys this file always wrote;
+# the other two write the same key with '__general2' / '__distance1' appended.
+_SLOT_ORDER = ['general1', 'general2', 'distance1']
+
+
+def _slot_suffix(slot):
+    """'' for general1 (the old key), '__<slot>' for the others."""
+    return '' if slot == 'general1' else f'__{slot}'
+
+
+def _rule_recipes(reps, labels, groups, *, downstream_model, budget,
+                  augmentations, metric, task_type, domain, dataset_name,
+                  data=None, label_noise=None, extra=None):
+    """The owner's set for one model, as recipe settings per slot.
+
+    Returns (slots, info). slots is a list, in _SLOT_ORDER, of
+    {'slot', 'lineage', 'tier', 'aug_condition', 'allocation_method',
+    'importance_method', 'internal_evaluator', 'budget_searched',
+    'budget_relaxed', 'score_all_folds', 'metric_name'}. info holds every slot
+    the set could not fill and why ('missing'), the model's top 2 single
+    representations ('base_reps') and the per-slot summary written to the
+    result file ('slots').
+    """
+    from experiments._shared import get_rule_hybrids
+    info = {'rule': None, 'missing': [], 'warnings': [], 'base_reps': [],
+            'slots': []}
+    try:
+        rule = get_rule_hybrids(
+            reps, labels, groups, downstream_model=downstream_model,
+            budget=budget, dataset_name=dataset_name,
+            augmentations=augmentations, metric=metric, task_type=task_type,
+            domain=domain, data=data, label_noise=label_noise,
+            **(extra or {}))
+    except Exception as e:
+        from kirby.result_cache import StaleResultDB as _Stale
+        if isinstance(e, _Stale):
+            raise
+        info['missing'].append(
+            f'the read of the owner\'s set raised {type(e).__name__}: {e}; '
+            f'no slot was filled from it')
+        return [], info
+    info['rule'] = rule.get('rule')
+    info['missing'] = list(rule.get('missing') or [])
+    info['warnings'] = list(rule.get('warnings') or [])
+    info['base_reps'] = [
+        {'rep': b.get('rep'), 'score_all_folds': b.get('score_other_folds'),
+         'tier': b.get('tier'), 'aug_condition': b.get('aug_condition')}
+        for b in (rule.get('base_reps') or [])]
+    slots = []
+    for h in rule.get('hybrids') or []:
+        bp = h.get('blueprint')
+        if bp is None:
+            info['missing'].append(
+                f"{h.get('slot')}: the stored row carries no blueprint, so it "
+                f"cannot be rebuilt")
+            continue
+        slots.append({
+            'slot': h.get('slot'),
+            # allocation|importance|budget|evaluator|step size as stored; this
+            # file applies the first, second and fourth plus the augmentation
+            # condition, so two slots that differ only in budget or step size
+            # build the same features here.
+            'recipe': h.get('recipe'),
+            'lineage': h.get('lineage'),
+            'tier': h.get('tier'),
+            'objective': h.get('objective'),
+            'aug_condition': h.get('aug_condition') or getattr(
+                bp, 'augmentation_strategy', 'none'),
+            'allocation_method': bp.allocation_method,
+            'importance_method': bp.importance_method,
+            'internal_evaluator': bp.internal_evaluator,
+            'budget_searched': h.get('budget'),
+            'budget_relaxed': bool(h.get('budget_relaxed')),
+            'score_all_folds': h.get('score_other_folds'),
+            'metric_name': h.get('metric_name'),
+        })
+    slots.sort(key=lambda s: _SLOT_ORDER.index(s['slot'])
+               if s['slot'] in _SLOT_ORDER else len(_SLOT_ORDER))
+    info['slots'] = [dict(s) for s in slots]
+    return slots, info
+
 
 def _condition_naive_pool(train_fps, train_labels_noisy, test_fps,
                           test_labels_clean, fed_model='rf', fed_seed=0):
@@ -231,7 +315,38 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         # final-layer classifiers.
         return _a, _i, _resolve_match(_e, 'rf'), _aug_cond
 
+    # The owner's set, 2026-10-02: for this model, the top 2 hybrids from the
+    # general searches plus the top 1 from the distance searches, each built
+    # and scored as its own C0, C5 and C6. Same noise level, same budget of
+    # 100 features and same metric as the lookup above. general1 is the slot
+    # the old keys keep; when the set has no general1 the lookup above (and
+    # its fallback to fixed settings) still fills it, as before.
+    def _rule_slot_settings(noise_spec, general1_settings):
+        slots, info = _rule_recipes(
+            reps, labels_binary, groups,
+            downstream_model=fed_to_kirby_model(fed_model), budget=100,
+            augmentations=augs, metric=metric_name,
+            task_type='classification',
+            domain=data.get('domain', 'molecular'),
+            dataset_name=dataset_name, data=None, label_noise=noise_spec,
+            extra=smoke_search_kwargs(config))
+        out = []
+        if 'general1' not in [s['slot'] for s in slots]:
+            out.append(('general1', general1_settings))
+            info['general1_source'] = 'single best lookup (set had none)'
+        for s in slots:
+            out.append((s['slot'], (s['allocation_method'],
+                                    s['importance_method'],
+                                    _resolve_match(s['internal_evaluator'],
+                                                   'rf'),
+                                    s['aug_condition'])))
+        out.sort(key=lambda x: _SLOT_ORDER.index(x[0])
+                 if x[0] in _SLOT_ORDER else len(_SLOT_ORDER))
+        return out, info
+
     settings_by_sigma = {}
+    slots_by_sigma = {}
+    rule_info_by_sigma = {}
     for _sigma in SIGMA_FRACS:
         _mean_flip = float(np.mean(np.linspace(0.0, float(_sigma), K)))
         if _mean_flip <= 0.0:
@@ -244,6 +359,11 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         _a, _i, _e, _ac = settings_by_sigma[_sigma]
         print(f"  sigma={_sigma}: mean flip fraction {_mean_flip:.4f} — "
               f"alloc={_a} importance={_i} evaluator={_e} aug={_ac}")
+        slots_by_sigma[_sigma], rule_info_by_sigma[str(_sigma)] = \
+            _rule_slot_settings(_spec, settings_by_sigma[_sigma])
+        for _sn, (_a, _i, _e, _ac) in slots_by_sigma[_sigma]:
+            print(f"    {_sn}: alloc={_a} importance={_i} evaluator={_e} "
+                  f"aug={_ac}")
 
     # 5-FOLD CV — scaffold-group-aware. Previous single 80/20 ran ALL
     # conditions × sigma × Phases 3/4/5 on one fold, so the noise contrast
@@ -321,8 +441,9 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 print(f"\n  === Sigma={sigma_frac} (noise linspace 0..{sigma_frac} across K={K} silos) ===")
 
                 # This level's own settings, from the search trained on labels
-                # corrupted at this level.
-                _alloc, _imp, _int_eval, aug_cond = settings_by_sigma[sigma_frac]
+                # corrupted at this level: one per hybrid in the owner's set
+                # (top 2 general + top 1 distance, 2026-10-02).
+                _slot_settings = slots_by_sigma[sigma_frac]
 
                 # Inject noise on training labels only using a heterogeneous linspace
                 # pattern: silo 1 = 0.0, silo K = sigma_frac, others interpolated.
@@ -397,57 +518,61 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         cluster_data_train.append(cd)
 
                 # -- Condition 0: Centralized KIRBy hybrid trained on NOISY labels --
-                # NOT a clean-label oracle / upper bound. C0 sees the SAME noisy labels
-                # the federated conditions see — it just gets centralized access to all
-                # silo features. Treat as "centralized noisy" baseline, not an upper
-                # bound. (P1 fix: header docstring was misleading.)
-                print("    C0: Centralized KIRBy (noisy labels)...", end=' ')
-                try:
-                    train_reps_all = {r: arr[train_idx] for r, arr in reps.items()}
-                    train_augs = ({k: v[train_idx] for k, v in augs.items()}
-                                  if augs else None)
-                    test_augs = ({k: v[test_idx] for k, v in augs.items()}
-                                 if augs else None)
-                    X_h_train, fi_central = create_hybrid(
-                        train_reps_all, train_labels_noisy, budget=BUDGET,
-                        # Without these, create_hybrid cuts its internal held-out
-                        # block at random, so how many features each representation
-                        # gets is decided on antibodies that share scaffolds with
-                        # their own training rows. Every other create_hybrid call in
-                        # this file passes them (lines 485, 623, 703, 836); this one
-                        # did not, so the centralised arm — the one the silo arms
-                        # are measured against — was the only scaffold-blind build
-                        # in the comparison.
-                        groups=(groups[train_idx] if groups is not None else None),
-                        allocation_method=_alloc,
-                        importance_method=_imp,
-                        internal_evaluator=_int_eval,
-                        augmentations=train_augs,
-                        augmentation_strategy=aug_cond)
-                    X_h_test = apply_feature_selection(
-                        {r: arr[test_idx] for r, arr in reps.items()}, fi_central)
-                    _aug_info = fi_central.get('augmentation_info') if isinstance(fi_central, dict) else None
-                    if _aug_info and test_augs:
-                        _X_test_aug = apply_augmentation_selection(test_augs, _aug_info)
-                        if _X_test_aug is not None:
-                            X_h_test = np.hstack([X_h_test, _X_test_aug])
-                    clf_c0 = fit_fed_classifier(
-                        fed_model, X_h_train, train_labels_noisy, seed=fed_seed)
-                    prob_c0 = clf_c0.predict_proba(X_h_test)
-                    prob_pos_c0 = prob_c0[:, 1] if prob_c0.shape[1] == 2 else None
-                    c0 = compute_clf_metrics(
-                        test_labels_clean, clf_c0.predict(X_h_test), prob_pos_c0)
-                    c0['n_features'] = int(X_h_train.shape[1])
-                    sigma_results['c0_centralized_kirby'] = c0
-                    print(f"MCC={c0['mcc']:.3f}")
-                except Exception as e:
-                    # Record traceback (not just str(e)) so a shape/import/NameError
-                    # in the create_hybrid path surfaces during the expensive run
-                    # rather than being reduced to a one-line message (FED-21).
-                    sigma_results['c0_centralized_kirby'] = {
-                        'error': str(e), 'traceback': traceback.format_exc()}
-                    print(f"FAILED: {e}")
-                    traceback.print_exc()
+                # One C0 per hybrid in the owner's set (top 2 general + top 1
+                # distance for this model, 2026-10-02). The first keeps the old key.
+                for _slot_name, (_alloc, _imp, _int_eval, aug_cond) in _slot_settings:
+                    _sfx = _slot_suffix(_slot_name)
+                    # NOT a clean-label oracle / upper bound. C0 sees the SAME noisy labels
+                    # the federated conditions see — it just gets centralized access to all
+                    # silo features. Treat as "centralized noisy" baseline, not an upper
+                    # bound. (P1 fix: header docstring was misleading.)
+                    print(f"    C0 [{_slot_name}]: Centralized KIRBy (noisy labels)...", end=' ')
+                    try:
+                        train_reps_all = {r: arr[train_idx] for r, arr in reps.items()}
+                        train_augs = ({k: v[train_idx] for k, v in augs.items()}
+                                      if augs else None)
+                        test_augs = ({k: v[test_idx] for k, v in augs.items()}
+                                     if augs else None)
+                        X_h_train, fi_central = create_hybrid(
+                            train_reps_all, train_labels_noisy, budget=BUDGET,
+                            # Without these, create_hybrid cuts its internal held-out
+                            # block at random, so how many features each representation
+                            # gets is decided on antibodies that share scaffolds with
+                            # their own training rows. Every other create_hybrid call in
+                            # this file passes them (lines 485, 623, 703, 836); this one
+                            # did not, so the centralised arm — the one the silo arms
+                            # are measured against — was the only scaffold-blind build
+                            # in the comparison.
+                            groups=(groups[train_idx] if groups is not None else None),
+                            allocation_method=_alloc,
+                            importance_method=_imp,
+                            internal_evaluator=_int_eval,
+                            augmentations=train_augs,
+                            augmentation_strategy=aug_cond)
+                        X_h_test = apply_feature_selection(
+                            {r: arr[test_idx] for r, arr in reps.items()}, fi_central)
+                        _aug_info = fi_central.get('augmentation_info') if isinstance(fi_central, dict) else None
+                        if _aug_info and test_augs:
+                            _X_test_aug = apply_augmentation_selection(test_augs, _aug_info)
+                            if _X_test_aug is not None:
+                                X_h_test = np.hstack([X_h_test, _X_test_aug])
+                        clf_c0 = fit_fed_classifier(
+                            fed_model, X_h_train, train_labels_noisy, seed=fed_seed)
+                        prob_c0 = clf_c0.predict_proba(X_h_test)
+                        prob_pos_c0 = prob_c0[:, 1] if prob_c0.shape[1] == 2 else None
+                        c0 = compute_clf_metrics(
+                            test_labels_clean, clf_c0.predict(X_h_test), prob_pos_c0)
+                        c0['n_features'] = int(X_h_train.shape[1])
+                        sigma_results['c0_centralized_kirby' + _sfx] = c0
+                        print(f"MCC={c0['mcc']:.3f}")
+                    except Exception as e:
+                        # Record traceback (not just str(e)) so a shape/import/NameError
+                        # in the create_hybrid path surfaces during the expensive run
+                        # rather than being reduced to a one-line message (FED-21).
+                        sigma_results['c0_centralized_kirby' + _sfx] = {
+                            'error': str(e), 'traceback': traceback.format_exc()}
+                        print(f"FAILED: {e}")
+                        traceback.print_exc()
 
                 # -- Condition 1: Naive pool --
                 print("    C1: Naive pool...", end=' ')
@@ -506,65 +631,69 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     print(f"FAILED: {e}")
 
                 # -- Condition 5: KIRBy federated feature selection --
-                print("    C5: KIRBy federated FS...", end=' ')
-                try:
-                    # Use training data reps with noisy labels
-                    train_reps = {r: arr[train_idx] for r, arr in reps.items()}
-                    test_reps = {r: arr[test_idx] for r, arr in reps.items()}
+                # One C5 per hybrid in the owner's set (top 2 general + top 1
+                # distance for this model, 2026-10-02). The first keeps the old key.
+                for _slot_name, (_alloc, _imp, _int_eval, aug_cond) in _slot_settings:
+                    _sfx = _slot_suffix(_slot_name)
+                    print(f"    C5 [{_slot_name}]: KIRBy federated FS...", end=' ')
+                    try:
+                        # Use training data reps with noisy labels
+                        train_reps = {r: arr[train_idx] for r, arr in reps.items()}
+                        test_reps = {r: arr[test_idx] for r, arr in reps.items()}
 
-                    train_groups_c5 = (groups[train_idx]
-                                       if groups is not None else None)
-                    X_hybrid_train, silo_budgets, silo_scores, silo_fis = \
-                        federated_feature_selection(
-                            train_reps, train_labels_noisy, train_silo_indices,
-                            K, budget=BUDGET,
-                            allocation_method=_alloc, importance_method=_imp,
-                            internal_evaluator=_int_eval,
-                            downstream_model=fed_to_kirby_model(fed_model),
-                            groups=train_groups_c5,
-                            task_type='classification',
-                            metric_fn=metric_fn, lower_is_better=lower_is_better)
+                        train_groups_c5 = (groups[train_idx]
+                                           if groups is not None else None)
+                        X_hybrid_train, silo_budgets, silo_scores, silo_fis = \
+                            federated_feature_selection(
+                                train_reps, train_labels_noisy, train_silo_indices,
+                                K, budget=BUDGET,
+                                allocation_method=_alloc, importance_method=_imp,
+                                internal_evaluator=_int_eval,
+                                downstream_model=fed_to_kirby_model(fed_model),
+                                groups=train_groups_c5,
+                                task_type='classification',
+                                metric_fn=metric_fn, lower_is_better=lower_is_better)
 
-                    # Reconstruct hybrid on test set using same feature selections
-                    # (apply_feature_selection is imported at module level; a
-                    # redundant local import here made Python treat the name as a
-                    # function-local everywhere in run(), raising "cannot access
-                    # local variable 'apply_feature_selection'" in the C0 path).
-                    hybrid_test_parts = []
-                    for s in range(1, K + 1):
-                        fi = silo_fis.get(s)
-                        if fi is None:
-                            continue
-                        try:
-                            X_part = apply_feature_selection(test_reps, fi)
-                            hybrid_test_parts.append(X_part)
-                        except Exception:
-                            continue
+                        # Reconstruct hybrid on test set using same feature selections
+                        # (apply_feature_selection is imported at module level; a
+                        # redundant local import here made Python treat the name as a
+                        # function-local everywhere in run(), raising "cannot access
+                        # local variable 'apply_feature_selection'" in the C0 path).
+                        hybrid_test_parts = []
+                        for s in range(1, K + 1):
+                            fi = silo_fis.get(s)
+                            if fi is None:
+                                continue
+                            try:
+                                X_part = apply_feature_selection(test_reps, fi)
+                                hybrid_test_parts.append(X_part)
+                            except Exception:
+                                continue
 
-                    if hybrid_test_parts:
-                        X_hybrid_test = np.hstack(hybrid_test_parts)
-                        clf = fit_fed_classifier(
-                            fed_model, X_hybrid_train, train_labels_noisy,
-                            seed=fed_seed)
-                        pred_cls = clf.predict(X_hybrid_test)
-                        pred_prob = clf.predict_proba(X_hybrid_test)
-                        prob_pos = pred_prob[:, 1] if pred_prob.shape[1] == 2 else None
-                        c5 = compute_clf_metrics(
-                            test_labels_clean, pred_cls, prob_pos)
-                    else:
-                        c5 = {'error': 'no valid silo selections'}
+                        if hybrid_test_parts:
+                            X_hybrid_test = np.hstack(hybrid_test_parts)
+                            clf = fit_fed_classifier(
+                                fed_model, X_hybrid_train, train_labels_noisy,
+                                seed=fed_seed)
+                            pred_cls = clf.predict(X_hybrid_test)
+                            pred_prob = clf.predict_proba(X_hybrid_test)
+                            prob_pos = pred_prob[:, 1] if pred_prob.shape[1] == 2 else None
+                            c5 = compute_clf_metrics(
+                                test_labels_clean, pred_cls, prob_pos)
+                        else:
+                            c5 = {'error': 'no valid silo selections'}
 
-                    c5['silo_budgets'] = convert_numpy(silo_budgets)
-                    c5['silo_scores'] = convert_numpy(silo_scores)
-                    sigma_results['c5_kirby_federated'] = c5
-                    mcc_str = f"MCC={c5['mcc']:.3f}" if 'mcc' in c5 else 'N/A'
-                    print(f"{mcc_str} budgets={silo_budgets}")
+                        c5['silo_budgets'] = convert_numpy(silo_budgets)
+                        c5['silo_scores'] = convert_numpy(silo_scores)
+                        sigma_results['c5_kirby_federated' + _sfx] = c5
+                        mcc_str = f"MCC={c5['mcc']:.3f}" if 'mcc' in c5 else 'N/A'
+                        print(f"{mcc_str} budgets={silo_budgets}")
 
-                except Exception as e:
-                    sigma_results['c5_kirby_federated'] = {
-                        'error': str(e), 'traceback': traceback.format_exc()}
-                    print(f"FAILED: {e}")
-                    traceback.print_exc()
+                    except Exception as e:
+                        sigma_results['c5_kirby_federated' + _sfx] = {
+                            'error': str(e), 'traceback': traceback.format_exc()}
+                        print(f"FAILED: {e}")
+                        traceback.print_exc()
 
                 # -- Condition 6: KIRBy + per-silo noise detection --
                 # Each silo runs detectors locally, flags noisy samples, retrain
@@ -650,76 +779,79 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     n_excluded = int((~cleaned_train_mask).sum())
                     clean_idx = np.where(cleaned_train_mask)[0]
 
-                    if len(clean_idx) > 20:
-                        try:
-                            # Silo membership, re-expressed as positions in the
-                            # cleaned rows. A silo that loses every row drops out.
-                            _pos = np.full(len(train_idx), -1, dtype=int)
-                            _pos[clean_idx] = np.arange(len(clean_idx))
-                            clean_silo_indices = {}
-                            for s in range(1, K + 1):
-                                mapped = _pos[train_silo_indices[s]]
-                                clean_silo_indices[s] = mapped[mapped >= 0]
+                    for _slot_name, (_alloc, _imp, _int_eval, aug_cond) in _slot_settings:
+                        _sfx = _slot_suffix(_slot_name)
+                        print(f"      [{_slot_name}]", end=' ')
+                        if len(clean_idx) > 20:
+                            try:
+                                # Silo membership, re-expressed as positions in the
+                                # cleaned rows. A silo that loses every row drops out.
+                                _pos = np.full(len(train_idx), -1, dtype=int)
+                                _pos[clean_idx] = np.arange(len(clean_idx))
+                                clean_silo_indices = {}
+                                for s in range(1, K + 1):
+                                    mapped = _pos[train_silo_indices[s]]
+                                    clean_silo_indices[s] = mapped[mapped >= 0]
 
-                            clean_reps = {r: arr[train_idx][clean_idx]
-                                          for r, arr in reps.items()}
-                            clean_groups_c6 = (groups[train_idx][clean_idx]
-                                               if groups is not None else None)
-                            X_c6_tr, sb_c6, ss_c6, sfis_c6 = \
-                                federated_feature_selection(
-                                    clean_reps, train_labels_noisy[clean_idx],
-                                    clean_silo_indices, K, budget=BUDGET,
-                                    allocation_method=_alloc,
-                                    importance_method=_imp,
-                                    internal_evaluator=_int_eval,
-                                    downstream_model=fed_to_kirby_model(fed_model),
-                                    groups=clean_groups_c6,
-                                    task_type='classification',
-                                    metric_fn=metric_fn,
-                                    lower_is_better=lower_is_better)
+                                clean_reps = {r: arr[train_idx][clean_idx]
+                                              for r, arr in reps.items()}
+                                clean_groups_c6 = (groups[train_idx][clean_idx]
+                                                   if groups is not None else None)
+                                X_c6_tr, sb_c6, ss_c6, sfis_c6 = \
+                                    federated_feature_selection(
+                                        clean_reps, train_labels_noisy[clean_idx],
+                                        clean_silo_indices, K, budget=BUDGET,
+                                        allocation_method=_alloc,
+                                        importance_method=_imp,
+                                        internal_evaluator=_int_eval,
+                                        downstream_model=fed_to_kirby_model(fed_model),
+                                        groups=clean_groups_c6,
+                                        task_type='classification',
+                                        metric_fn=metric_fn,
+                                        lower_is_better=lower_is_better)
 
-                            c6_test_parts = []
-                            for s in range(1, K + 1):
-                                fi = sfis_c6.get(s)
-                                if fi is None:
-                                    continue
-                                try:
-                                    c6_test_parts.append(
-                                        apply_feature_selection(test_reps, fi))
-                                except Exception:
-                                    continue
+                                c6_test_parts = []
+                                for s in range(1, K + 1):
+                                    fi = sfis_c6.get(s)
+                                    if fi is None:
+                                        continue
+                                    try:
+                                        c6_test_parts.append(
+                                            apply_feature_selection(test_reps, fi))
+                                    except Exception:
+                                        continue
 
-                            if c6_test_parts:
-                                X_c6_te = np.hstack(c6_test_parts)
-                                clf = fit_fed_classifier(
-                                    fed_model, X_c6_tr,
-                                    train_labels_noisy[clean_idx], seed=fed_seed)
-                                pred_cls = clf.predict(X_c6_te)
-                                pred_prob = clf.predict_proba(X_c6_te)
-                                prob_pos = (pred_prob[:, 1]
-                                            if pred_prob.shape[1] == 2 else None)
-                                c6 = compute_clf_metrics(
-                                    test_labels_clean, pred_cls, prob_pos)
-                            else:
-                                c6 = {'error': 'no valid silo selections'}
-                            c6['silo_budgets'] = convert_numpy(sb_c6)
-                            c6['silo_scores'] = convert_numpy(ss_c6)
-                        except Exception as e:
-                            # No Morgan-fingerprint fallback. It used to write an
-                            # MCC into this table under a 'note' key, so a fold
-                            # where the hybrid never built read afterwards as a
-                            # hybrid result.
-                            c6 = {'error': str(e),
-                                  'traceback': traceback.format_exc()}
-                            traceback.print_exc()
-                    else:
-                        c6 = {'error': 'too few samples after cleaning'}
+                                if c6_test_parts:
+                                    X_c6_te = np.hstack(c6_test_parts)
+                                    clf = fit_fed_classifier(
+                                        fed_model, X_c6_tr,
+                                        train_labels_noisy[clean_idx], seed=fed_seed)
+                                    pred_cls = clf.predict(X_c6_te)
+                                    pred_prob = clf.predict_proba(X_c6_te)
+                                    prob_pos = (pred_prob[:, 1]
+                                                if pred_prob.shape[1] == 2 else None)
+                                    c6 = compute_clf_metrics(
+                                        test_labels_clean, pred_cls, prob_pos)
+                                else:
+                                    c6 = {'error': 'no valid silo selections'}
+                                c6['silo_budgets'] = convert_numpy(sb_c6)
+                                c6['silo_scores'] = convert_numpy(ss_c6)
+                            except Exception as e:
+                                # No Morgan-fingerprint fallback. It used to write an
+                                # MCC into this table under a 'note' key, so a fold
+                                # where the hybrid never built read afterwards as a
+                                # hybrid result.
+                                c6 = {'error': str(e),
+                                      'traceback': traceback.format_exc()}
+                                traceback.print_exc()
+                        else:
+                            c6 = {'error': 'too few samples after cleaning'}
 
-                    c6['n_excluded'] = n_excluded
-                    c6['detection_results'] = convert_numpy(detection_results)
-                    sigma_results['c6_kirby_noise_detect'] = c6
-                    mcc_str = f"MCC={c6['mcc']:.3f}" if 'mcc' in c6 else 'N/A'
-                    print(f"{mcc_str} (excluded {n_excluded})")
+                        c6['n_excluded'] = n_excluded
+                        c6['detection_results'] = convert_numpy(detection_results)
+                        sigma_results['c6_kirby_noise_detect' + _sfx] = c6
+                        mcc_str = f"MCC={c6['mcc']:.3f}" if 'mcc' in c6 else 'N/A'
+                        print(f"{mcc_str} (excluded {n_excluded})")
 
                 except Exception as e:
                     sigma_results['c6_kirby_noise_detect'] = {
@@ -811,7 +943,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             # KIRBY_SMOKE_N the grid is [0, 0.2] and 0.2 is still in it; the
             # fallback is the largest level present.
             _sf_sigma = 0.2 if 0.2 in settings_by_sigma else max(settings_by_sigma)
-            _alloc, _imp, _int_eval, aug_cond = settings_by_sigma[_sf_sigma]
+            _slot_settings_sf = slots_by_sigma[_sf_sigma]
 
             for sf in SMOOTH_FACTORS:
                 print(f"  smooth_factor={sf}...", end=' ')
@@ -879,48 +1011,57 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         test_labels_clean, pred_cls_sf, pred_prob_sf)
 
                     # C5: KIRBy federated FS
-                    train_reps_sf = {r: arr[train_idx] for r, arr in reps.items()}
-                    test_reps_sf = {r: arr[test_idx] for r, arr in reps.items()}
-                    train_groups_sf = (groups[train_idx]
-                                       if groups is not None else None)
-                    X_h_train, sb, ss, sfis = federated_feature_selection(
-                        train_reps_sf, tl_noisy, train_silo_sf, K,
-                        budget=BUDGET,
-                        allocation_method=_alloc, importance_method=_imp,
-                        internal_evaluator=_int_eval,
-                        downstream_model=fed_to_kirby_model(fed_model),
-                        groups=train_groups_sf,
-                        task_type='classification',
-                        metric_fn=metric_fn, lower_is_better=lower_is_better)
-                    h_test_parts = []
-                    for s in range(1, K + 1):
-                        fi = sfis.get(s)
-                        if fi is None:
-                            continue
+                    # One C5 per hybrid in the owner's set (top 2 general +
+                    # top 1 distance, 2026-10-02); general1 keeps the old key.
+                    c5_sf_by_slot = {}
+                    for _slot_name, (_alloc, _imp, _int_eval, aug_cond) in _slot_settings_sf:
                         try:
-                            h_test_parts.append(
-                                apply_feature_selection(test_reps_sf, fi))
-                        except Exception:
-                            continue
-                    if h_test_parts:
-                        X_h_test = np.hstack(h_test_parts)
-                        clf_h = fit_fed_classifier(
-                            fed_model, X_h_train, tl_noisy, seed=fed_seed)
-                        pred_cls_h = clf_h.predict(X_h_test)
-                        pred_prob_h = clf_h.predict_proba(X_h_test)
-                        c5_sf = compute_clf_metrics(
-                            test_labels_clean, pred_cls_h,
-                            pred_prob_h[:, 1] if pred_prob_h.shape[1] == 2 else None)
-                    else:
-                        c5_sf = {'error': 'no valid silo selections'}
+                            train_reps_sf = {r: arr[train_idx] for r, arr in reps.items()}
+                            test_reps_sf = {r: arr[test_idx] for r, arr in reps.items()}
+                            train_groups_sf = (groups[train_idx]
+                                               if groups is not None else None)
+                            X_h_train, sb, ss, sfis = federated_feature_selection(
+                                train_reps_sf, tl_noisy, train_silo_sf, K,
+                                budget=BUDGET,
+                                allocation_method=_alloc, importance_method=_imp,
+                                internal_evaluator=_int_eval,
+                                downstream_model=fed_to_kirby_model(fed_model),
+                                groups=train_groups_sf,
+                                task_type='classification',
+                                metric_fn=metric_fn, lower_is_better=lower_is_better)
+                            h_test_parts = []
+                            for s in range(1, K + 1):
+                                fi = sfis.get(s)
+                                if fi is None:
+                                    continue
+                                try:
+                                    h_test_parts.append(
+                                        apply_feature_selection(test_reps_sf, fi))
+                                except Exception:
+                                    continue
+                            if h_test_parts:
+                                X_h_test = np.hstack(h_test_parts)
+                                clf_h = fit_fed_classifier(
+                                    fed_model, X_h_train, tl_noisy, seed=fed_seed)
+                                pred_cls_h = clf_h.predict(X_h_test)
+                                pred_prob_h = clf_h.predict_proba(X_h_test)
+                                c5_sf = compute_clf_metrics(
+                                    test_labels_clean, pred_cls_h,
+                                    pred_prob_h[:, 1] if pred_prob_h.shape[1] == 2 else None)
+                            else:
+                                c5_sf = {'error': 'no valid silo selections'}
+                        except Exception as _e_slot:
+                            c5_sf = {'error': str(_e_slot),
+                                     'traceback': traceback.format_exc()}
+                        c5_sf_by_slot[_slot_name] = c5_sf
 
-                    smooth_sweep[str(sf)] = convert_numpy({
-                        'c2_fluid_similarity': c2_sf,
-                        'c5_kirby_federated': c5_sf,
-                    })
+                    _sf_entry = {'c2_fluid_similarity': c2_sf}
+                    for _slot_name, _c5 in c5_sf_by_slot.items():
+                        _sf_entry['c5_kirby_federated' + _slot_suffix(_slot_name)] = _c5
+                    smooth_sweep[str(sf)] = convert_numpy(_sf_entry)
                     c2_mcc = c2_sf.get('mcc', float('nan'))
-                    c5_mcc = c5_sf.get('mcc', float('nan'))
-                    print(f"C2 MCC={c2_mcc:.3f}, C5 MCC={c5_mcc:.3f}")
+                    c5_mcc = c5_sf_by_slot.get('general1', {}).get('mcc', float('nan'))
+                    print(f"C2 MCC={c2_mcc:.3f}, C5 general1 MCC={c5_mcc:.3f}")
 
                 except Exception as e:
                     # Record the traceback, as every other condition in this
@@ -1047,6 +1188,18 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             'headline_budget': HEADLINE_BUDGET,
         },
         'by_budget': by_budget,
+        # The owner's set (top 2 general + top 1 distance for this model,
+        # 2026-10-02), per noise level: which recipe each slot used, the
+        # model's top 2 single representations, and every slot that could not
+        # be filled with the reason. C0, C5 and C6 are scored once per slot.
+        'rule_set_by_sigma': convert_numpy(rule_info_by_sigma),
+        'rule_slots_by_sigma': {
+            str(_s): [_n for _n, _ in slots_by_sigma[_s]]
+            for _s in SIGMA_FRACS},
+        'rule_missing': {
+            _s: _inf.get('missing', [])
+            for _s, _inf in rule_info_by_sigma.items()
+            if _inf.get('missing')},
         'primary_sweep': primary_agg,
         'noise_detection': detection_agg,
         'importance_noise_correlation': correlation_agg,

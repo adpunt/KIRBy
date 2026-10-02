@@ -216,10 +216,17 @@ def summarise_one(dataset_name, block):
             'n_reps_ranked': len(means),
         }
     out['baseline_by_model'] = per_model
+    # The distance lineage's own summary, same shape, under its own key
+    # (owner's set, 2026-10-02). None when that run did not produce a block.
+    if block.get('distance'):
+        out['distance'] = summarise_one(dataset_name, block['distance'])
+    out['rule'] = block.get('rule')
+    if block.get('rule_missing'):
+        out['rule_missing'] = block['rule_missing']
     return out
 
 
-def print_summary(summaries):
+def print_summary(summaries, lineage='general'):
     print('\n' + '=' * 84)
     print('SCAFFOLD-DIFF REPS IN THE REAL PIPELINE POOL — honest nested-CV comparison')
     # Each dataset is scored in its own metric and carries its own direction,
@@ -257,6 +264,14 @@ def print_summary(summaries):
                     for v in pf) or 'none'
                 print(f'    {model:10s} {d_str:>9s}  '
                       f'{n} paired outer folds  |  per fold: {pf_str}')
+    # The same table for the distance searches (owner's set, 2026-10-02),
+    # printed after the general one rather than mixed into it.
+    if lineage == 'general':
+        _d = [s['distance'] for s in summaries if s.get('distance')]
+        if _d:
+            print('\n' + '=' * 84)
+            print('SAME COMPARISON, DISTANCE SEARCHES')
+            print_summary(_d, lineage='distance')
 
 
 def main():
@@ -376,6 +391,43 @@ def _run_one_dataset(ds, args, override, config, budgets, t0):
             budgets=budgets, n_outer_folds=args.max_folds,
             verbose=True)
         block = result.to_dict()
+
+        # The DISTANCE lineage of the same comparison (owner's set,
+        # 2026-10-02): the same outer folds, the distance evaluators, the
+        # distance budgets and the distance models, under its own cache tier so
+        # it writes its own rows. Its hybrid and every single representation
+        # are scored on the untouched outer fold exactly as above.
+        #
+        # ⛔ WHAT IS STILL MISSING. The owner's set asks for the top 2 general
+        # recipes per fold, and nested_cv_evaluate scores one recipe per model
+        # per fold (find_best_hybrid.py:10871, inner.best_by_model[model]).
+        # Only the second general recipe is missing; that needs a change in the
+        # engine, not here.
+        from experiments._shared import (
+            DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS)
+        _d_budgets = [b for b in (budgets or config.get('budgets') or [])
+                      if b in DISTANCE_BUDGETS] or list(DISTANCE_BUDGETS)
+        block['rule'] = (
+            'top 1 general + top 1 distance recipe per model per outer fold, '
+            'and every single representation; the second general recipe needs '
+            'nested_cv_evaluate to score more than one recipe per fold')
+        try:
+            d_result = run_nested_cv(
+                reps=data['reps'], labels=np.asarray(data['labels']),
+                groups=data['groups'], config=config, dataset_name=ds,
+                task_type=data['task_type'], domain='antibody',
+                tier=f'{TIER}_distance',
+                internal_evaluators=list(DISTANCE_EVALUATORS),
+                models=list(DISTANCE_MODELS),
+                budgets=_d_budgets, n_outer_folds=args.max_folds,
+                verbose=True)
+            block['distance'] = d_result.to_dict()
+        except Exception as _e:
+            import traceback as _tb
+            _tb.print_exc()
+            block['distance'] = None
+            block['rule_missing'] = [
+                f'the distance nested run raised {type(_e).__name__}: {_e}']
 
         out_path = os.path.join(args.output_dir, f'opig_scaffold_hybrid_{ds}.json')
         with open(out_path, 'w') as f:

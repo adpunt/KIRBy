@@ -68,7 +68,9 @@ from experiments._shared import (
     extract_top3_base_reps, FULL_BUDGETS,
     fold_reselection, build_fold_reselection_input, hr_exclude_folds,
     select_model_rep_pairs, top_hybrids, hybrid_deltas,
-    resolve_comparison_models,
+    resolve_comparison_models, hr_direction, get_rule_hybrids,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    RULE_N_GENERAL, RULE_N_DISTANCE, build_fold_hybrid,
 )
 
 # =============================================================================
@@ -103,6 +105,109 @@ ENRICHMENT_FRACTIONS = [0.01, 0.05, 0.10]  # top-1%, top-5%, top-10%
 # variance. Reported but interpret with care; E@5% and E@10% are more stable.
 
 MODELS_LIST = DOWNSTREAM_MODELS
+
+# The owner's set of hybrids, 2026-10-02: for each downstream model, the top 2
+# hybrids from the general search plus the top 1 from the distance search, each
+# built and scored. 'general1' keeps the existing 'kirby_hybrid' name.
+RULE_SLOTS = ['general1', 'general2', 'distance1']
+
+
+def _slot_key(slot):
+    """Result key for one slot of the owner's set. general1 keeps the old name."""
+    return 'kirby_hybrid' if slot == 'general1' else f'kirby_hybrid__{slot}'
+
+
+def _rule_entries(gen_search, dist_search, model_name, context):
+    """Top 2 general + top 1 distance hybrids for one downstream model, read off
+    this fold's two searches (owner's set, 2026-10-02).
+
+    Returns ({slot: (tier, top_hybrids entry)}, [reason per missing slot]).
+    """
+    out, missing = {}, []
+    for lineage, tier, search, n in (
+            ('general', 'general', gen_search, RULE_N_GENERAL),
+            ('distance', 'general_distance', dist_search, RULE_N_DISTANCE)):
+        if search is None:
+            missing.append(f'{lineage} for {model_name}: the {tier} search '
+                           f'did not run on this fold')
+            continue
+        try:
+            th = top_hybrids(search, model_name, n, require_full=False,
+                             context=f'{context}/{tier}/{model_name}')
+        except Exception as e:
+            missing.append(f'{lineage} for {model_name}: '
+                           f'{type(e).__name__}: {e}')
+            continue
+        for e in th['selected']:
+            out[f"{lineage}{e['rank']}"] = (tier, e)
+        if not th['complete']:
+            missing.append(f'{lineage} for {model_name}: '
+                           f'{th["shortfall_reason"]}')
+    return out, missing
+
+
+def _rule_set_held_out(reps, labels, groups, dataset_name, reselection_block,
+                       read_kw):
+    """The owner's set of hybrids from the stored searches, scored per held-out
+    fold in AUROC (2026-10-02).
+
+    For each downstream model: the top 2 hybrids from the general searches plus
+    the top 1 from the distance searches. On held-out fold k each slot is
+    filled by the recipe ranked on the OTHER folds, and its score on fold k is
+    the score the stored search measured there (the search builds every
+    candidate per fold). Each slot is then set against the best single
+    representation re-picked per held-out fold, as reselected_comparison does
+    for the whole recipe list. 0 new model fits.
+    """
+    out = {'rule': 'top 2 general + top 1 distance hybrids per model',
+           'whole_dataset': {}, 'base_reps': {}, 'by_slot': {},
+           'fold_scores_by_slot': {}, 'rule_missing': []}
+    models = sorted((reselection_block or {}).get('baselines_by_model', {})
+                    or MODELS_LIST)
+    for m in models:
+        try:
+            whole = get_rule_hybrids(reps, labels, groups, downstream_model=m,
+                                     dataset_name=dataset_name, fold_i=None,
+                                     **read_kw)
+        except Exception as e:
+            out['rule_missing'].append(
+                f'{m}: the whole-dataset read raised {type(e).__name__}: {e}')
+            continue
+        out['rule_missing'] += whole['missing']
+        out['whole_dataset'][m] = [
+            {k: h.get(k) for k in ('slot', 'tier', 'aug_condition', 'objective',
+                                   'recipe', 'budget', 'budget_relaxed',
+                                   'score_other_folds', 'fold_scores')}
+            for h in whole['hybrids']]
+        out['base_reps'][m] = [
+            {k: b.get(k) for k in ('rep', 'score_other_folds', 'fold_scores')}
+            for b in whole['base_reps']]
+        n_folds = max([len(h.get('fold_scores') or [])
+                       for h in whole['hybrids']] or [0])
+        for k in range(n_folds):
+            try:
+                fk = get_rule_hybrids(reps, labels, groups, downstream_model=m,
+                                      dataset_name=dataset_name, fold_i=k,
+                                      n_outer_folds=n_folds, **read_kw)
+            except Exception as e:
+                out['rule_missing'].append(
+                    f'{m} fold {k}: the read raised {type(e).__name__}: {e}')
+                continue
+            for h in fk['hybrids']:
+                lst = out['fold_scores_by_slot'].setdefault(
+                    h['slot'], {}).setdefault(m, [None] * n_folds)
+                lst[k] = h.get('score_this_fold')
+    bases = (reselection_block or {}).get('baselines_by_model', {})
+    if reselection_block is not None:
+        for slot, by_m in out['fold_scores_by_slot'].items():
+            cands = {m: [{'name': slot, 'fold_scores': fs}]
+                     for m, fs in by_m.items()}
+            out['by_slot'][slot] = fold_reselection(
+                cands, {m: bases[m] for m in cands if m in bases},
+                hr_direction(reselection_block),
+                metric_name=reselection_block.get('metric_name'),
+                exclude_folds=hr_exclude_folds(reselection_block))
+    return out
 
 
 def _smoke_search_kwargs():
@@ -370,8 +475,13 @@ def _evaluate_hybrid_enrichment_per_fold(
     from experiments._shared import resolve_pruning_kwargs
 
     labels = np.asarray(labels, dtype=np.int64)
-    per_model = {m: {'enrich': [], 'auroc': [], 'acc': [], 'no_recipe': []}
-                 for m in models}
+    # One score list per (slot of the owner's set, downstream model), owner's
+    # set 2026-10-02. 'general1' is what this function always scored.
+    per_slot = {s: {m: {'enrich': [], 'auroc': [], 'acc': [], 'no_recipe': []}
+                    for m in models} for s in RULE_SLOTS}
+    per_model = per_slot['general1']
+    rule_recipes = []
+    rule_missing = []
     dims = []
     top3_first_fold = None
 
@@ -388,8 +498,9 @@ def _evaluate_hybrid_enrichment_per_fold(
         hybrid-minus-representation subtraction would compare two different
         held-out folds.
         """
-        for _s in per_model.values():
-            _s['enrich'].append(None)
+        for _by_m in per_slot.values():
+            for _s in _by_m.values():
+                _s['enrich'].append(None)
 
     for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
         train_reps = {r: arr[train_idx] for r, arr in reps.items()}
@@ -427,19 +538,122 @@ def _evaluate_hybrid_enrichment_per_fold(
             _pad_fold()
             continue
 
+        # The distance search on the same training rows: the third hybrid of
+        # the owner's set (top 2 general + top 1 distance per model,
+        # 2026-10-02). The distance precompute's settings -- tier
+        # 'general_distance', DISTANCE_EVALUATORS, DISTANCE_BUDGETS -- over the
+        # downstream models this function trains. Under KIRBY_SMOKE_N it takes
+        # the smoke budgets and the knn evaluator alone.
+        dist_search = None
+        try:
+            dist_search = find_best_hybrid(
+                train_reps, train_labels,
+                groups=train_groups,
+                augmentations=None,
+                augmentation_strategy='none',
+                budgets=(([b for b in _budgets if b <= max(DISTANCE_BUDGETS)]
+                          or [min(DISTANCE_BUDGETS)]) if _smoke
+                         else DISTANCE_BUDGETS),
+                metric='auc',
+                task_type='classification',
+                internal_evaluators=(['knn'] if _smoke
+                                     else DISTANCE_EVALUATORS),
+                models=list(models),
+                return_fitted=False,
+                cache=True,
+                dataset_name='tz_her2_binary',
+                tier='general_distance',
+                condition_suffix=f'enrich_fold{fold_idx}',
+                adaptive_pruning=0.25,
+                **_smoke_imp,
+                **_pkw,
+            )
+        except Exception as e:
+            print(f"    fold {fold_idx}: distance find_best_hybrid failed: {e}")
+            rule_missing.append({'fold': fold_idx, 'reason':
+                                 f'distance search raised '
+                                 f'{type(e).__name__}: {e}'})
+
         if fold_idx == 0 and fold_search is not None:
             top3_first_fold = extract_top3_base_reps(fold_search)
 
         fitted_all = (getattr(fold_search, 'fitted_results', None) or {}
                       if fold_search is not None else {})
         if not fitted_all:
-            print(f"    fold {fold_idx}: no fitted result; skipping fold")
-            _pad_fold()
-            continue
+            # general1 gets a missing score for every model below; general2 and
+            # distance1 are still built from the stored rankings.
+            print(f"    fold {fold_idx}: no fitted result; general1 not "
+                  f"scored this fold")
 
         val_reps = {r: arr[val_idx] for r, arr in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
         fold_dim_recorded = False
+
+        def _score_into(_s, train_hybrid, val_hybrid, factory, _label):
+            """Fit on the training block, count binders in the held-out
+            block's top fractions, and append to the score lists _s."""
+            train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
+            val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
+            if not _is_binary_rep(train_hybrid):
+                scaler = StandardScaler()
+                train_hybrid_s = scaler.fit_transform(train_hybrid)
+                val_hybrid_s = scaler.transform(val_hybrid)
+            else:
+                train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
+            try:
+                m = clone(factory())
+                m.fit(train_hybrid_s, y_train)
+                scores = _model_scores(m, val_hybrid_s)
+                preds = m.predict(val_hybrid_s)
+            except Exception as e:
+                print(f"    fold {fold_idx} {_label}: fit failed: {e}")
+                _s['enrich'].append(None)
+                return
+            _s['enrich'].append(compute_enrichment(y_val, scores))
+            _s['acc'].append(accuracy_score(y_val, preds))
+            try:
+                _s['auroc'].append(roc_auc_score(y_val, scores))
+            except Exception:
+                pass
+
+        # The 2nd general and the 1st distance hybrid of the owner's set, per
+        # model, rebuilt on this fold's training rows from their recipe and
+        # counted the same way (2026-10-02). general1 is built below from the
+        # search's own fitted recipe, as before.
+        for model_name in models:
+            _entries, _miss = _rule_entries(
+                fold_search, dist_search, model_name,
+                f'tz_her2_binary/fold{fold_idx}')
+            for _r in _miss:
+                rule_missing.append({'fold': fold_idx, 'model': model_name,
+                                     'reason': _r})
+            for _slot, (_tier, _e) in sorted(_entries.items()):
+                rule_recipes.append({
+                    'fold': fold_idx, 'model': model_name, 'slot': _slot,
+                    'tier': _tier, 'recipe': _e.get('label'),
+                    'budget': _e.get('budget'),
+                    'score_train_rows': _e.get('score_mean')})
+            for _slot in ('general2', 'distance1'):
+                _s = per_slot[_slot][model_name]
+                if _slot not in _entries:
+                    _s['no_recipe'].append(fold_idx)
+                    _s['enrich'].append(None)
+                    continue
+                try:
+                    _trh, _vah, _ = build_fold_hybrid(
+                        train_reps, val_reps, y_train,
+                        _entries[_slot][1].get('blueprint'),
+                        groups=train_groups)
+                except Exception as e:
+                    print(f"    fold {fold_idx} {model_name} {_slot}: build "
+                          f"failed: {e}")
+                    rule_missing.append({
+                        'fold': fold_idx, 'model': model_name, 'slot': _slot,
+                        'reason': f'build raised {type(e).__name__}: {e}'})
+                    _s['enrich'].append(None)
+                    continue
+                _score_into(_s, _trh, _vah, models[model_name],
+                            f'{model_name} {_slot}')
 
         for model_name in models:
             # Each downstream model uses the recipe the search picked for IT.
@@ -482,40 +696,32 @@ def _evaluate_hybrid_enrichment_per_fold(
                 dims.append(train_hybrid.shape[1])
                 fold_dim_recorded = True
 
-            if not _is_binary_rep(train_hybrid):
-                scaler = StandardScaler()
-                train_hybrid_s = scaler.fit_transform(train_hybrid)
-                val_hybrid_s = scaler.transform(val_hybrid)
-            else:
-                train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
+            _score_into(per_model[model_name], train_hybrid, val_hybrid,
+                        models[model_name], model_name)
 
-            try:
-                m = clone(models[model_name]())
-                m.fit(train_hybrid_s, y_train)
-                scores = _model_scores(m, val_hybrid_s)
-                preds = m.predict(val_hybrid_s)
-            except Exception as e:
-                print(f"    fold {fold_idx} {model_name}: fit failed: {e}")
-                per_model[model_name]['enrich'].append(None)
-                continue
-
-            per_model[model_name]['enrich'].append(
-                compute_enrichment(y_val, scores))
-            per_model[model_name]['acc'].append(accuracy_score(y_val, preds))
-            try:
-                per_model[model_name]['auroc'].append(
-                    roc_auc_score(y_val, scores))
-            except Exception:
-                pass
+    # general2 and distance1 in the same summary shape, plus the recipe behind
+    # each slot on each fold and every slot left empty, with the reason.
+    rule_block = {'rule': 'top 2 general + top 1 distance hybrids per model, '
+                          'each chosen on the fold\'s training rows',
+                  'by_slot': {_slot: _summarize_enrichment(per_slot[_slot],
+                                                           fold_splits)
+                              for _slot in ('general2', 'distance1')},
+                  'recipes': rule_recipes, 'rule_missing': rule_missing}
 
     if not dims:
-        return None, 0, top3_first_fold
+        return None, 0, top3_first_fold, rule_block
 
+    return (_summarize_enrichment(per_model, fold_splits, verbose=True),
+            int(np.mean(dims)), top3_first_fold, rule_block)
+
+
+def _summarize_enrichment(per_model, fold_splits, verbose=False):
+    """Per-model enrichment summary, shaped like evaluate_rep_enrichment's."""
     rep_results = {}
     for model_name, s in per_model.items():
         folds = s['enrich']
         if not any(fe is not None for fe in folds):
-            if s['no_recipe']:
+            if s['no_recipe'] and verbose:
                 print(f"    {model_name}: no enrichment row -- the search "
                       f"stored no recipe for it on any of "
                       f"{len(fold_splits)} folds")
@@ -552,11 +758,10 @@ def _evaluate_hybrid_enrichment_per_fold(
         res['base_rate'] = np.mean([fe['base_rate'] for fe in folds
                                     if fe is not None])
         rep_results[model_name] = res
+    return rep_results
 
-    return rep_results, int(np.mean(dims)), top3_first_fold
 
-
-def _paired_enrichment_delta(results):
+def _paired_enrichment_delta(results, hybrid_key='kirby_hybrid'):
     """Hybrid minus best single representation, on the SAME held-out fold.
 
     One block per enrichment fraction, keyed by downstream model. Both arms are
@@ -567,7 +772,7 @@ def _paired_enrichment_delta(results):
     so higher is better; it is not a BUILTIN_METRICS entry, and metric_name is
     left off for that reason.
     """
-    hybrid = results.get('kirby_hybrid', {}).get('models', {})
+    hybrid = results.get(hybrid_key, {}).get('models', {})
     if not hybrid:
         return {}
 
@@ -582,9 +787,11 @@ def _paired_enrichment_delta(results):
             if not folds:
                 continue
             candidates_by_model[model_name] = [
-                {'name': 'kirby_hybrid', 'fold_scores': list(folds)}]
+                {'name': hybrid_key, 'fold_scores': list(folds)}]
         for rep_name, rep_data in results.items():
-            if rep_name == 'kirby_hybrid':
+            # Every slot of the owner's set is a hybrid, never a single
+            # representation.
+            if rep_name.startswith('kirby_hybrid'):
                 continue
             for model_name, summary in rep_data.get('models', {}).items():
                 folds = summary.get(fold_key)
@@ -701,6 +908,7 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # a result holding three models read the same as a run configured for three.
     top2_models_compared = []
     top2_models_dropped = {}
+    rule_block = None
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -745,6 +953,21 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             if _excluded:
                 print(f"  per-fold reselection drops fold(s) {_excluded} from both "
                       f"arms (the search filtered its recipe list on them)")
+
+            # The owner's set: top 2 general + top 1 distance hybrids per
+            # downstream model (2026-10-02), read with the same settings as the
+            # search above. Smoke-only lists go in only under KIRBY_SMOKE_N.
+            try:
+                rule_block = _rule_set_held_out(
+                    reps, labels, groups, 'tz_her2_binary', reselection_block,
+                    dict(metric='auc', task_type='classification',
+                         augmentations=None, adaptive_pruning=0.25,
+                         **{k: v for k, v in _smoke.items() if k != 'speed'},
+                         **_pkw))
+            except Exception as e:
+                print(f"  Owner's hybrid set not read: {e}")
+                rule_block = {'rule_missing': [
+                    f'the read raised {type(e).__name__}: {e}']}
             for mn, r in sorted(reselection_result.items()):
                 flag = ' [single-fold: NOT honest]' if r['single_fold'] else ''
                 # delta_mean_of_folds is the paired per-fold difference. r['delta']
@@ -947,18 +1170,22 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # percent binder count.
     print(f"\n  Per-fold hybrid enrichment ({n_folds} folds, train-only search)...")
     try:
-        hybrid_enrich, hybrid_dim, hybrid_top3 = _ck_cached(
+        hybrid_enrich, hybrid_dim, hybrid_top3, rule_fold_block = _ck_cached(
             lambda: _evaluate_hybrid_enrichment_per_fold(
                 reps, labels, groups, fold_splits, models,
                 pruning_mode=pruning_mode),
             # (None, 0, ...) means no fold built a hybrid: not stored.
             store_if=lambda v: v[0] is not None,
             hybrid_per_fold=True, n_folds=n_folds,
-            reps=sorted(reps), pruning_mode=pruning_mode)
+            reps=sorted(reps), pruning_mode=pruning_mode,
+            # The return gained the owner's set on 2026-10-02; this key keeps
+            # an earlier attempt's 3-value result from being read back.
+            hybrid_set='top2_general_top1_distance')
     except Exception as e:
         print(f"  Per-fold hybrid enrichment failed: {e}")
         _FAILED.append('per-fold hybrid enrichment')
-        hybrid_enrich, hybrid_dim, hybrid_top3 = None, 0, None
+        hybrid_enrich, hybrid_dim, hybrid_top3, rule_fold_block = (
+            None, 0, None, None)
 
     if hybrid_top3:
         print(f"  Top-3 base reps (fold 0): "
@@ -970,6 +1197,22 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             auroc = res.get('auroc', {}).get('mean', float('nan'))
             print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
                   f"E@1%={e1:.4f}  AUROC={auroc:.4f}  ***")
+    # The 2nd general and the 1st distance hybrid of the owner's set
+    # (2026-10-02), filed beside 'kirby_hybrid' with the slot in the name, and
+    # each paired against the best single representation the same way.
+    enrichment_by_slot = {}
+    for _slot, _res in ((rule_fold_block or {}).get('by_slot') or {}).items():
+        if not _res:
+            continue
+        results[_slot_key(_slot)] = {'dim': None, 'models': _res,
+                                     'slot': _slot}
+        for model_name, res in sorted(_res.items()):
+            e1 = res.get('enrich_0.01', {}).get('mean', float('nan'))
+            auroc = res.get('auroc', {}).get('mean', float('nan'))
+            print(f"    {_slot_key(_slot):25s} {model_name:8s}  "
+                  f"E@1%={e1:.4f}  AUROC={auroc:.4f}  ***")
+        enrichment_by_slot[_slot] = _paired_enrichment_delta(
+            results, hybrid_key=_slot_key(_slot))
 
     return {
         'n_samples': n,
@@ -1000,6 +1243,17 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         # 2026-09-28; nothing above changes value.
         'top2_models_compared': top2_models_compared,
         'top2_models_dropped': top2_models_dropped,
+        # Owner's set (top 2 general + top 1 distance hybrids per model, top 2
+        # single representations; 2026-10-02). 'rule_hybrids_auroc': each slot
+        # read from the stored searches and scored per held-out fold in AUROC.
+        # 'enrichment_comparison_by_slot': general2 and distance1 from the
+        # per-fold searches, in binder enrichment ('enrichment_comparison' is
+        # general1). 'rule_missing': every slot not filled, and why.
+        'rule_hybrids_auroc': rule_block,
+        'enrichment_comparison_by_slot': enrichment_by_slot,
+        'rule_recipes_per_fold': (rule_fold_block or {}).get('recipes', []),
+        'rule_missing': ((rule_block or {}).get('rule_missing', [])
+                         + (rule_fold_block or {}).get('rule_missing', [])),
     }
 
 
@@ -1055,7 +1309,7 @@ def print_analysis(ds_results):
 
     for rep_name, model_name, e1, e5, e10, auroc, acc in rows:
         label = f"{rep_name} ({model_name})"
-        tag = ' ***' if rep_name == 'kirby_hybrid' else ''
+        tag = ' ***' if rep_name.startswith('kirby_hybrid') else ''
         e1s = f"{e1:.4f}" if not np.isnan(e1) else "—"
         e5s = f"{e5:.4f}" if not np.isnan(e5) else "—"
         e10s = f"{e10:.4f}" if not np.isnan(e10) else "—"
@@ -1064,7 +1318,8 @@ def print_analysis(ds_results):
         print(f"  {label:30s} {e1s:>8s} {e5s:>8s} {e10s:>8s} {aurocs:>8s} {accs:>8s}{tag}")
 
     # Summary
-    best_indiv = [r for r in rows if r[0] != 'kirby_hybrid']
+    # Every slot of the owner's set is a hybrid, not an individual rep.
+    best_indiv = [r for r in rows if not r[0].startswith('kirby_hybrid')]
 
     print(f"\n  Summary (Enrichment @ top-1%):")
     if best_indiv:

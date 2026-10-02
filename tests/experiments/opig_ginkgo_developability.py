@@ -68,7 +68,48 @@ from experiments._shared import (
     fold_reselection, hr_direction, hr_exclude_folds,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     resolve_comparison_models,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    RULE_N_GENERAL, RULE_N_DISTANCE, build_fold_hybrid,
 )
+
+# The owner's set of hybrids, 2026-10-02: for each downstream model, the top 2
+# hybrids from the general search plus the top 1 from the distance search, each
+# built and scored. 'general1' keeps the existing 'kirby_hybrid' name.
+RULE_SLOTS = ['general1', 'general2', 'distance1']
+
+
+def _slot_key(slot):
+    """Result key for one slot of the owner's set. general1 keeps the old name."""
+    return 'kirby_hybrid' if slot == 'general1' else f'kirby_hybrid__{slot}'
+
+
+def _rule_entries(gen_search, dist_search, model_name, context):
+    """Top 2 general + top 1 distance hybrids for one downstream model, read off
+    this fold's two searches (owner's set, 2026-10-02).
+
+    Returns ({slot: (tier, top_hybrids entry)}, [reason per missing slot]).
+    """
+    out, missing = {}, []
+    for lineage, tier, search, n in (
+            ('general', 'general', gen_search, RULE_N_GENERAL),
+            ('distance', 'general_distance', dist_search, RULE_N_DISTANCE)):
+        if search is None:
+            missing.append(f'{lineage} for {model_name}: the {tier} search '
+                           f'did not run on this fold')
+            continue
+        try:
+            th = top_hybrids(search, model_name, n, require_full=False,
+                             context=f'{context}/{tier}/{model_name}')
+        except Exception as e:
+            missing.append(f'{lineage} for {model_name}: '
+                           f'{type(e).__name__}: {e}')
+            continue
+        for e in th['selected']:
+            out[f"{lineage}{e['rank']}"] = (tier, e)
+        if not th['complete']:
+            missing.append(f'{lineage} for {model_name}: '
+                           f'{th["shortfall_reason"]}')
+    return out, missing
 
 # =============================================================================
 # CONFIGURATION
@@ -451,7 +492,15 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
     from kirby.hybrid import (apply_feature_selection,
                               apply_augmentation_selection)
 
-    per_model = {m: {'r2': [], 'rmse': [], 'spearman': []} for m in models}
+    # One score list per (slot of the owner's set, downstream model), owner's
+    # set 2026-10-02. The 'general1' entry is what this function always scored.
+    per_slot = {s: {m: {'r2': [], 'rmse': [], 'spearman': []} for m in models}
+                for s in RULE_SLOTS}
+    per_model = per_slot['general1']
+    # Per fold and model: which recipe filled each slot, and every slot that
+    # could not be filled, with the reason.
+    rule_recipes = []
+    rule_missing = []
     dims = []
     top3_first_fold = None
     # Filled from fold 0's search, the same search top3_first_fold reads.
@@ -512,17 +561,72 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
             print(f"    fold {fold_idx}: find_best_hybrid failed: {e}")
             continue
 
+        # The distance search on the same training rows, so this fold has the
+        # third hybrid of the owner's set (top 2 general + top 1 distance per
+        # model, 2026-10-02). Same settings the distance precompute runs:
+        # tier 'general_distance', DISTANCE_EVALUATORS, DISTANCE_BUDGETS, but
+        # only this file's downstream models. Under KIRBY_SMOKE_N it takes the
+        # smoke budgets and the knn evaluator alone.
+        dist_search = None
+        try:
+            dist_search = find_best_hybrid(
+                train_reps, train_labels,
+                groups=train_groups,
+                augmentations=train_aug,
+                augmentation_strategy=('uncapped' if has_aug else 'none'),
+                budgets=([b for b in _budgets if b <= max(DISTANCE_BUDGETS)]
+                         or [min(DISTANCE_BUDGETS)]) if _smoke
+                else DISTANCE_BUDGETS,
+                metric=_resolve_dataset_metric(prop_name)[0],
+                task_type='regression',
+                internal_evaluators=(['knn'] if _smoke
+                                     else DISTANCE_EVALUATORS),
+                # The downstream models this function trains. knn, the sixth
+                # name in DISTANCE_MODELS, is not trained here, so no recipe
+                # is searched for it.
+                models=list(models.keys()),
+                return_fitted=False,
+                cache=True,
+                dataset_name=prop_name,
+                tier='general_distance',
+                condition_suffix=f'ginkgo_hold_fold{fold_idx}',
+                adaptive_pruning=0.25,
+                **_smoke_imp,
+                **_pkw,
+            )
+        except Exception as e:
+            print(f"    fold {fold_idx}: distance find_best_hybrid failed: {e}")
+            rule_missing.append({'fold': fold_idx, 'reason':
+                                 f'distance search raised '
+                                 f'{type(e).__name__}: {e}'})
+
         if fold_idx == 0 and fold_search is not None:
             top3_first_fold = extract_top3_base_reps(fold_search)
             top2_first_fold = _top2_selection_from_search(
                 fold_search, list(models), f'{prop_name}/fold{fold_idx}')
+            # The distance search's top 1 per model beside the general top 2
+            # (owner's set, 2026-10-02). Training-fold numbers, like the rest.
+            if dist_search is not None and top2_first_fold is not None:
+                _d1 = {}
+                for _m in models:
+                    try:
+                        _d1[_m] = top_hybrids(
+                            dist_search, _m, RULE_N_DISTANCE,
+                            require_full=False,
+                            context=f'{prop_name}/fold0/distance/{_m}')
+                    except Exception as e:
+                        _d1[_m] = {'shortfall_reason':
+                                   f'{type(e).__name__}: {e}'}
+                top2_first_fold['distance_top1_hybrids'] = _d1
 
         _fitted_all = (getattr(fold_search, 'fitted_results', None) or {}
                        if fold_search is not None else {})
         if not _fitted_all:
-            print(f"    fold {fold_idx}: the search stored no recipe for any "
-                  f"downstream model; skipping the fold")
-            continue
+            # No fitted recipe for general1; the other slots of the owner's set
+            # are still built below from the stored rankings, and every model
+            # gets no general1 score on this fold.
+            print(f"    fold {fold_idx}: the search stored no fitted recipe "
+                  f"for any downstream model; general1 not scored this fold")
 
         val_reps = {r: arr[val_idx] for r, arr in src_reps.items()}
         y_train = labels[train_idx]
@@ -541,7 +645,97 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
         # Now each model uses the recipe stored for it, and a model with no
         # recipe of its own gets no score on the fold and is named on the line
         # printed below. Nothing is substituted.
+        def _score_slot(train_hybrid, val_hybrid, factory):
+            """(r2, rmse, rho) on the held-out fold, or None if the fit failed.
+            The same feature cut and scaling every hybrid arm gets."""
+            train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
+            val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
+            # Same feature cut the baseline arm gets. run_baseline_survey.evaluate_rep
+            # runs _filter_high_dim_per_fold on every baseline representation, so any
+            # representation wider than 500 features is scored on 200 of them there
+            # (a 1280-feature language-model representation loses 1080). Without this
+            # the hybrid keeps every feature it selected, and part of the reported
+            # difference between the two arms is that preprocessing difference rather
+            # than a representation difference. Fit on this fold's training rows only,
+            # before scaling, in the same order evaluate_rep uses. `dims` keeps
+            # the width the hybrid SELECTED, matching the baseline rows, which record
+            # each representation's own width and not its post-cut width.
+            train_hybrid, val_hybrid, _ = _filter_high_dim_per_fold(
+                train_hybrid, val_hybrid, y_train, 'regression')
+            if not _is_binary_hybrid(train_hybrid):
+                scaler = StandardScaler()
+                train_hybrid_s = scaler.fit_transform(train_hybrid)
+                val_hybrid_s = scaler.transform(val_hybrid)
+            else:
+                train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
+            try:
+                m = clone(factory())
+                m.fit(train_hybrid_s, y_train)
+                preds = m.predict(val_hybrid_s)
+            except Exception:
+                return None
+            ss_res = np.sum((y_val - preds) ** 2)
+            ss_tot = np.sum((y_val - y_val.mean()) ** 2)
+            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+            rmse = float(np.sqrt(np.mean((y_val - preds) ** 2)))
+            if len(y_val) > 2:
+                rho, _ = spearmanr(y_val, preds)
+                rho = float(rho) if not np.isnan(rho) else np.nan
+            else:
+                rho = np.nan
+            return r2, rmse, rho
+
+        val_aug = ({r: arr[val_idx] for r, arr in aug_dict.items()}
+                   if has_aug else None)
         for model_name, factory in models.items():
+            # The owner's set for this model on this fold (top 2 general + top
+            # 1 distance, 2026-10-02). general1 is still built from the
+            # search's own fitted recipe below, as before; general2 and
+            # distance1 are rebuilt on the training rows from their recipe.
+            _entries, _miss = _rule_entries(
+                fold_search, dist_search, model_name,
+                f'{prop_name}/fold{fold_idx}')
+            for _r in _miss:
+                rule_missing.append({'fold': fold_idx, 'model': model_name,
+                                     'reason': _r})
+            for _slot, (_tier, _e) in sorted(_entries.items()):
+                rule_recipes.append({
+                    'fold': fold_idx, 'model': model_name, 'slot': _slot,
+                    'tier': _tier, 'recipe': _e.get('label'),
+                    'budget': _e.get('budget'),
+                    'score_train_rows': _e.get('score_mean')})
+            for _slot in ('general2', 'distance1'):
+                _s = per_slot[_slot][model_name]
+                _res = None
+                if _slot in _entries:
+                    _tier, _e = _entries[_slot]
+                    _bp = _e.get('blueprint')
+                    try:
+                        _use_aug = (has_aug and getattr(
+                            _bp, 'augmentation_strategy', 'none') != 'none')
+                        _trh, _vah, _ = build_fold_hybrid(
+                            train_reps, val_reps, y_train, _bp,
+                            augmentations_train=(train_aug if _use_aug
+                                                 else None),
+                            augmentations_val=(val_aug if _use_aug
+                                               else None),
+                            groups=train_groups)
+                        _res = _score_slot(_trh, _vah, factory)
+                    except Exception as e:
+                        print(f"    fold {fold_idx} {model_name} {_slot}: "
+                              f"build failed: {e}")
+                        rule_missing.append({
+                            'fold': fold_idx, 'model': model_name,
+                            'slot': _slot,
+                            'reason': f'build raised {type(e).__name__}: {e}'})
+                # NaN on a fold this slot could not score, so each slot's
+                # per-fold list stays aligned with the folds.
+                if _res is None:
+                    _res = (np.nan, np.nan, np.nan)
+                _s['r2'].append(_res[0])
+                _s['rmse'].append(_res[1])
+                _s['spearman'].append(_res[2])
+
             fitted = _fitted_all.get(model_name)
             if fitted is None:
                 print(f"    fold {fold_idx} {model_name}: no recipe of its own "
@@ -556,7 +750,6 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
                 train_hybrid = apply_feature_selection(train_reps, fi)
                 val_hybrid = apply_feature_selection(val_reps, fi)
                 if fitted.augmentation_info and has_aug:
-                    val_aug = {r: arr[val_idx] for r, arr in aug_dict.items()}
                     train_aug_block = apply_augmentation_selection(
                         train_aug, fitted.augmentation_info)
                     val_aug_block = apply_augmentation_selection(
@@ -575,50 +768,33 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
             # selects its own features. The returned dim estimate is the mean
             # over all of those, where it used to be one width per fold.
             dims.append(train_hybrid.shape[1])
-            train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
-            val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
-
-            # Same feature cut the baseline arm gets. run_baseline_survey.evaluate_rep
-            # runs _filter_high_dim_per_fold on every baseline representation, so any
-            # representation wider than 500 features is scored on 200 of them there
-            # (a 1280-feature language-model representation loses 1080). Without this
-            # the hybrid keeps every feature it selected, and part of the reported
-            # difference between the two arms is that preprocessing difference rather
-            # than a representation difference. Fit on this fold's training rows only,
-            # before scaling, in the same order evaluate_rep uses. `dims` above keeps
-            # the width the hybrid SELECTED, matching the baseline rows, which record
-            # each representation's own width and not its post-cut width.
-            train_hybrid, val_hybrid, _ = _filter_high_dim_per_fold(
-                train_hybrid, val_hybrid, y_train, 'regression')
-
-            if not _is_binary_hybrid(train_hybrid):
-                scaler = StandardScaler()
-                train_hybrid_s = scaler.fit_transform(train_hybrid)
-                val_hybrid_s = scaler.transform(val_hybrid)
-            else:
-                train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
-
-            try:
-                m = clone(factory())
-                m.fit(train_hybrid_s, y_train)
-                preds = m.predict(val_hybrid_s)
-            except Exception:
+            _res = _score_slot(train_hybrid, val_hybrid, factory)
+            if _res is None:
                 continue
-            ss_res = np.sum((y_val - preds) ** 2)
-            ss_tot = np.sum((y_val - y_val.mean()) ** 2)
-            per_model[model_name]['r2'].append(
-                1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
-            per_model[model_name]['rmse'].append(
-                float(np.sqrt(np.mean((y_val - preds) ** 2))))
-            if len(y_val) > 2:
-                rho, _ = spearmanr(y_val, preds)
-                per_model[model_name]['spearman'].append(
-                    float(rho) if not np.isnan(rho) else np.nan)
-            else:
-                per_model[model_name]['spearman'].append(np.nan)
+            per_model[model_name]['r2'].append(_res[0])
+            per_model[model_name]['rmse'].append(_res[1])
+            per_model[model_name]['spearman'].append(_res[2])
+
+    # The other two slots of the owner's set, per downstream model, plus which
+    # recipe filled each slot on each fold and every slot left empty and why.
+    rule_block = {'rule': 'top 2 general + top 1 distance hybrids per model, '
+                          'each chosen on the fold\'s training rows',
+                  'by_slot': {}, 'recipes': rule_recipes,
+                  'rule_missing': rule_missing}
+    for _slot in ('general2', 'distance1'):
+        _res, _fs = {}, {}
+        for model_name, s in per_slot[_slot].items():
+            if not s['rmse'] or not np.any(~np.isnan(
+                    np.asarray(s['rmse'], dtype=np.float64))):
+                continue
+            _res[model_name] = _summarize_hybrid_scores(
+                s['r2'], s['rmse'], s['spearman'])
+            _fs[model_name] = s['spearman']
+        rule_block['by_slot'][_slot] = {'models': _res,
+                                        'fold_spearman_by_model': _fs}
 
     if not dims:
-        return None, 0, top3_first_fold, {}, top2_first_fold
+        return None, 0, top3_first_fold, {}, top2_first_fold, rule_block
 
     rep_results = {}
     fold_spearman_by_model = {}
@@ -630,7 +806,7 @@ def _evaluate_hybrid_per_fold(prop_name, base_reps, aug_dict, labels, groups,
         fold_spearman_by_model[model_name] = s['spearman']
 
     return (rep_results, int(np.mean(dims)), top3_first_fold,
-            fold_spearman_by_model, top2_first_fold)
+            fold_spearman_by_model, top2_first_fold, rule_block)
 
 
 def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruning'):
@@ -708,7 +884,8 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
     # ===== Hybrid arm: build PER FOLD (train-only), score held-out =====
     # Replaces the old full-data hybrid build (which selected features on all
     # rows, then scored the same rows — selection leakage in every fold).
-    hybrid_results, hybrid_dim, top3, hybrid_fold_scores, top2_block = (
+    (hybrid_results, hybrid_dim, top3, hybrid_fold_scores, top2_block,
+     rule_block) = (
         _evaluate_hybrid_per_fold(
             prop_name, base_for_search, aug_dict, labels, grp,
             fold_splits, models, pruning_mode=pruning_mode))
@@ -750,6 +927,18 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
             print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
                   f"rho={res['spearman']['mean']:.4f}  "
                   f"R2={res['r2']['mean']:.4f}  ***")
+    # The 2nd general and the 1st distance hybrid of the owner's set
+    # (2026-10-02), filed beside 'kirby_hybrid' with the slot in the name.
+    # print_analysis keeps these out of the single-representation side.
+    for _slot, _blk in (rule_block or {}).get('by_slot', {}).items():
+        if _blk['models']:
+            results[_slot_key(_slot)] = {'dim': None,
+                                         'models': _blk['models'],
+                                         'slot': _slot}
+            for model_name, res in _blk['models'].items():
+                print(f"    {_slot_key(_slot):25s} {model_name:8s}  "
+                      f"rho={res['spearman']['mean']:.4f}  "
+                      f"R2={res['r2']['mean']:.4f}  ***")
 
     # ===== fold_reselection block (CONTRACT shape) =====
     # One candidate per model (the per-fold-rebuilt hybrid); fold_reselection's
@@ -790,6 +979,19 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
         metric_name=reselection_block.get('metric_name'),
         exclude_folds=hr_exclude_folds(reselection_block),
     )
+    # The same held-out comparison for the other two slots of the owner's set
+    # (2026-10-02), each slot on its own against the best single
+    # representation. 'reselected_comparison' above stays general1.
+    reselected_by_slot = {}
+    for _slot, _blk in (rule_block or {}).get('by_slot', {}).items():
+        _cands = {m: [{'name': _slot_key(_slot), 'fold_scores': list(fs)}]
+                  for m, fs in _blk['fold_spearman_by_model'].items() if fs}
+        if _cands:
+            reselected_by_slot[_slot] = fold_reselection(
+                _cands, baselines_by_model,
+                hr_direction(reselection_block),
+                metric_name=reselection_block.get('metric_name'),
+                exclude_folds=hr_exclude_folds(reselection_block))
 
     return {
         'n_samples': n,
@@ -808,6 +1010,12 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
         # 'reselected_comparison' - so this key is printed by nothing and
         # saved to the JSON. None when fold 0's search did not run.
         'top2_selection': top2_block,
+        # Owner's set (top 2 general + top 1 distance per model, 2026-10-02):
+        # the held-out comparison per slot, the recipe behind each slot on
+        # each fold, and every slot that could not be filled, with the reason.
+        'reselected_comparison_by_slot': reselected_by_slot,
+        'rule_recipes': (rule_block or {}).get('recipes', []),
+        'rule_missing': (rule_block or {}).get('rule_missing', []),
     }
 
 
@@ -846,6 +1054,8 @@ def print_analysis(all_results):
             best_model_res = max(rep_data['models'].values(),
                                   key=lambda v: v['spearman']['mean'])
             rho = best_model_res['spearman']['mean']
+            if rep_name.startswith('kirby_hybrid__'):
+                continue   # general2/distance1: hybrids, not single reps
             if rep_name == 'kirby_hybrid':
                 hybrid_rho = rho
             elif rho > best_indiv_rho:

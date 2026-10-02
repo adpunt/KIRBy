@@ -74,7 +74,7 @@ from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
     fold_reselection, build_fold_reselection_input,
-    hr_exclude_folds, hr_direction,
+    hr_exclude_folds, hr_direction, get_rule_hybrids,
 )
 
 # =============================================================================
@@ -311,6 +311,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     # and the reason. Written so a table of three models cannot be read as a
     # table of five.
     hybrid_delta_unscored = {}
+    rule_block = None
     try:
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
@@ -340,6 +341,22 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             # scores). Model set is derived by the helper from what the search
             # actually evaluated, so gates are respected automatically.
             reselection_block = build_fold_reselection_input(search)
+
+            # The owner's set: top 2 general + top 1 distance hybrids per
+            # downstream model (2026-10-02), read with the same settings as the
+            # search above. Smoke-only lists are passed only under
+            # KIRBY_SMOKE_N, where both reads are small cold searches.
+            try:
+                rule_block = _rule_set_held_out(
+                    reps, labels, groups, dataset_name, reselection_block,
+                    dict(metric='auc', task_type='classification',
+                         augmentations=None, adaptive_pruning=0.25,
+                         **{k: v for k, v in _smoke.items() if k != 'speed'},
+                         **_pkw))
+            except Exception as e:
+                print(f"  Owner's hybrid set not read: {e}")
+                rule_block = {'rule_missing': [
+                    f'the read raised {type(e).__name__}: {e}']}
 
             # Top 2 beside the top 3 printed above, and saved rather than
             # printed. The line above names 3 representations under rf only and
@@ -483,10 +500,84 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     # main() only writes it to JSON.
     if top2_block is not None:
         out['top2_pairs_by_model'] = top2_block
+    # The owner's set (top 2 general + top 1 distance hybrids per model, top 2
+    # single representations; 2026-10-02), each hybrid scored per held-out fold
+    # against the best single representation. 'reselected_comparison' above
+    # re-picks among every stored recipe and is kept as it was.
+    if rule_block is not None:
+        out['rule_hybrids'] = rule_block
+        out['rule_missing'] = rule_block.get('rule_missing', [])
     if hybrid_delta_block:
         out['hybrid_deltas_by_model'] = hybrid_delta_block
     if hybrid_delta_unscored:
         out['hybrid_deltas_unscored_models'] = hybrid_delta_unscored
+    return out
+
+
+def _rule_set_held_out(reps, labels, groups, dataset_name, reselection_block,
+                       read_kw):
+    """The owner's set of hybrids, scored per held-out fold (2026-10-02).
+
+    For each downstream model: the top 2 hybrids from the general searches plus
+    the top 1 from the distance searches. On held-out fold k each slot is
+    filled by the recipe ranked on the OTHER folds, and its score on fold k is
+    the score the stored search measured there (the search builds every
+    candidate per fold). Each slot is then set against the best single
+    representation re-picked per held-out fold, as reselected_comparison does
+    for the whole recipe list. 0 new model fits.
+
+    Returns {'whole_dataset': {model: [slot rows]}, 'base_reps': {model: [top
+    2]}, 'by_slot': {slot: {model: fold_reselection entry}},
+    'fold_scores_by_slot': {slot: {model: [...]}}, 'rule_missing': [...]}.
+    """
+    out = {'rule': 'top 2 general + top 1 distance hybrids per model',
+           'whole_dataset': {}, 'base_reps': {}, 'by_slot': {},
+           'fold_scores_by_slot': {}, 'rule_missing': []}
+    models = sorted((reselection_block or {}).get('baselines_by_model', {})
+                    or MODELS_LIST)
+    for m in models:
+        try:
+            whole = get_rule_hybrids(reps, labels, groups, downstream_model=m,
+                                     dataset_name=dataset_name, fold_i=None,
+                                     **read_kw)
+        except Exception as e:
+            out['rule_missing'].append(
+                f'{m}: the whole-dataset read raised {type(e).__name__}: {e}')
+            continue
+        out['rule_missing'] += whole['missing']
+        out['whole_dataset'][m] = [
+            {k: h.get(k) for k in ('slot', 'tier', 'aug_condition', 'objective',
+                                   'recipe', 'budget', 'budget_relaxed',
+                                   'score_other_folds', 'fold_scores')}
+            for h in whole['hybrids']]
+        out['base_reps'][m] = [
+            {k: b.get(k) for k in ('rep', 'score_other_folds', 'fold_scores')}
+            for b in whole['base_reps']]
+        n_folds = max([len(h.get('fold_scores') or [])
+                       for h in whole['hybrids']] or [0])
+        for k in range(n_folds):
+            try:
+                fk = get_rule_hybrids(reps, labels, groups, downstream_model=m,
+                                      dataset_name=dataset_name, fold_i=k,
+                                      n_outer_folds=n_folds, **read_kw)
+            except Exception as e:
+                out['rule_missing'].append(
+                    f'{m} fold {k}: the read raised {type(e).__name__}: {e}')
+                continue
+            for h in fk['hybrids']:
+                lst = out['fold_scores_by_slot'].setdefault(
+                    h['slot'], {}).setdefault(m, [None] * n_folds)
+                lst[k] = h.get('score_this_fold')
+    bases = (reselection_block or {}).get('baselines_by_model', {})
+    if reselection_block is not None:
+        for slot, by_m in out['fold_scores_by_slot'].items():
+            cands = {m: [{'name': slot, 'fold_scores': fs}]
+                     for m, fs in by_m.items()}
+            out['by_slot'][slot] = fold_reselection(
+                cands, {m: bases[m] for m in cands if m in bases},
+                hr_direction(reselection_block),
+                metric_name=reselection_block.get('metric_name'),
+                exclude_folds=hr_exclude_folds(reselection_block))
     return out
 
 
