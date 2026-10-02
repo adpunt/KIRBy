@@ -698,6 +698,16 @@ FAST_SPEED_DATASETS = frozenset({
     'qm9',
     'tz_her2_binary',
     'tz_her2_multiclass',
+    # Added 2026-10-02, owner's decision (option 1 of 2). Both are about
+    # 100,000 rows -- past the 10,000 above -- and were never on this list, so
+    # they searched 8,160 configurations per pass. Measured on the server
+    # 2026-10-01: 115 s a configuration on bindingdb_kd and 82.5 on kiba,
+    # general/predictive/none alone 223 h and 139 h left, against 240 h queued
+    # each. The alternative was about 14 more 48-hour links each. Their
+    # uncapped passes were already skipped (precompute_hybrids.py
+    # UNCAPPED_SKIP_DATASETS) for the same reason.
+    'bindingdb_kd',
+    'kiba',
 })
 
 
@@ -767,7 +777,7 @@ def small_dataset_extra_models(dataset_name: Optional[str]):
 
 
 def dataset_search_speed(dataset_name: Optional[str]) -> str:
-    """'fast' for the twelve above, 'full' for everything else.
+    """'fast' for the fourteen above, 'full' for everything else.
 
     An unknown or missing name is 'full', which is the engine's own default --
     a dataset nobody has classified is never silently given a shorter search.

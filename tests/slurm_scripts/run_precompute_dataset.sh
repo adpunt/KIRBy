@@ -102,7 +102,7 @@ DS=${1:?usage: sbatch run_precompute_dataset.sh <dataset>}
 # Move a dataset by editing one of these three lines. KIRBY_SPEED and
 # KIRBY_PRUNING override the class entirely.
 SMALL_DATASETS="${KIRBY_SMALL_DATASETS:-tcga_brca_pam50 flab_thermo_tresanco humanness_therapeutic herg_ki ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_titer ginkgo_pr_cho abcov_kd abagym_Ang2 abagym_VEGF abagym_EGFR ddg_combined cdr_flexibility}"
-LARGE_DATASETS="${KIRBY_LARGE_DATASETS:-nt_H3K27me3 nt_H3K9me3 nt_H3K9ac nt_H3K4me3 gb_human_enhancers_cohn nt_promoter_tata qm9 herg logd flab_expression_koenig tz_her2_binary tz_her2_multiclass}"
+LARGE_DATASETS="${KIRBY_LARGE_DATASETS:-nt_H3K27me3 nt_H3K9me3 nt_H3K9ac nt_H3K4me3 gb_human_enhancers_cohn nt_promoter_tata qm9 herg logd flab_expression_koenig tz_her2_binary tz_her2_multiclass bindingdb_kd kiba}"
 
 if [[ " ${LARGE_DATASETS} " == *" ${DS} "* ]]; then
     CLASS="LARGE";  DEF_SPEED="fast"; DEF_PRUNING="calibrated"
