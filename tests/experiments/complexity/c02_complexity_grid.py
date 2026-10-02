@@ -31,8 +31,65 @@ from experiments._shared import (
     _build_rep_factories, parse_rep_args,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
     hr_exclude_folds,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+    RULE_N_GENERAL, RULE_N_DISTANCE,
 )
 from kirby.find_best_hybrid import _predict_for_metric
+
+
+def _rule_from_searches(gen_search, dist_search, model, budget=None, *,
+                        dist_error=None):
+    """Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
+    one downstream model, read off this file's own two searches.
+
+    Returns (entries, missing). Each entry is a top_hybrids 'selected' entry
+    plus 'slot' ('general1', 'general2', 'distance1'), 'lineage', 'tier',
+    'objective' and 'budget_relaxed'. Every slot asked for and not filled is
+    a sentence in `missing`.
+
+    A distance search scores budgets up to max(DISTANCE_BUDGETS) features
+    only. Asked for a larger budget, the distance read ranks over every budget
+    it holds and the entry says budget_relaxed=True.
+    """
+    entries, missing = [], []
+    for lineage, srch, n, tier in (
+            ('general', gen_search, RULE_N_GENERAL, 'general'),
+            ('distance', dist_search, RULE_N_DISTANCE, 'general_distance')):
+        relaxed = False
+        b = budget
+        if lineage == 'distance':
+            if model not in DISTANCE_MODELS:
+                missing.append(f'distance for {model}: {model} is not one of '
+                               f'the distance search models {DISTANCE_MODELS}, '
+                               f'so it was never scored there')
+                continue
+            if srch is None:
+                missing.append(f'distance for {model}: no distance search '
+                               f'({dist_error or "not run"})')
+                continue
+            if b is not None and b > max(DISTANCE_BUDGETS):
+                b, relaxed = None, True
+        if srch is None:
+            missing.append(f'{lineage} for {model}: no search')
+            continue
+        try:
+            th = top_hybrids(srch, model, n, budget=b, require_full=False)
+        except Exception as e:
+            missing.append(f'{lineage} for {model}: top_hybrids raised '
+                           f'{type(e).__name__}: {e}')
+            continue
+        if not th['complete']:
+            missing.append(f'{lineage} for {model}: {th["shortfall_reason"]}')
+        for e in th['selected']:
+            e = dict(e)
+            e['slot'] = f"{lineage}{e['rank']}"
+            e['lineage'] = lineage
+            e['tier'] = tier
+            e['objective'] = 'predictive'
+            e['budget_asked'] = budget
+            e['budget_relaxed'] = relaxed
+            entries.append(e)
+    return entries, missing
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -269,6 +326,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Use uncapped as the primary search (best overall)
     search = search_uncapped
+
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family. c02 runs its own searches, so the distance
+    # counterpart is its own search too: the primary condition above
+    # (uncapped when augmentation representations exist, else none), run
+    # with the distance settings precompute_hybrids.py uses for a distance
+    # condition -- tier 'general_distance', DISTANCE_BUDGETS (10 to 500
+    # features), DISTANCE_EVALUATORS, DISTANCE_MODELS. The rest of the
+    # recipe grid is the same as the general searches here.
+    _dist_cond = 'uncapped' if augs else 'none'
+    search_distance = None
+    distance_search_error = None
+    _dist_models = _asm({'models': list(DISTANCE_MODELS),
+                         'tier': 'general_distance'}, dataset_name)['models']
+    print(f"\n  --- Distance counterpart ({_dist_cond}, "
+          f"{len(DISTANCE_BUDGETS)} budgets up to {max(DISTANCE_BUDGETS)} "
+          f"features) ---")
+    try:
+        search_distance = find_best_hybrid(
+            base_reps=reps,
+            labels=labels,
+            groups=groups,
+            models=_dist_models,
+            budgets=list(DISTANCE_BUDGETS),
+            allocation_methods=allocation_methods,
+            importance_methods=importance_methods,
+            n_folds=n_folds,
+            augmentations=augs if _dist_cond != 'none' else None,
+            augmentation_strategy=_dist_cond,
+            internal_evaluators=list(DISTANCE_EVALUATORS),
+            **_c02_speed_kw,
+            metric=metric_name,
+            task_type=data['task_type'],
+            verbose=True,
+            cache=True,
+            dataset_name=dataset_name,
+            tier='general_distance',
+        )
+    except Exception as _d_exc:
+        distance_search_error = f'{type(_d_exc).__name__}: {_d_exc}'
+        print(f'  Distance search FAILED, the general conditions stand: '
+              f'{distance_search_error}')
 
     top3 = extract_top3_base_reps(search)
     if top3:
@@ -916,6 +1015,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
              'reason': f'{type(_e).__name__}: {_e}'})
         print(f"  top-2 model-and-representation grid unavailable: {_e}")
 
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model. Every one of the three was scored by its search's own 5-fold
+    # cross-validation; the scores, fold scores and both reference deltas are
+    # written per slot. general1 is the same configuration as
+    # top2_hybrids[model]['selected'][0]; the existing keys are unchanged.
+    rule_hybrids_by_model = {}
+    rule_deltas_by_model = {}
+    rule_missing = []
+    for _m in comparison_models:
+        _entries, _miss = _rule_from_searches(
+            search, search_distance, _m, dist_error=distance_search_error)
+        rule_missing += _miss
+        rule_hybrids_by_model[_m] = _no_blueprint(_entries)
+        rule_deltas_by_model[_m] = {}
+        for _e in _entries:
+            _src = search if _e['lineage'] == 'general' else search_distance
+            try:
+                rule_deltas_by_model[_m][_e['slot']] = _no_blueprint(
+                    hybrid_deltas(_src, _m, hybrid=_e))
+            except Exception as _ex:
+                rule_missing.append(
+                    f"{_e['slot']} deltas for {_m}: "
+                    f"{type(_ex).__name__}: {_ex}")
+        for _e in _entries:
+            print(f"    rule {_m} {_e['slot']}: {_e['allocation_method']}/"
+                  f"{_e['importance_method']}/b={_e['budget']} -> "
+                  f"{metric_label}={_e['score_mean']:.4f}")
+
+    distance_fold_reselection = None
+    if search_distance is not None:
+        try:
+            distance_fold_reselection = build_fold_reselection_input(
+                search_distance)
+        except Exception as _ex:
+            rule_missing.append(f'distance fold_reselection block: '
+                                f'{type(_ex).__name__}: {_ex}')
+
     # Printed because the two deltas answer different questions and a reader
     # given one number cannot tell which was asked. The first is the hybrid
     # against the mean of the representations the budget actually gave features
@@ -987,6 +1123,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'models_dropped': [{'downstream_model': _n, 'reason': _w}
                            for _n, _w in models_dropped],
         'comparison_failures': selection_failures,
+        # Owner's set (2026-10-02): per model, the top 2 hybrids of the
+        # general search and the top 1 of the distance search, each with its
+        # slot, tier and cross-validated scores, plus every slot not filled.
+        'rule_hybrids': rule_hybrids_by_model,
+        'rule_hybrid_deltas': rule_deltas_by_model,
+        'rule_missing': rule_missing,
+        'rule_distance_condition': _dist_cond,
+        'distance_search_error': distance_search_error,
+        'distance_fold_reselection': distance_fold_reselection,
     }
 
 

@@ -7,6 +7,13 @@ Core thesis: Selecting features via the hybrid is a form of inductive bias equiv
     model regularization becomes irrelevant because feature selection already controls
     the bias-variance tradeoff.
 
+Owner's set (2026-10-02): every family runs the whole heatmap once per hybrid
+of the set -- the top 2 general and the top 1 distance hybrid for the family's
+own downstream model. results['families'] holds 'Ridge' (general1, the old
+key), 'Ridge__general2', 'Ridge__distance1', and the same for RF and SVM.
+Ridge is never scored on the distance searches, so 'Ridge__distance1' and
+'LogReg__distance1' are recorded in results['rule_missing'], not built.
+
 Three analyses:
   1. Heatmap: R² over (regularization_strength × hybrid_budget) per model family
   2. Sensitivity: std(R² across regularization) at each budget — should → 0 at optimal budget
@@ -40,8 +47,8 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
     build_fold_hybrid,
-    get_best_search_for_downstream,
     fold_reselection,
+    get_rule_hybrids, top_hybrids, DISTANCE_MODELS,
     # 2026-09-12, owner's decision: c16 asks the pool for 'ridge' for the Ridge
     # family, 'svm' for SVR and 'rf' for RandomForest. RIDGE_MODELS is the named
     # model list that puts 'ridge' into the search — the same shape as
@@ -507,37 +514,77 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # no longer falls back to the blueprint's whole-dataset representation
     # scores, so every fold re-scores the representations on its own training
     # rows. results['recipe_selected_on'] below carries what is left.
-    blueprints = {fam: {} for fam in families}          # {family: {budget: bp}}
-    pool_lookup_errors = {fam: {} for fam in families}  # {family: {budget: str}}
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family. Each (family, slot) is an ARM below and runs the whole
+    # heatmap: arm 'Ridge' is general1 (the old single recipe), and
+    # 'Ridge__general2' / 'Ridge__distance1' are the other two.
+    _SLOTS = ('general1', 'general2', 'distance1')
+
+    def _arm_name(fam, slot):
+        return fam if slot == 'general1' else f'{fam}__{slot}'
+
+    arms = [(_arm_name(f, sl), f, sl) for f in families for sl in _SLOTS]
+    blueprints = {a: {} for a, _f, _sl in arms}          # {arm: {budget: bp}}
+    pool_lookup_errors = {a: {} for a, _f, _sl in arms}  # {arm: {budget: str}}
+    # {arm: {budget: bool}} -- True when the read ranked over every budget it
+    # holds because none was scored at this one (distance stops at 500).
+    budget_relaxed = {a: {} for a, _f, _sl in arms}
+    rule_missing = []
     for fam_name in families:
         pool_model = _family_to_canonical.get(fam_name)
         if pool_model is None:
-            pool_lookup_errors[fam_name]['all'] = (
-                f'no pool model name for family {fam_name}')
+            for _sl in _SLOTS:
+                pool_lookup_errors[_arm_name(fam_name, _sl)]['all'] = (
+                    f'no pool model name for family {fam_name}')
             continue
         for budget in pool_budgets:
             _t_look = time.time()
+            # General read: names C16_MODELS, which puts 'ridge' into the
+            # search cache key. Required on the read side or the key misses
+            # the --with-ridge file. n_distance=0: the distance read must NOT
+            # get this list, or it would ask for a distance search that was
+            # never built and cold-build it.
+            _parts = []
             try:
-                search, meta = get_best_search_for_downstream(
+                _parts.append(get_rule_hybrids(
                     reps, labels, groups,
                     downstream_model=pool_model, budget=budget,
                     augmentations=augmentations,
                     dataset_name=dataset_name, task_type=task_type,
-                    data=data,
-                    # Names 'ridge' into the search cache key. Required on the
-                    # read side or the key misses the --with-ridge file.
-                    models=C16_MODELS,
-                )
+                    data=data, n_distance=0, models=C16_MODELS))
             except Exception as e:
-                # Was one try/except around the whole budget loop, so a single
-                # failing budget dropped every later one with no message.
-                pool_lookup_errors[fam_name][budget] = f'{type(e).__name__}: {e}'
-                continue
-            if meta:
-                blueprints[fam_name][budget] = meta['best_config']['blueprint']
+                for _sl in ('general1', 'general2'):
+                    pool_lookup_errors[_arm_name(fam_name, _sl)][budget] = (
+                        f'{type(e).__name__}: {e}')
+            # Distance read, on the distance searches' own model list.
+            if pool_model in DISTANCE_MODELS:
+                try:
+                    _parts.append(get_rule_hybrids(
+                        reps, labels, groups,
+                        downstream_model=pool_model, budget=budget,
+                        augmentations=augmentations,
+                        dataset_name=dataset_name, task_type=task_type,
+                        data=data, n_general=0, n_base=0))
+                except Exception as e:
+                    pool_lookup_errors[_arm_name(fam_name, 'distance1')][budget] = (
+                        f'{type(e).__name__}: {e}')
+            elif budget == pool_budgets[0]:
+                rule_missing.append(
+                    f'{fam_name} distance1 for {pool_model}: {pool_model} is not '
+                    f'in DISTANCE_MODELS, so no distance search scored it; the '
+                    f'arm {_arm_name(fam_name, "distance1")} is not built')
+            for _r in _parts:
+                rule_missing += [f'{fam_name} budget={budget}: {m}'
+                                 for m in _r['missing']]
+                for _h in _r['hybrids']:
+                    _a = _arm_name(fam_name, _h.get('slot'))
+                    if _a in blueprints and _h.get('blueprint') is not None:
+                        blueprints[_a][budget] = _h['blueprint']
+                        budget_relaxed[_a][budget] = bool(_h.get('budget_relaxed'))
             print(f"  [c16 {_c16_t():.0f}s] recipe lookup {fam_name}/"
                   f"{pool_model} budget={budget}: "
-                  f"{'found' if meta else 'none'} in {time.time() - _t_look:.0f}s",
+                  f"{sum(budget in blueprints[_arm_name(fam_name, _sl)] for _sl in _SLOTS)}"
+                  f" of 3 slots in {time.time() - _t_look:.0f}s",
                   flush=True)
 
     # Fast search for the capped_full slot (not in FULL_BUDGETS), one per family.
@@ -587,6 +634,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     f'blueprint (no eligible {pool_model} result)')
                 print(f"  c16 fast search at capped_full={capped_full} "
                       f"[{fam_name}/{pool_model}]: no usable blueprint returned")
+            # Owner's set (2026-10-02): general2 at capped_full is the second
+            # recipe of this same fast search.
+            try:
+                _cf_top = top_hybrids(
+                    cf_search, pool_model, 2, budget=capped_full,
+                    require_full=False,
+                    context=f'c16 {dataset_name} {fam_name} capped_full')
+                if len(_cf_top['selected']) >= 2:
+                    blueprints[_arm_name(fam_name, 'general2')][capped_full] = (
+                        _cf_top['selected'][1]['blueprint'])
+                else:
+                    rule_missing.append(
+                        f'{fam_name} general2 at capped_full={capped_full}: the '
+                        f'fast search scored {len(_cf_top["selected"])} '
+                        f'configuration(s) for {pool_model}')
+            except Exception as e:
+                rule_missing.append(
+                    f'{fam_name} general2 at capped_full={capped_full}: '
+                    f'{type(e).__name__}: {e}')
         except Exception as e:
             capped_full_error[fam_name] = f'{type(e).__name__}: {e}'
             print(f"  c16 fast search at capped_full={capped_full} "
@@ -594,15 +660,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  [c16 {_c16_t():.0f}s] capped_full={capped_full} search "
               f"{fam_name}/{pool_model} took {time.time() - _t_cf:.0f}s",
               flush=True)
+        # Owner's set (2026-10-02): distance1 at capped_full comes from the
+        # stored distance searches, NOT a new fast search. Their budgets stop
+        # at 500, so the read ranks over every budget they hold and
+        # budget_relaxed is recorded; the cell is still built at capped_full,
+        # because _evaluate_cell passes budget_override=budget.
+        _da = _arm_name(fam_name, 'distance1')
+        if pool_model in DISTANCE_MODELS and capped_full not in blueprints[_da]:
+            try:
+                _r = get_rule_hybrids(
+                    reps, labels, groups,
+                    downstream_model=pool_model, budget=capped_full,
+                    augmentations=augmentations,
+                    dataset_name=dataset_name, task_type=task_type,
+                    data=data, n_general=0, n_base=0)
+                rule_missing += [f'{fam_name} capped_full={capped_full}: {m}'
+                                 for m in _r['missing']]
+                for _h in _r['hybrids']:
+                    if _h.get('blueprint') is not None:
+                        blueprints[_da][capped_full] = _h['blueprint']
+                        budget_relaxed[_da][capped_full] = bool(
+                            _h.get('budget_relaxed'))
+            except Exception as e:
+                pool_lookup_errors[_da][capped_full] = f'{type(e).__name__}: {e}'
 
     # Say out loud which budgets each family got a recipe for. A family with an
     # empty list here produces a blank column, and on a binary-classification
     # set scored by auc the Ridge/LogReg family is the one that can go blank:
     # the name 'ridge' resolves to RidgeClassifier, which has no predict_proba,
     # so the search cannot score it.
-    for fam_name in families:
-        got = sorted(blueprints[fam_name])
-        print(f"  Recipes for {fam_name} (asked the pool for "
+    for arm, fam_name, _sl in arms:
+        got = sorted(blueprints[arm])
+        print(f"  Recipes for {arm} (asked the pool for "
               f"'{_family_to_canonical.get(fam_name)}'): "
               f"{len(got)} of {len(budgets)} budgets — {got}")
 
@@ -616,19 +705,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # pool for its own downstream model, so each can succeed or fail on its
         # own. They were a bool and a string while one rf search served all
         # three families.
-        'capped_full_blueprint_built': {fam: capped_full in blueprints[fam]
-                                        for fam in families},
+        # Owner's set (2026-10-02): keyed by ARM (family, or family__slot).
+        'capped_full_blueprint_built': {a: capped_full in blueprints[a]
+                                        for a, _f, _sl in arms},
         'capped_full_error': capped_full_error,
-        'pool_lookup_errors': {fam: convert_numpy(errs)
-                               for fam, errs in pool_lookup_errors.items()},
+        'pool_lookup_errors': {a: convert_numpy(errs)
+                               for a, errs in pool_lookup_errors.items()},
         # Which downstream model chose each family's recipe, and the model list
         # that had to be named to get 'ridge' scored at all.
-        'recipe_downstream_model': {fam: _family_to_canonical.get(fam)
-                                    for fam in families},
+        'recipe_downstream_model': {a: _family_to_canonical.get(f)
+                                    for a, f, _sl in arms},
         'recipe_model_list': list(C16_MODELS),
-        'budgets_without_recipe': {fam: [b for b in budgets
-                                         if b not in blueprints[fam]]
-                                   for fam in families},
+        'budgets_without_recipe': {a: [b for b in budgets
+                                       if b not in blueprints[a]]
+                                   for a, _f, _sl in arms},
+        # Owner's set (2026-10-02): which hybrid of the set each arm is, the
+        # budgets where the read had to rank over other budgets, and every
+        # slot the rule asked for and did not get.
+        'rule_arms': {a: {'family': f, 'slot': sl,
+                          'lineage': 'distance' if sl.startswith('distance')
+                          else 'general'}
+                      for a, f, sl in arms},
+        'rule_budget_relaxed': convert_numpy(budget_relaxed),
+        'rule_missing': rule_missing,
         # Which rows chose what. The budget split is per fold; the rest of the
         # recipe is not, so the heatmap, the sensitivity curve and the
         # L2-equivalence numbers are all read under a recipe picked with every
@@ -656,12 +755,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # importance method). Empty and unused when _C16_REUSE_FOLD_WORK is off.
     _importance_by_fold = {} if _C16_REUSE_FOLD_WORK else None
 
-    for fam_name, variants in families.items():
-        print(f"\n  --- {fam_name} ({len(variants)} regularization levels × {len(budgets)} budgets) ---")
+    # Owner's set (2026-10-02): one pass per ARM (family x slot). An arm
+    # with no recipe at any budget (Ridge__distance1, say) is skipped and is
+    # already named in rule_missing.
+    for arm_name, fam_name, _slot in arms:
+        variants = families[fam_name]
+        if _slot != 'general1' and not blueprints.get(arm_name):
+            continue
+        print(f"\n  --- {arm_name} ({len(variants)} regularization levels × {len(budgets)} budgets) ---")
         param_name = variants[0][0]
         # 2026-09-12: this family's own recipes, chosen for its own downstream
         # model, instead of the one rf recipe every family used to share.
-        fam_blueprints = blueprints.get(fam_name, {})
+        fam_blueprints = blueprints.get(arm_name, {})
 
         heatmap = {}  # {budget: {param_value: {'val': score, 'train': score}}}
         # One entry per regularisation setting of this family, reused across
@@ -695,7 +800,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # (leave-one-fold-out budget / reg selection). Additive.
                     'fold_scores': list(fold_scores),
                 }
-                print(f"    [c16 {_c16_t():.0f}s] cell {fam_name} "
+                print(f"    [c16 {_c16_t():.0f}s] cell {arm_name} "
                       f"budget={budget} {pname}={pval}: "
                       f"{time.time() - _t_cell:.0f}s", flush=True)
             # Print row
@@ -808,13 +913,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                    if v is not None and not np.isnan(float(v))]
         comparison['family_blank'] = (len(_finite) == 0)
         if comparison['family_blank']:
-            _errs = pool_lookup_errors.get(fam_name) or {}
+            _errs = pool_lookup_errors.get(arm_name) or {}
             comparison['family_blank_reason'] = (
                 '; '.join(f'{k}: {v}' for k, v in sorted(_errs.items())[:4])
                 or f'no finite cell in {len(_cells)} (budget, setting) cells')
 
         fam_result = {
             'param_name': param_name,
+            # Owner's set (2026-10-02): which family and which hybrid of the
+            # set this arm is.
+            'family': fam_name,
+            'slot': _slot,
             # 2026-09-12: the downstream model this family's recipe was chosen
             # for. 'ridge' for Ridge and LogReg, 'svm' for SVR/SVC, 'rf' for
             # RandomForest. Every family read 'rf' before this.
@@ -867,15 +976,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             _fs = heatmap[b].get(str(_hybrid_default), {}).get('fold_scores', [])
             _cand_list.append({'name': f'b{b}', 'fold_scores': list(_fs)})
-        reselection_candidates[fam_name] = _cand_list
+        reselection_candidates[arm_name] = _cand_list
         # Baseline arm: tuned regularization settings at the full-dim budget.
         _base_map = {}
         for _, pval, _f in variants:
             _fs = heatmap[full_dim_budget].get(str(pval), {}).get('fold_scores', [])
             _base_map[f'{param_name}={pval}'] = list(_fs)
-        reselected_baselines[fam_name] = _base_map
+        reselected_baselines[arm_name] = _base_map
 
-        results['families'][fam_name] = fam_result
+        results['families'][arm_name] = fam_result
         print(f"    Sensitivity: {', '.join(f'b={b}:{s:.4f}' for b, s in sensitivity.items())}")
         if comparison.get('hybrid_wins') is not None:
             winner = 'simple_hybrid' if comparison['hybrid_wins'] else 'tuned_full_dim'

@@ -38,7 +38,8 @@ from experiments._shared import (
     compute_feature_importance,
 )
 from experiments._shared import (
-    get_best_search_for_downstream, build_fold_hybrid, cap_dimensions,
+    get_rule_hybrids, build_fold_hybrid, cap_dimensions,
+    fold_hybrid_scoring_kwargs,
 )
 # Scores a binary-AUROC dataset on class-1 probabilities instead of hard class
 # labels; falls through to model.predict for every other metric.
@@ -168,30 +169,57 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     #
     # This moves the lightgbm and xgboost columns of every c19 result already on
     # disk. Those numbers were measured with rf's features; the new ones are not.
-    hybrid_bp_by_model = {}
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family. Each one is its own input space below, built and
+    # scored under every weighting condition. The space named 'hybrid' is the
+    # general rank-1 recipe, as before; the others are 'hybrid__general2' and
+    # 'hybrid__distance1' (plus '__<family>' for a non-predictive family).
+    hybrid_bp_by_model = {}      # general rank 1, kept under its old name
     hybrid_recipe_missing = []
+    rule_missing = []
+    rule_hybrids = {}            # model -> [slot record, ...]
     for _m in models:
         try:
-            _search, _meta = get_best_search_for_downstream(
+            _rule = get_rule_hybrids(
                 reps, labels, groups, downstream_model=_m, budget=budget,
-                augmentations=augmentations,
-                data=data,
+                augmentations=augmentations, data=data,
                 dataset_name=dataset_name,
                 task_type=task_type, metric=metric_name,
             )
-            if _meta:
-                hybrid_bp_by_model[_m] = _meta['best_config']['blueprint']
-            else:
-                hybrid_recipe_missing.append(_m)
-                print(f"  Hybrid recipe lookup returned nothing for {_m} "
-                      f"at this budget")
         except Exception as e:
             hybrid_recipe_missing.append(_m)
+            rule_missing.append(f'{_m}: the pool read raised {e}')
             print(f"  Hybrid recipe lookup failed for {_m}: {e}")
-    if hybrid_bp_by_model:
-        input_spaces['hybrid'] = hybrid_bp_by_model
+            continue
+        rule_missing += [f'{_m}: {w}' for w in _rule['missing']]
+        rule_hybrids[_m] = []
+        for _fam, _part in _rule['by_objective'].items():
+            for _e in _part['hybrids']:
+                _space = 'hybrid' + ('' if _e['slot'] == 'general1'
+                                     else f"__{_e['slot']}")
+                if _fam != 'predictive':
+                    _space += f'__{_fam}'
+                input_spaces.setdefault(_space, {})[_m] = _e['blueprint']
+                rule_hybrids[_m].append({
+                    'space': _space, 'slot': _e['slot'],
+                    'lineage': _e['lineage'], 'tier': _e.get('tier'),
+                    'objective': _fam,
+                    'aug_condition': _e.get('aug_condition'),
+                    'recipe': _e.get('recipe'),
+                    'budget': _e.get('budget'),
+                    'budget_relaxed': _e.get('budget_relaxed'),
+                    'score_in_search': _e.get('score_other_folds'),
+                })
+        _g1 = input_spaces.get('hybrid', {}).get(_m)
+        if _g1 is not None:
+            hybrid_bp_by_model[_m] = _g1
+        else:
+            hybrid_recipe_missing.append(_m)
+            print(f"  Hybrid recipe lookup returned nothing for {_m} "
+                  f"at this budget")
     if hybrid_recipe_missing:
-        print(f"  no hybrid column for: {sorted(hybrid_recipe_missing)}")
+        print(f"  no general rank-1 hybrid column for: "
+              f"{sorted(hybrid_recipe_missing)}")
 
     print(f"  Input spaces: {list(input_spaces.keys())}")
     print(f"  Models: {list(models.keys())}")
@@ -216,6 +244,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Downstream models the pool had no recipe for at this budget. They
         # have no hybrid column; their other spaces still ran.
         'hybrid_recipe_missing': sorted(hybrid_recipe_missing),
+        # Owner's set (2026-10-02): every hybrid scored, per model, with the
+        # input space it is filed under, and every slot that was not filled.
+        'rule_hybrids': rule_hybrids,
+        'rule_missing': rule_missing,
         'conditions': conditions,
         # Which rows chose what. Every condition in a model's column shares one
         # feature set per fold, so the deltas between conditions — what c19
@@ -281,8 +313,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         tr_reps, va_reps, labels[train_idx], blueprint,
                         augmentations_train=tr_a, augmentations_val=va_a,
                         groups=(groups[train_idx] if groups is not None else None),
-                        model=model_factory(),
-                        metric_fn=metric_fn, lower_is_better=lower_is_better)
+                        # A recipe chosen under a geometry objective fits no
+                        # model; this hands back no model for it.
+                        **fold_hybrid_scoring_kwargs(
+                            blueprint, model=model_factory(),
+                            metric_fn=metric_fn,
+                            lower_is_better=lower_is_better))
                     fold_matrices.append((X_tr_f, X_va_f))
                 except Exception as e:
                     print(f"  {space_name}/{model_name}: "

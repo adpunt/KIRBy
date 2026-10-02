@@ -52,6 +52,7 @@ from experiments._shared import (
     build_fold_reselection_input, fold_reselection, hr_exclude_folds,
     top_base_reps, top_hybrids, resolve_comparison_models,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
+    get_rule_hybrids, build_hybrid_from_entry,
 )
 from kirby.hybrid import apply_augmentation_selection
 
@@ -89,6 +90,79 @@ def _winner_per_fold(all_results, model_name, lower_is_better, n_folds):
             key=lambda r: float(np.mean([r['fold_scores'][j] for j in others])))
     return winners
 
+
+def _rule_set_per_fold(data, ds_name, model_name, metric_name):
+    """The owner's set for one downstream model, re-picked per held-out fold.
+
+    Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    model, per family, and the model's top 2 single representations. c03
+    until then read the distance searches only and compared one hybrid.
+
+    Each fold k's hybrids and base representations are ranked on the other
+    folds' mean (get_rule_hybrids fold_i=k); the held-out number is the score
+    the stored search recorded on fold k. Reads only, no fits -- the same
+    arithmetic as the per-fold re-pick above, applied to every slot.
+
+    Returns (block, missing, whole, raw_per_fold): block has 'whole_dataset' (the set ranked on
+    every fold), 'per_fold' (one entry per fold), 'by_slot' (held-out score
+    per fold for each slot and each base rank) and 'budget_relaxed'.
+    """
+    common = dict(downstream_model=model_name, budget=None,
+                  dataset_name=ds_name,
+                  augmentations=data.get('augmentations'),
+                  task_type=data['task_type'], metric=metric_name, data=data)
+    whole = get_rule_hybrids(data['reps'], data['labels'], data['groups'],
+                             fold_i=None, **common)
+    missing = list(whole.get('missing') or [])
+
+    def _hyb_row(h):
+        return {'slot': h.get('slot'), 'lineage': h.get('lineage'),
+                'objective': h.get('objective'), 'tier': h.get('tier'),
+                'aug_condition': h.get('aug_condition'),
+                'recipe': h.get('recipe'), 'budget': h.get('budget'),
+                'budget_relaxed': h.get('budget_relaxed'),
+                'score_other_folds': h.get('score_other_folds'),
+                'score_this_fold': h.get('score_this_fold')}
+
+    def _base_row(b, rank):
+        return {'rank': rank, 'rep': b.get('rep'),
+                'objective': b.get('objective'),
+                'score_other_folds': b.get('score_other_folds'),
+                'score_this_fold': b.get('score_this_fold')}
+
+    n_pool_folds = max([len(h.get('fold_scores') or [])
+                        for h in whole['hybrids']] or [0])
+    per_fold, by_slot, raw_per_fold = [], {}, []
+    budget_relaxed = any(h.get('budget_relaxed') for h in whole['hybrids'])
+    for k in range(n_pool_folds):
+        rk = get_rule_hybrids(data['reps'], data['labels'], data['groups'],
+                              fold_i=k, n_outer_folds=n_pool_folds, **common)
+        budget_relaxed = budget_relaxed or any(
+            h.get('budget_relaxed') for h in rk['hybrids'])
+        raw_per_fold.append(list(rk['hybrids']))
+        hy = [_hyb_row(h) for h in rk['hybrids']]
+        ba = [_base_row(b, i + 1) for i, b in enumerate(rk['base_reps'])]
+        per_fold.append({'fold': k, 'hybrids': hy, 'base_reps': ba,
+                         'missing': rk.get('missing') or []})
+        for h in hy:
+            key = f"{h['objective']}|{h['slot']}"
+            by_slot.setdefault(key, [None] * n_pool_folds)[k] = \
+                h['score_this_fold']
+        for b in ba:
+            key = f"base{b['rank']}"
+            by_slot.setdefault(key, [None] * n_pool_folds)[k] = \
+                b['score_this_fold']
+    return {
+        'rule': whole.get('rule'),
+        'whole_dataset': {
+            'hybrids': [_hyb_row(h) for h in whole['hybrids']],
+            'base_reps': [_base_row(b, i + 1)
+                          for i, b in enumerate(whole['base_reps'])]},
+        'per_fold': per_fold,
+        'by_slot': by_slot,
+        'n_pool_folds': n_pool_folds,
+        'budget_relaxed': budget_relaxed,
+    }, missing, whole, raw_per_fold
 
 def run(datasets, config, output_dir, dataset_name=None, **kwargs):
     """Cross-context analysis across multiple datasets.
@@ -306,6 +380,33 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                           f"best single rep = {_d:+.4f} over "
                           f"{_hr[_mname].get('n_paired_folds', 0)} folds")
 
+            # Owner's set (2026-10-02): top 2 general + top 1 distance
+            # hybrids per model, per family, plus the model's top 2 single
+            # representations. Everything above reads the distance searches
+            # only and keeps its keys; this block adds the general searches'
+            # top 2. Held-out scores per fold, picked on the other folds.
+            rule_by_model = {}
+            rule_missing = []
+            rule_whole_by_model = {}
+            for _mname in DOWNSTREAM_MODELS:
+                try:
+                    _blk_r, _miss_r, _whole_r, _raw_r = _rule_set_per_fold(
+                        data, ds_name, _mname, metric_name_ds)
+                except Exception as _e:
+                    rule_missing.append(
+                        f'{_mname}: the owner\'s set could not be read '
+                        f'({type(_e).__name__}: {_e})')
+                    continue
+                rule_by_model[_mname] = _blk_r
+                rule_whole_by_model[_mname] = (_whole_r, _raw_r)
+                rule_missing += [f'{_mname}: {m}' for m in _miss_r]
+                for _key, _vals in _blk_r['by_slot'].items():
+                    _v = [v for v in _vals if v is not None]
+                    if _v:
+                        print(f"    {_mname:<10} {_key:<28} held-out "
+                              f"{metric_name_ds} mean over {len(_v)} folds "
+                              f"= {np.mean(_v):.4f}")
+
             # Best model on this dataset is now the argmax over the per-model
             # reads above, in the dataset's own metric and its own direction.
             _lower_flags = [v['lower_is_better'] for v in per_model.values()
@@ -434,6 +535,75 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                     except Exception as e:
                         print(f"    {novel_name} on {ds_name}: FAILED - {e}")
 
+            # Owner's set (2026-10-02): the two novel regressors are also
+            # fitted on each of the reference model's three rule hybrids
+            # (general1, general2, distance1, per family), re-picked per
+            # held-out fold on the other folds. 'novel_models' above keeps the
+            # earlier distance-search per-fold winner.
+            novel_results_rule = {}
+            if (best and data['task_type'] != 'classification'
+                    and ref_model in rule_whole_by_model):
+                _whole_ref, _raw_ref = rule_whole_by_model[ref_model]
+                if len(_raw_ref) != len(novel_splits):
+                    rule_missing.append(
+                        f'novel regressors: the pool holds {len(_raw_ref)} '
+                        f'folds, c03 splits into {len(novel_splits)}; folds '
+                        f'without a per-fold pick use the whole-dataset set')
+                for _h0 in _whole_ref['hybrids']:
+                    _skey = f"{_h0.get('objective')}|{_h0.get('slot')}"
+                    for novel_name, novel_model in novel_models.items():
+                        try:
+                            _sc = []
+                            for _fold_i, (train_idx, val_idx) in enumerate(novel_splits):
+                                _ent = _h0
+                                if _fold_i < len(_raw_ref):
+                                    _ent = next(
+                                        (h for h in _raw_ref[_fold_i]
+                                         if h.get('slot') == _h0.get('slot')
+                                         and h.get('objective') == _h0.get('objective')),
+                                        _h0)
+                                _bp_reps = set(getattr(_ent['blueprint'], 'reps', [])
+                                               or data['reps'].keys())
+                                _tr = {k: v[train_idx] for k, v in data['reps'].items() if k in _bp_reps}
+                                _va = {k: v[val_idx] for k, v in data['reps'].items() if k in _bp_reps}
+                                _use_aug = bool(augs) and _ent.get('aug_condition', 'none') != 'none'
+                                X_train, fi = build_hybrid_from_entry(
+                                    _tr, data['labels'][train_idx],
+                                    data['groups'][train_idx], _ent,
+                                    augmentations=({k: v[train_idx] for k, v in augs.items()}
+                                                   if _use_aug else None))
+                                X_val = apply_feature_selection(_va, fi)
+                                aug_info = fi.get('augmentation_info')
+                                if aug_info and _use_aug:
+                                    X_aug_val = apply_augmentation_selection(
+                                        {k: v[val_idx] for k, v in augs.items()}, aug_info)
+                                    if X_aug_val is not None:
+                                        X_val = np.hstack([X_val, X_aug_val])
+                                scaler = StandardScaler()
+                                X_train_s = scaler.fit_transform(X_train)
+                                X_val_s = scaler.transform(X_val)
+                                m = deepcopy(novel_model)
+                                m.fit(X_train_s, data['labels'][train_idx])
+                                _sc.append(metric_fn(
+                                    data['labels'][val_idx],
+                                    _predict_for_metric(m, X_val_s, metric_fn)))
+                            novel_results_rule.setdefault(_skey, {})[novel_name] = {
+                                'score_mean': float(np.mean(_sc)),
+                                'fold_scores': [float(x) for x in _sc],
+                                'slot': _h0.get('slot'),
+                                'lineage': _h0.get('lineage'),
+                                'objective': _h0.get('objective'),
+                                'tier': _h0.get('tier'),
+                                'budget_relaxed': _h0.get('budget_relaxed'),
+                            }
+                            print(f"    {novel_name} on {ds_name} [{_skey}]: "
+                                  f"{metric_name}={np.mean(_sc):.4f}")
+                        except Exception as e:
+                            rule_missing.append(
+                                f'novel regressor {novel_name} on {_skey}: '
+                                f'{type(e).__name__}: {e}')
+                            print(f"    {novel_name} on {ds_name} [{_skey}]: FAILED - {e}")
+
             elapsed = time.time() - start
 
             _bm = per_model.get(best_model_name) or {}
@@ -472,6 +642,12 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 'performance_matrix': (search_result.performance_matrix
                                        if search_result is not None else None),
                 'novel_models': novel_results if best else {},
+                # Owner's set (2026-10-02): per downstream model, top 2
+                # general + top 1 distance hybrids per family and the top 2
+                # single representations, held-out score per fold.
+                'rule_by_model': rule_by_model,
+                'novel_models_rule': novel_results_rule,
+                'rule_missing': rule_missing,
             }
             results[ds_name] = ds_result
 

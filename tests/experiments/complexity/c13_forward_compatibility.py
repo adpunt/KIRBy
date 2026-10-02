@@ -102,7 +102,8 @@ from experiments._shared import (
     build_fold_hybrid,
     get_best_search_for_downstream,
     parse_rep_args,
-    _is_tcga_dataset, _is_antibody_dataset)
+    _is_tcga_dataset, _is_antibody_dataset,
+    top_hybrids, DISTANCE_MODELS, RULE_N_GENERAL, RULE_N_DISTANCE)
 
 
 # =============================================================================
@@ -801,46 +802,136 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     _search_seconds = _time.time() - _t_search0
     _t_build0 = _time.time()
 
-    scores = []
-    allocation_dicts = []
-    last_feature_info = None
     sample_X = next(iter(reps.values()))
 
-    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels,
-                                       mode=mode, task_type=task_type):
-        train_reps = {k: v[train_idx] for k, v in reps.items()}
-        val_reps = {k: v[val_idx] for k, v in reps.items()}
-        y_train, y_val = labels[train_idx], labels[val_idx]
-        train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-        val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
-        groups_train = (groups[train_idx] if groups is not None else None)
+    # Owner's set (2026-10-02): the per-fold rebuild is one function so the
+    # winning recipe and each further rule hybrid are scored identically.
+    def _score_blueprint(bp_):
+        scores_, allocs_, last_fi_ = [], [], None
+        for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels,
+                                           mode=mode, task_type=task_type):
+            train_reps = {k: v[train_idx] for k, v in reps.items()}
+            val_reps = {k: v[val_idx] for k, v in reps.items()}
+            y_train, y_val = labels[train_idx], labels[val_idx]
+            train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+            val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+            groups_train = (groups[train_idx] if groups is not None else None)
 
-        _precomp_imp = _c13_fold_importance(
-            importance_cache, train_reps, y_train, groups_train, blueprint)
+            _precomp_imp = _c13_fold_importance(
+                importance_cache, train_reps, y_train, groups_train, bp_)
 
+            try:
+                X_train, X_val, feature_info = build_fold_hybrid(
+                    train_reps, val_reps, y_train, bp_,
+                    augmentations_train=train_augs, augmentations_val=val_augs,
+                    groups=groups_train,
+                    model=model_factory(),
+                    metric_fn=metric_fn,
+                    precomputed_importance=_precomp_imp)
+            except Exception:
+                continue
+
+            # Extract allocation from feature_info
+            allocs_.append(feature_info.get('allocation', {}))
+            last_fi_ = feature_info
+
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+
+            model = model_factory()
+            model.fit(X_train_s, y_train)
+            scores_.append(metric_fn(y_val, _predict_for_metric(model, X_val_s, metric_fn)))
+        return scores_, allocs_, last_fi_
+
+    scores, allocation_dicts, last_feature_info = _score_blueprint(blueprint)
+
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
+    # the model that scores them. 'general1' is the winning recipe above, kept
+    # under the existing keys. 'general2' is the second-ranked configuration of
+    # the same general search. 'distance1' is the top configuration of a
+    # second search over the same representations under the distance tier
+    # (tier 'general_distance': DISTANCE_EVALUATORS, DISTANCE_BUDGETS), run
+    # live with the same condition_suffix, for the same one model.
+    rule_slots, rule_missing = {}, []
+    if downstream_model:
+        import copy as _copy_rule
+
+        def _slot_entry(bp_, aug_cond, lineage, src):
+            bp_ = _copy_rule.deepcopy(bp_)
+            if aug_cond:
+                bp_.augmentation_strategy = aug_cond
+            sc_, al_, _ = _score_blueprint(bp_)
+            return {'slot': None, 'lineage': lineage,
+                    'tier': src.get('tier'), 'aug_condition': aug_cond,
+                    'objective': src.get('objective'),
+                    'budget': getattr(bp_, 'budget', None),
+                    'allocation_method': getattr(bp_, 'allocation_method', None),
+                    'importance_method': getattr(bp_, 'importance_method', None),
+                    'internal_evaluator': getattr(bp_, 'internal_evaluator', None),
+                    'fold_scores': [float(x) for x in sc_],
+                    'score_mean': (float(np.mean(sc_)) if sc_ else float('nan')),
+                    'n_folds_scored': len(sc_)}
         try:
-            X_train, X_val, feature_info = build_fold_hybrid(
-                train_reps, val_reps, y_train, blueprint,
-                augmentations_train=train_augs, augmentations_val=val_augs,
-                groups=groups_train,
-                model=model_factory(),
-                metric_fn=metric_fn,
-                precomputed_importance=_precomp_imp)
-        except Exception:
-            continue
-
-        # Extract allocation from feature_info
-        alloc = feature_info.get('allocation', {})
-        allocation_dicts.append(alloc)
-        last_feature_info = feature_info
-
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train)
-        X_val_s = scaler.transform(X_val)
-
-        model = model_factory()
-        model.fit(X_train_s, y_train)
-        scores.append(metric_fn(y_val, _predict_for_metric(model, X_val_s, metric_fn)))
+            _th = top_hybrids(search, downstream_model, RULE_N_GENERAL,
+                              require_full=False,
+                              context=f'c13 {condition_suffix}/{downstream_model}')
+            _sel = list(_th.get('selected') or [])
+        except Exception as _e:
+            _sel = []
+            rule_missing.append(f'general2: top-2 read raised '
+                                f'{type(_e).__name__}: {_e}')
+        if len(_sel) >= 2 and _sel[1].get('blueprint') is not None:
+            rule_slots['general2'] = _slot_entry(
+                _sel[1]['blueprint'], (best_meta or {}).get('aug_condition'),
+                'general', best_meta or {})
+            rule_slots['general2']['slot'] = 'general2'
+        elif not rule_missing:
+            rule_missing.append(
+                f'general2: the general search scored {len(_sel)} '
+                f'configuration(s) for {downstream_model}')
+        if downstream_model not in DISTANCE_MODELS:
+            rule_missing.append(
+                f'distance1: {downstream_model} is not in DISTANCE_MODELS, so '
+                f'no distance search scores it')
+        else:
+            try:
+                _dextra = {'condition_suffix': condition_suffix} if condition_suffix else {}
+                _ds, _dm = get_best_search_for_downstream(
+                    reps, labels, groups,
+                    downstream_model=downstream_model, budget=None,
+                    augmentations=augmentations,
+                    dataset_name=dataset_name,
+                    task_type=task_type, metric=metric_name,
+                    return_fitted=True, speed='fast', distance=True,
+                    models=[downstream_model], **_dextra)
+            except Exception as _e:
+                _ds, _dm = None, None
+                rule_missing.append(f'distance1: the distance search raised '
+                                    f'{type(_e).__name__}: {_e}')
+            if _dm:
+                _dsel = []
+                try:
+                    _dsel = list(top_hybrids(
+                        _ds, downstream_model, RULE_N_DISTANCE,
+                        require_full=False,
+                        context=f'c13 {condition_suffix}/{downstream_model} '
+                                f'distance').get('selected') or [])
+                except Exception as _e:
+                    rule_missing.append(f'distance1: top-1 read raised '
+                                        f'{type(_e).__name__}: {_e}')
+                if _dsel and _dsel[0].get('blueprint') is not None:
+                    rule_slots['distance1'] = _slot_entry(
+                        _dsel[0]['blueprint'], _dm.get('aug_condition'),
+                        'distance', _dm)
+                    rule_slots['distance1']['slot'] = 'distance1'
+                elif not any(m.startswith('distance1') for m in rule_missing):
+                    rule_missing.append(
+                        f'distance1: the distance search scored no '
+                        f'configuration for {downstream_model}')
+            elif not any(m.startswith('distance1') for m in rule_missing):
+                rule_missing.append('distance1: the distance search returned '
+                                    'no metadata')
 
     # Average allocation across folds
     avg_alloc = {}
@@ -872,6 +963,10 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             'budget': blueprint.budget,
             'internal_evaluator': blueprint.internal_evaluator,
         },
+        # Owner's set (2026-10-02): 'general1' is the recipe above; the other
+        # two slots are scored on the same folds. Missing slots say why.
+        'rule_slots': rule_slots,
+        'rule_missing': rule_missing,
     }
 
     return scores, result_info
@@ -1136,6 +1231,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     # Find best model for each condition via CV
     # We use all available models, then pick the best for conditions A/B
     per_rep_results = {}
+    # Owner's set (2026-10-02): every rule slot not filled, and why.
+    rule_missing_all = []
 
     # One hybrid search per (rep set, downstream model). Side 2's without-side is
     # the same set of representations for every subject on this dataset, and so
@@ -1300,6 +1397,17 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         ]
 
         side_means = {}
+        # Owner's set (2026-10-02): {slot: {condition key: mean}} for the
+        # three rule hybrids; 'general1' is the same number as side_means.
+        slot_means = {'general1': {}, 'general2': {}, 'distance1': {}}
+
+        def _record_slots(key, info, mean_g1):
+            slot_means['general1'][key] = mean_g1
+            for _sl, _ent in (info.get('rule_slots') or {}).items():
+                slot_means.setdefault(_sl, {})[key] = _ent.get('score_mean')
+            for _m in info.get('rule_missing') or []:
+                rule_missing_all.append(f'{rep_name} {key}: {_m}')
+
         for side in sides:
             c_key, d_key, dr_key = side['keys']
             without_reps = side['without']
@@ -1346,6 +1454,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'is_hybrid': is_hybrid,
             }
             side_means[c_key] = c_mean_side
+            _record_slots(c_key, c_info, c_mean_side)
             print(f"    {metric_name} = {c_mean_side:.4f} +/- {c_std_side:.4f}")
             if c_info.get('allocation'):
                 print(f"    Allocation: {c_info['allocation']}")
@@ -1376,6 +1485,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                     without_reps),
             }
             side_means[d_key] = d_mean_side
+            _record_slots(d_key, d_info, d_mean_side)
             print(f"    {metric_name} = {d_mean_side:.4f} +/- {d_std_side:.4f}")
             if alloc:
                 print(f"    Allocation: {alloc}")
@@ -1413,8 +1523,12 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'fold_scores': [float(s) for s in dr_scores],
                 'reps_searched': sorted(null_reps),
                 'allocation_share': float(dr_share),
+                # Owner's set (2026-10-02): general2 and distance1 scores.
+                'rule_slots': dr_info.get('rule_slots', {}),
+                'rule_missing': dr_info.get('rule_missing', []),
             }
             side_means[dr_key] = dr_mean_side
+            _record_slots(dr_key, dr_info, dr_mean_side)
             print(f"    {metric_name} = {dr_mean_side:.4f} +/- {dr_std_side:.4f}")
             print(f"    The Gaussian matrix took {dr_share:.1%} of the budget")
 
@@ -1482,6 +1596,37 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'hybrid HELPS the new rep beyond its best single model',
                 'hybrid does NOT beat the new rep alone'),
         }
+
+        # Owner's set (2026-10-02): the same subtractions for each of the
+        # three rule hybrids (general1 = the 'deltas' block above).
+        def _d(a, b):
+            try:
+                v = sign * (float(a) - float(b))
+            except (TypeError, ValueError):
+                return float('nan')
+            return float(v) if np.isfinite(v) else float('nan')
+        _bb = best_b_mean if not np.isinf(best_b_mean) else float('nan')
+        rep_result['deltas_by_slot'] = {}
+        for _sl, _sm in slot_means.items():
+            nan = float('nan')
+            rep_result['deltas_by_slot'][_sl] = {
+                'D_minus_C': _d(_sm.get('D', nan), _sm.get('C', nan)),
+                'D_random_minus_C': _d(_sm.get('D_random', nan), _sm.get('C', nan)),
+                'D_minus_D_random': _d(_sm.get('D', nan), _sm.get('D_random', nan)),
+                'D_minus_B': _d(_sm.get('D', nan), _bb),
+                'D_established_minus_C_established': _d(
+                    _sm.get('D_established', nan), _sm.get('C_established', nan)),
+                'D_random_established_minus_C_established': _d(
+                    _sm.get('D_random_established', nan), _sm.get('C_established', nan)),
+                'D_established_minus_D_random_established': _d(
+                    _sm.get('D_established', nan), _sm.get('D_random_established', nan)),
+                'D_established_minus_B': _d(_sm.get('D_established', nan), _bb),
+                'condition_means': dict(_sm),
+            }
+            print(f"    [{_sl}] D - D_random = "
+                  f"{rep_result['deltas_by_slot'][_sl]['D_minus_D_random']:+.4f}, "
+                  f"D_est - D_rand_est = "
+                  f"{rep_result['deltas_by_slot'][_sl]['D_established_minus_D_random_established']:+.4f}")
 
         print(f"\n  --- DELTAS in {metric_name}, positive = improvement ---")
         print(f"    Side 1, against the dataset's other representations:")
@@ -1688,6 +1833,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         config=config,
         results={
             'per_rep': per_rep_results,
+            # Owner's set (2026-10-02): rule slots not filled, and why.
+            'rule_missing': rule_missing_all,
             'summary': {
                 'new_reps': sorted(new_reps.keys()),
                 'existing_reps': sorted(existing_reps.keys()),

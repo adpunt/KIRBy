@@ -25,9 +25,53 @@ from experiments._shared import (
     extract_top3_base_reps,
     select_model_rep_pairs,
     INTERNAL_EVALUATORS,
-    get_best_search_for_downstream,
     build_fold_reselection_input,
+    get_rule_hybrids, top_hybrids, fold_hybrid_scoring_kwargs,
+    DOWNSTREAM_MODELS, DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+    RULE_N_GENERAL, RULE_N_DISTANCE,
 )
+
+
+def _rule_from_searches(gen_search, dist_search, model, *, dist_error=None):
+    """Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
+    one downstream model, read off this file's own two searches on one
+    subpopulation.
+
+    Returns (entries, missing). Each entry is a top_hybrids 'selected' entry
+    without its Blueprint, plus 'slot' ('general1', 'general2', 'distance1'),
+    'lineage', 'tier' and 'objective'. Every slot asked for and not filled is
+    a sentence in `missing`.
+    """
+    entries, missing = [], []
+    for lineage, srch, n, tier in (
+            ('general', gen_search, RULE_N_GENERAL, 'general'),
+            ('distance', dist_search, RULE_N_DISTANCE, 'general_distance')):
+        if lineage == 'distance' and model not in DISTANCE_MODELS:
+            missing.append(f'distance for {model}: {model} is not one of the '
+                           f'distance search models {DISTANCE_MODELS}, so it '
+                           f'was never scored there')
+            continue
+        if srch is None:
+            missing.append(f'{lineage} for {model}: no search '
+                           f'({(dist_error if lineage == "distance" else None) or "it raised or did not run"})')
+            continue
+        try:
+            th = top_hybrids(srch, model, n, require_full=False)
+        except Exception as e:
+            missing.append(f'{lineage} for {model}: top_hybrids raised '
+                           f'{type(e).__name__}: {e}')
+            continue
+        if not th['complete']:
+            missing.append(f'{lineage} for {model}: {th["shortfall_reason"]}')
+        for e in th['selected']:
+            e = {k: v for k, v in e.items() if k != 'blueprint'}
+            e['slot'] = f"{lineage}{e['rank']}"
+            e['lineage'] = lineage
+            e['tier'] = tier
+            e['objective'] = 'predictive'
+            e['budget_relaxed'] = False
+            entries.append(e)
+    return entries, missing
 
 
 def run(data, config, output_dir, dataset_name, partitions=None):
@@ -69,27 +113,50 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     # 'all_rows_bp_scores' are not held-out scores.
     all_rows_blueprints = {}
     full_augs_all = data.get('augmentations')
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family, read for the whole dataset. This replaces the single
+    # pool winner per model; general1 keeps the old keys.
+    # {model: [(slot, blueprint, tier, aug_condition), ...]}
+    all_rows_rule_bps = {}
+    results['rule_missing'] = []
+    results['rule'] = ('top 2 general + top 1 distance hybrids per model; '
+                       'base side top 2 single representations')
     for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
         try:
-            _s_fd, _m_fd = get_best_search_for_downstream(
+            _rule = get_rule_hybrids(
                 reps, labels, groups,
                 downstream_model=cand_model, budget=None,
-                augmentations=full_augs_all, 
+                augmentations=full_augs_all,
                 dataset_name=dataset_name,
                 task_type=data['task_type'], metric=metric_name,
                 data=data,
             )
-            if _m_fd:
-                all_rows_blueprints[cand_model] = (
-                    _m_fd['best_config']['blueprint'],
-                    _m_fd['tier'], _m_fd['aug_condition'],
-                )
-        except Exception:
-            pass
+        except Exception as _e:
+            results['rule_missing'].append(
+                f'all-rows pass for {cand_model}: the pool read raised '
+                f'{type(_e).__name__}: {_e}')
+            continue
+        results['rule_missing'] += [f'all-rows pass: {m}'
+                                    for m in _rule['missing']]
+        all_rows_rule_bps[cand_model] = [
+            (e['slot'], e['blueprint'], e['tier'], e['aug_condition'])
+            for e in _rule['hybrids'] if e.get('blueprint') is not None]
+        for _sl, _bp, _t, _a in all_rows_rule_bps[cand_model]:
+            if _sl == 'general1':
+                all_rows_blueprints[cand_model] = (_bp, _t, _a)
     results['all_rows_blueprints_meta'] = {
         m: {'tier': t, 'aug_condition': a, 'budget': bp.budget,
             'allocation': bp.allocation_method, 'importance': bp.importance_method}
         for m, (bp, t, a) in all_rows_blueprints.items()
+    }
+    # Every slot of the owner's set, same fields, per model.
+    results['all_rows_rule_meta'] = {
+        m: [{'slot': sl, 'tier': t, 'aug_condition': a, 'budget': bp.budget,
+             'allocation': bp.allocation_method,
+             'importance': bp.importance_method,
+             'internal_evaluator': bp.internal_evaluator}
+            for sl, bp, t, a in lst]
+        for m, lst in all_rows_rule_bps.items()
     }
 
     # c07 large-dataset cap (signed off 2026-06-05): the per-subpopulation
@@ -357,6 +424,51 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 best_config = None
                 best_by_model = {}
 
+            # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids
+            # per model. The distance counterpart of the search above, on the
+            # same subpopulation rows: tier 'general_distance', the distance
+            # evaluators and the distance budgets (10 to 500 features). The
+            # five downstream models it scores are the ones the general search
+            # above scores. The cross-model winner 'best' above is what the
+            # experiment compares between halves and is left as it was.
+            search_d = None
+            dist_error = None
+            _dist_models = [m for m in DOWNSTREAM_MODELS if m in DISTANCE_MODELS]
+            try:
+                _okw = own_search_kwargs(len(sub_labels), models=_dist_models)
+                _okw['internal_evaluators'] = list(DISTANCE_EVALUATORS)
+                search_d = find_best_hybrid(
+                    sub_reps, sub_labels, groups=sub_groups,
+                    budgets=list(DISTANCE_BUDGETS),
+                    augmentations=sub_augs,
+                    augmentation_strategy=sub_aug_strategy,
+                    metric=metric_name,
+                    task_type=data['task_type'],
+                    verbose=False,
+                    cache=True,
+                    dataset_name=f"{dataset_name}_{partition_name}_{subpop_name}",
+                    tier='general_distance',
+                    **_okw,
+                )
+            except Exception as e:
+                dist_error = f'{type(e).__name__}: {e}'
+                print(f"    {subpop_name}: distance find_best_hybrid failed - {e}")
+            rule_hybrids = {}
+            for _m in DOWNSTREAM_MODELS:
+                _ents, _miss = _rule_from_searches(search, search_d, _m,
+                                                   dist_error=dist_error)
+                rule_hybrids[_m] = _ents
+                results['rule_missing'] += [
+                    f'{partition_name}/{subpop_name}: {m}' for m in _miss]
+            reselection_block_distance = None
+            if search_d is not None:
+                try:
+                    reselection_block_distance = build_fold_reselection_input(
+                        search_d)
+                except Exception as _e:
+                    print(f"    {subpop_name}: distance fold_reselection "
+                          f"unavailable ({_e})")
+
             # Second pass: apply the all-rows-selected blueprint per model to
             # this subpopulation, re-selecting only its features here.
             all_rows_bp_scores = {}
@@ -365,6 +477,10 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # the reader apply the same held-out-fold honest correction to this
             # arm too, per model — no cross-model collapse.
             all_rows_bp_fold_scores = {}
+            # Owner's set (2026-10-02): the same pass once per slot.
+            # {model: {slot: score}}; general1 also fills the two dicts above.
+            all_rows_bp_scores_rule = {}
+            all_rows_bp_fold_scores_rule = {}
             # FIX 4d: this partitioned sub-population can have fewer distinct
             # scaffold groups than the fold count, and cv_split RAISES rather
             # than fall back to a random split. Reduce the fold count to the
@@ -382,8 +498,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 all_rows_bp_skipped = (
                     f'insufficient_groups: {n_sub_groups} distinct group(s) '
                     f'< 2 required for all-rows-bp CV')
-            for cand_model, (bp_fd, _t, _a) in (
-                    all_rows_blueprints.items() if all_rows_bp_skipped is None else []):
+            # Owner's set (2026-10-02): every slot, not the single winner.
+            _flat_slots = [(cm, sl, bp) for cm, lst in (
+                all_rows_rule_bps.items() if all_rows_bp_skipped is None else [])
+                for sl, bp, _t, _a in lst]
+            for cand_model, _slot, bp_fd in _flat_slots:
                 if bp_fd.budget is not None and bp_fd.budget > len(sub_labels):
                     continue
                 try:
@@ -425,9 +544,10 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                             augmentations_train=tr_augs_f,
                             augmentations_val=va_augs_f,
                             groups=sub_groups[tr_i],
-                            model=factory(),
-                            metric_fn=metric_fn_part,
-                            lower_is_better=_lib_part,
+                            **fold_hybrid_scoring_kwargs(
+                                bp_fd, model=factory(),
+                                metric_fn=metric_fn_part,
+                                lower_is_better=_lib_part),
                         )
                         sc = _SS()
                         X_tr_s = sc.fit_transform(X_tr)
@@ -436,9 +556,14 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         mdl.fit(X_tr_s, sub_labels[tr_i])
                         fold_scores.append(metric_fn_part(sub_labels[va_i], mdl.predict(X_va_s)))
                     if fold_scores:
-                        all_rows_bp_scores[cand_model] = float(np.mean(fold_scores))
-                        all_rows_bp_fold_scores[cand_model] = [
-                            float(s) for s in fold_scores]
+                        all_rows_bp_scores_rule.setdefault(cand_model, {})[
+                            _slot] = float(np.mean(fold_scores))
+                        all_rows_bp_fold_scores_rule.setdefault(cand_model, {})[
+                            _slot] = [float(s) for s in fold_scores]
+                        if _slot == 'general1':
+                            all_rows_bp_scores[cand_model] = float(np.mean(fold_scores))
+                            all_rows_bp_fold_scores[cand_model] = [
+                                float(s) for s in fold_scores]
                 except Exception:
                     pass
 
@@ -468,6 +593,15 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'top2_pairs_by_model': (sel['pairs'] if sel else []),
                 'all_rows_bp_scores': all_rows_bp_scores,
                 'all_rows_bp_fold_scores': all_rows_bp_fold_scores,
+                # Owner's set (2026-10-02): top 2 general + top 1 distance
+                # hybrids per model. The all-rows pass per slot, and this
+                # half's own two searches read per slot, each entry with its
+                # slot, tier and cross-validated score.
+                'all_rows_bp_scores_rule': all_rows_bp_scores_rule,
+                'all_rows_bp_fold_scores_rule': all_rows_bp_fold_scores_rule,
+                'rule_hybrids': rule_hybrids,
+                'fold_reselection_distance': reselection_block_distance,
+                'distance_search_error': dist_error,
                 # Per-model per-fold reselection inputs (per-fold, both arms). Exact
                 # CONTRACT keys inside: lower_is_better / candidates_by_model /
                 # baselines_by_model. None if the search itself failed.

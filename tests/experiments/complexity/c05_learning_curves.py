@@ -26,12 +26,59 @@ from experiments._shared import (
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     resolve_comparison_models,
     INTERNAL_EVALUATORS,
-    get_best_search_for_downstream, build_fold_hybrid, cv_split,
+    build_fold_hybrid, cv_split,
     build_fold_reselection_input, fold_reselection,
     hr_exclude_folds,
+    get_rule_hybrids, fold_hybrid_scoring_kwargs,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+    RULE_N_GENERAL, RULE_N_DISTANCE,
 )
 from sklearn.preprocessing import StandardScaler
 from kirby.hybrid import _graded_scores_for_clf
+
+RULE_SLOTS = ('general1', 'general2', 'distance1')
+
+
+def _rule_from_searches(gen_search, dist_search, model, *, dist_error=None):
+    """Owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
+    one downstream model, read off this file's own two searches at one
+    sample size and seed.
+
+    Returns (entries, missing). Each entry is a top_hybrids 'selected' entry
+    plus 'slot' ('general1', 'general2', 'distance1'), 'lineage', 'tier' and
+    'objective'. Every slot asked for and not filled is a sentence in
+    `missing`.
+    """
+    entries, missing = [], []
+    for lineage, srch, n, tier in (
+            ('general', gen_search, RULE_N_GENERAL, 'general'),
+            ('distance', dist_search, RULE_N_DISTANCE, 'general_distance')):
+        if lineage == 'distance' and model not in DISTANCE_MODELS:
+            missing.append(f'distance for {model}: {model} is not one of the '
+                           f'distance search models {DISTANCE_MODELS}, so it '
+                           f'was never scored there')
+            continue
+        if srch is None:
+            missing.append(f'{lineage} for {model}: no search '
+                           f'({(dist_error if lineage == "distance" else None) or "it raised or did not run"})')
+            continue
+        try:
+            th = top_hybrids(srch, model, n, require_full=False)
+        except Exception as e:
+            missing.append(f'{lineage} for {model}: top_hybrids raised '
+                           f'{type(e).__name__}: {e}')
+            continue
+        if not th['complete']:
+            missing.append(f'{lineage} for {model}: {th["shortfall_reason"]}')
+        for e in th['selected']:
+            e = dict(e)
+            e['slot'] = f"{lineage}{e['rank']}"
+            e['lineage'] = lineage
+            e['tier'] = tier
+            e['objective'] = 'predictive'
+            e['budget_relaxed'] = False
+            entries.append(e)
+    return entries, missing
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -112,6 +159,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # came from is not readable from the key names alone.
     last_search_n = None
     last_search_seed = None
+    # The distance search at the same sample size and seed as last_search.
+    last_search_d = None
     search_failures = []
     results = {'sample_sizes': sample_sizes, 'budgets': sweep_budgets,
                 'models': {},
@@ -155,7 +204,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Second pass: the all-rows-selected blueprint applied at each n.
             'hybrid_all_rows_bp': [],
             'all_rows_bp_meta': [],
+            # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids
+            # per model. One list per slot, aligned with sample_sizes, each the
+            # mean over seeds of that slot's cross-validated score in the
+            # subsample's own searches. general1 is the same quantity as
+            # 'hybrid' up to top_hybrids' dropping of non-finite rows.
+            'rule_slots': {sl: [] for sl in RULE_SLOTS},
+            'rule_slot_configs': {sl: [] for sl in RULE_SLOTS},
+            # The all-rows second pass, once per slot. 'hybrid_all_rows_bp'
+            # above stays the general1 column.
+            'hybrid_all_rows_bp_rule': {sl: [] for sl in RULE_SLOTS},
         }
+    # Every slot of the owner's set that was asked for and not filled, why,
+    # and at which sample size and seed.
+    results['rule_missing'] = []
+    results['rule'] = ('top 2 general + top 1 distance hybrids per model; '
+                       'base side top 2 single representations')
 
     # ⛔ AUGMENTATION CONDITION, NOT ROWS. Every row of the dataset is still
     # used; what is dropped here is one CONDITION of the search.
@@ -211,6 +275,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # picked at size n generalise".
     all_rows_blueprints = {}
     all_rows_meta = {}
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, read for the whole dataset. {model: [(slot, blueprint), ...]}.
+    all_rows_rule_bps = {}
+    results['all_rows_rule_meta'] = {}
     # {model: [ {n_sub, train_rows, blueprint_budget, reason}, ... ]} for every
     # point where the second pass was skipped. Without this a nan in
     # hybrid_all_rows_bp is indistinguishable from a point that was attempted
@@ -246,26 +314,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               "KIRBY_LOCAL_GRID, so hybrid_all_rows_bp is nan at every sample "
               "size. Set KIRBY_C05_ALL_ROWS_BP=1 to run it.")
     full_augs_top = None if _drop_augs else data.get('augmentations')
+    # Owner's set (2026-10-02): the single pool winner this pass used to read
+    # (get_best_search_for_downstream) is replaced by the owner's set, read
+    # the same way for the whole dataset. general1 keeps the old keys.
     for model_name in (model_names if _all_rows_bp else []):
         try:
-            _s_fd, _m_fd = get_best_search_for_downstream(
+            _rule = get_rule_hybrids(
                 reps, labels, groups,
                 downstream_model=model_name, budget=None,
-                augmentations=full_augs_top, 
+                augmentations=full_augs_top,
                 dataset_name=dataset_name,
                 task_type=data['task_type'], metric=metric_name,
                 data=data,
             )
-            if _m_fd:
-                all_rows_blueprints[model_name] = _m_fd['best_config']['blueprint']
-                all_rows_meta[model_name] = {
-                    'tier': _m_fd['tier'], 'aug_condition': _m_fd['aug_condition'],
-                    'budget': _m_fd['best_config']['blueprint'].budget,
-                }
-                print(f"  All-rows-selected BP for {model_name}: tier={_m_fd['tier']} "
-                      f"aug={_m_fd['aug_condition']} budget={_m_fd['best_config']['blueprint'].budget}")
         except Exception as e:
-            print(f"  All-rows-selected BP for {model_name}: pool helper failed ({e})")
+            print(f"  All-rows-selected BPs for {model_name}: pool read failed ({e})")
+            results['rule_missing'].append(
+                f'all-rows pass for {model_name}: the pool read raised '
+                f'{type(e).__name__}: {e}')
+            continue
+        results['rule_missing'] += [f'all-rows pass: {m}'
+                                    for m in _rule['missing']]
+        all_rows_rule_bps[model_name] = [
+            (e['slot'], e['blueprint']) for e in _rule['hybrids']
+            if e.get('blueprint') is not None]
+        results['all_rows_rule_meta'][model_name] = [
+            {'slot': e['slot'], 'lineage': e['lineage'], 'tier': e['tier'],
+             'objective': e.get('objective'),
+             'aug_condition': e['aug_condition'], 'budget': e['budget'],
+             'budget_relaxed': e['budget_relaxed'],
+             'recipe': e.get('recipe'),
+             'score_other_folds': e.get('score_other_folds')}
+            for e in _rule['hybrids']]
+        for e in _rule['hybrids']:
+            print(f"  All-rows-selected BP for {model_name} {e['slot']}: "
+                  f"tier={e['tier']} aug={e['aug_condition']} "
+                  f"budget={e['budget']}")
+            if e['slot'] == 'general1':
+                all_rows_blueprints[model_name] = e['blueprint']
+                all_rows_meta[model_name] = {
+                    'tier': e['tier'], 'aug_condition': e['aug_condition'],
+                    'budget': e['blueprint'].budget,
+                }
 
     for n_sub in sample_sizes:
         print(f"\n  n={n_sub}:")
@@ -287,7 +377,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         rows_drawn_this_n = []
         # Second pass: the all-rows-selected blueprint, features re-selected
         # on the subsample. The recipe itself still came from every label.
-        hybrid_fd_by_model = {m: [] for m in model_names}
+        # Per slot of the owner's set; 'general1' is the old single column.
+        hybrid_fd_by_model = {m: {} for m in model_names}
+        # Owner's set (2026-10-02): per model, per slot, one score per seed.
+        rule_by_model = {m: {sl: [] for sl in RULE_SLOTS} for m in model_names}
+        rule_cfg_by_model = {m: {sl: [] for sl in RULE_SLOTS}
+                             for m in model_names}
+        distance_blocks_this_n = []
         # One CONTRACT-shape fold_reselection block per seed at this sample size.
         reselection_blocks_this_n = []
 
@@ -423,6 +519,76 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 })
                 print(f"    seed={seed}: find_best_hybrid failed - {e}")
 
+            # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids
+            # per model. The distance counterpart of the search above, on the
+            # same subsample rows and folds: tier 'general_distance', the
+            # distance evaluators, and the distance budgets (10 to 500
+            # features) that fit the training rows. Models are this file's
+            # models that the distance searches score; any other is recorded
+            # as a missing slot.
+            search_d = None
+            dist_error = None
+            _dist_models = [m for m in model_names if m in DISTANCE_MODELS]
+            _dist_budgets = ([b for b in DISTANCE_BUDGETS if b <= train_size]
+                             or [max(2, train_size)])
+            if _dist_models:
+                try:
+                    _okw = own_search_kwargs(len(sub_labels),
+                                             models=_dist_models)
+                    _okw.pop('models', None)
+                    _okw['internal_evaluators'] = list(DISTANCE_EVALUATORS)
+                    search_d = find_best_hybrid(
+                        sub_reps, sub_labels, groups=sub_groups,
+                        models=_dist_models,
+                        budgets=_dist_budgets,
+                        n_folds=sub_folds,
+                        augmentations=sub_augs,
+                        augmentation_strategy=sub_aug_strategy,
+                        metric=metric_name,
+                        task_type=data['task_type'],
+                        verbose=False,
+                        cache=True,
+                        dataset_name=f"{dataset_name}_n{n_sub}_s{seed}",
+                        tier='general_distance',
+                        **_okw,
+                    )
+                    try:
+                        distance_blocks_this_n.append(
+                            build_fold_reselection_input(search_d))
+                    except Exception as _he:
+                        print(f"    seed={seed}: distance fold_reselection "
+                              f"build failed - {_he}")
+                except Exception as e:
+                    dist_error = f'{type(e).__name__}: {e}'
+                    search_failures.append({
+                        'n_sub': int(n_sub), 'seed': int(seed),
+                        'n_groups': int(n_unique_groups),
+                        'n_rows': int(len(idx)),
+                        'lineage': 'distance',
+                        'error': dist_error,
+                    })
+                    print(f"    seed={seed}: distance find_best_hybrid "
+                          f"failed - {e}")
+            for model_name in model_names:
+                _ents, _miss = _rule_from_searches(search, search_d, model_name,
+                                                   dist_error=dist_error)
+                results['rule_missing'] += [
+                    f'n={n_sub} seed={seed}: {m}' for m in _miss]
+                for _e in _ents:
+                    rule_by_model[model_name][_e['slot']].append(
+                        float(_e['score_mean']))
+                    rule_cfg_by_model[model_name][_e['slot']].append({
+                        'seed': int(seed), 'tier': _e['tier'],
+                        'budget': _e['budget'],
+                        'allocation': _e['allocation_method'],
+                        'importance': _e['importance_method'],
+                        'internal_evaluator': _e['internal_evaluator'],
+                        'score_mean': _e['score_mean'],
+                        'fold_scores': _e.get('fold_scores'),
+                    })
+            if search is not None:
+                last_search_d = search_d
+
             # Baselines per model, read out of the search that just ran.
             # search.baselines is {rep: {model: score}} on the SAME folds and
             # the same subsample rows the hybrid arm used. Re-scoring every
@@ -456,103 +622,111 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # whole-dataset selection above; only the feature selection runs on
             # subsample rows. The resulting score is NOT held out from the rows
             # that chose the recipe.
+            # Owner's set (2026-10-02): once per slot of the owner's set
+            # (general1, general2, distance1), not for the single winner only.
             for model_name, model_factory in models.items():
-                bp_fd = all_rows_blueprints.get(model_name)
-                if bp_fd is None:
-                    continue
-                bp_fd_budget = bp_fd.budget
-                # ⛔ THIS SKIP WROTE NOTHING, AND IT FIRES FOR A WHOLE MODEL AT
-                # EVERY SAMPLE SIZE. Measured on flab_thermo_tresanco
-                # 2026-09-24: the whole-dataset winner for rf carries
-                # budget=1000 while the curve's sample sizes are 67, 168, 336,
-                # 504 and 672 -- so rf's hybrid_all_rows_bp column was nan at
-                # every point, and nothing said why. lightgbm's winner carries
-                # budget=50 and its column is populated throughout. A reader
-                # comparing the two models sees one full column and one empty
-                # one with no explanation.
-                #
-                # Also compared against n_sub, the whole subsample, while the
-                # hybrid is built on the TRAINING partition -- so a budget of
-                # exactly n_sub passed and was then applied to about 0.8 n_sub
-                # rows. It now compares against the training partition, the
-                # same number the other arm caps against.
-                _fd_train = (int(n_sub * (sub_folds - 1) / sub_folds)
-                             if sub_folds > 1 else int(n_sub * 0.8))
-                if bp_fd_budget is not None and bp_fd_budget > _fd_train:
-                    all_rows_bp_skips.setdefault(model_name, []).append({
-                        'n_sub': int(n_sub),
-                        'train_rows': int(_fd_train),
-                        'blueprint_budget': int(bp_fd_budget),
-                        'reason': ('the all-rows recipe asks for more features '
-                                   'than this subsample has training rows'),
-                    })
-                    continue
-                # FIX 4d: cv_split RAISES (no random-split fallback) when the
-                # subsample has fewer distinct groups than the requested fold
-                # count. Reduce the fold count to the available groups (min 2);
-                # if fewer than 2 distinct groups exist, record an explicit skip
-                # flag instead of crashing or silently emitting nothing.
-                n_sub_groups = len(np.unique(sub_groups))
-                if n_sub_groups < 2:
-                    results['skipped_insufficient_groups'].append(
-                        {'n': int(n_sub), 'model': model_name, 'seed': int(seed),
-                         'n_groups': int(n_sub_groups),
-                         'reason': 'fewer than 2 distinct groups for all-rows-bp CV'})
-                    continue
-                sub_folds_fd = min(sub_folds, n_sub_groups)
-                try:
-                    fold_scores = []
-                    sample_sub_X = next(iter(sub_reps.values()))
-                    try:
-                        _fd_splits = list(cv_split(sub_groups, sub_folds_fd,
-                                                   sample_sub_X, sub_labels))
-                    except ValueError:
-                        # Group count fell below the (already-reduced) fold
-                        # count after StratifiedGroupKFold's own checks — skip
-                        # cleanly with a flag rather than propagate.
+                for _slot, bp_fd in all_rows_rule_bps.get(model_name, []):
+                    bp_fd_budget = bp_fd.budget
+                    # ⛔ THIS SKIP WROTE NOTHING, AND IT FIRES FOR A WHOLE MODEL AT
+                    # EVERY SAMPLE SIZE. Measured on flab_thermo_tresanco
+                    # 2026-09-24: the whole-dataset winner for rf carries
+                    # budget=1000 while the curve's sample sizes are 67, 168, 336,
+                    # 504 and 672 -- so rf's hybrid_all_rows_bp column was nan at
+                    # every point, and nothing said why. lightgbm's winner carries
+                    # budget=50 and its column is populated throughout. A reader
+                    # comparing the two models sees one full column and one empty
+                    # one with no explanation.
+                    #
+                    # Also compared against n_sub, the whole subsample, while the
+                    # hybrid is built on the TRAINING partition -- so a budget of
+                    # exactly n_sub passed and was then applied to about 0.8 n_sub
+                    # rows. It now compares against the training partition, the
+                    # same number the other arm caps against.
+                    _fd_train = (int(n_sub * (sub_folds - 1) / sub_folds)
+                                 if sub_folds > 1 else int(n_sub * 0.8))
+                    if bp_fd_budget is not None and bp_fd_budget > _fd_train:
+                        all_rows_bp_skips.setdefault(model_name, []).append({
+                            'n_sub': int(n_sub),
+                            'train_rows': int(_fd_train),
+                            'blueprint_budget': int(bp_fd_budget),
+                            'slot': _slot,
+                            'reason': ('the all-rows recipe asks for more features '
+                                       'than this subsample has training rows'),
+                        })
+                        continue
+                    # FIX 4d: cv_split RAISES (no random-split fallback) when the
+                    # subsample has fewer distinct groups than the requested fold
+                    # count. Reduce the fold count to the available groups (min 2);
+                    # if fewer than 2 distinct groups exist, record an explicit skip
+                    # flag instead of crashing or silently emitting nothing.
+                    n_sub_groups = len(np.unique(sub_groups))
+                    if n_sub_groups < 2:
                         results['skipped_insufficient_groups'].append(
                             {'n': int(n_sub), 'model': model_name, 'seed': int(seed),
                              'n_groups': int(n_sub_groups),
-                             'reason': 'cv_split rejected all-rows-bp folds'})
+                             'reason': 'fewer than 2 distinct groups for all-rows-bp CV'})
                         continue
-                    for tr_i, va_i in _fd_splits:
-                        train_reps_fold = {k: v[tr_i] for k, v in sub_reps.items()}
-                        val_reps_fold = {k: v[va_i] for k, v in sub_reps.items()}
-                        train_augs_fold = ({k: v[tr_i] for k, v in sub_augs.items()}
-                                           if sub_augs else None)
-                        val_augs_fold = ({k: v[va_i] for k, v in sub_augs.items()}
-                                         if sub_augs else None)
-                        X_tr, X_va, _fi = build_fold_hybrid(
-                            train_reps_fold, val_reps_fold,
-                            sub_labels[tr_i], bp_fd,
-                            augmentations_train=train_augs_fold,
-                            augmentations_val=val_augs_fold,
-                            groups=(sub_groups[tr_i] if sub_groups is not None else None),
-                            model=model_factory(),
-                            metric_fn=metric_fn,
-                            lower_is_better=lower_is_better)
-                        scaler = StandardScaler()
-                        X_tr_s = scaler.fit_transform(X_tr)
-                        X_va_s = scaler.transform(X_va)
-                        mdl = model_factory()
-                        mdl.fit(X_tr_s, sub_labels[tr_i])
-                        # Ranking metrics need graded scores. An AUROC read off
-                        # hard 0/1 labels collapses to the mean of sensitivity
-                        # and specificity (hybrid.py:2661). The baselines arm
-                        # above was fixed for this; this one was not, so the
-                        # hybrid_all_rows_bp column was a different quantity
-                        # from the hybrid column on every auc dataset.
-                        _hard = mdl.predict(X_va_s)
-                        _y = (_graded_scores_for_clf(mdl, X_va_s, _hard)
-                              if data['task_type'] == 'classification' else _hard)
-                        fold_scores.append(metric_fn(sub_labels[va_i], _y))
-                    if fold_scores:
-                        hybrid_fd_by_model[model_name].append(float(np.mean(fold_scores)))
-                except Exception:
-                    pass
+                    sub_folds_fd = min(sub_folds, n_sub_groups)
+                    try:
+                        fold_scores = []
+                        sample_sub_X = next(iter(sub_reps.values()))
+                        try:
+                            _fd_splits = list(cv_split(sub_groups, sub_folds_fd,
+                                                       sample_sub_X, sub_labels))
+                        except ValueError:
+                            # Group count fell below the (already-reduced) fold
+                            # count after StratifiedGroupKFold's own checks — skip
+                            # cleanly with a flag rather than propagate.
+                            results['skipped_insufficient_groups'].append(
+                                {'n': int(n_sub), 'model': model_name, 'seed': int(seed),
+                                 'n_groups': int(n_sub_groups),
+                                 'reason': 'cv_split rejected all-rows-bp folds'})
+                            continue
+                        for tr_i, va_i in _fd_splits:
+                            train_reps_fold = {k: v[tr_i] for k, v in sub_reps.items()}
+                            val_reps_fold = {k: v[va_i] for k, v in sub_reps.items()}
+                            train_augs_fold = ({k: v[tr_i] for k, v in sub_augs.items()}
+                                               if sub_augs else None)
+                            val_augs_fold = ({k: v[va_i] for k, v in sub_augs.items()}
+                                             if sub_augs else None)
+                            X_tr, X_va, _fi = build_fold_hybrid(
+                                train_reps_fold, val_reps_fold,
+                                sub_labels[tr_i], bp_fd,
+                                augmentations_train=train_augs_fold,
+                                augmentations_val=val_augs_fold,
+                                groups=(sub_groups[tr_i] if sub_groups is not None else None),
+                                **fold_hybrid_scoring_kwargs(
+                                    bp_fd, model=model_factory(),
+                                    metric_fn=metric_fn,
+                                    lower_is_better=lower_is_better))
+                            scaler = StandardScaler()
+                            X_tr_s = scaler.fit_transform(X_tr)
+                            X_va_s = scaler.transform(X_va)
+                            mdl = model_factory()
+                            mdl.fit(X_tr_s, sub_labels[tr_i])
+                            # Ranking metrics need graded scores. An AUROC read off
+                            # hard 0/1 labels collapses to the mean of sensitivity
+                            # and specificity (hybrid.py:2661). The baselines arm
+                            # above was fixed for this; this one was not, so the
+                            # hybrid_all_rows_bp column was a different quantity
+                            # from the hybrid column on every auc dataset.
+                            _hard = mdl.predict(X_va_s)
+                            _y = (_graded_scores_for_clf(mdl, X_va_s, _hard)
+                                  if data['task_type'] == 'classification' else _hard)
+                            fold_scores.append(metric_fn(sub_labels[va_i], _y))
+                        if fold_scores:
+                            hybrid_fd_by_model[model_name].setdefault(
+                                _slot, []).append(float(np.mean(fold_scores)))
+                    except Exception:
+                        pass
 
         if reselection_blocks_this_n:
             results['fold_reselection_by_n'][str(n_sub)] = reselection_blocks_this_n
+        # Owner's set (2026-10-02): the distance searches' per-fold blocks,
+        # same shape, one per seed.
+        if distance_blocks_this_n:
+            results.setdefault('fold_reselection_distance_by_n', {})[
+                str(n_sub)] = distance_blocks_this_n
 
         # Leave-one-fold-out re-pick at this sample size, per seed, then
         # averaged over seeds. Pure arithmetic on per-fold scores that already
@@ -606,8 +780,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             s = (float(np.mean(single_by_model[model_name]))
                  if single_by_model[model_name] else float('nan'))
 
-            h_fd = (float(np.mean(hybrid_fd_by_model[model_name]))
-                    if hybrid_fd_by_model[model_name] else float('nan'))
+            _g1_fd = hybrid_fd_by_model[model_name].get('general1') or []
+            h_fd = float(np.mean(_g1_fd)) if _g1_fd else float('nan')
+            # Owner's set (2026-10-02): one value per slot at this size.
+            for _sl in RULE_SLOTS:
+                _v = rule_by_model[model_name][_sl]
+                results['models'][model_name]['rule_slots'][_sl].append(
+                    float(np.mean(_v)) if _v else float('nan'))
+                results['models'][model_name]['rule_slot_configs'][_sl].append(
+                    rule_cfg_by_model[model_name][_sl] or None)
+                _f = hybrid_fd_by_model[model_name].get(_sl) or []
+                results['models'][model_name]['hybrid_all_rows_bp_rule'][
+                    _sl].append(float(np.mean(_f)) if _f else float('nan'))
             results['models'][model_name]['hybrid'].append(h)
             results['models'][model_name]['best_single'].append(s)
             results['models'][model_name]['best_configs'].append(
@@ -631,12 +815,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Top-3 from the last (full-data) subsample search
     # Carry the skip record out with the numbers.
     results['all_rows_bp_skips'] = all_rows_bp_skips
-    for _m, _sk in sorted(all_rows_bp_skips.items()):
-        print(f"  {_m}: hybrid_all_rows_bp skipped at {len(_sk)} of "
-              f"{len(sample_sizes)} sample sizes — its all-rows recipe asks "
-              f"for {_sk[0]['blueprint_budget']} features and the largest "
-              f"training partition here is "
-              f"{max(x['train_rows'] for x in _sk)}")
+    for _m, _sk_all in sorted(all_rows_bp_skips.items()):
+        # One line per slot of the owner's set (2026-10-02).
+        for _sl in RULE_SLOTS:
+            _sk = [x for x in _sk_all if x.get('slot') == _sl]
+            if not _sk:
+                continue
+            print(f"  {_m} {_sl}: hybrid_all_rows_bp skipped at {len(_sk)} of "
+                  f"{len(sample_sizes)} sample sizes — its all-rows recipe asks "
+                  f"for {_sk[0]['blueprint_budget']} features and the largest "
+                  f"training partition here is "
+                  f"{max(x['train_rows'] for x in _sk)}")
 
     top3_full = extract_top3_base_reps(last_search) if last_search is not None else []
 
@@ -811,6 +1000,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     print(f"  hybrid deltas for {_m} unavailable: {_e}")
                     results['top2_models_dropped'][_m] = (
                         'no hybrid deltas: %s: %s' % (type(_e).__name__, _e))
+        # Owner's set (2026-10-02): the top 2 general + top 1 distance hybrids
+        # per model, read off the same last search and its distance
+        # counterpart at the same sample size and seed.
+        results['rule_hybrids_last_search'] = {}
+        for _m in _cmp_models:
+            _ents, _miss = _rule_from_searches(last_search, last_search_d, _m)
+            results['rule_hybrids_last_search'][_m] = _no_blueprint(_ents)
+            results['rule_missing'] += [f'last search: {m}' for m in _miss]
         try:
             results['top2_pairs_by_model'] = _no_blueprint(
                 select_model_rep_pairs(last_search, models=list(_cmp_models),

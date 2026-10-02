@@ -40,13 +40,191 @@ from experiments._shared import (
     get_config,
     extract_top3_base_reps,
     top_base_reps, hybrid_deltas, resolve_comparison_models,
+    top_hybrids,
     DOWNSTREAM_MODELS,
     INTERNAL_EVALUATORS,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
 )
 from kirby.find_best_hybrid import _predict_for_metric, nested_cv_evaluate
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
 EXPERIMENT_ID = 'c14_cross_domain_summary'
+
+
+# =========================================================================
+# Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per model,
+# per family. c14 runs its own search inside each outer training fold, so the
+# set is taken from those searches, not from the stored pool:
+#   general1  the nested CV's own winner per outer fold (unchanged)
+#   general2  the second-ranked configuration of the same inner search, rebuilt
+#             on the outer training rows and scored on the outer test fold
+#   distance1 the winner of a second nested CV whose inner searches run on the
+#             distance tier ('general_distance', DISTANCE_EVALUATORS,
+#             DISTANCE_BUDGETS), scored on the same outer folds
+# All three are compared against the same best single representation per
+# outer fold: the one the general nested CV picked on that fold's training rows.
+# One family only (predictive): c14 never searches under objective='similarity'.
+# Also imported by c33.
+# =========================================================================
+
+def _bp_identity(bp):
+    """The fields that make two blueprints the same recipe."""
+    return tuple(getattr(bp, a, None) for a in (
+        'allocation_method', 'importance_method', 'budget',
+        'internal_evaluator', 'step_size', 'augmentation_strategy'))
+
+
+def _score_blueprint_outer(bp, model_name, tr, te, reps, labels, groups, *,
+                           augmentations, task_type, metric_fn, lower_is_better,
+                           seed, tuned_model=None):
+    """One blueprint rebuilt on outer-train rows, scored on the outer test fold.
+
+    The same steps nested_cv_evaluate's own hybrid arm takes
+    (find_best_hybrid.py, the 'HYBRID ARM' block): apply_blueprint on the
+    training rows with the real model and metric, the same feature selection
+    applied to the test rows, augmentation features appended including any
+    representation create_hybrid demoted, then _outer_fit_score.
+    """
+    from kirby.find_best_hybrid import (
+        apply_blueprint, _outer_fit_score, get_model, Blueprint, _resolve_tune)
+    from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
+
+    tr = np.asarray(tr)
+    te = np.asarray(te)
+    y_tr, y_te = labels[tr], labels[te]
+    train_reps = {k: v[tr] for k, v in reps.items()}
+    test_reps = {k: v[te] for k, v in reps.items()}
+    train_groups = groups[tr] if groups is not None else None
+    train_augs = ({k: v[tr] for k, v in augmentations.items()}
+                  if augmentations else None)
+    test_augs = ({k: v[te] for k, v in augmentations.items()}
+                 if augmentations else None)
+    _model = get_model(model_name, task_type, n_samples=len(y_tr))
+    X_tr_h, finfo = apply_blueprint(
+        train_reps, bp, labels=y_tr, augmentations=train_augs,
+        groups=train_groups, model=_model,
+        metric_fn=(metric_fn if _model is not None else None),
+        lower_is_better=lower_is_better, row_index=tr,
+        is_clf=(task_type == 'classification'))
+    bp_obj = bp if isinstance(bp, Blueprint) else Blueprint.from_dict(bp)
+    X_te_h = apply_feature_selection(
+        {k: test_reps[k] for k in bp_obj.reps if k in test_reps}, finfo)
+    aug_info = finfo.get('augmentation_info')
+    if aug_info:
+        _te_augs = dict(test_augs) if test_augs else {}
+        for _dn, _di in (finfo.get('demoted_reps') or {}).items():
+            if _dn in test_reps:
+                _te_augs[_dn] = test_reps[_dn][:, _di]
+        if _te_augs:
+            aug_te = apply_augmentation_selection(_te_augs, aug_info)
+            if aug_te is not None:
+                X_te_h = np.hstack([X_te_h, aug_te])
+    score, _ = _outer_fit_score(
+        X_tr_h, y_tr, X_te_h, y_te, model_name, task_type, metric_fn,
+        seed=seed, train_groups=train_groups, test_idx=te,
+        test_groups=(groups[te] if groups is not None else None),
+        tuned_model=tuned_model, tune_per_fold=_resolve_tune(None))
+    return float(score), int(X_tr_h.shape[1])
+
+
+def rule_general2_outer(ncv, reps, labels, groups, *, models, metric_name,
+                        task_type, n_outer_folds, seed=42, augmentations=None,
+                        context=''):
+    """general2 per model: each outer fold's second-ranked inner configuration,
+    scored on that outer fold. Returns {model: {...}}.
+
+    'Second-ranked' is top_hybrids over the inner search's own CV scores on
+    the outer training rows, skipping any configuration identical to the
+    nested CV's winner for that fold, so general1 and general2 are always two
+    different recipes.
+    """
+    from kirby.find_best_hybrid import nested_cv_outer_folds, _resolve_metric
+    metric_fn, lower = _resolve_metric(metric_name)
+    folds = nested_cv_outer_folds(reps, labels, groups, n_outer_folds, seed,
+                                  task_type)
+    inner = list(getattr(ncv, 'inner_searches', None) or [])
+    out = {}
+    for m in models:
+        rec = {'slot': 'general2', 'lineage': 'general', 'tier': 'general',
+               'objective': 'predictive',
+               'fold_scores': [None] * len(folds),
+               'n_features_per_fold': [None] * len(folds),
+               'recipes_per_fold': [None] * len(folds), 'missing': []}
+        for i, (tr, te) in enumerate(folds):
+            s = inner[i] if i < len(inner) else None
+            if s is None:
+                rec['missing'].append(f'outer fold {i}: the inner search failed')
+                continue
+            win = (getattr(s, 'best_by_model', None) or {}).get(m)
+            if not win:
+                rec['missing'].append(
+                    f'outer fold {i}: the inner search scored no recipe for {m}')
+                continue
+            try:
+                sel = top_hybrids(s, m, 3, require_full=False,
+                                  context=f'{context} fold {i}')
+            except Exception as e:
+                rec['missing'].append(
+                    f'outer fold {i}: ranking raised {type(e).__name__}: {e}')
+                continue
+            win_id = _bp_identity(win.get('blueprint'))
+            pick = next((e for e in sel['selected']
+                         if e.get('blueprint') is not None
+                         and _bp_identity(e['blueprint']) != win_id), None)
+            if pick is None:
+                rec['missing'].append(
+                    f'outer fold {i}: the inner search ranked '
+                    f'{len(sel["selected"])} configuration(s) for {m} and none '
+                    f'differs from the winner')
+                continue
+            bp = pick['blueprint']
+            rec['recipes_per_fold'][i] = {
+                'label': pick.get('label'), 'budget': pick.get('budget'),
+                'inner_score_mean': pick.get('score_mean'),
+                'allocation_method': getattr(bp, 'allocation_method', None),
+                'importance_method': getattr(bp, 'importance_method', None),
+                'internal_evaluator': getattr(bp, 'internal_evaluator', None),
+                'augmentation_strategy': getattr(bp, 'augmentation_strategy', None)}
+            try:
+                sc, width = _score_blueprint_outer(
+                    bp, m, tr, te, reps, labels, groups,
+                    augmentations=augmentations, task_type=task_type,
+                    metric_fn=metric_fn, lower_is_better=lower, seed=seed,
+                    tuned_model=(getattr(s, 'tuned_models', None) or {}).get(m))
+                rec['fold_scores'][i] = sc if np.isfinite(sc) else None
+                rec['n_features_per_fold'][i] = width
+            except Exception as e:
+                rec['missing'].append(
+                    f'outer fold {i}: rebuild/score raised '
+                    f'{type(e).__name__}: {e}')
+        out[m] = rec
+    return out
+
+
+def rule_slot_vs_single(fold_scores, single_fold_scores, lower_is_better):
+    """Mean, spread and the paired per-fold delta against the best single
+    representation (positive = the hybrid is better)."""
+    fs = [None if v is None or not np.isfinite(v) else float(v)
+          for v in (fold_scores or [])]
+    vals = [v for v in fs if v is not None]
+    per_fold = []
+    for f in range(max(len(fs), len(single_fold_scores or []))):
+        h = fs[f] if f < len(fs) else None
+        b = (single_fold_scores[f]
+             if single_fold_scores and f < len(single_fold_scores) else None)
+        if h is None or b is None or not np.isfinite(b):
+            per_fold.append(None)
+            continue
+        per_fold.append(float((b - h) if lower_is_better else (h - b)))
+    paired = [d for d in per_fold if d is not None]
+    return {
+        'hybrid_fold_scores': fs,
+        'hybrid_mean': float(np.mean(vals)) if vals else None,
+        'hybrid_std': float(np.std(vals)) if vals else None,
+        'per_fold_delta': per_fold,
+        'delta_mean_of_folds': float(np.mean(paired)) if paired else None,
+        'n_paired_folds': len(paired),
+    }
 
 
 # =========================================================================
@@ -417,6 +595,96 @@ def _evaluate_task(task_name, rep_preset, config):
                  'reason': f'{type(e).__name__}: {e}'})
             print(f"    WARNING: the two hybrid deltas for {_m} failed: {e}")
 
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family. general1 is the nested CV above; general2 and
+    # distance1 are scored here on the same outer folds. See the block at the
+    # top of this file. Every key above is unchanged and is general1.
+    rule_missing = []
+    _n_outer = int(ncv.n_outer_folds)
+    general2 = rule_general2_outer(
+        ncv, reps, labels, groups, models=list(ncv.by_model),
+        metric_name=metric_name, task_type=task_type, n_outer_folds=_n_outer,
+        augmentations=aug_dict if aug_dict else None,
+        context=f'c14 {task_name}')
+    _dist_models = [m for m in DOWNSTREAM_MODELS if m in DISTANCE_MODELS]
+    for _m in DOWNSTREAM_MODELS:
+        if _m not in DISTANCE_MODELS:
+            rule_missing.append(
+                f'distance1 for {_m}: {_m} is not in DISTANCE_MODELS, so the '
+                f'distance searches never score it')
+    # Distance budgets are DISTANCE_BUDGETS (they stop at 500 features),
+    # restricted to the budgets this run was given when any overlap.
+    _dist_budgets = ([b for b in DISTANCE_BUDGETS if b in set(config['budgets'])]
+                     or list(DISTANCE_BUDGETS))
+    ncv_dist = None
+    try:
+        ncv_dist = nested_cv_evaluate(
+            reps, labels, groups,
+            n_outer_folds=n_folds,
+            dataset_name=task_name,
+            models=_dist_models,
+            budgets=_dist_budgets,
+            metric=metric_name,
+            task_type=task_type,
+            augmentations=aug_dict if aug_dict else None,
+            augmentation_strategy='uncapped' if aug_dict else 'none',
+            internal_evaluators=DISTANCE_EVALUATORS,
+            tier='general_distance',
+            verbose=False,
+        )
+    except Exception as e:
+        rule_missing.append(f'distance1 for every model: the distance nested '
+                            f'CV raised {type(e).__name__}: {e}')
+        print(f"    WARNING: distance nested CV failed for {task_name}: {e}")
+
+    rule_hybrids_by_model = {}
+    for _m, _e in ncv.by_model.items():
+        _single = list(_e.get('best_single_fold_scores') or [])
+        _slots = {}
+        _g1 = rule_slot_vs_single(_e.get('hybrid_fold_scores'), _single,
+                                  lower_is_better)
+        _g1.update({'slot': 'general1', 'lineage': 'general',
+                    'tier': 'general', 'objective': 'predictive',
+                    'source': 'nested_cv_by_model (the keys above)'})
+        _slots['general1'] = _g1
+        _g2 = general2.get(_m)
+        if _g2 is not None:
+            _row = rule_slot_vs_single(_g2['fold_scores'], _single,
+                                       lower_is_better)
+            _row.update({k: _g2[k] for k in (
+                'slot', 'lineage', 'tier', 'objective', 'recipes_per_fold',
+                'n_features_per_fold')})
+            _slots['general2'] = _row
+            rule_missing += [f'general2 for {_m}: {w}' for w in _g2['missing']]
+        _d = (ncv_dist.by_model.get(_m) if ncv_dist is not None else None)
+        if _d is not None:
+            _row = rule_slot_vs_single(_d.get('hybrid_fold_scores'), _single,
+                                       lower_is_better)
+            _row.update({
+                'slot': 'distance1', 'lineage': 'distance',
+                'tier': 'general_distance', 'objective': 'predictive',
+                'budgets_searched': _dist_budgets,
+                'budget_relaxed': False,
+                # The distance nested CV's own best single representation,
+                # picked from the distance searches' baselines. Kept for
+                # reference; the delta above uses the general run's pick so
+                # all three hybrids face the same single representation.
+                'own_run_delta_mean_of_folds': _d.get('delta_mean_of_folds'),
+                'search_mean': _d.get('search_mean'),
+                'bias': _d.get('bias'),
+                'recipes_per_fold': [
+                    (b.to_dict() if hasattr(b, 'to_dict') else b)
+                    for b in (_d.get('blueprints_per_fold') or [])]})
+            _slots['distance1'] = _row
+        elif ncv_dist is not None and _m in DISTANCE_MODELS:
+            rule_missing.append(f'distance1 for {_m}: the distance nested CV '
+                                f'recorded no hybrid for this model')
+        rule_hybrids_by_model[_m] = _slots
+    for _m, _slots in rule_hybrids_by_model.items():
+        print(f"    {_m}: " + ", ".join(
+            f"{s}={v['hybrid_mean']:.4f}" if v.get('hybrid_mean') is not None
+            else f"{s}=n/a" for s, v in _slots.items()))
+
     print(f"    Hybrid (held out): {hybrid_score:.4f} vs best single "
           f"{reselected_best_single:.4f}  "
           f"(delta_mean_of_folds={delta:+.4f}, {pct:+.1f}%, "
@@ -524,6 +792,16 @@ def _evaluate_task(task_name, rep_preset, config):
         # both positive when the hybrid is ahead. Not the same quantity as
         # 'delta' above, which is delta_mean_of_folds.
         'hybrid_deltas_by_model': hybrid_deltas_by_model,
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+        # model. {model: {'general1'|'general2'|'distance1': {hybrid_fold_scores,
+        # hybrid_mean, per_fold_delta, delta_mean_of_folds, ...}}}, every delta
+        # against the same best single representation per outer fold.
+        'rule_hybrids_by_model': rule_hybrids_by_model,
+        'rule_base_reps_by_model': top2_base_reps_by_model,
+        'rule': ('top 2 general + top 1 distance hybrids per model; general2 '
+                 'is the inner search\'s second-ranked recipe, distance1 the '
+                 'winner of a nested CV on the distance tier'),
+        'rule_missing': rule_missing,
     }
 
 

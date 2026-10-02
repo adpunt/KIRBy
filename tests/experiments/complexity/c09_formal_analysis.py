@@ -24,12 +24,52 @@ from experiments._shared import (
     apply_feature_selection,
     find_best_hybrid, get_domain_metric,
     get_best_search_for_downstream,
-    INTERNAL_EVALUATORS)
+    INTERNAL_EVALUATORS,
+    get_rule_hybrids, DOWNSTREAM_MODELS)
 from kirby.hybrid import create_hybrid
 from experiments._shared import create_hybrid_cached
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
 #       semantics may change after framework experiments. Revisit call sites below.
 
+
+# Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+# model, per family. Until then each sub-analysis below took ONE recipe per
+# budget (9b, 9c: the best across four models; 9d: the best per model). The
+# single-recipe curves keep their keys; every rule hybrid now gets its own.
+def _rule_entries_for_budget(data, dataset_name, models, budget, metric,
+                             missing_out):
+    """[(model, 'model|family|slot', entry), ...] for one budget.
+
+    A distance search stops at 500 features; asked for a larger budget its
+    entries carry budget_relaxed=True (ranked over every budget it holds).
+    Every slot the rule asked for and did not get is appended to missing_out.
+    """
+    out = []
+    for m in models:
+        try:
+            r = get_rule_hybrids(
+                data['reps'], data['labels'], data.get('groups'),
+                downstream_model=m, budget=budget,
+                dataset_name=dataset_name,
+                augmentations=data.get('augmentations'),
+                task_type=data['task_type'], metric=metric, data=data,
+                fold_i=None)
+        except Exception as exc:
+            missing_out.append(f'{m} budget={budget}: the owner\'s set could '
+                               f'not be read ({type(exc).__name__}: {exc})')
+            continue
+        missing_out.extend(f'{m} budget={budget}: {x}' for x in r['missing'])
+        for h in r['hybrids']:
+            out.append((m, f"{m}|{h.get('objective')}|{h.get('slot')}", h))
+    return out
+
+
+def _rule_meta(h):
+    return {'slot': h.get('slot'), 'lineage': h.get('lineage'),
+            'objective': h.get('objective'), 'tier': h.get('tier'),
+            'aug_condition': h.get('aug_condition'),
+            'recipe': h.get('recipe'),
+            'budget_relaxed': bool(h.get('budget_relaxed'))}
 
 # =========================================================================
 # 9a: ANOVA helpers
@@ -403,80 +443,18 @@ def _run_information_retention(data, budgets, dataset_name=None,
                'match_resolved_to': {},
                # Features are selected on each fold's training rows; both
                # curves are read on that fold's held-out rows.
-               'measured_on': 'held-out rows'}
+               'measured_on': 'held-out rows',
+               # Owner's set (2026-10-02): one curve per rule hybrid,
+               # keyed 'model|family|slot', and every slot not filled.
+               'rule_curves': {}, 'rule_missing': []}
 
     augs = data.get('augmentations')
     sample_X = next(iter(reps.values()))
     from sklearn.linear_model import Ridge as _Ridge
 
-    # {budget: 'lightgbm'} for budgets whose recipe said internal
-    # evaluator 'match', which this path cannot honour. See the note
-    # inside the loop.
-    _match_resolved = {}
-    for budget in sorted(budgets):
-        # Pool helper across (general, top) x (none, uncapped, capped) cache
-        # files; pick winner across common downstream models for this budget.
-        bp = None
-        best_score = None
-        for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
-            try:
-                _s, _m = get_best_search_for_downstream(
-                    reps, labels, groups,
-                    downstream_model=cand_model, budget=budget,
-                    augmentations=augs, 
-                    dataset_name=dataset_name,
-                    task_type=data['task_type'], metric=metric_name_9b)
-            except Exception as exc:
-                # N7: a thrown search lookup is NOT the same as "no result";
-                # log it so a genuine NaN curve is distinguishable from a crash.
-                print(f"      9b budget={budget} model={cand_model} search "
-                      f"lookup failed: {type(exc).__name__}: {exc}")
-                continue
-            if not _m:
-                continue
-            score = _m['best_config'].get('score_mean')
-            if score is None:
-                continue
-            is_better = (best_score is None) or (
-                score < best_score if lower_is_better_9b
-                else score > best_score)
-            if is_better:
-                best_score = score
-                bp = _m['best_config']['blueprint']
-
-        # No-search fallback: the engine's own current defaults. Was
-        # 'greedy'/'treeshap'/'ridge' -- greedy is cut, and treeshap/ridge are
-        # neither the engine default nor what the search would have picked.
-        # ⛔ internal_evaluator WAS 'lightgbm' HERE and the engine's has been
-        # 'rf' since 2026-09-16 (hybrid.py:34 records the change, hybrid.py:
-        # create_hybrid signature carries it). The comment claimed to track the
-        # engine and did not, so a budget with no pool blueprint was built
-        # under a different evaluator from one that had a blueprint naming
-        # 'rf' -- inside the same curve.
-        alloc = bp.allocation_method if bp else 'performance_weighted'
-        imp = bp.importance_method if bp else 'lightgbm_gain'
-        int_eval = bp.internal_evaluator if bp else 'rf'
-        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. create_hybrid_cached
-        # refuses any keyword it cannot hash into its fold key, and model,
-        # metric_fn and lower_is_better are not in _HYBRID_FOLD_KEY_KWARGS
-        # (_shared.py:107). With no model, create_hybrid resolves
-        # internal_evaluator='match' to 'lightgbm' (hybrid.py:5952) whatever
-        # downstream model the recipe was chosen for -- and with no metric_fn
-        # the budget split is ranked on R2 or accuracy rather than the
-        # dataset's own metric. Recorded rather than silently different.
-        if int_eval == 'match':
-            _match_resolved.setdefault(budget, 'lightgbm')
-        aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
-        # from_fallback says the recipe is the engine's default, not a recipe
-        # any search picked. Without it a fallback budget reads like a searched
-        # one in the saved file.
-        results['best_configs'].append({'budget': budget, 'importance': imp,
-                                        'allocation': alloc,
-                                        'from_fallback': bp is None})
-        if bp is None:
-            print(f"      9b budget={budget}: no search found, using engine "
-                  f"defaults {alloc}/{imp}/{int_eval}")
-
+    # Owner's set (2026-10-02): the per-fold computation is one function so
+    # the single recipe and each rule hybrid are measured identically.
+    def _mi_for(alloc, imp, int_eval, aug_strat, budget):
         # Features are selected on the training rows; both numbers below are
         # then measured on the held-out rows of the same fold.
         fold_mi_xy = []
@@ -569,6 +547,100 @@ def _run_information_retention(data, budgets, dataset_name=None,
 
         mi_xy_avg = float(np.mean(fold_mi_xy)) if fold_mi_xy else float('nan')
         mi_xx_avg = float(np.mean(fold_mi_xx)) if fold_mi_xx else float('nan')
+        return mi_xy_avg, mi_xx_avg
+
+    # {budget: 'lightgbm'} for budgets whose recipe said internal
+    # evaluator 'match', which this path cannot honour. See the note
+    # inside the loop.
+    _match_resolved = {}
+    for budget in sorted(budgets):
+        # Pool helper across (general, top) x (none, uncapped, capped) cache
+        # files; pick winner across common downstream models for this budget.
+        bp = None
+        best_score = None
+        for cand_model in ['rf', 'svm', 'lightgbm', 'dnn']:
+            try:
+                _s, _m = get_best_search_for_downstream(
+                    reps, labels, groups,
+                    downstream_model=cand_model, budget=budget,
+                    augmentations=augs, 
+                    dataset_name=dataset_name,
+                    task_type=data['task_type'], metric=metric_name_9b)
+            except Exception as exc:
+                # N7: a thrown search lookup is NOT the same as "no result";
+                # log it so a genuine NaN curve is distinguishable from a crash.
+                print(f"      9b budget={budget} model={cand_model} search "
+                      f"lookup failed: {type(exc).__name__}: {exc}")
+                continue
+            if not _m:
+                continue
+            score = _m['best_config'].get('score_mean')
+            if score is None:
+                continue
+            is_better = (best_score is None) or (
+                score < best_score if lower_is_better_9b
+                else score > best_score)
+            if is_better:
+                best_score = score
+                bp = _m['best_config']['blueprint']
+
+        # No-search fallback: the engine's own current defaults. Was
+        # 'greedy'/'treeshap'/'ridge' -- greedy is cut, and treeshap/ridge are
+        # neither the engine default nor what the search would have picked.
+        # ⛔ internal_evaluator WAS 'lightgbm' HERE and the engine's has been
+        # 'rf' since 2026-09-16 (hybrid.py:34 records the change, hybrid.py:
+        # create_hybrid signature carries it). The comment claimed to track the
+        # engine and did not, so a budget with no pool blueprint was built
+        # under a different evaluator from one that had a blueprint naming
+        # 'rf' -- inside the same curve.
+        alloc = bp.allocation_method if bp else 'performance_weighted'
+        imp = bp.importance_method if bp else 'lightgbm_gain'
+        int_eval = bp.internal_evaluator if bp else 'rf'
+        # ⛔ 'match' CANNOT BE HONOURED ON THIS PATH. create_hybrid_cached
+        # refuses any keyword it cannot hash into its fold key, and model,
+        # metric_fn and lower_is_better are not in _HYBRID_FOLD_KEY_KWARGS
+        # (_shared.py:107). With no model, create_hybrid resolves
+        # internal_evaluator='match' to 'lightgbm' (hybrid.py:5952) whatever
+        # downstream model the recipe was chosen for -- and with no metric_fn
+        # the budget split is ranked on R2 or accuracy rather than the
+        # dataset's own metric. Recorded rather than silently different.
+        if int_eval == 'match':
+            _match_resolved.setdefault(budget, 'lightgbm')
+        aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
+        # from_fallback says the recipe is the engine's default, not a recipe
+        # any search picked. Without it a fallback budget reads like a searched
+        # one in the saved file.
+        results['best_configs'].append({'budget': budget, 'importance': imp,
+                                        'allocation': alloc,
+                                        'from_fallback': bp is None})
+        if bp is None:
+            print(f"      9b budget={budget}: no search found, using engine "
+                  f"defaults {alloc}/{imp}/{int_eval}")
+
+        mi_xy_avg, mi_xx_avg = _mi_for(alloc, imp, int_eval, aug_strat,
+                                       budget)
+
+        # Owner's set (2026-10-02): the same two curves for every rule
+        # hybrid, built at this budget with that hybrid's recipe.
+        for _rm, _key, _h in _rule_entries_for_budget(
+                data, dataset_name, DOWNSTREAM_MODELS, budget,
+                metric_name_9b, results['rule_missing']):
+            _bp = _h['blueprint']
+            _ie = _bp.internal_evaluator
+            if _ie == 'match':
+                _match_resolved.setdefault(budget, 'lightgbm')
+            _x, _xx = _mi_for(_bp.allocation_method, _bp.importance_method,
+                              _ie, _h.get('aug_condition') or 'none', budget)
+            _c = results['rule_curves'].setdefault(
+                _key, {**_rule_meta(_h), 'model': _rm, 'budgets': [],
+                       'mi_xy': [], 'mi_xx_full': [],
+                       'budget_relaxed_at': []})
+            _c['budgets'].append(budget)
+            _c['mi_xy'].append(_x)
+            _c['mi_xx_full'].append(_xx)
+            _c['budget_relaxed_at'].append(bool(_h.get('budget_relaxed')))
+            print(f"    [{_key}] budget={budget}: MI(X,Y)={_x:.4f}, "
+                  f"info_retained={_xx:.4f}")
 
         results['budgets'].append(budget)
         results['mi_xy'].append(mi_xy_avg)
@@ -661,12 +733,40 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                # which this path resolves to lightgbm; see the note in
                # the loop below.
                'match_resolved_to': {},
-               'n_feat_per_fold': [], 'pca_failures': [], 'from_fallback': []}
+               'n_feat_per_fold': [], 'pca_failures': [], 'from_fallback': [],
+               # Owner's set (2026-10-02): one hybrid-rank curve per rule
+               # hybrid, keyed 'model|family|slot', and every slot not filled.
+               'rule_curves': {}, 'rule_missing': []}
 
     augs = data.get('augmentations')
     sample_X = next(iter(reps.values()))
     from experiments._shared import cv_split as _cv_split_9c
     _mode_9c = 'intermediary' if n_folds == 1 else 'full'
+
+    # Owner's set (2026-10-02): the per-fold hybrid rank is one function so
+    # the single recipe and each rule hybrid are measured identically.
+    def _hyb_rank_for(alloc, imp, int_eval, aug_strat, budget):
+        fold_ranks = []
+        hybrid_fold_widths = []
+        for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
+            try:
+                train_reps = {k: v[train_idx] for k, v in reps.items()}
+                train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+                X_hybrid, _ = create_hybrid_cached(
+                    train_reps, labels[train_idx], train_idx,
+                    groups=groups[train_idx], dataset_name=dataset_name,
+                    allocation_method=alloc,
+                    importance_method=imp,
+                    budget=budget,
+                    internal_evaluator=int_eval,
+                    augmentations=train_augs,
+                    augmentation_strategy=aug_strat)
+                fold_ranks.append(compute_effective_rank(X_hybrid))
+                hybrid_fold_widths.append(int(X_hybrid.shape[1]))
+            except Exception:
+                pass
+        return (float(np.mean(fold_ranks)) if fold_ranks else float('nan'),
+                hybrid_fold_widths)
 
     # {budget: 'lightgbm'} for budgets whose recipe said internal
     # evaluator 'match', which this path cannot honour. See the note
@@ -749,26 +849,30 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         # width, so the comparison printed at the end mixes a width difference
         # into a rank difference. Only the PCA/random width was recorded; the
         # hybrid's is now recorded beside it so the two can be read together.
-        fold_ranks = []
-        hybrid_fold_widths = []
-        for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
-            try:
-                train_reps = {k: v[train_idx] for k, v in reps.items()}
-                train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
-                X_hybrid, _ = create_hybrid_cached(
-                    train_reps, labels[train_idx], train_idx,
-                    groups=groups[train_idx], dataset_name=dataset_name,
-                    allocation_method=alloc,
-                    importance_method=imp,
-                    budget=budget,
-                    internal_evaluator=int_eval,
-                    augmentations=train_augs,
-                    augmentation_strategy=aug_strat)
-                fold_ranks.append(compute_effective_rank(X_hybrid))
-                hybrid_fold_widths.append(int(X_hybrid.shape[1]))
-            except Exception:
-                pass
-        hybrid_rank = float(np.mean(fold_ranks)) if fold_ranks else float('nan')
+        hybrid_rank, hybrid_fold_widths = _hyb_rank_for(
+            alloc, imp, int_eval, aug_strat, budget)
+
+        # Owner's set (2026-10-02): the hybrid's effective rank for every
+        # rule hybrid too, built at this budget with that hybrid's recipe.
+        for _rm, _key, _h in _rule_entries_for_budget(
+                data, dataset_name, DOWNSTREAM_MODELS, budget,
+                metric_name_9c, results['rule_missing']):
+            _bp = _h['blueprint']
+            _ie = _bp.internal_evaluator
+            if _ie == 'match':
+                _match_resolved.setdefault(budget, 'lightgbm')
+            _rk, _wd = _hyb_rank_for(
+                _bp.allocation_method, _bp.importance_method, _ie,
+                _h.get('aug_condition') or 'none', budget)
+            _c = results['rule_curves'].setdefault(
+                _key, {**_rule_meta(_h), 'model': _rm, 'budgets': [],
+                       'hybrid_rank': [], 'hybrid_width_per_fold': [],
+                       'budget_relaxed_at': []})
+            _c['budgets'].append(budget)
+            _c['hybrid_rank'].append(float(_rk))
+            _c['hybrid_width_per_fold'].append(list(_wd))
+            _c['budget_relaxed_at'].append(bool(_h.get('budget_relaxed')))
+            print(f"    [{_key}] budget={budget}: hybrid rank={_rk:.1f}")
 
         # PCA — per-fold to match hybrid (avoids using val data in fit)
         pca_fold_ranks = []
@@ -918,6 +1022,10 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
           "is not held out from the rows that chose them.")
     results['recipe_selected_on'] = 'all rows'
     results['val_score_is_held_out'] = False
+    # Owner's set (2026-10-02): one entry per rule hybrid, keyed
+    # 'model|family|slot', and every slot not filled.
+    results['rule_models'] = {}
+    results['rule_missing'] = []
     augs = data.get('augmentations')
     model_names = list(models.keys())
 
@@ -988,6 +1096,42 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                       f"{' (engine defaults, no search)' if _from_fallback else ''}")
             except Exception as e:
                 print(f"    {model_name}/b={budget}: FAILED - {e}")
+
+            # Owner's set (2026-10-02): the same train-validation gap for each
+            # of this model's rule hybrids (top 2 general + top 1 distance).
+            for _rm, _key, _h in _rule_entries_for_budget(
+                    data, dataset_name, [model_name], budget, metric_name,
+                    results['rule_missing']):
+                _bp = _h['blueprint']
+                try:
+                    _v, _vs, _t, _ts, _nf = evaluate_cv_with_train(
+                        reps, labels, groups, model_factory, n_folds,
+                        allocation_method=_bp.allocation_method,
+                        importance_method=_bp.importance_method,
+                        budget=budget, mode=mode, metric_fn=metric_fn,
+                        internal_evaluator=_bp.internal_evaluator,
+                        augmentations=augs,
+                        augmentation_strategy=(_h.get('aug_condition')
+                                               or 'none'))
+                except Exception as e:
+                    results['rule_missing'].append(
+                        f'{_key} budget={budget}: build or scoring failed '
+                        f'({type(e).__name__}: {e})')
+                    print(f"    [{_key}]/b={budget}: FAILED - {e}")
+                    continue
+                _gap = (_v - _t) if lower_is_better else (_t - _v)
+                _bias = _t if lower_is_better else (1 - _t)
+                results['rule_models'].setdefault(_key, {
+                    **_rule_meta(_h), 'model': _rm, 'by_budget': {}}
+                )['by_budget'][budget] = {
+                    'train_score': _t, 'val_score': _v, 'gap': _gap,
+                    'bias_proxy': _bias, 'budget': budget,
+                    'budget_relaxed': bool(_h.get('budget_relaxed')),
+                    'recipe_selected_on': 'all rows',
+                    'val_score_is_held_out': False,
+                }
+                print(f"    [{_key}]/b={budget}: gap={_gap:.3f}, "
+                      f"bias={_bias:.3f}, val_{metric_name}={_v:.4f}")
 
     return results
 

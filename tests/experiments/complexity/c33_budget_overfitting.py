@@ -127,6 +127,13 @@ from experiments._shared import (
     get_domain_metric, run_nested_cv,
     top_base_reps, top_hybrids,
     FULL_BUDGETS,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+)
+# Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per model,
+# per family. The general2 rebuild-and-score and the paired delta are shared
+# with c14, which runs the same kind of nested search.
+from experiments.complexity.c14_cross_domain_summary import (
+    rule_general2_outer, rule_slot_vs_single,
 )
 
 
@@ -722,6 +729,55 @@ def run(data, config, output_dir, dataset_name):
     )
 
     lower = bool(result.lower_is_better)
+
+    # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+    # model, per family (predictive only here). general1 is the nested run
+    # above, whose per-budget curve is the object of this experiment and is
+    # unchanged. general2 is each outer fold's second-ranked inner recipe,
+    # rebuilt on that fold's training rows and scored on its test rows.
+    # distance1 is the winner of a second nested run on the distance tier
+    # ('general_distance', DISTANCE_EVALUATORS, DISTANCE_BUDGETS), same 3
+    # outer folds and seed. DISTANCE_BUDGETS stop at 500 features, so the
+    # distance curve cannot reach the budgets above 500 that c33 adds.
+    rule_missing = []
+    general2 = rule_general2_outer(
+        result, reps, labels, groups, models=list(result.by_model or {}),
+        metric_name=metric_name, task_type=task_type,
+        n_outer_folds=n_outer_folds, seed=seed, augmentations=augs,
+        context=f'c33 {dataset_name}')
+    _dist_models = [m for m in models if m in DISTANCE_MODELS]
+    for _m in models:
+        if _m not in DISTANCE_MODELS:
+            rule_missing.append(
+                f'distance1 for {_m}: {_m} is not in DISTANCE_MODELS, so the '
+                f'distance searches never score it')
+    _dist_budgets = ([b for b in DISTANCE_BUDGETS if b in set(budgets)]
+                     or list(DISTANCE_BUDGETS))
+    result_dist = None
+    if _dist_models:
+        try:
+            result_dist = run_nested_cv(
+                reps, labels, groups, config,
+                dataset_name=dataset_name,
+                augmentations=augs,
+                task_type=task_type,
+                metric=metric_name,
+                domain=data.get('domain'),
+                tier='general_distance',
+                budgets=_dist_budgets,
+                models=_dist_models,
+                internal_evaluators=list(DISTANCE_EVALUATORS),
+                n_outer_folds=n_outer_folds,
+                seed=seed,
+                verbose=True,
+                **{k: v for k, v in own_search_kwargs(len(labels)).items()
+                   if k not in ('models', 'internal_evaluators')},
+            )
+        except Exception as e:
+            rule_missing.append(f'distance1 for every model: the distance '
+                                f'nested run raised {type(e).__name__}: {e}')
+            print(f"  WARNING: distance nested run failed: {e}")
+
     by_model_budget = {}
     summary = {}
     # {model: [rank-2 representation name per outer fold]}. NOT stored inside
@@ -881,6 +937,59 @@ def run(data, config, output_dir, dataset_name):
             **curve,
         }
 
+    # Owner's set (2026-10-02): the three hybrids per model, each scored on
+    # the same 3 outer folds and compared against the same best single
+    # representation per fold (the general nested run's pick).
+    rule_hybrids_by_model = {}
+    by_model_budget_distance = {}
+    for model, entry in (result.by_model or {}).items():
+        _single = list(entry.get('best_single_fold_scores') or [])
+        _slots = {}
+        _g1 = rule_slot_vs_single(entry.get('hybrid_fold_scores'), _single,
+                                  lower)
+        _g1.update({'slot': 'general1', 'lineage': 'general',
+                    'tier': 'general', 'objective': 'predictive',
+                    'picked_budget_per_fold': _picked_budgets(entry),
+                    'source': "the nested run's own per-fold winner "
+                              "(summary[model]['process_reselected_mean'])"})
+        _slots['general1'] = _g1
+        _g2 = general2.get(model)
+        if _g2 is not None:
+            _row = rule_slot_vs_single(_g2['fold_scores'], _single, lower)
+            _row.update({k: _g2[k] for k in (
+                'slot', 'lineage', 'tier', 'objective', 'recipes_per_fold',
+                'n_features_per_fold')})
+            _slots['general2'] = _row
+            rule_missing += [f'general2 for {model}: {w}'
+                             for w in _g2['missing']]
+        _d = ((result_dist.by_model or {}).get(model)
+              if result_dist is not None else None)
+        if _d is not None:
+            _row = rule_slot_vs_single(_d.get('hybrid_fold_scores'), _single,
+                                       lower)
+            _row.update({
+                'slot': 'distance1', 'lineage': 'distance',
+                'tier': 'general_distance', 'objective': 'predictive',
+                'budgets_searched': _dist_budgets,
+                # The nested run picks its own budget per fold from the
+                # distance budgets, so no named budget was relaxed.
+                'budget_relaxed': False,
+                'picked_budget_per_fold': _picked_budgets(_d),
+                'search_mean': _f(_d.get('search_mean')),
+                'bias': _f(_d.get('bias'))})
+            _slots['distance1'] = _row
+            _pb = (result_dist.by_model_budget or {}).get(model)
+            if _pb:
+                _rows_d, _curve_d = _summarise_model(
+                    _pb, _single, lower, min_train_rows)
+                by_model_budget_distance[model] = {
+                    str(b): r for b, r in _rows_d.items()}
+                _row['curve'] = _curve_d
+        elif result_dist is not None and model in DISTANCE_MODELS:
+            rule_missing.append(f'distance1 for {model}: the distance nested '
+                                f'run recorded no hybrid for this model')
+        rule_hybrids_by_model[model] = _slots
+
     results = {
         'experiment': 'c33_budget_overfitting',
         'dataset': dataset_name,
@@ -916,6 +1025,17 @@ def run(data, config, output_dir, dataset_name):
         },
         'by_model_budget': by_model_budget,
         'summary': summary,
+        # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids per
+        # model. {model: {'general1'|'general2'|'distance1': {...}}}. The base
+        # side is the best single representation (rank 1) per outer fold and
+        # rank 2 in summary[model]['rank2_rep_per_fold'].
+        'rule_hybrids_by_model': rule_hybrids_by_model,
+        # The distance nested run's honest score per budget, same columns as
+        # by_model_budget, deltas against the general run's best single
+        # representation. Budgets are DISTANCE_BUDGETS only.
+        'by_model_budget_distance': by_model_budget_distance,
+        'distance_budgets': _dist_budgets,
+        'rule_missing': rule_missing,
     }
 
     # ---- printed table: one row is one (model, budget) --------------------
