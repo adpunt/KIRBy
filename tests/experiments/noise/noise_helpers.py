@@ -1500,14 +1500,8 @@ def _import_experiment(exp_id: str):
         'n41': 'n41_conformal_fdr_detection',
         'n42': 'n42_similarity_noise_sweep',
     }
-    import importlib
-    # Framework experiments that run on the noise suite's loading and
-    # precompute. Their files live in framework/, not noise/.
-    framework_map = {'f36': 'f36_label_smoothing_portfolio'}
-    if exp_id in framework_map:
-        return importlib.import_module(
-            f'experiments.framework.{framework_map[exp_id]}')
     mod_name = module_map[exp_id]
+    import importlib
     return importlib.import_module(f'experiments.noise.{mod_name}')
 
 
@@ -1554,7 +1548,6 @@ def _experiment_full_name(exp_id: str) -> str:
         'n40': 'n40_model_side_regularisation',
         'n41': 'n41_conformal_fdr_detection',
         'n42': 'n42_similarity_noise_sweep',
-        'f36': 'f36_label_smoothing_portfolio',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -1647,6 +1640,66 @@ def _error_record(exp_id, exc, kind=None):
 REP_LIST_FROM = {'herg_ic50': 'herg_ki'}
 
 
+def load_noise_data(dataset_name, rep_names=None):
+    """(data, rep_names): the dataset as run_all loads it, before any search.
+
+    The approved representation list (DATASET_REPS, or REP_LIST_FROM), the
+    NaN guard, and the augmentation representations in data['augmentations'].
+    Split out of run_all on 2026-10-02 so a caller that must not start a
+    search (framework f36) loads the same data without run_all's precompute.
+    """
+    # Resolve rep list
+    if rep_names is None:
+        # herg_ic50 has no DATASET_REPS entry of its own: it takes herg_ki's
+        # representations (same target, same molecule type; user decision).
+        # Mapped here rather than added to DATASET_REPS, so the precompute and
+        # status scripts that loop over every DATASET_REPS key do not pick it up.
+        ds_reps = DATASET_REPS.get(REP_LIST_FROM.get(dataset_name, dataset_name))
+        if ds_reps is None:
+            raise ValueError(
+                f"No rep list for '{dataset_name}'. Pass rep_names explicitly "
+                f"or add it to DATASET_REPS in complexity_helpers.py."
+            )
+        rep_names = ds_reps['general']
+
+    t0 = time.time()
+    print(f"\nLoading {dataset_name}...")
+    data = load_data(dataset_name, rep_preset='all', rep_names=rep_names)
+    print(f"  Loaded in {time.time() - t0:.1f}s")
+
+    # NaN guard: some reps produce NaN for certain sequences. Replace with 0 and warn.
+    import numpy as np
+    reps_data = data.get('reps', {})
+    for rname, X in list(reps_data.items()):
+        nan_count = int(np.isnan(X).sum())
+        if nan_count > 0:
+            pct = 100 * nan_count / X.size
+            print(f"  WARNING: {rname} has {nan_count} NaN values ({pct:.1f}%) — imputing 0")
+            reps_data[rname] = np.nan_to_num(X, nan=0.0)
+
+    # ── Load augmentation reps ──
+    aug_rep_names = DATASET_REPS.get(dataset_name, {}).get('augmentation', [])
+    if aug_rep_names:
+        missing = [r for r in aug_rep_names if r not in reps_data]
+        if missing:
+            print(f"  Loading {len(missing)} augmentation reps: {missing}")
+            aug_data = load_data(dataset_name, rep_preset='all', rep_names=missing)
+            aug_reps = {}
+            for rn, arr in aug_data['reps'].items():
+                if int(np.isnan(arr).sum()) > 0:
+                    arr = np.nan_to_num(arr, nan=0.0)
+                aug_reps[rn] = arr
+            data['augmentations'] = aug_reps
+        else:
+            data['augmentations'] = {r: reps_data[r] for r in aug_rep_names}
+        print(f"  Augmentations ({len(data['augmentations'])}): "
+              f"{', '.join(f'{k}={v.shape[1]}' for k, v in data['augmentations'].items())}")
+    else:
+        data['augmentations'] = None
+
+    return data, rep_names
+
+
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
@@ -1727,12 +1780,9 @@ def run_all(dataset_name: str, output_dir: str,
                     f"of the default experiments injects a condition. This is a "
                     f"bug in HONOURS_NOISE_CONDITION or SINGLE_DATASET_EXPERIMENTS.")
 
-    # Resolve rep list
+    # Resolve rep list (load_noise_data resolves it the same way; done here
+    # first so the banner can name the representations).
     if rep_names is None:
-        # herg_ic50 has no DATASET_REPS entry of its own: it takes herg_ki's
-        # representations (same target, same molecule type; user decision).
-        # Mapped here rather than added to DATASET_REPS, so the precompute and
-        # status scripts that loop over every DATASET_REPS key do not pick it up.
         ds_reps = DATASET_REPS.get(REP_LIST_FROM.get(dataset_name, dataset_name))
         if ds_reps is None:
             raise ValueError(
@@ -1740,7 +1790,6 @@ def run_all(dataset_name: str, output_dir: str,
                 f"or add it to DATASET_REPS in complexity_helpers.py."
             )
         rep_names = ds_reps['general']
-
     print(f"\n{'=' * 70}")
     print(f"NOISE EXPERIMENTS: {dataset_name.upper()}")
     print(f"{'=' * 70}")
@@ -1749,41 +1798,10 @@ def run_all(dataset_name: str, output_dir: str,
     print(f"Experiments: {experiments}")
     print(f"Output:      {output_dir}")
 
-    # ── Load data ONCE ──
     t0 = time.time()
-    print(f"\nLoading {dataset_name}...")
-    data = load_data(dataset_name, rep_preset='all', rep_names=rep_names)
-    print(f"  Loaded in {time.time() - t0:.1f}s")
-
-    # NaN guard: some reps produce NaN for certain sequences. Replace with 0 and warn.
+    data, rep_names = load_noise_data(dataset_name, rep_names)
     import numpy as np
     reps_data = data.get('reps', {})
-    for rname, X in list(reps_data.items()):
-        nan_count = int(np.isnan(X).sum())
-        if nan_count > 0:
-            pct = 100 * nan_count / X.size
-            print(f"  WARNING: {rname} has {nan_count} NaN values ({pct:.1f}%) — imputing 0")
-            reps_data[rname] = np.nan_to_num(X, nan=0.0)
-
-    # ── Load augmentation reps ──
-    aug_rep_names = DATASET_REPS.get(dataset_name, {}).get('augmentation', [])
-    if aug_rep_names:
-        missing = [r for r in aug_rep_names if r not in reps_data]
-        if missing:
-            print(f"  Loading {len(missing)} augmentation reps: {missing}")
-            aug_data = load_data(dataset_name, rep_preset='all', rep_names=missing)
-            aug_reps = {}
-            for rn, arr in aug_data['reps'].items():
-                if int(np.isnan(arr).sum()) > 0:
-                    arr = np.nan_to_num(arr, nan=0.0)
-                aug_reps[rn] = arr
-            data['augmentations'] = aug_reps
-        else:
-            data['augmentations'] = {r: reps_data[r] for r in aug_rep_names}
-        print(f"  Augmentations ({len(data['augmentations'])}): "
-              f"{', '.join(f'{k}={v.shape[1]}' for k, v in data['augmentations'].items())}")
-    else:
-        data['augmentations'] = None
 
     # ── Resolve pruning_mode + apply n_samples gate ──
     from experiments._shared import resolve_pruning_mode, apply_pruning_gate
