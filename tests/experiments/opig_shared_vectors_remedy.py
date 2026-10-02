@@ -116,8 +116,9 @@ import opig_shared_vectors_census as census                        # noqa: E402
 TIER = 'shared_vec'      # a private cache identity; does not touch the shared DBs
 
 # The owner's set (2026-10-02): every arm is run under the general search and
-# under the distance search. The second general recipe per fold is not here —
-# nested_cv_evaluate scores one recipe per model per outer fold.
+# under the distance search. The second general recipe per model is each outer
+# fold's second-ranked inner recipe from the general run, rebuilt on that
+# fold's training rows and scored on its test rows (summarise_comparison).
 RULE_LINEAGES = ('general', 'distance')
 DEFAULT_DATASETS = ['herg_ki']
 
@@ -442,10 +443,8 @@ def run_comparison(name, data, dataset_name, reps, donor_reps, config, args,
     outer folds and the same arm, searched with the distance evaluators, the
     distance budgets and the distance models, under its own cache tier.
 
-    ⛔ The owner's set also asks for the SECOND general recipe per fold.
-    nested_cv_evaluate scores one recipe per model per outer fold
-    (find_best_hybrid.py:10871, inner.best_by_model[model]), so that slot needs
-    a change in the engine and is not available here.
+    The SECOND general recipe per model is not a separate run: it is read
+    out of this run's inner searches in summarise_comparison.
     """
     from experiments._shared import (
         run_nested_cv, DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS)
@@ -500,8 +499,12 @@ def run_comparison(name, data, dataset_name, reps, donor_reps, config, args,
 
 
 def summarise_comparison(name, point, result, outer_folds, data, reps, donor_reps,
-                  target, args, lineage='general'):
-    """Scores, paired deltas against A, and the tie counts per fold."""
+                  target, args, lineage='general', dataset_name=None):
+    """Scores, paired deltas against A, and the tie counts per fold.
+
+    Under lineage='general' it also emits one row per model for the second
+    general recipe (comparison '<name>__general2'), owner's set 2026-10-02.
+    """
     labels = np.asarray(data['labels'])
     groups = data['groups']
     task_type = data['task_type']
@@ -567,6 +570,100 @@ def summarise_comparison(name, point, result, outer_folds, data, reps, donor_rep
             'no_op': (point is not None
                       and point.get('augmentation_strategy') != 'none'
                       and not admitted),
+        })
+    if lineage == 'general':
+        rows.extend(_general2_rows(name, point, result, outer_folds, data, reps,
+                                   donor_reps, target, args, dataset_name))
+    return rows
+
+
+def _general2_rows(name, point, result, outer_folds, data, reps, donor_reps,
+                   target, args, dataset_name):
+    """The second general recipe per model (owner's set: top 2 general + top 1
+    distance per model, 2026-10-02).
+
+    Each outer fold's second-ranked inner recipe from the general run, rebuilt
+    on that fold's training rows and scored on its test rows. The arguments
+    match what run_comparison gave run_nested_cv: the same representations,
+    the same donor as augmentations, n_outer_folds = args.n_outer_folds or
+    config n_splits, seed 42, and the task type _resolve_search_metric gives.
+    The paired delta is against the target representation alone, as in the
+    general1 row.
+
+    The tie counts are not computed for this row: rule_general2_outer returns
+    each fold's score and recipe label, not the recipe itself, so the matrix
+    cannot be rebuilt here. ties_per_fold is empty and no_op is None.
+    """
+    from experiments._shared import _resolve_search_metric
+    from experiments.complexity.c14_cross_domain_summary import (
+        rule_general2_outer, rule_slot_vs_single)
+    from kirby.find_best_hybrid import nested_cv_outer_folds
+    labels = np.asarray(data['labels'])
+    _, task_type = _resolve_search_metric(
+        labels, task_type=data['task_type'], metric='auto',
+        domain=data.get('domain'), dataset_name=dataset_name)
+    lower = bool(result.lower_is_better)
+    n_outer = args.n_outer_folds
+    # rule_general2_outer splits the rows itself. Check its split is the one
+    # run_comparison scored on before using any of its numbers.
+    mine = nested_cv_outer_folds(reps, labels, data['groups'], n_outer, 42,
+                                 task_type)
+    if (len(mine) != len(outer_folds)
+            or any(not np.array_equal(np.sort(a[1]), np.sort(b[1]))
+                   for a, b in zip(mine, outer_folds))):
+        return [{'comparison': f'{name}__general2', 'arm': name,
+                 'lineage': 'general', 'slot': 'general2',
+                 'sweep_point': point,
+                 'rule_missing': [
+                     'general2: the outer folds rebuilt with the resolved task '
+                     f'type {task_type!r} differ from the folds the general run '
+                     'was scored on, so no general2 score was taken']}]
+    # run_comparison passes tune=False. rule_general2_outer's rebuild reads
+    # KIRBY_TUNE instead, so it is cleared for this call to keep the second
+    # recipe untuned like the first.
+    _saved = os.environ.pop('KIRBY_TUNE', None)
+    try:
+        g2_all = rule_general2_outer(
+            result, reps, labels, data['groups'],
+            models=list(result.by_model or {}),
+            metric_name=result.metric_name, task_type=task_type,
+            n_outer_folds=n_outer,
+            seed=42, augmentations=(donor_reps or None),
+            context=f'opig_shared_vectors_remedy {dataset_name} {name}')
+    finally:
+        if _saved is not None:
+            os.environ['KIRBY_TUNE'] = _saved
+    rows = []
+    for model, g2 in g2_all.items():
+        base = ((result.baselines_by_model or {}).get(model, {})
+                .get(target, {}).get('fold_scores') or [])
+        cmp_ = rule_slot_vs_single(g2['fold_scores'], base, lower)
+        per_fold = cmp_['per_fold_delta']
+        paired = [i for i, d in enumerate(per_fold) if d is not None]
+        deltas = [per_fold[i] for i in paired]
+        rows.append({
+            'comparison': f'{name}__general2',
+            'arm': name,
+            'lineage': 'general',
+            'slot': 'general2',
+            'sweep_point': point, 'model': model,
+            'condition_suffix': point_slug(point) if point else None,
+            'metric_name': result.metric_name, 'lower_is_better': lower,
+            'n_outer_folds': result.n_outer_folds,
+            'target_representation': target,
+            'hybrid_fold_scores': cmp_['hybrid_fold_scores'],
+            'target_alone_fold_scores': base,
+            'paired_folds': paired,
+            'delta_vs_target_alone_per_fold': deltas,
+            'delta_vs_target_alone_mean': cmp_['delta_mean_of_folds'],
+            'n_paired_folds': cmp_['n_paired_folds'],
+            'recipes_per_fold': g2['recipes_per_fold'],
+            'n_features_per_fold': g2['n_features_per_fold'],
+            'ties_per_fold': [],
+            'donor_features_admitted': None,
+            'no_op': None,
+            'rule_missing': [f'general2 for {model}: {w}'
+                             for w in g2['missing']],
         })
     return rows
 
@@ -880,7 +977,7 @@ def main():
         for (name, _lin), (res, folds, rep_pool) in c_results.items():
             all_rows.extend(summarise_comparison(
                 name, None, res, folds, data, rep_pool, None, target, args,
-                lineage=_lin))
+                lineage=_lin, dataset_name=ds))
 
         to_run = [('B', target_only)]
         for name, rep_pool in hybrid_pools.items():
@@ -919,7 +1016,7 @@ def main():
                         continue
                     _new_rows = summarise_comparison(
                         which, point, res, folds, data, which_reps, donor_reps,
-                        target, args, lineage=_lin)
+                        target, args, lineage=_lin, dataset_name=ds)
                     _ck.put(_new_rows, **_pkey)
                     all_rows.extend(_new_rows)
 
@@ -942,10 +1039,20 @@ def main():
                         if r.get('dataset') == ds and r.get('model') in common],
                        common)
         all_meta.append({'dataset': ds, 'choice': choice,
-                         'rule': ('every arm run under the general search and '
-                                  'the distance search; the second general '
-                                  'recipe per fold needs nested_cv_evaluate '
-                                  'to score more than one recipe per fold'),
+                         'rule': ('top 2 general + top 1 distance recipe per '
+                                  'model for every arm: general1 rows '
+                                  '(comparison <arm>), general2 rows '
+                                  '(comparison <arm>__general2: each outer '
+                                  "fold's second-ranked inner recipe of the "
+                                  'general run, scored on that fold), '
+                                  'distance1 rows (comparison <arm>d)'),
+                         'general2_tie_counts': (
+                             'not computed: rule_general2_outer returns each '
+                             "fold's score and recipe label, not the recipe, "
+                             'so the general2 matrix is not rebuilt'),
+                         'rule_missing': [
+                             w for r in all_rows if r.get('dataset') == ds
+                             for w in (r.get('rule_missing') or [])],
                          'lineages_run': list(RULE_LINEAGES),
                          'fold_spread_used_for_margins': spread,
                          'n_sweep_points': len(points),

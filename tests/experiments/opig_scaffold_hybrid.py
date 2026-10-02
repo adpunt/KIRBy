@@ -220,6 +220,17 @@ def summarise_one(dataset_name, block):
     # (owner's set, 2026-10-02). None when that run did not produce a block.
     if block.get('distance'):
         out['distance'] = summarise_one(dataset_name, block['distance'])
+    # The second general recipe per model (owner's set, 2026-10-02): the
+    # same delta against the best single representation, its outer folds and
+    # the per-fold differences, under keys ending '__general2'.
+    g2 = block.get('by_model__general2') or {}
+    if g2:
+        out['delta_mean_of_folds__general2'] = {
+            m: e.get('delta_mean_of_folds') for m, e in g2.items()}
+        out['n_paired_folds__general2'] = {
+            m: e.get('n_paired_folds') for m, e in g2.items()}
+        out['per_fold_delta__general2'] = {
+            m: e.get('per_fold_delta') for m, e in g2.items()}
     out['rule'] = block.get('rule')
     if block.get('rule_missing'):
         out['rule_missing'] = block['rule_missing']
@@ -257,6 +268,23 @@ def print_summary(summaries, lineage='general'):
                 dv = deltas[model]
                 n = (s.get('n_paired_folds') or {}).get(model)
                 pf = (s.get('per_fold_delta') or {}).get(model) or []
+                d_str = ('—' if dv is None or not np.isfinite(dv)
+                         else f'{dv:+.4f}')
+                pf_str = ', '.join(
+                    '—' if v is None or not np.isfinite(v) else f'{v:+.3f}'
+                    for v in pf) or 'none'
+                print(f'    {model:10s} {d_str:>9s}  '
+                      f'{n} paired outer folds  |  per fold: {pf_str}')
+        # The second general recipe per model, same layout (owner's set,
+        # 2026-10-02).
+        deltas2 = s.get('delta_mean_of_folds__general2') or {}
+        if deltas2:
+            print('  second-ranked general recipe minus best single '
+                  'representation, per model — same layout:')
+            for model in sorted(deltas2):
+                dv = deltas2[model]
+                n = (s.get('n_paired_folds__general2') or {}).get(model)
+                pf = (s.get('per_fold_delta__general2') or {}).get(model) or []
                 d_str = ('—' if dv is None or not np.isfinite(dv)
                          else f'{dv:+.4f}')
                 pf_str = ', '.join(
@@ -397,20 +425,49 @@ def _run_one_dataset(ds, args, override, config, budgets, t0):
         # distance budgets and the distance models, under its own cache tier so
         # it writes its own rows. Its hybrid and every single representation
         # are scored on the untouched outer fold exactly as above.
-        #
-        # ⛔ WHAT IS STILL MISSING. The owner's set asks for the top 2 general
-        # recipes per fold, and nested_cv_evaluate scores one recipe per model
-        # per fold (find_best_hybrid.py:10871, inner.best_by_model[model]).
-        # Only the second general recipe is missing; that needs a change in the
-        # engine, not here.
         from experiments._shared import (
-            DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS)
+            DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
+            _resolve_search_metric)
+        from experiments.complexity.c14_cross_domain_summary import (
+            rule_general2_outer, rule_slot_vs_single)
         _d_budgets = [b for b in (budgets or config.get('budgets') or [])
                       if b in DISTANCE_BUDGETS] or list(DISTANCE_BUDGETS)
         block['rule'] = (
-            'top 1 general + top 1 distance recipe per model per outer fold, '
-            'and every single representation; the second general recipe needs '
-            'nested_cv_evaluate to score more than one recipe per fold')
+            'top 2 general + top 1 distance recipe per model per outer fold, '
+            'and every single representation. general1 is by_model, general2 '
+            'is by_model__general2 (each outer fold\'s second-ranked inner '
+            'recipe, rebuilt on that fold\'s training rows and scored on its '
+            'test rows), distance1 is distance')
+        rule_missing = []
+
+        # The second general recipe per model (owner's set: top 2 general +
+        # top 1 distance per model, 2026-10-02). Same rows, same reps, no
+        # augmentations, same outer folds: run_nested_cv above used
+        # n_outer_folds = args.max_folds or config n_splits, seed 42, and the
+        # task type _resolve_search_metric gives, so the same three are passed
+        # here. Each is compared with the same best single representation per
+        # fold that general1 is compared with.
+        _labels = np.asarray(data['labels'])
+        _, _task = _resolve_search_metric(
+            _labels, task_type=data['task_type'], metric='auto',
+            domain='antibody', dataset_name=ds)
+        _lower = bool(result.lower_is_better)
+        _g2_all = rule_general2_outer(
+            result, data['reps'], _labels, data['groups'],
+            models=list(result.by_model or {}),
+            metric_name=result.metric_name, task_type=_task,
+            n_outer_folds=(args.max_folds or config.get('n_splits', 5)),
+            seed=42, augmentations=None, context=f'opig_scaffold {ds}')
+        block['by_model__general2'] = {}
+        for _m, _g2 in _g2_all.items():
+            _single = list((result.by_model.get(_m) or {})
+                           .get('best_single_fold_scores') or [])
+            _row = rule_slot_vs_single(_g2['fold_scores'], _single, _lower)
+            _row.update({k: _g2[k] for k in (
+                'slot', 'lineage', 'tier', 'objective', 'recipes_per_fold',
+                'n_features_per_fold')})
+            block['by_model__general2'][_m] = _row
+            rule_missing += [f'general2 for {_m}: {w}' for w in _g2['missing']]
         try:
             d_result = run_nested_cv(
                 reps=data['reps'], labels=np.asarray(data['labels']),
@@ -426,8 +483,10 @@ def _run_one_dataset(ds, args, override, config, budgets, t0):
             import traceback as _tb
             _tb.print_exc()
             block['distance'] = None
-            block['rule_missing'] = [
-                f'the distance nested run raised {type(_e).__name__}: {_e}']
+            rule_missing.append(
+                f'the distance nested run raised {type(_e).__name__}: {_e}')
+        if rule_missing:
+            block['rule_missing'] = rule_missing
 
         out_path = os.path.join(args.output_dir, f'opig_scaffold_hybrid_{ds}.json')
         with open(out_path, 'w') as f:
