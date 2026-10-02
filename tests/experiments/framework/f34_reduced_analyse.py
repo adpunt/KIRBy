@@ -52,6 +52,14 @@ for ds_dir in sorted(p for p in DIR.iterdir() if p.is_dir()):
         info[(ds_dir.name, rep)] = (metric, lower, kinds[rep], incomplete[rep])
 
 
+n_files = sum(1 for _ in DIR.glob('*/*.jsonl'))
+print(f'{DIR}: {n_files} task files, {len(groups)} (dataset, representation) '
+      f'groups with all {N_FOLDS} folds')
+if not groups:
+    sys.exit('Nothing complete to rank. Look at f34_reduced.log for why the '
+             'tasks stopped.')
+
+
 def ranked(key):
     cells = groups[key]
     lower = info[key][1]
