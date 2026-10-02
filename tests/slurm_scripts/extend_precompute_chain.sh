@@ -39,9 +39,9 @@
 #   --links N       extra links per dataset, default 1
 #   --wall T        default 24:00:00
 #   --speed S       fast | full. Default, and what you want: the dataset's
-#                   class. The twelve in dataset_policy.FAST_SPEED_DATASETS run
+#                   class. The fourteen in dataset_policy.FAST_SPEED_DATASETS run
 #                   fast, 816 configurations per condition against 8,160.
-#                   ⛔ DO NOT PASS full ON THOSE TWELVE. Since 2026-09-21 the
+#                   ⛔ DO NOT PASS full ON THOSE FOURTEEN. Since 2026-09-21 the
 #                   experiments search them at fast too, so a full-speed link
 #                   computes 8,160 configurations nothing will read.
 #   --partition P   default medium,long
