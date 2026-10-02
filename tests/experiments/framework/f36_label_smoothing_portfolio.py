@@ -637,9 +637,15 @@ def unit_rows_path(output_dir, ds, cond, unit):
 
 def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
              metric, task_type, factory, output_dir, errors, unavailable,
-             flush_every=200):
+             flush_every=200, flush_seconds=60.0):
     """Every combination of one passes schedule on one unit. Rows already on
-    disk are skipped. Returns the number of rows written."""
+    disk are skipped. Returns the number of rows written.
+
+    Rows go to disk every flush_every combinations or every flush_seconds,
+    whichever comes first, so a job killed at its wall clock loses at most a
+    minute of fits. One combination under passes fixed or anneal refits its
+    value up to 4 times, so a count alone could hold hours of work in memory.
+    """
     from experiments.noise import noise_cache as nc
     from experiments.noise.d_vs_dprime import (
         make_row, row_key, append_rows, done_keys)
@@ -711,13 +717,15 @@ def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
 
     buf = []
     written = 0
+    last_flush = time.time()
 
     def flush():
-        nonlocal buf, written
+        nonlocal buf, written, last_flush
         if buf:
             append_rows(path, buf)
             written += len(buf)
             buf = []
+        last_flush = time.time()
 
     for c in todo:
         v, r, pr, sc, p = c
@@ -752,7 +760,8 @@ def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
         buf.append(make_row(**ident(setting, sim_of(v)), model=m,
                             metric=metric_name, lower_is_better=lib,
                             score_D=s_D, score_Dprime=s_P, score_clean=s_C))
-        if len(buf) >= flush_every:
+        if (len(buf) >= flush_every
+                or time.time() - last_flush >= flush_seconds):
             flush()
     flush()
     unavailable.update({f'v={k}': w for k, w in vals.unavailable.items()})
