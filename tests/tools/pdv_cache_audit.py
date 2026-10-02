@@ -171,6 +171,44 @@ def rebuild(datasets):
     return still_zscored, could_not_load
 
 
+def fresh(datasets, n_rows=200):
+    """Rebuild a sample of rows and compare them with the cached matrix.
+
+    The table above says only whether a file exists and whether it is
+    z-scored. That never answered the chembert question (2026-10-01: four
+    rows of "exists True, z-scored no" and nothing about whether the cached
+    features are the ones the code builds today). This does, through the same
+    freshness_check opig_shared_vectors_remedy refuses on. Reads only.
+    """
+    from experiments._shared import load_data
+    from experiments.opig_shared_vectors_census import freshness_check
+    stale = []
+    for ds in datasets:
+        try:
+            data = load_data(ds, rep_preset='full', rep_names=[REP])
+        except Exception as exc:
+            print(f'{ds:14s} COULD NOT LOAD — {type(exc).__name__}: {exc}')
+            continue
+        v = freshness_check(data, [REP], n_rows=n_rows).get(REP)
+        if v is None:
+            print(f'{ds:14s} not checked: no builder for {REP} in the check')
+        elif 'error' in v:
+            print(f'{ds:14s} rebuild failed: {v["error"]}')
+        elif v['matches']:
+            print(f'{ds:14s} matches: {v["rows_checked"]} molecules rebuilt, '
+                  f'0 differ')
+        else:
+            stale.append(ds)
+            if 'rows_that_differ' in v:
+                print(f'{ds:14s} ⛔ STALE: {v["rows_that_differ"]} of '
+                      f'{v["rows_checked"]} rebuilt molecules differ from the '
+                      f'cache (largest difference {v["largest_difference"]:.3g})')
+            else:
+                print(f'{ds:14s} ⛔ STALE: cached {v["cached_width"]} features, '
+                      f'rebuilt {v["rebuilt_width"]}')
+    return stale
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -181,6 +219,8 @@ if __name__ == '__main__':
                     help='move both cache layers aside (files are moved, never deleted)')
     ap.add_argument('--rebuild', action='store_true',
                     help='rebuild pdv and say whether it came back raw')
+    ap.add_argument('--fresh', action='store_true',
+                    help='rebuild 200 molecules and compare with the cache (reads only)')
     args = ap.parse_args()
     REP = args.rep
 
@@ -188,6 +228,10 @@ if __name__ == '__main__':
     entries = [find_for(ds) for ds in args.datasets]
     report(entries)
 
+    if args.fresh:
+        print('\n--- cache against the code, 200 molecules each ---')
+        _stale = fresh(args.datasets)
+        print(f'\n{len(_stale)} stale' + (f': {", ".join(_stale)}' if _stale else ''))
     if args.quarantine:
         print('\n--- quarantine ---')
         quarantine(entries)
