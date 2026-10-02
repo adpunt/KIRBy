@@ -6011,7 +6011,7 @@ def _local_aug_conditions(conditions):
     return [c for c in conditions if c in keep] or ['none']
 
 
-def _pool_conditions(distance, augmentations, dataset_name=None):
+def _pool_conditions(distance, augmentations, dataset_name=None, n_samples=None):
     """The (tier, aug_condition, augmentations) members of the pool.
 
     One 10-rep pool ('general', or 'general_distance' for the distance
@@ -6031,6 +6031,10 @@ def _pool_conditions(distance, augmentations, dataset_name=None):
         pool = [('general_distance', 'none', None)]
         if has_augs and not _no_uncapped:
             pool.append(('general_distance', 'uncapped', augmentations))
+        # The capped distance search, which precompute_hybrids.py builds under
+        # 10,000 molecules since 2026-09-29. It was built and never read.
+        if has_augs and n_samples is not None and int(n_samples) < 10000:
+            pool.append(('general_distance', 'capped', augmentations))
         _keep = set(_local_aug_conditions([c for _t, c, _a in pool]))
         return [m for m in pool if m[1] in _keep]
     pool = [('general', 'none', None)]
@@ -6232,7 +6236,8 @@ def get_best_search_for_downstream(
 
     # One 10-rep pool (tier 'general'); the 'top' tier is retired (2026-08-24).
     # The same (tier, aug_condition) members are asked of every eligible family.
-    base_pool = _pool_conditions(distance, augmentations, dataset_name)
+    base_pool = _pool_conditions(distance, augmentations, dataset_name,
+                                 n_samples=len(labels))
     pool = [(tier, aug_cond, augs, obj)
             for obj in objectives
             for tier, aug_cond, augs in base_pool]
@@ -6496,6 +6501,51 @@ def pool_recipes_by_family(meta, space_for_family=None, eligible_families=None,
                 'no feature space could be built from any search family')
         return recipes, unavailable
 
+    # THE OWNER'S SET (get_rule_hybrids, 2026-10-02): when the caller attached
+    # it, every slot becomes its own space -- general rank 1 keeps the
+    # family's existing space name so nothing already reported is renamed;
+    # general rank 2 and distance rank 1 get '__general2' / '__distance1'.
+    rule = meta.get('rule_hybrids')
+    if rule:
+        for fam, fo in (rule.get('by_objective') or {}).items():
+            base = _name(fam)
+            for h in fo.get('hybrids') or []:
+                bp = h.get('blueprint')
+                slot = h.get('slot') or 'general1'
+                name = base if slot == 'general1' else f'{base}__{slot}'
+                if bp is None:
+                    unavailable[name] = (f'the {fam} {slot} hybrid carried no '
+                                         f'blueprint, so it could not be built')
+                    continue
+                recipes.append({
+                    'space': name, 'objective': fam, 'blueprint': bp,
+                    'tier': h.get('tier'),
+                    'aug_condition': h.get('aug_condition'),
+                    'lineage': h.get('lineage'), 'slot': slot,
+                    'budget': int(getattr(bp, 'budget', 0) or 0),
+                    'allocation_method': getattr(bp, 'allocation_method', None),
+                    'importance_method': getattr(bp, 'importance_method', None),
+                    'internal_evaluator': getattr(bp, 'internal_evaluator', None),
+                    'augmentation_strategy': h.get('aug_condition'),
+                    'search_score_mean': h.get('score_other_folds'),
+                    'search_metric_name': h.get('metric_name'),
+                    'search_lower_is_better': h.get('lower_is_better'),
+                    'budget_relaxed': h.get('budget_relaxed'),
+                    'is_pool_winner': slot == 'general1',
+                })
+            if fo.get('missing'):
+                _why = ' | '.join(fo['missing'])
+                if not fo.get('hybrids'):
+                    unavailable[base] = _why
+                else:
+                    unavailable[f'{base}__missing_slots'] = _why
+        for fam in (eligible_families or ()):
+            if fam not in (rule.get('by_objective') or {}):
+                unavailable[_name(fam)] = (
+                    f'the pool held no search under objective={fam} for this '
+                    f'dataset in either the general or the distance searches')
+        return recipes, unavailable
+
     winner = meta.get('objective')
     by_obj = meta.get('by_objective') or {}
     if not by_obj:
@@ -6693,9 +6743,13 @@ def get_fold_pool_recipes(
         raise ValueError(
             "get_fold_pool_recipes requires dataset_name= "
             "(cache files are dataset-keyed)")
-    fold_i = int(fold_i)
-    if fold_i < 0:
-        raise ValueError(f"fold_i must be >= 0, got {fold_i}")
+    # fold_i=None: nothing held out, every fold enters the mean. That is the
+    # whole-dataset ranking get_rule_hybrids uses for experiments that read one
+    # recipe set for the whole dataset rather than one per held-out fold.
+    if fold_i is not None:
+        fold_i = int(fold_i)
+        if fold_i < 0:
+            raise ValueError(f"fold_i must be >= 0, got {fold_i}")
     n_hybrids = int(n_hybrids)
     if n_hybrids < 1:
         raise ValueError(f"n_hybrids must be >= 1, got {n_hybrids}")
@@ -6711,7 +6765,8 @@ def get_fold_pool_recipes(
     objectives, pool_subset_name = _resolve_pool_objectives(
         pool_subset, objective)
 
-    base_pool = _pool_conditions(distance, augmentations, dataset_name)
+    base_pool = _pool_conditions(distance, augmentations, dataset_name,
+                                 n_samples=len(labels))
     pool = [(tier, aug_cond, augs, obj)
             for obj in objectives
             for tier, aug_cond, augs in base_pool]
@@ -6846,7 +6901,8 @@ def get_fold_pool_recipes(
                 'score_other_folds': float(m),
                 'n_other_folds': int(n_used),
                 'score_this_fold': (float(folds[fold_i])
-                                    if fold_i < len(folds)
+                                    if fold_i is not None
+                                    and fold_i < len(folds)
                                     and not _hr_is_bad(folds[fold_i])
                                     else None),
                 'fold_scores': [(None if _hr_is_bad(s) else float(s))
@@ -6885,7 +6941,8 @@ def get_fold_pool_recipes(
                 'score_other_folds': float(m),
                 'n_other_folds': int(n_used),
                 'score_this_fold': (float(folds[fold_i])
-                                    if fold_i < len(folds)
+                                    if fold_i is not None
+                                    and fold_i < len(folds)
                                     and not _hr_is_bad(folds[fold_i])
                                     else None),
                 'fold_scores': [(None if _hr_is_bad(s) else float(s))
@@ -6901,7 +6958,8 @@ def get_fold_pool_recipes(
                     (cand['score_other_folds'] > prev['score_other_folds'])):
                 entry['baselines'][rep_name] = cand
 
-    if n_folds_in_pool is not None and fold_i >= n_folds_in_pool:
+    if (fold_i is not None and n_folds_in_pool is not None
+            and fold_i >= n_folds_in_pool):
         warnings_out.append(
             f"fold_i={fold_i} but the pool holds {n_folds_in_pool} fold "
             f"scores per configuration — nothing was held out of the ranking")
@@ -6983,6 +7041,219 @@ def get_fold_pool_recipes(
         'budgets_ranked_over': budgets_ranked_over,
         'warnings': warnings_out,
     }
+
+
+# =============================================================================
+# THE OWNER'S HYBRID SET: top 2 general + top 1 distance, per model, per family
+# =============================================================================
+# Owner, repeatedly and again on 2026-10-02: an experiment that compares
+# hybrids compares, for each downstream model, the TOP 2 hybrids from the
+# general searches PLUS the TOP 1 hybrid from the distance searches -- and,
+# where it reads both search families (features chosen for prediction, and
+# features chosen under objective='similarity'), that set for each family.
+# The base side is each model's top 2 single representations.
+#
+# An audit that day found no experiment doing it: a pool read was either the
+# general searches or the distance searches (_pool_conditions takes one), and
+# most experiments built only the single winner. This is the one reader every
+# experiment now goes through.
+RULE_N_GENERAL = 2
+RULE_N_DISTANCE = 1
+RULE_N_BASE = 2
+
+
+def get_rule_hybrids(
+    reps, labels, groups, *, downstream_model, budget=None,
+    dataset_name=None, augmentations=None, pool_subset=None, objective=None,
+    fold_i=None, n_outer_folds=None,
+    n_general=RULE_N_GENERAL, n_distance=RULE_N_DISTANCE, n_base=RULE_N_BASE,
+    metric='auto', task_type=None, domain=None, data=None,
+    weight_method=None, label_noise=None, drop_folds=None, **kwargs,
+):
+    """Per family: the top `n_general` general hybrids + top `n_distance`
+    distance hybrids for ONE downstream model, and its top `n_base` single
+    representations. Reads stored searches; runs none beyond what
+    KIRBY_COLD_SEARCH_MAX_CONFIGS lets a missing small search do.
+
+    fold_i=None ranks on the mean over every fold (one set for the whole
+    dataset). fold_i=k ranks on the other folds' mean, as get_fold_pool_recipes
+    does, so fold k's score never chooses fold k's hybrids.
+
+    knn is scored on the general searches only by the knn pass, which runs
+    under objective='similarity' with MAIN_MODELS_WITH_KNN. So for knn the
+    general read names that model list; there is no predictive general search
+    for knn, and that slot is reported missing rather than filled from another
+    model.
+
+    A distance search's budgets stop at max(DISTANCE_BUDGETS). Asked for a
+    budget it never scored, get_fold_pool_recipes ranks over every budget it
+    holds and sets 'budget_relaxed'; that is carried per entry here.
+
+    Returns:
+        {
+          'model', 'budget', 'fold', 'pool_subset', 'objectives',
+          'by_objective': {family: {
+              'hybrids': [entry, ...],   # general ranks 1..n, then distance
+              'general': [entry, ...], 'distance': [entry, ...],
+              'base_reps': [base entry, ...],     # top n_base, general pool
+              'metric_name', 'lower_is_better',
+              'missing': [sentence, ...]}},
+          'hybrids': [every entry, family order],
+          'base_reps': [top n_base of the first family that has any],
+          'missing': [sentence, ...],   # every slot the rule asked for and
+                                        # did not get, and why
+          'warnings': [...],
+        }
+        Each hybrid entry is a get_fold_pool_recipes entry plus 'lineage'
+        ('general' | 'distance'), 'lineage_rank' (1-based), 'slot'
+        (e.g. 'general1', 'distance1') and 'budget_relaxed'.
+    """
+    common = dict(
+        fold_i=fold_i, n_outer_folds=n_outer_folds,
+        downstream_model=downstream_model, budget=budget,
+        dataset_name=dataset_name, augmentations=augmentations,
+        pool_subset=pool_subset, objective=objective,
+        metric=metric, task_type=task_type, domain=domain, data=data,
+        weight_method=weight_method, label_noise=label_noise,
+        drop_folds=drop_folds)
+    gen_kw = dict(kwargs)
+    if (downstream_model not in DOWNSTREAM_MODELS
+            and downstream_model in MAIN_MODELS_WITH_KNN
+            and 'models' not in gen_kw):
+        gen_kw['models'] = list(MAIN_MODELS_WITH_KNN)
+    out_parts = {}
+    errors = {}
+    for lineage, dist, n in (('general', False, n_general),
+                             ('distance', True, n_distance)):
+        if n <= 0:
+            continue
+        try:
+            out_parts[lineage] = get_fold_pool_recipes(
+                reps, labels, groups, distance=dist, n_hybrids=n,
+                **common, **(gen_kw if not dist else dict(kwargs)))
+        except Exception as exc:
+            from kirby.result_cache import StaleResultDB as _Stale
+            if isinstance(exc, _Stale):
+                raise
+            errors[lineage] = f'{type(exc).__name__}: {exc}'
+
+    objectives, subset_name = _resolve_pool_objectives(pool_subset, objective)
+    by_objective, missing_all, warnings_all = {}, [], []
+    for lineage, part in out_parts.items():
+        warnings_all += [f'{lineage}: {w}' for w in part.get('warnings', [])]
+    for fam in objectives:
+        fam_out = {'hybrids': [], 'general': [], 'distance': [],
+                   'base_reps': [], 'metric_name': None,
+                   'lower_is_better': None, 'missing': []}
+        for lineage, n in (('general', n_general), ('distance', n_distance)):
+            if n <= 0:
+                continue
+            part = out_parts.get(lineage)
+            if part is None:
+                fam_out['missing'].append(
+                    f'{lineage} {fam}: the pool read raised '
+                    f'{errors.get(lineage)}, so none of its {n} slot(s) '
+                    f'was filled')
+                continue
+            e = (part.get('by_objective') or {}).get(fam)
+            hy = list((e or {}).get('hybrids') or [])
+            for h in hy:
+                h = dict(h)
+                h['lineage'] = lineage
+                h['lineage_rank'] = int(h.get('rank', 0) or 0)
+                h['slot'] = f"{lineage}{h['lineage_rank']}"
+                h['budget_relaxed'] = bool(part.get('budget_relaxed'))
+                fam_out[lineage].append(h)
+            if len(hy) < n:
+                why = ('the pool held no search under this family for this '
+                       'tier' if e is None else
+                       f'only {len(hy)} configuration(s) were scored for '
+                       f'{downstream_model}')
+                fam_out['missing'].append(
+                    f'{lineage} {fam} for {downstream_model}: asked for {n}, '
+                    f'got {len(hy)} -- {why}')
+            if e is not None:
+                if fam_out['metric_name'] is None:
+                    fam_out['metric_name'] = e.get('metric_name')
+                    fam_out['lower_is_better'] = e.get('lower_is_better')
+                if lineage == 'general':
+                    fam_out['base_reps'] = list(
+                        e.get('base_reps_ranked') or [])[:n_base]
+        fam_out['hybrids'] = fam_out['general'] + fam_out['distance']
+        by_objective[fam] = fam_out
+        missing_all += fam_out['missing']
+
+    base_reps = []
+    for fam in objectives:
+        if by_objective.get(fam, {}).get('base_reps'):
+            base_reps = by_objective[fam]['base_reps']
+            break
+    if len(base_reps) < n_base:
+        missing_all.append(
+            f'base representations for {downstream_model}: asked for '
+            f'{n_base}, got {len(base_reps)}')
+    if missing_all:
+        print(f"[rule] {dataset_name} model={downstream_model} "
+              f"budget={budget} fold={fold_i}: "
+              + ' | '.join(missing_all))
+    return {
+        'model': downstream_model, 'budget': budget, 'fold': fold_i,
+        'pool_subset': subset_name, 'objectives': list(objectives),
+        'by_objective': by_objective,
+        'hybrids': [h for f in objectives
+                    for h in by_objective.get(f, {}).get('hybrids', [])],
+        'base_reps': base_reps,
+        'missing': missing_all,
+        'warnings': warnings_all,
+        'rule': (f'top {n_general} general + top {n_distance} distance '
+                 f'hybrids per family, top {n_base} single representations'),
+    }
+
+
+def build_hybrid_from_entry(reps, labels, groups, entry, *,
+                            augmentations=None):
+    """Fit one hybrid from a get_rule_hybrids / get_fold_pool_recipes entry on
+    the rows given. Returns (X_hybrid, feature_info).
+
+    Same create_hybrid arguments get_fitted_pool_hybrid passes (every recipe
+    setting, the grouping, and the family's own objective), so a recipe is
+    rebuilt the way the search scored it. To build on a training fold, pass
+    that fold's rows; apply the returned feature_info to the held-out rows with
+    hybrid.apply_feature_selection.
+    """
+    bp = entry['blueprint']
+    aug_strat = entry.get('aug_condition') or getattr(
+        bp, 'augmentation_strategy', 'none')
+    return _create_hybrid_from_blueprint(
+        reps, labels, groups, bp, aug_strat,
+        augmentations if aug_strat != 'none' else None,
+        entry.get('objective'))
+
+
+def _create_hybrid_from_blueprint(reps, labels, groups, bp, aug_strat, augs,
+                                  objective):
+    from kirby.hybrid import create_hybrid
+    return create_hybrid(
+        reps, labels,
+        allocation_method=bp.allocation_method,
+        budget=bp.budget,
+        step_size=getattr(bp, 'step_size', 5),
+        importance_method=bp.importance_method,
+        internal_evaluator=bp.internal_evaluator,
+        augmentations=augs,
+        augmentation_strategy=aug_strat,
+        augmentation_margin=float(
+            getattr(bp, 'augmentation_margin', 0.0) or 0.0),
+        augmentation_fraction=getattr(bp, 'augmentation_fraction', None),
+        candidate_ranking=getattr(bp, 'candidate_ranking',
+                                  'residual_correlation'),
+        augmentation_threshold=getattr(bp, 'augmentation_threshold', None),
+        augmentation_budget=int(getattr(bp, 'augmentation_budget', 20) or 20),
+        aug_max_candidates=int(getattr(bp, 'aug_max_candidates', 50) or 50),
+        aug_per_source_budget=getattr(bp, 'aug_per_source_budget', None),
+        groups=groups,
+        **({'objective': objective} if objective is not None else {}),
+    )
 
 
 def get_fitted_pool_hybrid(
