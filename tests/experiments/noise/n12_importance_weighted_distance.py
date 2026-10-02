@@ -54,6 +54,14 @@ stored search (_shared.noise_base_reps_by_model), do two jobs:
 
 Which representations those are is written to 'base_reps_by_model'.
 
+EVERY DOWNSTREAM MODEL'S OWN HYBRIDS, owner's decision 2026-10-02. Per model
+and family, that model's top 2 general + top 1 distance hybrids are hybrid
+spaces, each carrying the three hybrid conditions, scored only for that
+model's evaluation units and rebuilt with that model in the accept-or-reject
+step. rf's spaces keep the names above; another model's are '<name>@<model>'
+('hybrid__distance1@svm_unweighted'). The similarity sweep reads each model's
+own general rank-1 recipes.
+
 Usage:
     python n12_importance_weighted_distance.py --dataset logd --mode intermediary
     python n12_importance_weighted_distance.py --dataset caco2 --mode full
@@ -449,7 +457,7 @@ def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name,
 
 def _build_conditions(train_reps, y_train, augmentations, bp,
                        imp_method, base_groups, shared=None,
-                       shared_by_space=None):
+                       shared_by_space=None, models_by_space=None):
     """Build every condition for one importance method.
 
     Args:
@@ -471,6 +479,10 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
             family of stored search the pool held. Added 2026-09-19. Takes the
             place of `shared`, which is the same thing for the one space
             'hybrid' and is still accepted.
+        models_by_space: {hybrid space name: [models]}. Added 2026-10-02 with
+            each downstream model's own hybrids (owner's decision): a hybrid
+            space's three conditions are scored only for the models named
+            here. A space absent from it is open to all, as before.
 
     Returns four dicts.
       {condition_name: X_standardized}   the spaces to score. A base
@@ -614,6 +626,13 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
                 zero_importance[f'{_space}_imp_own'] = True
         except Exception as e:
             print(f"      {_space}_imp_own failed: {e}")
+
+    # Each model's own hybrid conditions are scored for that model only
+    # (owner's set per model, 2026-10-02).
+    for _space, _ms in (models_by_space or {}).items():
+        for suf in HYBRID_CONDITION_SUFFIXES:
+            if f'{_space}{suf}' in conditions:
+                models_for[f'{_space}{suf}'] = list(_ms)
 
     return conditions, zero_importance, duplicate, models_for
 
@@ -847,29 +866,89 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # the distance searches, and attached to meta so pool_recipes_by_family
     # emits one space per slot: 'hybrid' / 'hybrid_similarity' stay general
     # rank 1, '<space>__general2' and '<space>__distance1' are added. Every
-    # space carries the same three conditions. Still the random forest's
-    # recipes, as before: the spaces are where the estimators find neighbours.
-    try:
-        _rule = get_rule_hybrids(
-            reps, labels, groups, downstream_model='rf', budget=None,
-            dataset_name=dataset_name, augmentations=augmentations,
-            pool_subset=POOL_SUBSET, task_type=task_type, data=data)
-    except Exception as exc:
-        from kirby.result_cache import StaleResultDB as _Stale
-        if isinstance(exc, _Stale):
-            raise
-        _rule = None
-        print(f"  rule hybrid read failed: {type(exc).__name__}: {exc}")
+    # space carries the same three conditions.
+    #
+    # PER DOWNSTREAM MODEL (owner's decision 2026-10-02): each model's own
+    # set, not rf's for all. rf's spaces keep the names above; every other
+    # model's are '<name>@<model>' ('hybrid__distance1@svm'). A space's
+    # conditions are scored only for its own model's evaluation units, and
+    # its build's accept-or-reject step fits that model. A recipe built under
+    # the similarity objective fits no model in its build, so two models
+    # holding the same one share one space ('also_holds').
+    _rules_by_model = {}
+    for _m in (['rf'] + [m for m in downstream_models if m != 'rf']):
+        try:
+            _rules_by_model[_m] = get_rule_hybrids(
+                reps, labels, groups, downstream_model=_m, budget=None,
+                dataset_name=dataset_name, augmentations=augmentations,
+                pool_subset=POOL_SUBSET, task_type=task_type, data=data)
+        except Exception as exc:
+            from kirby.result_cache import StaleResultDB as _Stale
+            if isinstance(exc, _Stale):
+                raise
+            _rules_by_model[_m] = None
+            print(f"  rule hybrid read for {_m} failed: "
+                  f"{type(exc).__name__}: {exc}")
+    _rule = _rules_by_model.get('rf')
     if _rule is not None and _rule.get('hybrids'):
         meta = dict(meta)
         meta['rule_hybrids'] = _rule
     hybrid_recipes, hybrid_unavailable = pool_recipes_by_family(
         meta, SPACE_FOR_FAMILY,
         eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+    for _r in hybrid_recipes:
+        _r['model'] = 'rf'
+        _r['models'] = ['rf']
     if _rule is None:
         hybrid_unavailable['_rule_read'] = (
             'the read of the top 2 general + top 1 distance hybrids raised, so '
             'only each family\'s single winner was built')
+
+    def _build_sig(r):
+        # What makes two recipes build the same matrix here: every recipe
+        # field, and the model in the accept-or-reject step unless the
+        # recipe was searched under a geometry objective (which fits none).
+        _bp = r['blueprint']
+        _geo = _is_geometry_objective(getattr(_bp, 'objective', None)
+                                      or 'predictive')
+        _fields = tuple(sorted(
+            (k, repr(v)) for k, v in vars(_bp).items()
+            if k not in ('kept_augmentations', 'allocation_per_fold')))
+        return (_fields, r.get('aug_condition'),
+                None if _geo else r['model'])
+    _by_sig = {_build_sig(_r): _r for _r in hybrid_recipes}
+    for _m in downstream_models:
+        if _m == 'rf':
+            continue
+        _rm = _rules_by_model.get(_m)
+        if _rm is None:
+            hybrid_unavailable[f'_rule_read@{_m}'] = (
+                f"the read of {_m}'s top 2 general + top 1 distance hybrids "
+                f"raised, so none of {_m}'s hybrid spaces was built")
+            continue
+        _recs_m, _unav_m = pool_recipes_by_family(
+            {'rule_hybrids': _rm}, SPACE_FOR_FAMILY,
+            eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+        for _sp, _why in _unav_m.items():
+            hybrid_unavailable[f'{_sp}@{_m}'] = _why
+        for _r in _recs_m:
+            _r['space'] = f"{_r['space']}@{_m}"
+            _r['model'] = _m
+            _r['models'] = [_m]
+            _r['is_pool_winner'] = False
+            _same = _by_sig.get(_build_sig(_r))
+            if _same is not None:
+                _same['models'].append(_m)
+                _same.setdefault('also_holds', []).append(
+                    {'model': _m, 'slot': _r.get('slot'),
+                     'would_have_been_named': _r['space']})
+                continue
+            _by_sig[_build_sig(_r)] = _r
+            hybrid_recipes.append(_r)
+    results_rule_missing_by_model = {
+        _m: (list(_r.get('missing') or []) if _r is not None
+             else ['the read raised'])
+        for _m, _r in _rules_by_model.items()}
     # Every condition this run scores: the base ones, then three per hybrid
     # space actually built (CONDITION_NAMES is the two-space list it had
     # before 2026-10-02 and is kept for readers).
@@ -915,6 +994,23 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         print(f"  evaluation unit {_u}: {_m} fitted on {_rn}")
     for _m, _why in base_missing.items():
         print(f"  {_m}: no single representation, left out -- {_why}")
+    # A model's own hybrid spaces are scored only for its own evaluation
+    # units, so a model left out above leaves its spaces with nothing to
+    # score. They are not built, and say why.
+    _kept = []
+    for _r in hybrid_recipes:
+        if not (set(_r.get('models') or []) & set(eval_models)):
+            hybrid_unavailable[_r['space']] = (
+                f"built for {', '.join(_r.get('models') or [])}, which has "
+                f"no single representation to be fitted on in this run")
+            continue
+        _kept.append(_r)
+    hybrid_recipes[:] = _kept
+    condition_names = BASE_CONDITION_NAMES + [
+        f"{r['space']}{suf}" for r in hybrid_recipes
+        for suf in HYBRID_CONDITION_SUFFIXES]
+    hybrid_models_by_space = {r['space']: list(r['models'])
+                              for r in hybrid_recipes}
     if not eval_units:
         print("  no downstream model has a single representation to be "
               "fitted on, so nothing can be scored")
@@ -991,7 +1087,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 'slot': r.get('slot', 'general1'),
                 'lineage': r.get('lineage', 'general'),
                 'budget_relaxed': r.get('budget_relaxed'),
+                # Whose recipe, and every model scored in it (owner's set
+                # per model, 2026-10-02).
+                'model': r.get('model', 'rf'),
+                'models_scored_in_it': list(r.get('models') or []),
+                'also_holds': list(r.get('also_holds') or []),
             } for r in hybrid_recipes}),
+        'rule_missing_by_model': results_rule_missing_by_model,
         'hybrid_spaces_unavailable': hybrid_unavailable,
         'conditions_run': list(condition_names),
         'hybrid_spaces_note': (
@@ -1080,14 +1182,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     sim_settings = sweep_settings()
     sink = RowSink(output_dir, 'n12_importance_weighted_distance',
                    dataset_name, kwargs.get('noise_condition'))
-    # TODO(similarity-sweep 2026-09-25): the hybrid and hybrid_similarity
-    # similarity spaces use the one recipe this file reads, rf's
-    # (get_best_search_for_downstream(downstream_model='rf') above), for every
-    # evaluation unit's model. The plan says each model's own prediction-built
-    # hybrid; reading one recipe per model is a pool read per model. Owner to
-    # say whether rf's recipe stands in for every model here.
-    sim_recipes = {r['space']: (r['blueprint'], r['aug_condition'])
-                   for r in hybrid_recipes}
+    # The hybrid and hybrid_similarity similarity spaces: until 2026-10-02
+    # rf's recipe stood in for every evaluation unit's model (a TODO asked the
+    # owner). Owner's decision 2026-10-02: each model's own general rank-1
+    # recipe per family. The settings know those two names only.
+    sim_recipes_by_model = {}
+    for _r in hybrid_recipes:
+        _fam_space = SPACE_FOR_FAMILY.get(_r['objective'])
+        if _fam_space is None:
+            continue
+        _owners = ([_r['model']] if _r.get('slot', 'general1') == 'general1'
+                   else [])
+        _owners += [a['model'] for a in _r.get('also_holds') or []
+                    if a.get('slot') == 'general1']
+        for _m in _owners:
+            sim_recipes_by_model.setdefault(_m, {}).setdefault(
+                _fam_space, (_r['blueprint'], _r['aug_condition']))
     sim_detection = {}
     sweep_ctx = sweep_context(
         experiment='n12_importance_weighted_distance',
@@ -1209,12 +1319,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     None,
                     groups=(groups[train_idx] if groups is not None else None),
                     val_reps=val_reps_fold, augmentations_val=val_augs,
-                    # The hybrid build's own accept-or-reject step keeps the
-                    # first model in the roster. It decides which features go
-                    # in, not which model is finally scored, and making it
-                    # depend on the model would give every model a different
-                    # feature space to be compared in.
-                    model=model_factories[downstream_models[0]](),
+                    # The hybrid build's own accept-or-reject step fits the
+                    # model whose recipe this is. Until 2026-10-02 it kept the
+                    # first model in the roster, because every model shared
+                    # rf's spaces; each model now has its own (owner's
+                    # decision), and a recipe searched for one model is
+                    # rebuilt with that model. With the default roster rf is
+                    # first, so rf's spaces are built as before.
+                    model=model_factories.get(
+                        _r.get('model'),
+                        model_factories[downstream_models[0]])(),
                     metric_fn=metric_fn,
                     lower_is_better=lower_is_better)
                 results['n_hybrid_builds_by_space'][_r['space']] = (
@@ -1242,6 +1356,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     train_reps_fold, y_noisy, train_augs, bp,
                     imp_method, base_groups,
                     shared_by_space=fold_shared_by_space,
+                    models_by_space=hybrid_models_by_space,
                 )
                 # How many features each condition's distance was actually
                 # computed over. It is not the same for every condition and it
@@ -1394,7 +1509,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     X_va=_xva, y_tr_noisy=y_noisy, y_tr_clean=y_train_clean,
                     y_val=y_val, train_idx=train_idx, val_idx=val_idx,
                     groups_tr=_g_tr, fold=fold_idx - 1, draw=noise_seed,  # rows count folds from 0
-                    recipes=sim_recipes, base_reps=base_by_model.get(_m, []),
+                    recipes=sim_recipes_by_model.get(_m, {}),
+                    base_reps=base_by_model.get(_m, []),
                     make_dprimes=_dprimes, level=sigma)
 
         # Aggregate

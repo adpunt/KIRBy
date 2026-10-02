@@ -34,6 +34,14 @@ machinery. Space names carry the family ('hybrid_predictive_<budget>',
 'hybrid_similarity_<budget>') and results['pool_selection'] records what each
 one was built from.
 
+2026-10-02, owner's decision: every downstream model's OWN hybrids. Per model
+and family, that model's top 2 general + top 1 distance hybrids are estimation
+spaces, and each is scored only for that model's evaluation units. rf's keep
+the names above; another model's are '<name>@<model>'. Two models whose
+recipes build the same matrix here share one space (pool_selection.hybrid_arm.
+space_for_model). The similarity sweep reads each model's own general rank-1
+recipes.
+
 That REPLACES the four-block stack this file used to build by hand for its
 'hybrid_sim' arm (count + physchem-minus-saboteurs + 3D shape + fine-2D, from
 _similarity_hybrid_space). Two things change with it. The hand-built stack chose
@@ -339,6 +347,29 @@ def _get_correction_target(estimator):
     return None, None
 
 
+def _model_space(name, model):
+    """rf keeps the space names this file has always written; every other
+    downstream model's own hybrid space is '<name>@<model>' (owner's decision
+    2026-10-02: each model's own top 2 general + top 1 distance hybrids per
+    family, not rf's for all)."""
+    return name if model in (None, 'rf') else f'{name}@{model}'
+
+
+def _n11_build_signature(bp, objective):
+    """What _build_estimation_spaces' create_hybrid call reads off a recipe.
+
+    It passes no model and every representation the fold holds, so two
+    models' recipes that agree on these six build the same matrix. The second
+    is not built again: its model is added to the first one's space.
+    """
+    return (getattr(bp, 'allocation_method', None),
+            getattr(bp, 'importance_method', None),
+            getattr(bp, 'internal_evaluator', None),
+            getattr(bp, 'budget', None),
+            getattr(bp, 'augmentation_strategy', None),
+            objective)
+
+
 def _build_estimation_spaces(train_reps, y_train, augmentations,
                              hybrid_recipes, base_spaces,
                              dataset_name=None, groups=None,
@@ -409,6 +440,11 @@ def _build_estimation_spaces(train_reps, y_train, augmentations,
             )
             scaler_h = StandardScaler()
             spaces[hybrid_key] = scaler_h.fit_transform(X_h)
+            # A recipe read for named models (owner's set, 2026-10-02) is
+            # scored only for those models' evaluation units. A recipe with
+            # no 'models' (the single-winner fallback) is open to all.
+            if _recipe.get('models'):
+                models_by_space[hybrid_key] = list(_recipe['models'])
         except Exception as e:
             print(f"      {hybrid_key} failed: {e}")
             # 2026-09-12: a family whose hybrid never builds would otherwise
@@ -914,76 +950,116 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # nearest neighbours predict.
     hybrid_recipes = []
     # THE OWNER'S SET (top 2 general + top 1 distance hybrids per model and
-    # family, 2026-10-02). Each family now gives up to three estimation spaces:
-    # general rank 1 keeps the name this file has always used
-    # ('hybrid_<family>_<budget>'), general rank 2 and distance rank 1 add
-    # '__general2' / '__distance1'. The recipe is still the random forest's,
-    # as before: no downstream model is fitted on these spaces, they are where
-    # the noise estimators score molecules. A family or slot that could not be
+    # family, 2026-10-02). Each family gives up to three estimation spaces PER
+    # DOWNSTREAM MODEL, read from that model's own stored searches (owner's
+    # decision 2026-10-02: each model's own hybrids, not rf's for all). rf's
+    # spaces keep the names this file has always used
+    # ('hybrid_<family>_<budget>', plus '__general2' / '__distance1'); every
+    # other model's are '<name>@<model>'. A space is scored only for its own
+    # model's evaluation units. Where two models hold a recipe that builds
+    # the same matrix here (_n11_build_signature), it is built once and both
+    # models' units are scored in it; 'hybrid_space_for_model' says which
+    # space each model's slot landed in. A family or slot that could not be
     # filled is written to hybrid_arm['unavailable'] with its reason.
     hybrid_arm['unavailable'] = {}
-    _rule = None
-    try:
-        _rule = get_rule_hybrids(
-            reps, labels, groups, downstream_model='rf', budget=None,
-            dataset_name=dataset_name, augmentations=augmentations,
-            pool_subset=pool_subset, task_type=task_type, data=data)
-    except Exception as exc:
-        from kirby.result_cache import StaleResultDB as _Stale
-        if isinstance(exc, _Stale):
-            raise
-        hybrid_arm['unavailable']['_rule_read'] = (
-            f'the read of the top 2 general + top 1 distance hybrids raised '
-            f'{type(exc).__name__}: {exc}; no hybrid estimation space was built')
-        print(f"  rule hybrid read failed: {type(exc).__name__}: {exc}")
-    for _obj, _fo in ((_rule or {}).get('by_objective') or {}).items():
-        for _h in _fo.get('hybrids') or []:
-            _bp = _h.get('blueprint')
-            _slot = _h.get('slot') or 'general1'
-            if _bp is None:
-                hybrid_arm['unavailable'][f'hybrid_{_obj}__{_slot}'] = (
-                    f'the {_obj} {_slot} hybrid carried no blueprint')
-                continue
-            _budget = int(getattr(_bp, 'budget', 0) or 0)
-            _name = (f'hybrid_{_obj}_{_budget}' if _budget
-                     else f'hybrid_{_obj}')
-            if _slot != 'general1':
-                _name = f'{_name}__{_slot}'
-            hybrid_recipes.append({
-                'space': _name,
-                'objective': _obj,
-                'slot': _slot,
-                'lineage': _h.get('lineage'),
-                'blueprint': _bp,
-                'tier': _h.get('tier'),
-                'aug_condition': _h.get('aug_condition'),
-                'budget': _budget,
-                'budget_relaxed': _h.get('budget_relaxed'),
-                'allocation_method': getattr(_bp, 'allocation_method', None),
-                'importance_method': getattr(_bp, 'importance_method', None),
-                'internal_evaluator': getattr(_bp, 'internal_evaluator', None),
-                'augmentation_strategy': getattr(_bp, 'augmentation_strategy',
+    hybrid_arm['space_for_model'] = {}
+    hybrid_arm['rule_missing_by_model'] = {}
+    _rule_by_model = {}
+    _built_by_signature = {}
+    for _model in downstream_models:
+        _rule = None
+        try:
+            _rule = get_rule_hybrids(
+                reps, labels, groups, downstream_model=_model, budget=None,
+                dataset_name=dataset_name, augmentations=augmentations,
+                pool_subset=pool_subset, task_type=task_type, data=data)
+        except Exception as exc:
+            from kirby.result_cache import StaleResultDB as _Stale
+            if isinstance(exc, _Stale):
+                raise
+            hybrid_arm['unavailable'][_model_space('_rule_read', _model)] = (
+                f'the read of {_model}\'s top 2 general + top 1 distance '
+                f'hybrids raised {type(exc).__name__}: {exc}; no hybrid '
+                f'estimation space of {_model}\'s was built')
+            print(f"  rule hybrid read for {_model} failed: "
+                  f"{type(exc).__name__}: {exc}")
+        _rule_by_model[_model] = _rule
+        hybrid_arm['rule_missing_by_model'][_model] = list(
+            (_rule or {}).get('missing') or [])
+        for _obj, _fo in ((_rule or {}).get('by_objective') or {}).items():
+            for _h in _fo.get('hybrids') or []:
+                _bp = _h.get('blueprint')
+                _slot = _h.get('slot') or 'general1'
+                if _bp is None:
+                    hybrid_arm['unavailable'][_model_space(
+                        f'hybrid_{_obj}__{_slot}', _model)] = (
+                        f'the {_obj} {_slot} hybrid for {_model} carried no '
+                        f'blueprint')
+                    continue
+                _budget = int(getattr(_bp, 'budget', 0) or 0)
+                _name = (f'hybrid_{_obj}_{_budget}' if _budget
+                         else f'hybrid_{_obj}')
+                if _slot != 'general1':
+                    _name = f'{_name}__{_slot}'
+                _name = _model_space(_name, _model)
+                _sig = _n11_build_signature(_bp, _obj)
+                _same = _built_by_signature.get(_sig)
+                if _same is not None:
+                    if _model not in _same['models']:
+                        _same['models'].append(_model)
+                    _same.setdefault('also_holds', []).append(
+                        {'model': _model, 'slot': _slot,
+                         'would_have_been_named': _name})
+                    hybrid_arm['space_for_model'].setdefault(_model, {})[
+                        f'{_obj}/{_slot}'] = _same['space']
+                    continue
+                _rec = {
+                    'space': _name,
+                    'objective': _obj,
+                    'slot': _slot,
+                    'model': _model,
+                    'models': [_model],
+                    'lineage': _h.get('lineage'),
+                    'blueprint': _bp,
+                    'tier': _h.get('tier'),
+                    'aug_condition': _h.get('aug_condition'),
+                    'budget': _budget,
+                    'budget_relaxed': _h.get('budget_relaxed'),
+                    'allocation_method': getattr(_bp, 'allocation_method',
                                                  None),
-                'search_score_mean': _h.get('score_other_folds'),
-                'search_metric_name': _fo.get('metric_name'),
-                'search_lower_is_better': _fo.get('lower_is_better'),
-            })
-        if _fo.get('missing'):
-            hybrid_arm['unavailable'][f'hybrid_{_obj}'] = ' | '.join(
-                _fo['missing'])
-    # A family the pool subset asked for and the read returned nothing under.
-    # Until 2026-10-02 such a family left no trace in the result file.
-    for _obj in POOL_SUBSETS.get(pool_subset, ()):
-        if (_rule is not None
-                and _obj not in (_rule.get('by_objective') or {})):
-            hybrid_arm['unavailable'][f'hybrid_{_obj}'] = (
-                f'the pool held no search under objective={_obj} for this '
-                f'dataset in either the general or the distance searches')
+                    'importance_method': getattr(_bp, 'importance_method',
+                                                 None),
+                    'internal_evaluator': getattr(_bp, 'internal_evaluator',
+                                                  None),
+                    'augmentation_strategy': getattr(
+                        _bp, 'augmentation_strategy', None),
+                    'search_score_mean': _h.get('score_other_folds'),
+                    'search_metric_name': _fo.get('metric_name'),
+                    'search_lower_is_better': _fo.get('lower_is_better'),
+                }
+                _built_by_signature[_sig] = _rec
+                hybrid_recipes.append(_rec)
+                hybrid_arm['space_for_model'].setdefault(_model, {})[
+                    f'{_obj}/{_slot}'] = _name
+            if _fo.get('missing'):
+                hybrid_arm['unavailable'][_model_space(
+                    f'hybrid_{_obj}', _model)] = ' | '.join(_fo['missing'])
+        # A family the pool subset asked for and the read returned nothing
+        # under. Until 2026-10-02 such a family left no trace in the result
+        # file.
+        for _obj in POOL_SUBSETS.get(pool_subset, ()):
+            if (_rule is not None
+                    and _obj not in (_rule.get('by_objective') or {})):
+                hybrid_arm['unavailable'][_model_space(
+                    f'hybrid_{_obj}', _model)] = (
+                    f'the pool held no search under objective={_obj} for '
+                    f'{_model} on this dataset in either the general or the '
+                    f'distance searches')
 
-    # The rule read found no hybrid at all but the single-winner lookup
-    # above did (a stand-in pool, or a pool the two reads see differently):
-    # each family's single winner is built, as before 2026-10-02, and the
-    # result file says so.
+    # The rule read found no hybrid at all, for any model, but the
+    # single-winner lookup above did (a stand-in pool, or a pool the two
+    # reads see differently): each family's single winner (rf's) is built for
+    # every model, as before 2026-10-02, and the result file says so.
     if not hybrid_recipes and meta:
         _by_obj = meta.get('by_objective') or {
             meta.get('objective', 'predictive'): {
@@ -1080,6 +1156,20 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         print(f"  evaluation unit {_u}: {_m} fitted on {_rn}")
     for _m, _why in base_missing.items():
         print(f"  {_m}: no single representation, left out -- {_why}")
+    # A model's own hybrid spaces are scored only for its own evaluation
+    # units, so a model left out above (no single representation) leaves its
+    # spaces with nothing to score. They are not built, and say why.
+    _kept = []
+    for _r in hybrid_recipes:
+        if _r.get('models') and not (set(_r['models']) & set(eval_models)):
+            hybrid_arm['unavailable'][_r['space']] = (
+                f"built for {', '.join(_r['models'])}, which has no single "
+                f"representation to be fitted on in this run, so nothing "
+                f"would be scored in it")
+            continue
+        _kept.append(_r)
+    hybrid_recipes[:] = _kept
+    hybrid_arm['spaces_built'] = [_r['space'] for _r in hybrid_recipes]
     if not eval_units:
         print("  no downstream model has a single representation to be "
               "fitted on, so nothing can be scored")
@@ -1183,24 +1273,30 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     sim_settings = sweep_settings()
     sink = RowSink(output_dir, 'n11_estimation_remediation_grid',
                    dataset_name, kwargs.get('noise_condition'))
-    # TODO(similarity-sweep 2026-09-25): the hybrid and hybrid_similarity
-    # similarity spaces use the one recipe this file reads, rf's
-    # (get_best_search_for_downstream(downstream_model='rf') above), for every
-    # evaluation unit's model. The plan says each model's own prediction-built
-    # hybrid; reading one recipe per model is a pool read per model. Owner to
-    # say whether rf's recipe stands in for every model here.
-    # The similarity settings know two hybrid spaces by name, 'hybrid' and
+    # The hybrid and hybrid_similarity similarity spaces: until 2026-10-02
+    # rf's recipe stood in for every evaluation unit's model (a TODO asked the
+    # owner). The similarity settings know two hybrid spaces by name, 'hybrid' and
     # 'hybrid_similarity', so only each family's general rank 1 is read there
     # (2026-10-02); the other slots are estimation spaces above.
-    sim_recipes = {}
+    #
+    # Owner's decision 2026-10-02: each model's own. sim_recipes_by_model[m]
+    # holds m's general rank-1 recipe per family, read above; the single-
+    # winner fallback (no 'models' on the recipe) stands in for every model.
+    sim_recipes_by_model = {}
     for _r in hybrid_recipes:
-        if _r.get('slot', 'general1') != 'general1':
-            continue
         _sp = ('hybrid' if _r['objective'] == 'predictive'
                else 'hybrid_similarity' if _r['objective'] == 'similarity'
                else None)
-        if _sp is not None:
-            sim_recipes[_sp] = (_r['blueprint'], _r['aug_condition'])
+        if _sp is None:
+            continue
+        _owners = []
+        if _r.get('slot', 'general1') == 'general1':
+            _owners += list(_r.get('models') or downstream_models)
+        _owners += [a['model'] for a in _r.get('also_holds') or []
+                    if a.get('slot') == 'general1']
+        for _m in _owners:
+            sim_recipes_by_model.setdefault(_m, {}).setdefault(
+                _sp, (_r['blueprint'], _r['aug_condition']))
     sim_estimators = [e for e in available_estimators
                       if e in NEIGHBOUR_DETECTORS]
     sim_detection = {}
@@ -1524,7 +1620,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         y_tr_clean=y_train_clean, y_val=y_val,
                         train_idx=train_idx, val_idx=val_idx,
                         groups_tr=_g_sw, fold=fold_idx - 1, draw=noise_seed,  # rows count folds from 0
-                        recipes=sim_recipes,
+                        recipes=sim_recipes_by_model.get(_m, {}),
                         base_reps=base_by_model.get(_m, []),
                         make_dprimes=_dprimes, level=sigma)
 
@@ -1720,6 +1816,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             _r['space']: {
                 'objective': _r['objective'],
                 'slot': _r.get('slot'),
+                # Whose recipe it is, and every model whose evaluation units
+                # are scored in it (owner's set per model, 2026-10-02).
+                'model': _r.get('model', 'rf'),
+                'models_scored_in_it': list(_r.get('models') or ['all']),
+                'also_holds': list(_r.get('also_holds') or []),
                 'lineage': _r.get('lineage'),
                 'budget_relaxed': _r.get('budget_relaxed'),
                 'tier': _r['tier'],
