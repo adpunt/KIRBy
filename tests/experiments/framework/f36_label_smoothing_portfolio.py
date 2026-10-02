@@ -176,6 +176,15 @@ REGRESSION_CONDITIONS = ('outlier_p10', 'outlier_only_p10', 'censoring')
 CLASSIFICATION_CONDITIONS = ('uniform',)
 MODELS = ('rf', 'svm')
 MODEL_INPUTS = ('base_1', 'base_2', 'hybrid')
+
+# Which stored searches the model inputs are read from: the prediction-built
+# ones only. n42 reads 'predictive_and_similarity', and that made the noise
+# loader complete the similarity-built search for logd, 74% stored, inside the
+# first f36 job (2026-10-02 log). f36's hybrid input is the prediction-built
+# recipe and its single representations are ranked by prediction, so the
+# similarity-built search is never read.
+POOL_SUBSET = 'predictive_only'
+SPACE_FOR_FAMILY = {'predictive': 'hybrid'}
 NOISE_DRAWS = (0, 1, 2)
 INNER_FOLDS = 5
 PAIR_PERCENTILE = 1.0            # n35 CLOSE_PERCENTILE
@@ -772,6 +781,38 @@ def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
 # Entry point through noise_helpers.run_all
 # ---------------------------------------------------------------------------
 
+def _recipes_for(by_model, models):
+    """n42._recipes_for with POOL_SUBSET and SPACE_FOR_FAMILY above."""
+    import copy
+    from experiments._shared import pool_recipes_by_family, POOL_SUBSETS
+    recipes, unavail = {}, {}
+    for m in models:
+        meta = (by_model.get(m) or {}).get('meta')
+        try:
+            rs, un = pool_recipes_by_family(
+                meta, SPACE_FOR_FAMILY,
+                eligible_families=POOL_SUBSETS[POOL_SUBSET])
+        except Exception as exc:
+            recipes[m] = {}
+            unavail[m] = {'_all': f'{type(exc).__name__}: {exc}'}
+            continue
+        per = {}
+        for r in rs:
+            bp = r['blueprint']
+            aug = r['aug_condition'] or 'uncapped'
+            if getattr(bp, 'augmentation_strategy', None) != aug:
+                try:
+                    bp = copy.copy(bp)
+                    bp.augmentation_strategy = aug
+                except Exception:
+                    pass
+            per[r['space']] = (bp, aug)
+        recipes[m] = per
+        if un:
+            unavail[m] = dict(un)
+    return recipes, unavail
+
+
 def _slice():
     raw = os.environ.get('KIRBY_F36_SLICE', '0/1')
     k, n = (int(x) for x in raw.split('/'))
@@ -805,7 +846,7 @@ def _conditions_asked(is_clf):
 
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Every condition, every passes schedule, this process's slice of the
-    units. Called by noise_helpers.run_all."""
+    units. Called by main() on data from noise_helpers.load_noise_data."""
     from experiments._shared import (
         cv_split, get_domain_metric, get_model_factories,
         get_best_search_for_downstream, noise_base_reps_by_model,
@@ -815,7 +856,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         noise_spec_for, inject_train_labels, pool_recipe_per_downstream_model)
     from experiments.noise import n07_remediation as n07
     from experiments.noise import n23_uncertainty_cleaning as n23
-    from experiments.noise import n42_similarity_noise_sweep as n42
     from experiments.noise import similarity_space as ss
 
     t_start = time.time()
@@ -838,9 +878,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         get_best_search_for_downstream, reps, labels, groups,
         budget=kwargs.get('budget'), augmentations=augmentations,
         dataset_name=dataset_name, task_type=task_type, data=data,
-        pool_subset=n42.POOL_SUBSET)
+        pool_subset=POOL_SUBSET)
     by_model, no_recipe = pool_recipe_per_downstream_model(lookup, models)
-    recipes, recipes_unavailable = n42._recipes_for(by_model, models)
+    recipes, recipes_unavailable = _recipes_for(by_model, models)
     base_by_model, base_missing = noise_base_reps_by_model(
         {m: by_model[m]['search'] for m in by_model}, models, reps=reps,
         dataset_name=dataset_name, verbose=False)
@@ -1013,27 +1053,32 @@ def main():
     ap.add_argument('--passes', default=None,
                     help='comma list of once,fixed,anneal (default all)')
     ap.add_argument('--conditions', default=None)
-    ap.add_argument('--pruning-mode', default='calibrated')
     args = ap.parse_args()
     if args.status:
         status(args.output)
         return
     if not args.dataset:
         ap.error('a dataset is needed unless --status')
-    os.environ.setdefault('KIRBY_NO_COLD_SEARCH', '1')
+    # NEVER A SEARCH. 1.0: a stored search counts only when every one of its
+    # configurations is stored; COLD_SEARCH_MAX_CONFIGS 0: the 'small search
+    # runs here' exception (find_best_hybrid._refuse_cold_search) is off. A
+    # search that is not complete is skipped with a '[pool] WARNING' line in
+    # the log, never filled in.
+    os.environ['KIRBY_NO_COLD_SEARCH'] = '1.0'
+    os.environ['KIRBY_COLD_SEARCH_MAX_CONFIGS'] = '0'
     if args.slice:
         os.environ['KIRBY_F36_SLICE'] = args.slice
     if args.passes:
         os.environ['KIRBY_F36_PASSES'] = args.passes
     if args.conditions:
         os.environ['KIRBY_F36_CONDITIONS'] = args.conditions
-    from experiments.noise.noise_helpers import run_all
-    # force_rerun: f36's own unit checkpoints and row files decide what is
-    # done. run_all's file-level resume would skip a second slice whose
-    # sibling had already written <dataset>.json.
-    run_all(dataset_name=args.dataset, output_dir=args.output,
-            experiments=['f36'], pruning_mode=args.pruning_mode,
-            force_rerun=True)
+    # The data as every noise experiment loads it, WITHOUT noise_helpers.run_all:
+    # run_all precomputes every search family before any experiment runs,
+    # and that is where the first f36 jobs spent their 2 hours.
+    from experiments.noise.noise_helpers import load_noise_data
+    from kirby.find_best_hybrid import DEFAULT_N_FOLDS
+    data, _reps = load_noise_data(args.dataset)
+    run(data, {'n_splits': DEFAULT_N_FOLDS}, args.output, args.dataset)
 
 
 if __name__ == '__main__':
