@@ -1399,7 +1399,29 @@ def pool_recipe_per_downstream_model(lookup, models):
         message' or None}} for every model it did not.
     """
     by_model, no_recipe = {}, {}
+    # THE OWNER'S SET, 2026-10-02: top 2 general + top 1 distance hybrids per
+    # model and family (_shared.get_rule_hybrids). The lookup below still finds
+    # the stored search; the rule set is read beside it from the same bound
+    # arguments and handed to pool_recipes_by_family through meta, so every
+    # caller of this function builds all of the rule's spaces.
+    import functools as _ft
+    from experiments._shared import get_rule_hybrids as _rule
+    _rule_args, _rule_kw = None, None
+    if isinstance(lookup, _ft.partial):
+        _rule_args = lookup.args
+        _rule_kw = {k: v for k, v in (lookup.keywords or {}).items()
+                    if k not in ('distance', 'return_fitted', 'downstream_model')}
     for name in models:
+        _rule_set = None
+        if _rule_args is not None:
+            try:
+                _rule_set = _rule(*_rule_args, downstream_model=name, **_rule_kw)
+            except Exception as exc:
+                from kirby.result_cache import StaleResultDB as _Stale
+                if isinstance(exc, _Stale):
+                    raise
+                print(f"  rule hybrid read failed for {name}: "
+                      f"{type(exc).__name__}: {exc}")
         try:
             search, meta = lookup(downstream_model=name)
         except Exception as exc:
@@ -1411,7 +1433,12 @@ def pool_recipe_per_downstream_model(lookup, models):
                 'lookup_error': err}
             print(f"  hybrid recipe lookup failed for {name}: {err}")
             continue
+        if _rule_set is not None and _rule_set.get('hybrids'):
+            meta = dict(meta or {})
+            meta['rule_hybrids'] = _rule_set
         bp = ((meta or {}).get('best_config') or {}).get('blueprint')
+        if bp is None and meta and meta.get('rule_hybrids'):
+            bp = meta['rule_hybrids']['hybrids'][0]['blueprint']
         if bp is None:
             no_recipe[name] = {
                 'why': ('the precomputed pool holds no stored search that '
