@@ -96,6 +96,7 @@ from experiments._shared import (
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
     extract_top3_base_reps,
     searched_models, resolve_comparison_models,
+    get_rule_hybrids,
 )
 
 # 2026-09-18, owner's instruction: the top 2 rows go in everywhere as an extra,
@@ -709,6 +710,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # scored on its single representations only; conditions 3, 4 and 5 write no
     # row for it, because the only recipe on offer belonged to another model.
     hybrid_recipe_missing = {}
+    # {downstream model: every slot of the owner's set it did not get, and why}
+    rule_missing = {}
     for _mname in model_factories:
         try:
             _search, _meta = get_best_search_for_downstream(
@@ -729,6 +732,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         pass
                 bp_by_model[_mname] = _bp
                 aug_by_model[_mname] = _aug_cond
+                # The owner's set (2026-10-02): this model's top 2 general +
+                # top 1 distance hybrids per family, read beside the pool
+                # lookup and attached so pool_recipes_by_family below turns
+                # each into its own space ('hybrid', 'hybrid__general2',
+                # 'hybrid__distance1', and the same for 'hybrid_similarity').
+                _meta = dict(_meta)
+                try:
+                    _rule = get_rule_hybrids(
+                        reps, labels, groups, downstream_model=_mname,
+                        budget=None, augmentations=augmentations,
+                        dataset_name=dataset_name, task_type=task_type,
+                        data=data, pool_subset=POOL_SUBSET)
+                except Exception as _rexc:
+                    from kirby.result_cache import StaleResultDB as _Stale
+                    if isinstance(_rexc, _Stale):
+                        raise
+                    _rule = None
+                    rule_missing[_mname] = [
+                        f'the rule read raised {type(_rexc).__name__}: '
+                        f'{_rexc}; only the pool winner per family is built']
+                if _rule is not None:
+                    rule_missing[_mname] = list(_rule.get('missing') or [])
+                    if _rule.get('hybrids'):
+                        _meta['rule_hybrids'] = _rule
                 meta_by_model[_mname] = _meta
                 if _search is not None:
                     search_by_model[_mname] = _search
@@ -829,6 +856,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             hybrid_spaces_unavailable[_mname] = _unavail
     results['hybrid_spaces_unavailable'] = hybrid_spaces_unavailable
     results['hybrid_recipe_missing'] = dict(hybrid_recipe_missing)
+    results['rule'] = ('top 2 general + top 1 distance hybrids per model and '
+                       'family; general rank 1 keeps the family\'s space name, '
+                       'the others add __general2 / __distance1')
+    results['rule_missing'] = dict(rule_missing)
+    results['hybrid_space_slot'] = {
+        _r_sp: ('general1' if '__' not in _r_sp else _r_sp.split('__', 1)[1])
+        for _r_sp in space_objective}
     results['hybrid_space_objective'] = dict(space_objective)
     results['hybrid_spaces_note'] = (
         'One hybrid space per family of stored search, per model. A predictive '

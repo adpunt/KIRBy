@@ -111,7 +111,12 @@ def test_n07_per_rep_call_sites_pass_is_clf():
     all_pass_isclf = all('is_clf=is_clf' in c for c in eval_calls)
     _check('n07 per-rep _evaluate_fold calls all pass is_clf=is_clf',
            all_pass_isclf)
-    inject_calls = re.findall(r'inject_train_labels\((.*?)\)', per_rep_src, re.DOTALL)
+    # n07 injects through _inject_or_recorded, which passes is_clf on to
+    # inject_train_labels (n07_remediation.py, _inject_or_recorded). The
+    # per-rep block has called that wrapper rather than inject_train_labels
+    # directly since the AS_THEY_COME condition was added.
+    inject_calls = re.findall(r'(?:inject_train_labels|_inject_or_recorded)\((.*?)\)',
+                              per_rep_src, re.DOTALL)
     all_inject_isclf = all('is_clf=is_clf' in c for c in inject_calls)
     _check('n07 per-rep injection calls all pass is_clf=is_clf',
            all_inject_isclf and len(inject_calls) >= 1,

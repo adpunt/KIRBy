@@ -157,6 +157,18 @@ SPACE_FOR_FAMILY = {'predictive': 'hybrid', 'similarity': 'hybrid_similarity'}
 # representations and its prediction-built hybrid, unchanged.
 MODEL_INPUTS = ('base_1', 'base_2', 'hybrid')
 
+
+def model_inputs_for(recipes_m):
+    """The model inputs for one downstream model: MODEL_INPUTS plus the other
+    prediction-built hybrids of the owner's set (top 2 general + top 1 distance
+    hybrids per model and family, 2026-10-02) -- 'hybrid__general2' and
+    'hybrid__distance1' when the pool held them. 'hybrid' stays the general
+    rank-1 recipe, so earlier rows keep their meaning. The similarity family's
+    hybrids are neighbour spaces here, as before, not model inputs."""
+    extra = tuple(sp for sp in (recipes_m or {})
+                  if sp.startswith('hybrid__') and sp not in MODEL_INPUTS)
+    return MODEL_INPUTS + extra
+
 # The families this file runs, in the order they run in each unit.
 FAMILIES = ('n07', 'n02', 'n23', 'n30', 'n31', 'n32', 'n33', 'n35', 'n41')
 
@@ -1088,6 +1100,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     sample_X = next(iter(reps.values()))
     mi_settings = [ss.SimilaritySetting(sp, 'none', 'manhattan')
                    for sp in MODEL_INPUTS]
+    # Per model, every hybrid of the owner's set it is fitted on (2026-10-02).
+    # The ones past MODEL_INPUTS have no SimilaritySetting name, so
+    # n07.fold_similarity_spaces builds them through extra_spaces.
+    mi_by_model = {m: model_inputs_for(recipes.get(m, {})) for m in models}
+    extra_mi_by_model = {m: [mi for mi in mi_by_model[m]
+                             if mi not in MODEL_INPUTS] for m in models}
 
     for fold_i, (train_idx, val_idx) in enumerate(
             cv_split(groups, n_folds, sample_X, labels)):
@@ -1101,10 +1119,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         mc_tr = None if mcounts is None else np.asarray(mcounts)[train_idx]
 
         for level, draw in passes:
-            todo = [(m, mi) for m in models for mi in MODEL_INPUTS
+            todo = [(m, mi) for m in models for mi in mi_by_model[m]
                     if units.get([fold_i, float(level), int(draw), m, mi])
                     is None]
-            n_units_resumed += len(models) * len(MODEL_INPUTS) - len(todo)
+            n_units_resumed += (sum(len(mi_by_model[m]) for m in models)
+                                - len(todo))
             if not todo:
                 continue
             try:
@@ -1149,7 +1168,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         recipes=recipes.get(m, {}),
                         augmentations=augmentations, model_name=m,
                         model_factory=factories.get(m), metric=metric,
-                        task_type=task_type)
+                        task_type=task_type,
+                        extra_spaces=extra_mi_by_model.get(m, ()))
                 except Exception as exc:
                     errors.add(f'spaces|{m}', exc)
                     continue
@@ -1247,6 +1267,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'passes': [[float(lv), int(dr)] for lv, dr in passes],
         'n_folds': n_folds, 'models': models,
         'model_inputs': list(MODEL_INPUTS),
+        # The owner's set, 2026-10-02: every model input each model was
+        # fitted on, with general rank 2 and distance rank 1 beside 'hybrid'.
+        # A slot the pool could not fill is in recipe_spaces_unavailable
+        # ('hybrid__missing_slots') with the reason.
+        'model_inputs_by_model': {m: list(v) for m, v in mi_by_model.items()},
         'base_reps_by_model': base_by_model, 'base_reps_missing': base_missing,
         'recipe_spaces_by_model': {m: sorted(v) for m, v in recipes.items()},
         'recipe_spaces_unavailable': recipes_unavailable,

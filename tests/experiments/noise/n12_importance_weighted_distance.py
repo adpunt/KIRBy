@@ -83,6 +83,7 @@ from experiments._shared import (
     # One feature space per search family the pool holds, added 2026-09-19.
     # n11's loop, in one place. See SPACE_FOR_FAMILY below.
     pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
+    get_rule_hybrids,
 )
 from kirby.hybrid import compute_feature_importance
 from kirby.similarity.distance_config import (
@@ -840,9 +841,41 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # One recipe per family the pool holds, and a written reason for each family
     # that produced none. `bp` stays the recipe the pool RETURNED, which is what
     # every 'hybrid_*' key below already described.
+    #
+    # THE OWNER'S SET (top 2 general + top 1 distance hybrids per model and
+    # family, 2026-10-02). Read beside the lookup above, from the general AND
+    # the distance searches, and attached to meta so pool_recipes_by_family
+    # emits one space per slot: 'hybrid' / 'hybrid_similarity' stay general
+    # rank 1, '<space>__general2' and '<space>__distance1' are added. Every
+    # space carries the same three conditions. Still the random forest's
+    # recipes, as before: the spaces are where the estimators find neighbours.
+    try:
+        _rule = get_rule_hybrids(
+            reps, labels, groups, downstream_model='rf', budget=None,
+            dataset_name=dataset_name, augmentations=augmentations,
+            pool_subset=POOL_SUBSET, task_type=task_type, data=data)
+    except Exception as exc:
+        from kirby.result_cache import StaleResultDB as _Stale
+        if isinstance(exc, _Stale):
+            raise
+        _rule = None
+        print(f"  rule hybrid read failed: {type(exc).__name__}: {exc}")
+    if _rule is not None and _rule.get('hybrids'):
+        meta = dict(meta)
+        meta['rule_hybrids'] = _rule
     hybrid_recipes, hybrid_unavailable = pool_recipes_by_family(
         meta, SPACE_FOR_FAMILY,
         eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+    if _rule is None:
+        hybrid_unavailable['_rule_read'] = (
+            'the read of the top 2 general + top 1 distance hybrids raised, so '
+            'only each family\'s single winner was built')
+    # Every condition this run scores: the base ones, then three per hybrid
+    # space actually built (CONDITION_NAMES is the two-space list it had
+    # before 2026-10-02 and is kept for readers).
+    condition_names = BASE_CONDITION_NAMES + [
+        f"{r['space']}{suf}" for r in hybrid_recipes
+        for suf in HYBRID_CONDITION_SUFFIXES]
     for r in hybrid_recipes:
         print(f"  hybrid space {r['space']}: family {r['objective']!r}, "
               f"budget {r['budget']} features, allocation "
@@ -955,8 +988,12 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 'search_metric_name': r['search_metric_name'],
                 'conditions': [f"{r['space']}{suf}"
                                for suf in HYBRID_CONDITION_SUFFIXES],
+                'slot': r.get('slot', 'general1'),
+                'lineage': r.get('lineage', 'general'),
+                'budget_relaxed': r.get('budget_relaxed'),
             } for r in hybrid_recipes}),
         'hybrid_spaces_unavailable': hybrid_unavailable,
+        'conditions_run': list(condition_names),
         'hybrid_spaces_note': (
             'One hybrid space per family of stored search, each carrying the '
             'same three conditions. A predictive search chose its features to '
@@ -1401,7 +1438,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
 
         for imp_method in IMPORTANCE_METHODS:
             imp_result = {}
-            for cond_name in CONDITION_NAMES:
+            for cond_name in condition_names:
                 cond_agg = {}
                 cond_errors = None
                 for ek, score_list in grid_acc.get(imp_method, {}).get(cond_name, {}).items():
@@ -1493,7 +1530,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         for imp_method in IMPORTANCE_METHODS:
             print(f"    {imp_method}:")
             imp_data = sigma_result['per_importance_method'].get(imp_method, {})
-            for cond_name in CONDITION_NAMES:
+            for cond_name in condition_names:
                 cond_data = imp_data.get(cond_name, {})
                 if cond_data:
                     recoveries = [v['recovery'] for v in cond_data.values()

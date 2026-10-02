@@ -21,6 +21,7 @@ from experiments._shared import (
     build_fold_hybrid, build_fold_reselection_input, fold_reselection,
     hr_exclude_folds,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
+    get_rule_hybrids,
     DOWNSTREAM_MODELS, _apply_dataset_search_speed, resolve_pruning_kwargs,
 )
 from kirby.find_best_hybrid import find_best_hybrid
@@ -603,6 +604,41 @@ def run(data, config, output_dir, dataset_name, levels=None, strategies=None,
             except Exception as _e:
                 _cell['error'] = f'{type(_e).__name__}: {_e}'
             out['top2_by_cell'][str(_key)] = _cell
+
+        # ── THE OWNER'S SET FROM THE STORED POOL, CLEAN LABELS (2026-10-02) ──
+        # Report only, 0 new model fits when the pool holds the searches: the
+        # top 2 general hybrids, the top 1 distance hybrid and the top 2
+        # single representations for this model, read on every fold of the
+        # clean-label precompute (_shared.get_rule_hybrids). c10's own arms
+        # are NOT these: each noisy cell's hybrid arm is re-picked per fold
+        # from that cell's own search, which is what this experiment measures.
+        # No distance search runs under noisy labels, so the noisy cells have
+        # no distance row; every slot not filled is listed with its reason.
+        try:
+            _rule = get_rule_hybrids(
+                reps, labels, groups, downstream_model=model, budget=None,
+                dataset_name=dataset_name,
+                augmentations=augmentations or None,
+                task_type='regression', data=data)
+            out['rule_hybrids_clean_pool'] = {
+                'rule': _rule['rule'],
+                'hybrids': [
+                    {'family': h.get('objective'), 'slot': h.get('slot'),
+                     'lineage': h.get('lineage'), 'tier': h.get('tier'),
+                     'aug_condition': h.get('aug_condition'),
+                     'budget': h.get('budget'),
+                     'budget_relaxed': h.get('budget_relaxed'),
+                     'score_mean': h.get('score_other_folds'),
+                     'reps': sorted(getattr(h.get('blueprint'), 'reps', [])
+                                    or [])}
+                    for h in _rule['hybrids']],
+                'base_reps': [b.get('rep') if isinstance(b, dict) else b
+                              for b in _rule['base_reps']],
+                'rule_missing': list(_rule['missing']),
+            }
+        except Exception as _e:
+            out['rule_hybrids_clean_pool'] = {
+                'error': f'{type(_e).__name__}: {_e}'}
 
         _any_cell = next(iter(cells.values()), None)
         out['excluded_folds'] = _any_cell['excluded_folds'] if _any_cell else None

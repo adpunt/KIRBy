@@ -64,7 +64,7 @@ from experiments._shared import (
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     DOWNSTREAM_MODELS_NOISE, FULL_BUDGETS,
     _resolve_search_metric,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DISTANCE_MODELS,
 )
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
@@ -521,6 +521,43 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             print(f"      fold {fold_i}: recipe search failed "
                   f"({type(e).__name__}: {e})")
 
+    # The distance counterpart of each fold's search (the owner's set,
+    # 2026-10-02: top 2 general + top 1 distance hybrids per model). Same
+    # fold, same training rows, same speed and no augmentation flag; the
+    # distance settings are the ones the precompute's distance searches use:
+    # tier 'general_distance', DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    # DISTANCE_MODELS.
+    fold_dist_searches = {}
+    fold_dist_search_errors = []
+    for fold_i, (train_idx, _val_idx) in enumerate(folds):
+        try:
+            fold_dist_searches[fold_i] = find_best_hybrid(
+                base_reps={k: np.asarray(v)[train_idx] for k, v in reps.items()},
+                labels=labels[train_idx],
+                groups=(np.asarray(groups)[train_idx]
+                        if groups is not None else None),
+                budgets=DISTANCE_BUDGETS,
+                internal_evaluators=DISTANCE_EVALUATORS,
+                models=list(DISTANCE_MODELS),
+                augmentations=None,
+                augmentation_strategy='none',
+                speed='fast',
+                metric=search_metric,
+                task_type=search_task,
+                cache=dataset_name is not None,
+                verbose=search_verbose,
+                dataset_name=dataset_name,
+                tier='general_distance',
+                cache_namespace=nested_cv_cache_namespace(
+                    fold_i, len(folds), _FOLD_SEARCH_SEED),
+            )
+        except Exception as e:
+            fold_dist_searches[fold_i] = None
+            fold_dist_search_errors.append({'fold': int(fold_i),
+                                            'error': f'{type(e).__name__}: {e}'})
+            print(f"      fold {fold_i}: distance search failed "
+                  f"({type(e).__name__}: {e})")
+
     # One blueprint per (model, fold), read out of that fold's search.
     bp_by_model_fold = {m: {} for m in model_factories}
     recipe_rows = []
@@ -556,6 +593,72 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                 'aug_condition': 'none',
                 'selection_scope': 'fold_train_rows',
             })
+
+    # The owner's set (2026-10-02), per (model, fold): the top 2 hybrids of
+    # that fold's general search and the top 1 of its distance search, each
+    # built and scored as its own arm. top_hybrids reads only the asked
+    # model's rows, so a slot the search did not fill stays empty and its
+    # reason goes to rule_missing. general1 falls back to the
+    # get_best_for_downstream pick above when top_hybrids returns nothing,
+    # which is what this arm used before.
+    RULE_SLOTS = ('general1', 'general2', 'distance1')
+    rule_bp = {m: {sl: {} for sl in RULE_SLOTS} for m in model_factories}
+    rule_rows, rule_missing = [], []
+    for fold_i in range(len(folds)):
+        for model_name in model_factories:
+            for lineage, srch, n_take in (
+                    ('general', fold_searches.get(fold_i), 2),
+                    ('distance', fold_dist_searches.get(fold_i), 1)):
+                sel = []
+                if srch is None:
+                    why = (f'the {lineage} search on this fold failed or was '
+                           f'not run')
+                else:
+                    try:
+                        _t = top_hybrids(srch, model_name, n_take,
+                                         require_full=False,
+                                         context=f'n01 {dataset_name} fold '
+                                                 f'{fold_i} {lineage}')
+                        sel = list(_t.get('selected') or [])
+                        why = _t.get('shortfall_reason') or (
+                            f'only {len(sel)} configuration(s) scored')
+                    except Exception as e:
+                        why = f'top_hybrids raised {type(e).__name__}: {e}'
+                for r in range(1, n_take + 1):
+                    slot = f'{lineage}{r}'
+                    e = sel[r - 1] if len(sel) >= r else None
+                    bp = e.get('blueprint') if e else None
+                    if bp is None and slot == 'general1':
+                        bp = bp_by_model_fold[model_name].get(fold_i)
+                    if bp is None:
+                        rule_missing.append(
+                            f'{model_name} fold {fold_i} {slot}: {why}')
+                        continue
+                    bp = copy.deepcopy(bp)
+                    try:
+                        bp.augmentation_strategy = 'none'
+                    except Exception:
+                        pass
+                    rule_bp[model_name][slot][fold_i] = bp
+                    rule_rows.append({
+                        'fold': int(fold_i), 'model': model_name,
+                        'slot': slot, 'lineage': lineage,
+                        'tier': ('general_distance' if lineage == 'distance'
+                                 else 'general'),
+                        'label': e.get('label') if e else None,
+                        'score_mean': e.get('score_mean') if e else None,
+                        'budget': getattr(bp, 'budget', None),
+                        'allocation_method': getattr(bp, 'allocation_method',
+                                                     None),
+                        'importance_method': getattr(bp, 'importance_method',
+                                                     None),
+                        'internal_evaluator': getattr(bp, 'internal_evaluator',
+                                                      None),
+                        'from_top_hybrids': e is not None,
+                    })
+    for _m in model_factories:
+        if rule_bp[_m]['general1']:
+            bp_by_model_fold[_m] = dict(rule_bp[_m]['general1'])
 
     for row in recipe_rows:
         flag = '' if row['model_scored_by_name'] else '  [blueprint from another model]'
@@ -958,8 +1061,19 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                       f"{mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
                       f"gap={res['cliff_noncliff_gap']:.4f}")
 
-        if model_bps:
-            print(f"    [{model_name}] Hybrid:")
+        # The owner's set (2026-10-02): one arm per slot. general1 keeps the
+        # existing '_hybrid' key; the others are '_hybrid__general2' and
+        # '_hybrid__distance1'.
+        for _slot in RULE_SLOTS:
+            _slot_bps = rule_bp[model_name][_slot]
+            if not _slot_bps:
+                continue
+            if _slot == 'general1':
+                _label, _key = 'hybrid', '_hybrid'
+            else:
+                _label, _key = f'hybrid__{_slot}', f'_hybrid__{_slot}'
+            model_bps = _slot_bps
+            print(f"    [{model_name}] Hybrid ({_slot}):")
 
             # _mf binds the loop's model_factory at definition time, the same
             # way _bps already does — a late-bound free variable would hand the
@@ -989,27 +1103,36 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                     lower_is_better=lower_is_better)
                 return X_tr_h, X_va_h
 
-            res = _evaluate_condition(_get_hybrid, 'hybrid', model_factory,
+            res = _evaluate_condition(_get_hybrid, _label, model_factory,
                                       model_name=model_name)
             if res:
-                per_model['_hybrid'] = res
+                per_model[_key] = res
                 mn = res['metric']
-                print(f"      {'_hybrid':<20} {mn}_all={res[f'{mn}_all']:.4f}  "
+                print(f"      {_key:<20} {mn}_all={res[f'{mn}_all']:.4f}  "
                       f"{mn}_cliff={res[f'{mn}_cliff']:.4f}  "
                       f"{mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
                       f"gap={res['cliff_noncliff_gap']:.4f}")
 
-            rep_gap_list = [(k, v['cliff_noncliff_gap'])
-                            for k, v in per_model.items()
-                            if k != '_hybrid'
-                            and not np.isnan(v.get('cliff_noncliff_gap', float('nan')))]
-            if rep_gap_list and '_hybrid' in per_model:
-                top3_gap = sorted(rep_gap_list, key=lambda x: abs(x[1]))[:3]
-                hybrid_gap = per_model['_hybrid']['cliff_noncliff_gap']
-                per_model['_comparison'] = {
-                    'top3_smallest_gap': top3_gap,
-                    'hybrid_gap': hybrid_gap,
-                }
+        # Every key starting '_' is a hybrid arm or this comparison, never a
+        # representation.
+        rep_gap_list = [(k, v['cliff_noncliff_gap'])
+                        for k, v in per_model.items()
+                        if not k.startswith('_')
+                        and not np.isnan(v.get('cliff_noncliff_gap', float('nan')))]
+        if rep_gap_list and '_hybrid' in per_model:
+            top3_gap = sorted(rep_gap_list, key=lambda x: abs(x[1]))[:3]
+            hybrid_gap = per_model['_hybrid']['cliff_noncliff_gap']
+            per_model['_comparison'] = {
+                'top3_smallest_gap': top3_gap,
+                'hybrid_gap': hybrid_gap,
+                # The gap of every arm of the owner's set, by slot.
+                'hybrid_gap_by_slot': {
+                    sl: per_model[k]['cliff_noncliff_gap']
+                    for sl, k in (('general1', '_hybrid'),
+                                  ('general2', '_hybrid__general2'),
+                                  ('distance1', '_hybrid__distance1'))
+                    if k in per_model},
+            }
 
         strat_results_by_model[model_name] = per_model
 
@@ -1089,7 +1212,22 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             'search_metric': search_metric,
             'per_fold': recipe_rows,
             'errors': fold_search_errors,
+            'distance_search': {
+                'tier': 'general_distance',
+                'budgets': list(DISTANCE_BUDGETS),
+                'internal_evaluators': list(DISTANCE_EVALUATORS),
+                'models_searched': list(DISTANCE_MODELS),
+                'errors': fold_dist_search_errors,
+            },
         }),
+        # The owner's set (2026-10-02): per (fold, model), the top 2 hybrids
+        # of the fold's general search and the top 1 of its distance search.
+        # Each was built and scored as its own arm in stratified_by_model
+        # ('_hybrid', '_hybrid__general2', '_hybrid__distance1').
+        'rule': ('top 2 general + top 1 distance hybrids per model, each '
+                 'fold read from its own searches'),
+        'rule_recipes': convert_numpy(rule_rows),
+        'rule_missing': list(rule_missing),
         'top3_base_reps': [(nm, sc) for nm, sc in top3_base_reps],
         'top3_base_reps_by_fold': convert_numpy(top3_by_fold),
         # Added 2026-09-18, beside the keys above and overwriting none of them.

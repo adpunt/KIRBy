@@ -99,7 +99,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     get_best_search_for_downstream, build_fold_hybrid,
-    extract_top3_base_reps,
+    extract_top3_base_reps, get_rule_hybrids,
 )
 from kirby.utils.lnl_methods import (
     get_lnl_method, LNL_REGISTRY, REGRESSION_ONLY_LNL,
@@ -340,6 +340,50 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Top-3 base reps (ranked by RF baseline): "
                   f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     bp = meta['best_config']['blueprint'] if meta else None
+    # THE OWNER'S SET (top 2 general + top 1 distance hybrids per model and
+    # family, 2026-10-02), read here for the clean-label pick. The per-fold
+    # search on the noisy labels below is what this experiment measures and is
+    # unchanged: every hybrid arm is built from ITS recipe, so no clean-label
+    # hybrid becomes an arm (that would hand the label-noise methods features
+    # chosen on the clean labels). The clean-label recipe is only the fallback
+    # for a fold whose noisy search scores nothing; it is now the set's general
+    # rank 1, and the whole set is written to the result file.
+    clean_rule = None
+    try:
+        clean_rule = get_rule_hybrids(
+            reps, labels, groups, downstream_model=BASE_RANK_MODEL,
+            budget=None, dataset_name=dataset_name,
+            augmentations=augmentations, task_type=task_type, data=data)
+    except Exception as exc:
+        from kirby.result_cache import StaleResultDB as _Stale
+        if isinstance(exc, _Stale):
+            raise
+        print(f"  clean-label rule set read failed: {type(exc).__name__}: {exc}")
+    clean_rule_record = None
+    if clean_rule is not None:
+        _gen1 = [h for h in clean_rule['hybrids'] if h.get('slot') == 'general1']
+        if _gen1 and _gen1[0].get('blueprint') is not None:
+            bp = _gen1[0]['blueprint']
+        clean_rule_record = {
+            'rule': clean_rule['rule'],
+            'used_as': ('the fallback recipe for a fold whose noisy-label '
+                        'search scored nothing; general1 only. No entry here '
+                        'is built as an arm.'),
+            'hybrids': [{
+                'family': h.get('objective'), 'slot': h.get('slot'),
+                'lineage': h.get('lineage'), 'tier': h.get('tier'),
+                'aug_condition': h.get('aug_condition'),
+                'budget': int(getattr(h.get('blueprint'), 'budget', 0) or 0),
+                'budget_relaxed': h.get('budget_relaxed'),
+                'allocation_method': getattr(h.get('blueprint'),
+                                             'allocation_method', None),
+                'reps': sorted(getattr(h.get('blueprint'), 'reps', []) or []),
+                'score_all_folds': h.get('score_other_folds'),
+            } for h in clean_rule['hybrids']],
+            'base_reps': [b.get('rep') if isinstance(b, dict) else b
+                          for b in clean_rule.get('base_reps') or []],
+            'missing': list(clean_rule.get('missing') or []),
+        }
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}
@@ -412,6 +456,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'is_clf': is_clf,
         'n_classes': int(len(classes_)) if is_clf else None,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # The owner's set read on the clean labels (see clean_rule above);
+        # 'missing' names every slot it could not fill and why.
+        'clean_rule_hybrids': clean_rule_record,
         # One entry per (sigma, fold, noise draw) whose feature-mix search
         # returned: which labels chose that pass's recipe, under 'source',
         # beside the sigma, fold index and noise draw seed it belongs to. A

@@ -77,6 +77,7 @@ from experiments._shared import (
     get_best_search_for_downstream, build_fold_hybrid, make_cv_splitter,
     extract_top3_base_reps, get_domain_metric,
     POOL_SUBSETS, noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
+    get_rule_hybrids,
 )
 from kirby.utils.noise_estimation import get_noise_estimator, ESTIMATOR_REGISTRY
 
@@ -327,10 +328,89 @@ def _blueprint_for(reps, labels, groups, data, dataset_name, task_type,
         return None, None, f'{type(exc).__name__}: {exc}', None
     if not meta:
         return None, None, 'no pool candidate produced a result for rf', search
+    # The owner's set (2026-10-02): top 2 general + top 1 distance hybrids for
+    # rf, per family. Read from the same stored searches and attached to the
+    # metadata; rule_hybrid_spaces turns each into its own space.
+    try:
+        rule = get_rule_hybrids(
+            reps, labels, groups, downstream_model='rf', budget=budget,
+            dataset_name=dataset_name, augmentations=augmentations,
+            pool_subset=pool_subset, task_type=task_type, data=data)
+    except Exception as exc:
+        from kirby.result_cache import StaleResultDB as _Stale
+        if isinstance(exc, _Stale):
+            raise
+        rule = {'hybrids': [], 'by_objective': {},
+                'missing': [f'the rule read raised {type(exc).__name__}: '
+                            f'{exc}']}
+    meta = dict(meta)
+    meta['rule_hybrids'] = rule
     bp = meta.get('best_config', {}).get('blueprint')
+    if bp is None and rule.get('hybrids'):
+        bp = rule['hybrids'][0]['blueprint']
     if bp is None:
         return None, None, 'the winning pool entry carries no blueprint', search
     return bp, meta.get('aug_condition', 'uncapped'), meta, search
+
+
+def rule_entry_summary(h):
+    """The scalars of one get_rule_hybrids entry, for the result file."""
+    bp = h.get('blueprint')
+    return {
+        'slot': h.get('slot'), 'lineage': h.get('lineage'),
+        'built_under_objective': h.get('objective'),
+        'tier': h.get('tier'), 'aug_condition': h.get('aug_condition'),
+        'recipe': h.get('recipe'),
+        'budget': int(getattr(bp, 'budget', 0) or 0) if bp is not None
+        else h.get('budget'),
+        'budget_relaxed': h.get('budget_relaxed'),
+        'allocation_method': h.get('allocation_method'),
+        'importance_method': h.get('importance_method'),
+        'internal_evaluator': h.get('internal_evaluator'),
+        'reps': sorted(getattr(bp, 'reps', []) or []) if bp is not None
+        else None,
+        'pool_score': h.get('score_other_folds'),
+        'pool_score_metric': h.get('metric_name'),
+    }
+
+
+def rule_hybrid_spaces(rule, eligible_families):
+    """Every hybrid of the owner's set as its own space.
+
+    The owner's set (2026-10-02): per family, the top 2 hybrids from the
+    general searches and the top 1 from the distance searches. General rank 1
+    keeps the family's existing space name; the others are
+    '<name>__general2' and '<name>__distance1'.
+
+    Returns ({space: ('hybrid', blueprint, aug_condition)},
+             {space: provenance dict}, [every slot not filled, and why]).
+    """
+    spaces, prov = {}, {}
+    by_obj = (rule or {}).get('by_objective') or {}
+    for fam, fo in by_obj.items():
+        base = _space_name(fam)
+        for h in fo.get('hybrids') or []:
+            slot = h.get('slot') or 'general1'
+            name = base if slot == 'general1' else f'{base}__{slot}'
+            if h.get('blueprint') is None:
+                prov[name] = {'unavailable': f'the {fam} {slot} hybrid carries '
+                                             f'no blueprint'}
+                continue
+            spaces[name] = ('hybrid', h['blueprint'],
+                            h.get('aug_condition') or 'uncapped')
+            prov[name] = dict(rule_entry_summary(h),
+                              features_chosen_by=FEATURES_CHOSEN_BY.get(fam, fam))
+        if fo.get('missing') and fo.get('hybrids'):
+            prov[f'{base}__missing_slots'] = {
+                'unavailable': ' | '.join(fo['missing'])}
+        elif fo.get('missing'):
+            prov[base] = {'unavailable': ' | '.join(fo['missing'])}
+    for fam in eligible_families or ():
+        if fam not in by_obj and _space_name(fam) not in prov:
+            prov[_space_name(fam)] = {'unavailable': (
+                f'the pool held no search under objective={fam} in either the '
+                f'general or the distance searches')}
+    return spaces, prov, list((rule or {}).get('missing') or [])
 
 
 def _fold_hybrid_pair(train_idx, val_idx, reps, labels, groups, bp, aug_cond,
@@ -696,6 +776,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, search_groups, data, dataset_name, task_type,
         augmentations, budget, pool_subset=pool_subset)
     results['seconds_to_resolve_the_pool'] = round(time.time() - t_pool, 1)
+    # Every slot of the owner's set that could not be filled, and why.
+    if isinstance(meta, dict) and meta.get('rule_hybrids'):
+        results['rule_missing'] = list(
+            meta['rule_hybrids'].get('missing') or [])
 
     winner_family = None
     pool_failure = None
@@ -718,14 +802,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"under the {winner_family} objective "
               f"({meta.get('objective_choice')})")
 
+        # The owner's set (2026-10-02): when the rule read came back, every
+        # one of rf's top 2 general + top 1 distance hybrids per family is its
+        # own space, and the single-winner block below is skipped.
+        _rule = meta.get('rule_hybrids')
+        if _rule and _rule.get('hybrids'):
+            _rs, _rp, _rmiss = rule_hybrid_spaces(_rule, eligible_families)
+            spaces.update(_rs)
+            for _nm, _p in _rp.items():
+                if 'unavailable' not in _p:
+                    _p['is_the_recipe_the_pool_returned'] = (
+                        _nm == _space_name(winner_family))
+            space_provenance.update(_rp)
+            results['rule'] = _rule.get('rule')
+            results['rule_model'] = 'rf'
+            results['rule_missing'] = _rmiss
         # Every eligible family's own best recipe is scored, not only the one
         # the pool returned. The two families' stored scores are in different
         # units, so the pool cannot rank them against each other; scoring only
         # the returned one would drop the other family with no reason given.
-        entries = [(winner_family, aug_cond, meta.get('tier'), bp,
-                    meta.get('score_mean'), meta.get('metric_name'))]
+        entries = ([] if (_rule and _rule.get('hybrids')) else
+                   [(winner_family, aug_cond, meta.get('tier'), bp,
+                     meta.get('score_mean'), meta.get('metric_name'))])
         for o, d in (meta.get('by_objective') or {}).items():
-            if o == winner_family:
+            if o == winner_family or (_rule and _rule.get('hybrids')):
                 continue
             o_bp = (d.get('best_config') or {}).get('blueprint')
             if o_bp is None:

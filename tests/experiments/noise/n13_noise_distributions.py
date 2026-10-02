@@ -95,6 +95,7 @@ from experiments._shared import (
     # best. Added 2026-09-28 to replace the places that handed a model with no
     # stored search of its own the random forest's recipe.
     top_hybrids_across_models,
+    get_rule_hybrids,
 )
 from kirby.find_best_hybrid import OBJECTIVE_SIMILARITY
 # 2026-09-12 decision: n13's pool subset includes similarity hybrids, and the
@@ -847,6 +848,105 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # score chose it. None only when no configuration over any model could be
     # rebuilt; the 'hybrid' space is then absent from Track A and from Track B's
     # detection spaces.
+    # ── THE OWNER'S SET (top 2 general + top 1 distance hybrids per model and
+    # family, 2026-10-02) ──
+    # Read per model from the general AND the distance searches. Each model's
+    # hybrid recipes become a list (rule_recipes_by_model): up to three per
+    # family. The first one keeps the role the single recipe had (the
+    # 'hybrid' space, the single-recipe per-fold block); the others are added
+    # as arms beside it. A model the rule found nothing for keeps the
+    # cross-model fill above as its one recipe (owner's decision 2026-09-28).
+    rule_by_model = {}
+    rule_missing_by_model = {}
+    rule_recipes_by_model = {}
+    for _mname in sorted(set(model_factories) | {TRACK_A_MODEL}):
+        try:
+            _rs = get_rule_hybrids(
+                reps, labels, groups, downstream_model=_mname, budget=None,
+                dataset_name=dataset_name, augmentations=augmentations,
+                pool_subset=POOL_SUBSET, task_type=task_type, data=data)
+        except Exception as _exc:
+            from kirby.result_cache import StaleResultDB as _Stale
+            if isinstance(_exc, _Stale):
+                raise
+            rule_missing_by_model[_mname] = [
+                f'the rule read raised {type(_exc).__name__}: {_exc}']
+            _rs = None
+        _list = []
+        if _rs is not None:
+            rule_by_model[_mname] = _rs
+            if _rs.get('missing'):
+                rule_missing_by_model[_mname] = list(_rs['missing'])
+            for _h in _rs.get('hybrids') or []:
+                if _h.get('blueprint') is None:
+                    continue
+                _list.append({
+                    'name': f"{_h.get('objective')}:{_h.get('slot')}",
+                    'blueprint': _h['blueprint'],
+                    'aug_condition': _h.get('aug_condition') or 'uncapped',
+                    'objective': _h.get('objective'),
+                    'slot': _h.get('slot'), 'lineage': _h.get('lineage'),
+                    'tier': _h.get('tier'),
+                    'budget_relaxed': _h.get('budget_relaxed'),
+                    'source': 'rule'})
+        if not _list and _mname in bp_by_model:
+            _list.append({
+                'name': f"{objective_by_model.get(_mname)}:"
+                        f"{hybrid_recipe_source_by_model.get(_mname)}",
+                'blueprint': bp_by_model[_mname],
+                'aug_condition': aug_by_model.get(_mname, 'uncapped'),
+                'objective': objective_by_model.get(_mname),
+                'slot': 'general1', 'lineage': 'general', 'tier': None,
+                'budget_relaxed': None,
+                'source': hybrid_recipe_source_by_model.get(_mname)})
+        if _list:
+            rule_recipes_by_model[_mname] = _list
+            # The first recipe keeps the single recipe's role everywhere below.
+            _first = _list[0]
+            bp_by_model[_mname] = _first['blueprint']
+            aug_by_model[_mname] = _first['aug_condition']
+            objective_by_model[_mname] = _first['objective']
+            if _first['source'] == 'rule':
+                hybrid_recipe_source_by_model[_mname] = 'own_search'
+                hybrid_recipe_chosen_by_model.pop(_mname, None)
+    hybrid_unscored_models = sorted(m for m in model_factories
+                                    if m not in bp_by_model)
+
+    # Track A's hybrid spaces: TRACK_A_MODEL's rule recipes. The predictive
+    # general rank 1 is 'hybrid' and the similarity general rank 1 is
+    # 'hybrid_sim', as before; the other slots are '<that name>__<slot>'.
+    _track_a_list = rule_recipes_by_model.get(TRACK_A_MODEL, [])
+    track_a_extra_recipes = []
+    _ta_pred1 = None
+    _sim_rule_entry = None
+    for _r in _track_a_list:
+        if _r['source'] != 'rule':
+            continue
+        _base_sp = ('hybrid_sim' if _r['objective'] == OBJECTIVE_SIMILARITY
+                    else 'hybrid')
+        if _r['slot'] == 'general1':
+            if _base_sp == 'hybrid':
+                _ta_pred1 = _r
+            else:
+                # The similarity general rank 1 is now TRACK_A_MODEL's own,
+                # in place of the one read with the random forest's lookup.
+                bp_sim = _r['blueprint']
+                sim_aug_condition = _r['aug_condition']
+                sim_arm_on = True
+                _sim_rule_entry = _r
+            continue
+        track_a_extra_recipes.append(dict(_r, space=f"{_base_sp}__{_r['slot']}"))
+    if _ta_pred1 is not None:
+        bp_by_model[TRACK_A_MODEL] = _ta_pred1['blueprint']
+        aug_by_model[TRACK_A_MODEL] = _ta_pred1['aug_condition']
+        objective_by_model[TRACK_A_MODEL] = _ta_pred1['objective']
+    for _r in track_a_extra_recipes:
+        print(f"  Track A extra hybrid space {_r['space']}: {_r['objective']} "
+              f"{_r['slot']} ({_r['tier']}/{_r['aug_condition']}), budget "
+              f"{getattr(_r['blueprint'], 'budget', None)} features")
+    for _mname, _miss in rule_missing_by_model.items():
+        print(f"  {_mname}: rule slots not filled -- {' | '.join(_miss)}")
+
     bp_track_a = bp_by_model.get(TRACK_A_MODEL)
     aug_condition_track_a = aug_by_model.get(TRACK_A_MODEL, 'uncapped')
     bp_objective = objective_by_model.get(TRACK_A_MODEL)
@@ -1043,6 +1143,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             TRACK_A_MODEL),
         'track_a_hybrid_recipe_chosen_by': hybrid_recipe_chosen_by_model.get(
             TRACK_A_MODEL),
+        # The owner's set, 2026-10-02: each model's hybrid recipes (top 2
+        # general + top 1 distance per family). Every one is built and scored
+        # in 'per_fold_scores_rule_hybrids'; TRACK_A_MODEL's also become Track
+        # A and Track B spaces ('hybrid', 'hybrid_sim' and '<those>__<slot>').
+        'rule_hybrids_by_model': convert_numpy({
+            m: [{'name': r['name'], 'family': r['objective'],
+                 'slot': r['slot'], 'lineage': r['lineage'],
+                 'tier': r['tier'], 'aug_condition': r['aug_condition'],
+                 'budget': getattr(r['blueprint'], 'budget', None),
+                 'budget_relaxed': r['budget_relaxed'],
+                 'allocation_method': getattr(r['blueprint'],
+                                              'allocation_method', None),
+                 'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
+                 'source': r['source']} for r in rs]
+            for m, rs in rule_recipes_by_model.items()}),
+        # Every slot the rule asked for and did not get, per model, and why.
+        'rule_missing': rule_missing_by_model,
+        'track_a_hybrid_spaces': (
+            (['hybrid'] if bp_track_a is not None else [])
+            + (['hybrid_sim'] if bp_sim is not None else [])
+            + [r['space'] for r in track_a_extra_recipes]),
         'per_noise_type': {},
     }
 
@@ -1271,7 +1392,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                               'lnl_methods': list(lnl_methods),
                               'estimators': list(estimators),
                               'models': list(model_factories),
-                              'lnl_epochs': LNL_EPOCHS})
+                              'lnl_epochs': LNL_EPOCHS,
+                              # 2026-10-02: the owner's set of hybrids.
+                              'rule': 'top2_general_top1_distance',
+                              'track_a_extra': [r['space'] for r in
+                                                track_a_extra_recipes]})
     print(f"  Similarity axis: {len(sim_settings)} settings x ks "
           f"{list(sweep_ks())} x Track B estimators {sim_estimators}; rows -> "
           f"{sink.path}; checkpoint -> {ckpt.path}")
@@ -1347,6 +1472,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reselected_base_folds = {mn: {} for mn in model_factories}
             reselected_hyb_folds = {mn: {} for mn in model_factories}
             reselected_hyb_name = {}  # model -> its blueprint signature (candidate name)
+            # The owner's set, 2026-10-02: every rule recipe's score per
+            # (model, recipe name, fold).
+            rule_hyb_folds = {mn: {} for mn in model_factories}
 
             for fi, fd in enumerate(fold_data):
                 for noise_seed in NOISE_SEEDS:
@@ -1444,6 +1572,48 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             sim_build_failures[_key_f] = \
                                 sim_build_failures.get(_key_f, 0) + 1
 
+                    # The owner's set (2026-10-02): TRACK_A_MODEL's other rule
+                    # hybrids, built on the same noisy labels. Each becomes a
+                    # Track A space and a Track B detection space.
+                    extra_val_s = {}
+                    for _xr in track_a_extra_recipes:
+                        try:
+                            _xobj = _xr['objective']
+                            if _xobj == OBJECTIVE_SIMILARITY:
+                                _xkw = {'objective': OBJECTIVE_SIMILARITY,
+                                        'is_clf': is_clf}
+                            else:
+                                _xkw = {'model': (hybrid_model_factory()
+                                                  if hybrid_model_factory
+                                                  is not None else None),
+                                        'metric_fn': metric_fn,
+                                        'lower_is_better': lower_is_better}
+                            if _xr['aug_condition'] != 'none' and augmentations:
+                                _xtr_aug = {k: v[fd['train_idx']]
+                                            for k, v in augmentations.items()}
+                                _xva_aug = {k: v[fd['val_idx']]
+                                            for k, v in augmentations.items()}
+                            else:
+                                _xtr_aug = _xva_aug = None
+                            _Xx_tr, _Xx_va, _ = build_fold_hybrid(
+                                fd['train_reps_fold'], fd['val_reps_fold'],
+                                y_noisy, _xr['blueprint'],
+                                augmentations_train=_xtr_aug,
+                                augmentations_val=_xva_aug,
+                                groups=(groups[fd['train_idx']]
+                                        if groups is not None else None),
+                                **_xkw)
+                            _sc_x = StandardScaler()
+                            spaces[_xr['space']] = _sc_x.fit_transform(_Xx_tr)
+                            extra_val_s[_xr['space']] = _sc_x.transform(_Xx_va)
+                        except Exception as _exc:
+                            _key_f = (f"{_xr['space']}: {type(_exc).__name__}: "
+                                      f"{_exc}")[:200]
+                            if _key_f not in sim_build_failures:
+                                print(f"      {_key_f}")
+                            sim_build_failures[_key_f] = \
+                                sim_build_failures.get(_key_f, 0) + 1
+
                     # ── Honest hybrid arm: train each model PLAINLY (no LNL,
                     # no sample weights) on its MATCHED hybrid space, built from
                     # that model's blueprint on the NOISY labels. This is the
@@ -1451,21 +1621,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # the base-rep baseline arm. Identical blueprints across
                     # models share one create_hybrid build via _hyb_space_cache.
                     _hyb_space_cache = {}  # bp_sig -> (X_tr_s, X_va_s) or None
-                    for mname, mfactory in model_factories.items():
-                        _bp_m = bp_by_model.get(mname)
-                        if _bp_m is None:
-                            continue
+                    # The owner's set (2026-10-02): every rule recipe of each
+                    # model is built and scored. The first one also fills the
+                    # single-recipe block, as the one recipe did before.
+                    for mname, mfactory, _rec in [
+                            (mn, mf, rr) for mn, mf in model_factories.items()
+                            for rr in (rule_recipes_by_model.get(mn) or [])]:
+                        _bp_m = _rec['blueprint']
+                        _is_first = _rec is rule_recipes_by_model[mname][0]
                         # 2026-09-12: the recipe name carries the search family
                         # it came from, so two families that happen to share an
                         # allocation method / budget / importance method /
                         # internal evaluator are still told apart in the
                         # per-fold score block.
-                        _obj_m = objective_by_model.get(mname)
+                        _obj_m = _rec['objective']
                         _sig = f"{_obj_m}|{_bp_sig(_bp_m)}"
-                        reselected_hyb_name[mname] = _sig
-                        if _sig not in _hyb_space_cache:
+                        if _is_first:
+                            reselected_hyb_name[mname] = _sig
+                        _ckey = _sig
+                        if _ckey not in _hyb_space_cache:
                             try:
-                                _augc_m = aug_by_model.get(mname, 'uncapped')
+                                _augc_m = _rec['aug_condition']
                                 if _augc_m != 'none' and augmentations:
                                     _tr_aug = {k: v[fd['train_idx']]
                                                for k, v in augmentations.items()}
@@ -1493,20 +1669,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     groups=(groups[fd['train_idx']] if groups is not None else None),
                                     **_obj_kw)
                                 _sc_h = StandardScaler()
-                                _hyb_space_cache[_sig] = (
+                                _hyb_space_cache[_ckey] = (
                                     _sc_h.fit_transform(_Xh_tr),
                                     _sc_h.transform(_Xh_va))
                             except Exception:
-                                _hyb_space_cache[_sig] = None
-                        _built = _hyb_space_cache[_sig]
+                                _hyb_space_cache[_ckey] = None
+                        _built = _hyb_space_cache[_ckey]
                         if _built is None:
                             continue
                         _Xh_tr_s, _Xh_va_s = _built
                         try:
                             m = mfactory()
                             m.fit(_Xh_tr_s, y_noisy)
-                            reselected_hyb_folds[mname].setdefault(fi, []).append(
-                                float(metric_fn(fd['y_val'], m.predict(_Xh_va_s))))
+                            _sc_r = float(metric_fn(fd['y_val'],
+                                                    m.predict(_Xh_va_s)))
+                            (rule_hyb_folds[mname].setdefault(_rec['name'], {})
+                             .setdefault(fi, []).append(_sc_r))
+                            if _is_first:
+                                reselected_hyb_folds[mname].setdefault(
+                                    fi, []).append(_sc_r)
                         except Exception:
                             pass
 
@@ -1524,6 +1705,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if 'hybrid_sim' in spaces and hybrid_sim_val_s is not None:
                         _track_a_spaces.append(
                             ('hybrid_sim', spaces['hybrid_sim'], hybrid_sim_val_s))
+                    for _xsp, _xva in extra_val_s.items():
+                        _track_a_spaces.append((_xsp, spaces[_xsp], _xva))
                     for space_name, X_train_s, X_val_s in _track_a_spaces:
 
                         if space_name not in track_a_acc:
@@ -1642,7 +1825,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # that train on hybrid?". Recovery denominator (clean/noisy
                     # baselines) is the same unit's, so the comparison is
                     # apples-to-apples.
-                    for space_name in list(base_spaces) + ['hybrid', 'hybrid_sim']:
+                    for space_name in (list(base_spaces) + ['hybrid', 'hybrid_sim']
+                                       + list(extra_val_s)):
                         if space_name not in spaces:
                             continue
                         X_space = spaces[space_name]
@@ -1935,6 +2119,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'recipe_source': 'clean_label_search_pool',
             }
             strength_result['per_fold_scores_single_recipe'] = reselection_block
+            # The owner's set, 2026-10-02: every rule recipe's per-fold score
+            # per model, mean over the noise draws; nan where a fold failed.
+            # Nothing is re-selected here; each recipe is its own arm.
+            strength_result['per_fold_scores_rule_hybrids'] = {
+                mn: {rn: [float(np.mean(fm[fi])) if fm.get(fi)
+                          else float('nan') for fi in range(n_folds)]
+                     for rn, fm in rmap.items()}
+                for mn, rmap in rule_hyb_folds.items() if rmap}
 
             # Stash the canonical top-level slice (moderate gaussian noise) so a
             # reader can json.load(...)['per_fold_scores_single_recipe'] directly.
@@ -2027,9 +2219,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'arm_on': bool(sim_arm_on),
         'source': 'pool_search_objective_similarity',
         'objective': OBJECTIVE_SIMILARITY if sim_arm_on else None,
-        'tier': sim_entry.get('tier') if sim_entry else None,
+        # Since 2026-10-02 the recipe is TRACK_A_MODEL's similarity general
+        # rank 1 from the owner's set when that read found one; 'rf' means the
+        # random forest's lookup above, as before.
+        'recipe_read_for_model': (TRACK_A_MODEL if _sim_rule_entry is not None
+                                  else 'rf'),
+        'tier': (_sim_rule_entry['tier'] if _sim_rule_entry is not None
+                 else sim_entry.get('tier') if sim_entry else None),
         'aug_condition': sim_aug_condition,
-        'search_score_mean': sim_entry.get('score_mean') if sim_entry else None,
+        'search_score_mean': (None if _sim_rule_entry is not None
+                              else sim_entry.get('score_mean') if sim_entry
+                              else None),
         'search_metric_name': (sim_entry.get('metric_name') if sim_entry
                                else None),
         'recipe_refit_rows': 'fold_train_rows_noisy_labels' if sim_arm_on else None,

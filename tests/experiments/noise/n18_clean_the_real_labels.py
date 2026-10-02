@@ -105,6 +105,7 @@ from experiments._shared import (
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     searched_models, resolve_comparison_models,
     noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
+    pool_recipes_by_family, POOL_SUBSETS,
 )
 # One per-fold hybrid build, shared with n17 and n19. It lived in n19 until
 # 2026-09-17.
@@ -363,6 +364,15 @@ SHUFFLE_SEEDS = (0, 1, 2)
 # representation (see the module docstring).
 BASE_SPACES = tuple(f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1))
 SPACES = BASE_SPACES + ('hybrid', 'hybrid_similarity')
+# The owner's set (2026-10-02): per model and family, the top 2 hybrids from
+# the general searches and the top 1 from the distance searches. 'hybrid' and
+# 'hybrid_similarity' stay the general rank-1 recipes; the other two slots of
+# each family get their own space. They are listed after SPACES so the seeds
+# that SPACES.index gave the existing spaces do not move.
+SPACE_FOR_FAMILY = {'predictive': 'hybrid', 'similarity': 'hybrid_similarity'}
+RULE_SPACES = tuple(f'{_b}__{_slot}' for _b in ('hybrid', 'hybrid_similarity')
+                    for _slot in ('general2', 'distance1'))
+ALL_SPACES = SPACES + RULE_SPACES
 
 # Which searches the recipe may come from. Same as n02, n06, n07, n11, n12, n13,
 # n17 and n19 since 2026-09-12: a search whose features were chosen to predict
@@ -661,19 +671,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # {model: {space: recipe}}. A model missing from a space is a model that
     # space was never built for, and its rows in that space stay empty.
     recipe_for_space_by_model = {}
+    # The owner's set (2026-10-02): every slot of every family becomes its own
+    # space -- 'hybrid' / 'hybrid_similarity' (general rank 1, as before), and
+    # '<space>__general2' / '<space>__distance1'. pool_recipes_by_family reads
+    # the set pool_recipe_per_downstream_model attached to the metadata. Each
+    # family's own winner is still taken by name, not by preference, so both
+    # families are measured. Every space or slot not built is written to
+    # hybrid_spaces_unavailable with its reason.
+    hybrid_unavailable = {}
+    recipe_info_by_model = {}
     for _m, _got in by_model.items():
-        # ── The geometry recipe, taken by name and not by preference ──
-        # The pool returns one family and names the rest under by_objective.
-        # This reaches past that and takes the similarity family's own winner,
-        # so both are measured instead of one being measured and the other
-        # recorded. See the SPACES comment for why it matters here in
-        # particular.
-        _sim_entry = ((_got['meta'].get('by_objective') or {})
-                      .get('similarity') or {})
-        _bp_sim_m = (_sim_entry.get('best_config') or {}).get('blueprint')
-        recipe_for_space_by_model[_m] = {'hybrid': _got['blueprint']}
-        if _bp_sim_m is not None:
-            recipe_for_space_by_model[_m]['hybrid_similarity'] = _bp_sim_m
+        _rs, _un = pool_recipes_by_family(
+            _got['meta'], SPACE_FOR_FAMILY,
+            eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+        recipe_for_space_by_model[_m] = {r['space']: r['blueprint']
+                                         for r in _rs
+                                         if r['space'] in ALL_SPACES}
+        recipe_info_by_model[_m] = {
+            r['space']: {'slot': r.get('slot', 'general1'),
+                         'lineage': r.get('lineage', 'general'),
+                         'family': r['objective'], 'tier': r['tier'],
+                         'aug_condition': r['aug_condition'],
+                         'budget_relaxed': r.get('budget_relaxed'),
+                         'search_score_mean': r['search_score_mean']}
+            for r in _rs}
+        for _sp, _why in _un.items():
+            hybrid_unavailable.setdefault(_sp, {})[_m] = _why
+    results['hybrid_spaces_unavailable'] = hybrid_unavailable
+    results['hybrid_slot_by_model'] = convert_numpy(recipe_info_by_model)
 
     # ── The single-representation comparison, per downstream model ──
     if base_reps_override is not None:
@@ -716,7 +741,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         # A space runs when at least one downstream model has a recipe for it,
         # and inside it only the models that do.
-        spaces = tuple(s for s in SPACES if s in base_spaces_run or (
+        spaces = tuple(s for s in ALL_SPACES if s in base_spaces_run or (
             s not in BASE_SPACES and any(
                 s in _r for _r in recipe_for_space_by_model.values())))
         results['hybrid_available'] = True
@@ -766,7 +791,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for m, _r in recipe_for_space_by_model.items()})
         for m in results['hybrid_models_with_a_recipe']:
             _r = recipe_for_space_by_model[m]
-            _bp_m = _r['hybrid']
+            _bp_m = _r.get('hybrid', by_model[m]['blueprint'])
             print(f"  {m}: recipe of "
                   f"{len(sorted(getattr(_bp_m, 'reps', []) or []))} "
                   f"representations, budget {getattr(_bp_m, 'budget', None)} "
@@ -1353,7 +1378,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # two spaces or detectors never share a permutation.
                 for seed in shuffle_seeds:
                     _perm = np.random.default_rng(
-                        [int(seed), int(fold_i), SPACES.index(space),
+                        [int(seed), int(fold_i), ALL_SPACES.index(space),
                          det_i]).permutation(len(scores))
                     _shuf = np.asarray(scores)[_perm]
                     for slot, rate in enumerate(flag_rates):

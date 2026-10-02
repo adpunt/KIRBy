@@ -162,6 +162,9 @@ from experiments._shared import (
     # extra, and nothing already reported changes. All three read rows the
     # per-model searches already stored and fit no model: 0 new model fits.
     top_base_reps, top_hybrids, hybrid_deltas,
+    # The owner's set (top 2 general + top 1 distance hybrids per model and
+    # family, 2026-10-02).
+    get_rule_hybrids,
 )
 from kirby.utils.noise_estimation import (
     ESTIMATOR_REGISTRY, ActivityCliffAwareEstimator, GaussianProcessEstimator,
@@ -1631,7 +1634,8 @@ def fold_similarity_spaces(dataset_name, settings, *, model_input_tr,
                            model_input_va, reps, train_idx, val_idx, y_train,
                            groups_train=None, base_reps=(), recipes=None,
                            augmentations=None, model_name=None,
-                           model_factory=None, metric=None, task_type=None):
+                           model_factory=None, metric=None, task_type=None,
+                           extra_spaces=()):
     """The standardised matrices one fold's similarity settings read.
 
     Args:
@@ -1654,6 +1658,13 @@ def fold_similarity_spaces(dataset_name, settings, *, model_input_tr,
         augmentations: {name: full matrix}, data['augmentations'].
         model_name / model_factory / metric: the downstream model and the
             get_domain_metric triple, for the builds' accept-or-reject step.
+        extra_spaces: recipe spaces to build whether or not a setting names
+            them, by their key in `recipes` -- e.g. 'hybrid__general2' and
+            'hybrid__distance1', the owner's set (top 2 general + top 1
+            distance hybrids per model and family, 2026-10-02), which n42
+            fits models on. A SimilaritySetting only accepts the two family
+            names, so these cannot come in through `settings`. Default ()
+            builds exactly what it built before.
 
     Returns (spaces_train, spaces_val, unavailable), where unavailable is
     {space: reason}. Every build goes through a noise_cache wrapper
@@ -1731,9 +1742,9 @@ def fold_similarity_spaces(dataset_name, settings, *, model_input_tr,
                     continue
                 tr[sp], va[sp] = _scale_pair(built[0], built[1])
 
-    for sp in ('hybrid', 'hybrid_similarity'):
-        if sp not in need:
-            continue
+    _hyb_spaces = [sp for sp in ('hybrid', 'hybrid_similarity') if sp in need]
+    _hyb_spaces += [sp for sp in (extra_spaces or ()) if sp not in _hyb_spaces]
+    for sp in _hyb_spaces:
         rec = (recipes or {}).get(sp)
         if rec is None or rec[0] is None:
             unavailable[sp] = ('no stored recipe of this family for this model '
@@ -2488,6 +2499,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # Each model's own pool metadata, kept so the per-family loop below reads
     # every family's best for that model and not only the one the pool returned.
     meta_by_model = {}
+    # The owner's set, 2026-10-02: per model and family, the top 2 hybrids
+    # from the general searches and the top 1 from the distance searches.
+    # Read beside the pool winner and attached to its meta, so the per-family
+    # loop below turns every one of them into its own space and the fold loop
+    # builds and scores each. Slots the pool could not fill, and why, per model.
+    rule_by_model = {}
+    rule_missing_by_model = {}
     rf_search = None
     rf_meta = None
     for _mname in models_requested:
@@ -2502,6 +2520,28 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
             )
             if _mname == 'rf':
                 rf_search, rf_meta = _search, _meta
+            try:
+                _rule = get_rule_hybrids(
+                    reps, labels, groups, downstream_model=_mname,
+                    budget=budget, augmentations=augmentations,
+                    dataset_name=dataset_name, task_type=task_type,
+                    data=data, pool_subset=POOL_SUBSET)
+            except Exception as _rexc:
+                from kirby.result_cache import StaleResultDB as _Stale
+                if isinstance(_rexc, _Stale):
+                    raise
+                _rule = None
+                rule_missing_by_model[_mname] = [
+                    f'the read of the owner\'s hybrid set raised '
+                    f'{type(_rexc).__name__}: {_rexc}; only the pool winner '
+                    f'of each family was built for this model']
+            if _rule is not None:
+                rule_by_model[_mname] = _rule
+                if _rule.get('missing'):
+                    rule_missing_by_model[_mname] = list(_rule['missing'])
+                if _meta is not None and _rule.get('hybrids'):
+                    _meta = dict(_meta)
+                    _meta['rule_hybrids'] = _rule
             if _meta is None:
                 blueprint_status[_mname] = 'no_search_metadata'
                 print(f"  WARNING: no search metadata for {_mname} — "
@@ -2572,6 +2612,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # before 2026-09-19 still means what it meant.
     recipes_for_model = {}
     space_objective = {}
+    # Which slot of the owner's set each space holds ('general1', 'general2',
+    # 'distance1'), and per model the tier, budget and search score of the
+    # recipe each space was rebuilt from (2026-10-02).
+    space_slot = {}
+    hybrid_space_recipe_by_model = {}
     hybrid_spaces_unavailable = {}
     # First per-fold build failure per space, filled by _fold_space below. A
     # space whose every fold failed would otherwise leave no rows and no reason.
@@ -2595,11 +2640,28 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     pass
             _per_space[_r['space']] = (_r_bp, _r_aug)
             space_objective[_r['space']] = _r['objective']
+            space_slot[_r['space']] = _r.get('slot') or 'general1'
+            hybrid_space_recipe_by_model.setdefault(_mname, {})[
+                _r['space']] = {
+                    'family': _r['objective'],
+                    'slot': _r.get('slot') or 'general1',
+                    'lineage': _r.get('lineage') or 'general',
+                    'tier': _r.get('tier'), 'aug_condition': _r_aug,
+                    'budget': _r.get('budget'),
+                    'budget_relaxed': _r.get('budget_relaxed'),
+                    'allocation_method': _r.get('allocation_method'),
+                    'importance_method': _r.get('importance_method'),
+                    'internal_evaluator': _r.get('internal_evaluator'),
+                    'reps': sorted(getattr(_r_bp, 'reps', []) or []),
+                    'search_score': _r.get('search_score_mean'),
+                    'search_metric_name': _r.get('search_metric_name'),
+                }
         recipes_for_model[_mname] = _per_space
         if _unavail:
             hybrid_spaces_unavailable[_mname] = _unavail
     for _sp in sorted(space_objective):
-        print(f"  hybrid space {_sp}: family {space_objective[_sp]!r}")
+        print(f"  hybrid space {_sp}: family {space_objective[_sp]!r}, "
+              f"slot {space_slot.get(_sp)}")
     for _mname, _unavail in hybrid_spaces_unavailable.items():
         for _sp, _why in _unavail.items():
             print(f"  {_mname}: no {_sp} space — {_why}")
@@ -3000,6 +3062,19 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'hybrid_spaces_unavailable': hybrid_spaces_unavailable,
         'hybrid_space_build_errors': _fold_space_errors,
         'hybrid_space_objective': dict(space_objective),
+        # The owner's set, 2026-10-02: top 2 general + top 1 distance hybrids
+        # per model and family, each built and scored as its own space. The
+        # general rank-1 space keeps the family's old name ('hybrid',
+        # 'hybrid_similarity'); the others carry '__general2' / '__distance1'.
+        # A slot the pool could not fill is named under
+        # hybrid_spaces_unavailable ('<space>__missing_slots') and in
+        # rule_missing_by_model, with the reason.
+        'hybrid_space_slot': dict(space_slot),
+        'hybrid_space_recipe_by_model': convert_numpy(
+            hybrid_space_recipe_by_model),
+        'rule': (next(iter(rule_by_model.values()))['rule']
+                 if rule_by_model else None),
+        'rule_missing_by_model': rule_missing_by_model,
         'hybrid_spaces_note': (
             'One hybrid space per family of stored search, per downstream '
             'model. A predictive search chose its features to predict the '
@@ -3161,6 +3236,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # require_full=False everywhere: a downstream model the search never scored
     # yields a short list with a shortfall_reason instead of raising and killing
     # the run.
+    # These top-2 rows are read off the pool winner's one stored search. The
+    # owner's set (top 2 general + top 1 distance per model and family,
+    # 2026-10-02) is what the fold loop builds; it is listed per model and
+    # space in 'hybrid_space_recipe_by_model'.
     results['top2_base_reps'] = {}
     results['top2_hybrids'] = {}
     results['hybrid_deltas_by_model'] = {}
@@ -3270,6 +3349,17 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         model_strategies = [st for st in strategies
                             if st not in REGRESSION_ONLY_CLEANUPS
                             or model_name in top_models]
+        # The same feature ceiling, per space (2026-10-02): the owner's set
+        # adds the general rank-2 and distance rank-1 recipes, whose budgets
+        # can differ from the pool winner's that hybrid_too_wide checked. A
+        # space wider than the ceiling keeps the four older cleanups only.
+        _space_budget = int(getattr(model_bp, 'budget', 0) or 0)
+        if (cap_features is not None and _space_budget > cap_features
+                and model_name not in hybrid_too_wide):
+            model_strategies = [st for st in model_strategies
+                                if st not in REGRESSION_ONLY_CLEANUPS]
+            results.setdefault('hybrid_space_budgets_above_ceiling', {}) \
+                .setdefault(model_name, {})[space_name] = _space_budget
         per_strategy_scores = {s: [] for s in model_strategies}
         # Same strategies again, measured in the CLEAN-label feature space.
         # That space is the head start: create_hybrid ranks features and splits
@@ -3558,6 +3648,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # Which hybrid space this row was measured in. One per family
                 # of stored search since 2026-09-19.
                 'space': space_name,
+                'hybrid_slot': space_slot.get(space_name),
             }
             (results['per_model_per_strategy_by_space']
                 .setdefault(space_name, {})

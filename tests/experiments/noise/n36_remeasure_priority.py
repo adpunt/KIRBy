@@ -431,6 +431,10 @@ def run(data, config, output_dir, dataset_name, force_rerun=False, **kwargs):
                 ordered_spaces.append(r['space'])
             recipe_record.setdefault(_m, {})[r['space']] = {
                 'built_under_objective': r['objective'],
+                # Which of the owner's set this space is (top 2 general + top 1
+                # distance per model and family, 2026-10-02).
+                'slot': r.get('slot'), 'lineage': r.get('lineage'),
+                'budget_relaxed': r.get('budget_relaxed'),
                 'features_chosen_by': describe_pool_family(r['objective']),
                 'budget': r['budget'],
                 'allocation_method': r['allocation_method'],
