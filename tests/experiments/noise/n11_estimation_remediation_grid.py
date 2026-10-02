@@ -109,7 +109,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     get_precomputed_search, get_best_search_for_downstream, cap_dimensions,
-    DOWNSTREAM_MODELS,
+    DOWNSTREAM_MODELS, get_rule_hybrids, POOL_SUBSETS,
 )
 from kirby.hybrid import create_hybrid
 from kirby.similarity.distance_config import DISTANCE_METRICS
@@ -913,37 +913,123 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # correlation between each held-out molecule's activity and what its five
     # nearest neighbours predict.
     hybrid_recipes = []
-    _by_obj = meta.get('by_objective') or {
-        meta.get('objective', 'predictive'): {
-            'tier': meta.get('tier'), 'aug_condition': meta.get('aug_condition'),
-            'score_mean': meta.get('score_mean'),
-            'metric_name': meta.get('metric_name'),
-            'lower_is_better': meta.get('lower_is_better'),
-            'best_config': meta.get('best_config'),
-        }}
-    for _obj, _entry in _by_obj.items():
-        _bp = (_entry.get('best_config') or {}).get('blueprint')
-        if _bp is None:
-            print(f"  pool family {_obj!r}: no blueprint on its best entry — "
-                  f"no space for it")
-            continue
-        _budget = int(getattr(_bp, 'budget', 0) or 0)
-        hybrid_recipes.append({
-            'space': f'hybrid_{_obj}_{_budget}' if _budget else f'hybrid_{_obj}',
-            'objective': _obj,
-            'blueprint': _bp,
-            'tier': _entry.get('tier'),
-            'aug_condition': _entry.get('aug_condition'),
-            'budget': _budget,
-            'allocation_method': getattr(_bp, 'allocation_method', None),
-            'importance_method': getattr(_bp, 'importance_method', None),
-            'internal_evaluator': getattr(_bp, 'internal_evaluator', None),
-            'augmentation_strategy': getattr(_bp, 'augmentation_strategy', None),
-            'search_score_mean': _entry.get('score_mean'),
-            'search_metric_name': _entry.get('metric_name'),
-            'search_lower_is_better': _entry.get('lower_is_better'),
-        })
+    # THE OWNER'S SET (top 2 general + top 1 distance hybrids per model and
+    # family, 2026-10-02). Each family now gives up to three estimation spaces:
+    # general rank 1 keeps the name this file has always used
+    # ('hybrid_<family>_<budget>'), general rank 2 and distance rank 1 add
+    # '__general2' / '__distance1'. The recipe is still the random forest's,
+    # as before: no downstream model is fitted on these spaces, they are where
+    # the noise estimators score molecules. A family or slot that could not be
+    # filled is written to hybrid_arm['unavailable'] with its reason.
+    hybrid_arm['unavailable'] = {}
+    _rule = None
+    try:
+        _rule = get_rule_hybrids(
+            reps, labels, groups, downstream_model='rf', budget=None,
+            dataset_name=dataset_name, augmentations=augmentations,
+            pool_subset=pool_subset, task_type=task_type, data=data)
+    except Exception as exc:
+        from kirby.result_cache import StaleResultDB as _Stale
+        if isinstance(exc, _Stale):
+            raise
+        hybrid_arm['unavailable']['_rule_read'] = (
+            f'the read of the top 2 general + top 1 distance hybrids raised '
+            f'{type(exc).__name__}: {exc}; no hybrid estimation space was built')
+        print(f"  rule hybrid read failed: {type(exc).__name__}: {exc}")
+    for _obj, _fo in ((_rule or {}).get('by_objective') or {}).items():
+        for _h in _fo.get('hybrids') or []:
+            _bp = _h.get('blueprint')
+            _slot = _h.get('slot') or 'general1'
+            if _bp is None:
+                hybrid_arm['unavailable'][f'hybrid_{_obj}__{_slot}'] = (
+                    f'the {_obj} {_slot} hybrid carried no blueprint')
+                continue
+            _budget = int(getattr(_bp, 'budget', 0) or 0)
+            _name = (f'hybrid_{_obj}_{_budget}' if _budget
+                     else f'hybrid_{_obj}')
+            if _slot != 'general1':
+                _name = f'{_name}__{_slot}'
+            hybrid_recipes.append({
+                'space': _name,
+                'objective': _obj,
+                'slot': _slot,
+                'lineage': _h.get('lineage'),
+                'blueprint': _bp,
+                'tier': _h.get('tier'),
+                'aug_condition': _h.get('aug_condition'),
+                'budget': _budget,
+                'budget_relaxed': _h.get('budget_relaxed'),
+                'allocation_method': getattr(_bp, 'allocation_method', None),
+                'importance_method': getattr(_bp, 'importance_method', None),
+                'internal_evaluator': getattr(_bp, 'internal_evaluator', None),
+                'augmentation_strategy': getattr(_bp, 'augmentation_strategy',
+                                                 None),
+                'search_score_mean': _h.get('score_other_folds'),
+                'search_metric_name': _fo.get('metric_name'),
+                'search_lower_is_better': _fo.get('lower_is_better'),
+            })
+        if _fo.get('missing'):
+            hybrid_arm['unavailable'][f'hybrid_{_obj}'] = ' | '.join(
+                _fo['missing'])
+    # A family the pool subset asked for and the read returned nothing under.
+    # Until 2026-10-02 such a family left no trace in the result file.
+    for _obj in POOL_SUBSETS.get(pool_subset, ()):
+        if (_rule is not None
+                and _obj not in (_rule.get('by_objective') or {})):
+            hybrid_arm['unavailable'][f'hybrid_{_obj}'] = (
+                f'the pool held no search under objective={_obj} for this '
+                f'dataset in either the general or the distance searches')
 
+    # The rule read found no hybrid at all but the single-winner lookup
+    # above did (a stand-in pool, or a pool the two reads see differently):
+    # each family's single winner is built, as before 2026-10-02, and the
+    # result file says so.
+    if not hybrid_recipes and meta:
+        _by_obj = meta.get('by_objective') or {
+            meta.get('objective', 'predictive'): {
+                'tier': meta.get('tier'),
+                'aug_condition': meta.get('aug_condition'),
+                'score_mean': meta.get('score_mean'),
+                'metric_name': meta.get('metric_name'),
+                'lower_is_better': meta.get('lower_is_better'),
+                'best_config': meta.get('best_config'),
+            }}
+        for _obj, _entry in _by_obj.items():
+            _bp = (_entry.get('best_config') or {}).get('blueprint')
+            if _bp is None:
+                hybrid_arm['unavailable'].setdefault(
+                    f'hybrid_{_obj}',
+                    'the family was in the pool but its winning configuration '
+                    'carried no blueprint')
+                continue
+            _budget = int(getattr(_bp, 'budget', 0) or 0)
+            hybrid_recipes.append({
+                'space': (f'hybrid_{_obj}_{_budget}' if _budget
+                          else f'hybrid_{_obj}'),
+                'objective': _obj, 'slot': 'general1',
+                'lineage': 'single_winner_fallback', 'blueprint': _bp,
+                'tier': _entry.get('tier'),
+                'aug_condition': _entry.get('aug_condition'),
+                'budget': _budget, 'budget_relaxed': None,
+                'allocation_method': getattr(_bp, 'allocation_method', None),
+                'importance_method': getattr(_bp, 'importance_method', None),
+                'internal_evaluator': getattr(_bp, 'internal_evaluator', None),
+                'augmentation_strategy': getattr(_bp, 'augmentation_strategy',
+                                                 None),
+                'search_score_mean': _entry.get('score_mean'),
+                'search_metric_name': _entry.get('metric_name'),
+                'search_lower_is_better': _entry.get('lower_is_better'),
+            })
+        if hybrid_recipes:
+            hybrid_arm['rule_fallback'] = (
+                'the read of the top 2 general + top 1 distance hybrids '
+                'returned none, so each family\'s single winner from the pool '
+                'lookup was built instead')
+            print("  rule set empty: built each family's single winner")
+    if hybrid_recipes:
+        # The rule read found hybrids even where the single-winner lookup
+        # above returned nothing, so no arm was dropped.
+        hybrid_arm['dropped_reason'] = None
     if not hybrid_recipes:
         print("  no blueprint on any family the pool holds: the hybrid "
               "estimation spaces are not built, and the estimator x "
@@ -1103,8 +1189,13 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # evaluation unit's model. The plan says each model's own prediction-built
     # hybrid; reading one recipe per model is a pool read per model. Owner to
     # say whether rf's recipe stands in for every model here.
+    # The similarity settings know two hybrid spaces by name, 'hybrid' and
+    # 'hybrid_similarity', so only each family's general rank 1 is read there
+    # (2026-10-02); the other slots are estimation spaces above.
     sim_recipes = {}
     for _r in hybrid_recipes:
+        if _r.get('slot', 'general1') != 'general1':
+            continue
         _sp = ('hybrid' if _r['objective'] == 'predictive'
                else 'hybrid_similarity' if _r['objective'] == 'similarity'
                else None)
@@ -1628,6 +1719,9 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         'hybrid_spaces': {
             _r['space']: {
                 'objective': _r['objective'],
+                'slot': _r.get('slot'),
+                'lineage': _r.get('lineage'),
+                'budget_relaxed': _r.get('budget_relaxed'),
                 'tier': _r['tier'],
                 'aug_condition': _r['aug_condition'],
                 'budget_features': _r['budget'],

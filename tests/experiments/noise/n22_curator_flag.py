@@ -111,7 +111,7 @@ from experiments._shared import (  # noqa: E402
     POOL_SUBSETS, DOWNSTREAM_MODELS,
     noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
-    get_best_search_for_downstream,
+    get_best_search_for_downstream, get_rule_hybrids,
     searched_models, resolve_comparison_models,
 )
 from kirby.utils.noise_estimation import get_noise_estimator  # noqa: E402
@@ -134,6 +134,7 @@ from noise_helpers import detection_scores  # noqa: E402
 from n06_bindingdb_ground_truth import (  # noqa: E402
     resolve_estimators, _canonical, _clean_matrix, _blueprint_for,
     _fold_hybrid_pair, _space_name, SPACE_FOR_FAMILY, FEATURES_CHOSEN_BY,
+    rule_hybrid_spaces, rule_entry_summary,
     POOL_SUBSET_WITH_SIMILARITY, POOL_SUBSET_WITHOUT_SIMILARITY,
     GP_SUBSAMPLED_ESTIMATORS, GP_MAX_ROWS,
 )
@@ -417,6 +418,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, search_groups, data, dataset_name, task_type,
         augmentations, budget, pool_subset=pool_subset)
     results['seconds_to_resolve_the_pool'] = round(time.time() - t_pool, 1)
+    # Every slot of the owner's set that could not be filled, and why.
+    _rule = meta.get('rule_hybrids') if isinstance(meta, dict) else None
+    if _rule:
+        results['rule_missing'] = list(_rule.get('missing') or [])
 
     winner_family = None
     pool_failure = None
@@ -428,10 +433,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['hybrid_family'] = winner_family
         results['hybrid_family_choice'] = meta.get('objective_choice')
         results['hybrid_metric'] = meta.get('metric_name')
-        entries = [(winner_family, aug_cond, meta.get('tier'), bp,
-                    meta.get('score_mean'), meta.get('metric_name'))]
+        # The owner's set (2026-10-02): rf's top 2 general + top 1 distance
+        # hybrids per family, each its own space (n06.rule_hybrid_spaces).
+        # The single-winner entries below are used only when no rule set
+        # came back.
+        _use_rule = bool(_rule and _rule.get('hybrids'))
+        if _use_rule:
+            _rs, _rp, _ = rule_hybrid_spaces(_rule, eligible_families)
+            spaces.update(_rs)
+            for _nm, _p in _rp.items():
+                if 'unavailable' not in _p:
+                    _p['is_the_recipe_the_pool_returned'] = (
+                        _nm == _space_name(winner_family))
+            space_provenance.update(_rp)
+            results['rule'] = _rule.get('rule')
+            results['rule_model'] = 'rf'
+        entries = ([] if _use_rule else
+                   [(winner_family, aug_cond, meta.get('tier'), bp,
+                     meta.get('score_mean'), meta.get('metric_name'))])
         for o, d in (meta.get('by_objective') or {}).items():
-            if o == winner_family:
+            if o == winner_family or _use_rule:
                 continue
             o_bp = (d.get('best_config') or {}).get('blueprint')
             if o_bp is None:
@@ -651,6 +672,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         except Exception as _e:
             print(f"  top-2 pair grid unavailable "
                   f"({type(_e).__name__}: {_e})")
+
+    # The owner's set as report rows (2026-10-02): per downstream model and
+    # family, the top 2 general + top 1 distance hybrids and the top 2 single
+    # representations. Reads stored searches only; the detectors above run in
+    # rf's set, since n22 fits no downstream model of its own.
+    rule_by_model = {}
+    for _m in DOWNSTREAM_MODELS:
+        try:
+            _r = get_rule_hybrids(
+                reps, labels, search_groups, downstream_model=_m,
+                budget=budget, dataset_name=dataset_name,
+                augmentations=augmentations, pool_subset=pool_subset,
+                task_type=task_type, data=data)
+        except Exception as _e:
+            from kirby.result_cache import StaleResultDB as _Stale
+            if isinstance(_e, _Stale):
+                raise
+            rule_by_model[_m] = {'error': f'{type(_e).__name__}: {_e}'}
+            continue
+        rule_by_model[_m] = {
+            'hybrids': {f: [rule_entry_summary(h) for h in fo.get('hybrids')
+                            or []]
+                        for f, fo in (_r.get('by_objective') or {}).items()},
+            'base_reps': [(b.get('rep'), b.get('score_other_folds'))
+                          for b in _r.get('base_reps') or []],
+            'missing': list(_r.get('missing') or []),
+        }
+    results['rule_hybrids_by_model'] = convert_numpy(rule_by_model)
 
     # New keys, keyed by downstream model name, beside 'top3_base_reps' and not
     # in place of it. A downstream model whose own search never scored it, or

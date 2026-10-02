@@ -665,6 +665,10 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         results['hybrid_recipe_by_model'] = convert_numpy({
             m: {r['space']: {
                 'built_under_objective': r['objective'],
+                # Which of the owner's set this space is (top 2 general + top 1
+                # distance per model and family, 2026-10-02).
+                'slot': r.get('slot'), 'lineage': r.get('lineage'),
+                'budget_relaxed': r.get('budget_relaxed'),
                 'features_chosen_by': describe_pool_family(r['objective']),
                 'budget': r['budget'],
                 'allocation_method': r['allocation_method'],

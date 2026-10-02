@@ -192,6 +192,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS_NOISE,
     get_best_search_for_downstream,
+    pool_recipes_by_family, describe_pool_family, POOL_SUBSETS,
     noise_base_reps_by_model, base_rank_groups, NOISE_BASE_REP_COUNT,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     searched_models, resolve_comparison_models,
@@ -404,6 +405,10 @@ NOISE_SEEDS = (0,)
 # representation (see the module docstring).
 BASE_SPACES = tuple(f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1))
 SPACES = BASE_SPACES + ('hybrid', 'hybrid_similarity')
+# The space name of each search family's general rank-1 hybrid. Rank 2 and the
+# distance rank 1 are '<name>__general2' / '<name>__distance1'
+# (_shared.pool_recipes_by_family, the owner's set, 2026-10-02).
+SPACE_FOR_FAMILY = {'predictive': 'hybrid', 'similarity': 'hybrid_similarity'}
 POOL_SUBSET = 'predictive_and_similarity'
 
 # n01's activity cutoff, in median absolute deviations of this dataset's own
@@ -1122,42 +1127,54 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['hybrid_unavailable_by_model'] = {
         m: d['why'] for m, d in no_recipe.items()}
 
-    # {model: {space: recipe}}. The geometry recipe is taken by name from the
-    # similarity family's own winner, as n18 does.
+    # {model: {space: recipe}}. THE OWNER'S SET (2026-10-02): per model and
+    # per search family, the top 2 hybrids from the general searches and the
+    # top 1 from the distance searches, each built and scored as its own space.
+    # 'hybrid' / 'hybrid_similarity' keep the general rank-1 recipe of each
+    # family; the others are '<space>__general2' and '<space>__distance1'.
+    # Until this date 'hybrid' was the pool's single winner and
+    # 'hybrid_similarity' the similarity family's single winner.
     recipe_for_space_by_model = {}
     hybrid_record = {}
+    hybrid_spaces_unavailable = {}
     hybrid_similarity_unavailable = {}
-    for _m, _got in by_model.items():
-        _meta_m = _got['meta'] or {}
-        _by_obj = _meta_m.get('by_objective') or {}
-        _sim = _by_obj.get('similarity')
-        _bp_sim_m = ((_sim or {}).get('best_config') or {}).get('blueprint')
-        recipe_for_space_by_model[_m] = {'hybrid': _got['blueprint']}
+    _ordered_hybrid_spaces = []
+    for _m in downstream_models:
+        _got = by_model.get(_m)
+        _rs, _un = pool_recipes_by_family(
+            (_got or {}).get('meta'), SPACE_FOR_FAMILY,
+            eligible_families=POOL_SUBSETS.get(POOL_SUBSET))
+        for _sp, _why in _un.items():
+            hybrid_spaces_unavailable.setdefault(_sp, {})[_m] = _why
+        if 'hybrid_similarity' in _un and _got is not None:
+            hybrid_similarity_unavailable[_m] = _un['hybrid_similarity']
+        if _got is None or not _rs:
+            continue
+        recipe_for_space_by_model[_m] = {r['space']: r['blueprint']
+                                         for r in _rs}
         hybrid_record[_m] = {
-            'hybrid': {
-                'family': _meta_m.get('objective'),
-                'pool_subset': _meta_m.get('pool_subset'),
-                'budget': getattr(_got['blueprint'], 'budget', None),
-                'reps': sorted(getattr(_got['blueprint'], 'reps', []) or []),
-            }}
-        if _bp_sim_m is not None:
-            recipe_for_space_by_model[_m]['hybrid_similarity'] = _bp_sim_m
-            hybrid_record[_m]['hybrid_similarity'] = {
-                'budget': getattr(_bp_sim_m, 'budget', None),
-                'reps': sorted(getattr(_bp_sim_m, 'reps', []) or []),
-            }
-        else:
-            hybrid_similarity_unavailable[_m] = (
-                'the pool held no search under objective=similarity for this '
-                'model, so the space whose features were chosen to make the '
-                'neighbour distance predictive could not be built for it.'
-                if 'similarity' not in _by_obj else
-                'the similarity family was in the pool but its winning '
-                'configuration carried no blueprint.')
-        print(f"  {_m} / hybrid: {len(hybrid_record[_m]['hybrid']['reps'])} "
-              f"representations, budget "
-              f"{hybrid_record[_m]['hybrid']['budget']}, searched under "
-              f"objective {_meta_m.get('objective')}")
+            r['space']: {
+                'family': r['objective'],
+                'features_chosen_by': describe_pool_family(r['objective']),
+                'slot': r.get('slot'), 'lineage': r.get('lineage'),
+                'tier': r['tier'], 'aug_condition': r['aug_condition'],
+                'pool_subset': (_got['meta'] or {}).get('pool_subset'),
+                'budget': r['budget'],
+                'budget_relaxed': r.get('budget_relaxed'),
+                'allocation_method': r['allocation_method'],
+                'importance_method': r['importance_method'],
+                'reps': sorted(getattr(r['blueprint'], 'reps', []) or []),
+                'search_score_mean': r['search_score_mean'],
+                'search_metric_name': r['search_metric_name'],
+            } for r in _rs}
+        for r in _rs:
+            if r['space'] not in _ordered_hybrid_spaces:
+                _ordered_hybrid_spaces.append(r['space'])
+            print(f"  {_m} / {r['space']}: "
+                  f"{len(hybrid_record[_m][r['space']]['reps'])} "
+                  f"representations, budget {r['budget']}, family "
+                  f"{r['objective']}, {r.get('lineage')} rank "
+                  f"{r.get('slot')}, tier {r['tier']}")
 
     # ── The single-representation comparison, per downstream model ──
     if base_reps_override is not None:
@@ -1175,9 +1192,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         f'base_{_k}' for _k in range(1, NOISE_BASE_REP_COUNT + 1)
         if base_rank_groups(base_by_model, _k, downstream_models))
 
-    spaces = tuple(s_ for s_ in SPACES if s_ in base_spaces_run or (
-        s_ not in BASE_SPACES and any(
-            s_ in _r for _r in recipe_for_space_by_model.values())))
+    # Every hybrid space at least one model holds a recipe for, in the order
+    # the pool reported them (the owner's set, 2026-10-02).
+    spaces = tuple(base_spaces_run) + tuple(_ordered_hybrid_spaces)
+    results['hybrid_spaces_unavailable'] = convert_numpy(
+        hybrid_spaces_unavailable)
     if not recipe_for_space_by_model:
         results['hybrid_available'] = False
         results['hybrid_unavailable_reason'] = (
@@ -1194,6 +1213,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         results['hybrid_available'] = True
         results['hybrid_recipe_by_model'] = convert_numpy(hybrid_record)
+        # The owner's set as read (2026-10-02): every slot it asked for and
+        # every slot it could not fill, with the reason, per model.
+        results['rule'] = next(
+            ((d['meta'] or {}).get('rule_hybrids', {}).get('rule')
+             for d in by_model.values()
+             if (d['meta'] or {}).get('rule_hybrids')), None)
+        results['rule_missing'] = {
+            _m: list(((d['meta'] or {}).get('rule_hybrids') or {})
+                     .get('missing') or [])
+            for _m, d in by_model.items()}
         results['hybrid_similarity_available'] = 'hybrid_similarity' in spaces
         results['hybrid_similarity_unavailable_by_model'] = (
             hybrid_similarity_unavailable)

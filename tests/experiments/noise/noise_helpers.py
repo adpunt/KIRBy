@@ -1407,7 +1407,11 @@ def pool_recipe_per_downstream_model(lookup, models):
     import functools as _ft
     from experiments._shared import get_rule_hybrids as _rule
     _rule_args, _rule_kw = None, None
-    if isinstance(lookup, _ft.partial):
+    # Only for the real pool reader. A smoke test that swaps in a fake lookup
+    # must not trigger real searches through the rule read.
+    from experiments._shared import (
+        get_best_search_for_downstream as _real_lookup)
+    if isinstance(lookup, _ft.partial) and lookup.func is _real_lookup:
         _rule_args = lookup.args
         _rule_kw = {k: v for k, v in (lookup.keywords or {}).items()
                     if k not in ('distance', 'return_fitted', 'downstream_model')}

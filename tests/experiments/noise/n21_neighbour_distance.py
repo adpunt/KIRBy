@@ -94,6 +94,17 @@ model's own ranking beside it. The hybrid distances do not depend on it, but
 their repaired fits are scored on it, so they appear under both prefixes with
 identical detection numbers.
 
+THE HYBRID DISTANCES ARE PER DOWNSTREAM MODEL since 2026-10-02 (the owner's
+set). Each model gets, per family, its own top 2 general hybrids and top 1
+distance hybrid from the stored searches, each is its own distance keyed
+'<space>@<model>|<metric>' (space 'hybrid', 'hybrid__general2',
+'hybrid__distance1', and the same three under 'hybrid_similarity'), and only
+that model's repaired fit is scored in it. Detection average precision is
+model-free, so two models holding the same recipe give the same detection
+numbers under two keys. `hybrid.recipes_by_model` names every recipe and
+`hybrid.unavailable` every slot not filled, with the reason. The shared
+similarity axis still uses the first model's two rank-1 recipes.
+
 `--distance-metric` does not reach this experiment. Every neighbour call here
 names its metric, because the metric is a swept axis.
 
@@ -106,6 +117,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+import functools
 import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -116,6 +128,7 @@ from experiments.dataset_policy import (
 from experiments.noise.noise_helpers import (
     inject_train_labels, noise_spec_for, detection_scores,
     DETECTION_IS_DEFINED, hybrid_for_fold, sweep_conditions,
+    pool_recipe_per_downstream_model,
 )
 from kirby.noise_spec import GROUPED_STRATEGIES
 from experiments.noise.n07_remediation import _predict_for_metric
@@ -127,6 +140,7 @@ from experiments._shared import (
     get_best_search_for_downstream, make_nearest_neighbors,
     top_base_reps, top_hybrids, select_model_rep_pairs, hybrid_deltas,
     searched_models, resolve_comparison_models,
+    pool_recipes_by_family, POOL_SUBSETS,
 )
 from kirby.hybrid import compute_feature_importance
 from kirby.utils.noise_estimation import (
@@ -474,12 +488,20 @@ def suspicion_from_neighbours(neighbour_indices, y, detector, is_clf):
 # ---------------------------------------------------------------------------
 
 def space_specs(importance_methods, metrics, exponents,
-                include_hybrid=True):
+                include_hybrid=True, hybrid_recipes=None):
     """Every (space, metric) cell this run scores, and what each one is.
 
     One entry per key. `family` says which of the five distances it belongs to.
     `distance_metric` is None for forest proximity, which is a distance and not
     a space a metric is applied to.
+
+    hybrid_recipes: {model: [pool_recipes_by_family recipe, ...]}. Given, the
+    hybrid distances are one per (downstream model, recipe, metric), keyed
+    '<space>@<model>|<metric>' and carrying 'recipe_model': only that model's
+    repaired fit is scored in it. This is the owner's set (2026-10-02): per
+    model and family, the top 2 general hybrids and the top 1 distance hybrid.
+    None keeps the two unkeyed hybrid distances ('hybrid|<metric>',
+    'hybrid_similarity|<metric>') of one recipe each.
     """
     specs = {}
     for m in metrics:
@@ -517,7 +539,31 @@ def space_specs(importance_methods, metrics, exponents,
             'one minus the share of trees of a forest fitted on this fold in '
             'which two molecules land in the same leaf'),
     }
-    if include_hybrid:
+    if include_hybrid and hybrid_recipes is not None:
+        for _m, _rs in hybrid_recipes.items():
+            for r in _rs:
+                _fam = ('hybrid_similarity' if r['objective'] == 'similarity'
+                        else 'hybrid')
+                for m in metrics:
+                    specs[f"{r['space']}@{_m}|{m}"] = {
+                        'family': _fam,
+                        'distance_metric': m,
+                        'importance_method': None,
+                        'importance_exponent': None,
+                        'convention_matches_metric': None,
+                        'recipe_model': _m,
+                        'hybrid_key': f"{r['space']}@{_m}",
+                        'slot': r.get('slot', 'general1'),
+                        'lineage': r.get('lineage', 'general'),
+                        'tier': r.get('tier'),
+                        'what_it_is': (
+                            f"the feature space {_m}'s {r.get('slot', 'general1')} "
+                            f"{r['objective']} recipe built (tier "
+                            f"{r.get('tier')}), z-scored, under a {m} "
+                            f"distance; only {_m}'s repaired fit is scored "
+                            f"in it"),
+                    }
+    elif include_hybrid:
         # ⛔ TWO HYBRID DISTANCES, NOT ONE. This file's whole subject is which
         # distance the neighbours are found in, and until 2026-09-19 its fourth
         # distance was only ever the PREDICTION-built space. The pool is asked
@@ -616,7 +662,8 @@ def _build_hybrid_space(train_reps, val_reps, y_noisy, bp, groups_train,
 
 def _spaces_for_pass(X_base_raw, X_base_std, y_noisy, is_clf, specs,
                      importance_methods, forest_kw, hybrid_X, errors,
-                     pass_key, hybrid_sim_X=None, dataset=None):
+                     pass_key, hybrid_sim_X=None, dataset=None,
+                     hybrid_X_by_key=None):
     """Build every space this pass scores, once.
 
     `dataset`, added 2026-09-25 (plan section 3): given, each importance
@@ -688,7 +735,16 @@ def _spaces_for_pass(X_base_raw, X_base_std, y_noisy, is_clf, specs,
         sc = StandardScaler()
         _X_std = sc.fit_transform(_X)
         for key, spec in specs.items():
-            if spec['family'] == _fam:
+            if spec['family'] == _fam and 'hybrid_key' not in spec:
+                built[key] = ('features', _X_std, spec['distance_metric'])
+
+    # One matrix per (downstream model, recipe): the owner's set, 2026-10-02.
+    for hk, _X in (hybrid_X_by_key or {}).items():
+        if _X is None:
+            continue
+        _X_std = StandardScaler().fit_transform(_X)
+        for key, spec in specs.items():
+            if spec.get('hybrid_key') == hk:
                 built[key] = ('features', _X_std, spec['distance_metric'])
 
     return built, zero_importance
@@ -796,74 +852,103 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     base_reps_override = kwargs.get('base_reps')
     noise_groups, _n_groups, _largest = noise_groups_for(data)
 
-    # The hybrid recipe, once, from the precomputed pool. n12's call, including
-    # the subset that admits searches run under objective='similarity'.
+    # The hybrid recipes, PER DOWNSTREAM MODEL, from the precomputed pool.
+    # n12's call, including the subset that admits searches run under
+    # objective='similarity'. Until 2026-10-02 one recipe was fetched for
+    # downstream_models[0] and every model's repaired fit was scored with
+    # neighbours found in that one model's hybrid. Now each model gets its own
+    # set -- the owner's set: per family, its top 2 general hybrids and its top
+    # 1 distance hybrid -- and each model's repaired fit is scored only in its
+    # own hybrids' distances.
     include_hybrid = bool(kwargs.get('include_hybrid', True))
     bp = None
     bp_sim = None
-    # The SearchResult the recipe came out of, kept so the top-2 block at the
-    # end of run() can read the rows it already holds. Before this it was
-    # dropped at the end of the try below, and the only way to report a second
-    # base representation or a second hybrid recipe was a second pool lookup,
-    # which on a cold cache is a full search. Held, it costs 0 model fits.
-    # The same search ranks the single representations, so under --no-hybrid
-    # it is still looked up unless the caller named them (`base_reps`).
+    # The SearchResult the first model's recipe came out of. It ranks the
+    # single representations (see the module docstring) and is read by the
+    # top-2 block at the end of run(). Held, it costs 0 model fits.
     pool_search = None
     hybrid_meta = {'present': False, 'blueprint_is_clean_label': True}
     _lookup_error = None
-    meta = None
+    by_model, no_recipe = {}, {}
+    hybrid_recipes = {}
     if include_hybrid or base_reps_override is None:
         try:
-            pool_search, meta = get_best_search_for_downstream(
-                reps, labels, groups,
-                downstream_model=downstream_models[0], budget=None,
-                augmentations=augmentations, dataset_name=dataset_name,
-                task_type=task_type, data=data,
-                pool_subset='predictive_and_similarity')
+            by_model, no_recipe = pool_recipe_per_downstream_model(
+                functools.partial(
+                    get_best_search_for_downstream, reps, labels, groups,
+                    budget=None, augmentations=augmentations,
+                    dataset_name=dataset_name, task_type=task_type, data=data,
+                    pool_subset='predictive_and_similarity'),
+                downstream_models)
         except Exception as exc:
             _lookup_error = f'{type(exc).__name__}: {exc}'
+        _owner = by_model.get(downstream_models[0]) or {}
+        pool_search = _owner.get('search')
+        if _lookup_error is None and downstream_models[0] in no_recipe:
+            _lookup_error = no_recipe[downstream_models[0]].get('lookup_error')
     if not include_hybrid:
         hybrid_meta['absent_because'] = 'include_hybrid=False was passed'
-    elif _lookup_error is not None:
+    elif _lookup_error is not None and not by_model:
         hybrid_meta['absent_because'] = _lookup_error
     else:
         try:
-            bp = meta['best_config']['blueprint'] if meta else None
-            # The geometry family's own winner, taken by NAME. The pool returns
-            # one family by preference and names the rest under by_objective,
-            # so without this the fourth distance is only ever the
-            # prediction-built space -- see the two-hybrid note in _specs.
-            _by_obj = (meta.get('by_objective') or {}) if meta else {}
-            _sim = _by_obj.get('similarity') or {}
-            bp_sim = _sim.get('best_config', {}).get('blueprint')
-            hybrid_meta['similarity_present'] = bp_sim is not None
-            if bp_sim is None:
-                hybrid_meta['similarity_absent_because'] = (
-                    'the pool held no search under objective=similarity for '
-                    'this dataset'
-                    if 'similarity' not in _by_obj else
-                    'the similarity family was in the pool but its winning '
-                    'configuration carried no blueprint')
-            else:
-                hybrid_meta['similarity_score_mean'] = _sim.get('score_mean')
-                hybrid_meta['similarity_metric_name'] = _sim.get('metric_name')
-                hybrid_meta['similarity_note'] = (
-                    "Its features were chosen so that the distance they "
-                    "define predicts each molecule's activity from its five "
-                    "nearest neighbours. score_mean is that correlation, not "
-                    "the dataset's own metric.")
-            if bp is None:
+            _unavailable = {}
+            for _m in downstream_models:
+                if _m not in by_model:
+                    continue
+                _rs, _un = pool_recipes_by_family(
+                    by_model[_m]['meta'],
+                    {'predictive': 'hybrid', 'similarity': 'hybrid_similarity'},
+                    eligible_families=POOL_SUBSETS['predictive_and_similarity'])
+                if _rs:
+                    hybrid_recipes[_m] = _rs
+                for _sp, _why in _un.items():
+                    _unavailable.setdefault(_sp, {})[_m] = _why
+            # The shared similarity axis below still builds ONE 'hybrid' and
+            # ONE 'hybrid_similarity' neighbour space, the first model's
+            # general rank-1 recipes, as before.
+            _own = {r['space']: r['blueprint']
+                    for r in hybrid_recipes.get(downstream_models[0], [])}
+            bp = _own.get('hybrid')
+            bp_sim = _own.get('hybrid_similarity')
+            hybrid_meta['similarity_present'] = any(
+                r['objective'] == 'similarity'
+                for _rs in hybrid_recipes.values() for r in _rs)
+            hybrid_meta['recipes_by_model'] = convert_numpy({
+                _m: {r['space']: {
+                        'family': r['objective'], 'slot': r.get('slot'),
+                        'lineage': r.get('lineage'), 'tier': r['tier'],
+                        'aug_condition': r['aug_condition'],
+                        'budget': r['budget'],
+                        'budget_relaxed': r.get('budget_relaxed'),
+                        'allocation_method': r['allocation_method'],
+                        'importance_method': r['importance_method'],
+                        'reps': sorted(getattr(r['blueprint'], 'reps', [])
+                                       or []),
+                        'search_score_mean': r['search_score_mean'],
+                        'search_metric_name': r['search_metric_name']}
+                     for r in _rs}
+                for _m, _rs in hybrid_recipes.items()})
+            hybrid_meta['unavailable'] = _unavailable
+            hybrid_meta['models_without_a_recipe'] = {
+                _m: d['why'] for _m, d in no_recipe.items()}
+            hybrid_meta['similarity_note'] = (
+                "A 'hybrid_similarity' space's features were chosen so that "
+                "the distance they define predicts each molecule's activity "
+                "from its five nearest neighbours. Its search_score_mean is "
+                "that correlation, not the dataset's own metric.")
+            if not hybrid_recipes:
                 hybrid_meta['absent_because'] = (
-                    'the precomputed pool returned no recipe for this dataset')
+                    'the precomputed pool returned no recipe for this dataset '
+                    'for any downstream model')
             else:
                 hybrid_meta.update({
                     'present': True,
-                    'family': meta['objective'],
-                    'family_choice': meta['objective_choice'],
-                    'pool_subset': meta['pool_subset'],
-                    'pool_metric': meta['metric_name'],
-                    'tier': meta['tier'],
-                    'aug_condition': meta['aug_condition'],
+                    'pool_subset': 'predictive_and_similarity',
+                    'rule': ("owner's set, 2026-10-02: per downstream model "
+                             "and family, top 2 general + top 1 distance "
+                             "hybrids; each is its own distance, keyed "
+                             "'<space>@<model>|<metric>'"),
                 })
         except Exception as exc:
             hybrid_meta['absent_because'] = f'{type(exc).__name__}: {exc}'
@@ -886,7 +971,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         if m not in base_by_model}
     else:
         base_by_model, base_missing = noise_base_reps_by_model(
-            {m: pool_search for m in downstream_models}, downstream_models,
+            {m: (by_model.get(m) or {}).get('search')
+             for m in downstream_models}, downstream_models,
             reps=reps, dataset_name=dataset_name)
     _owner_reps = base_by_model.get(rank_owner) or []
     base_used = {f'base_{k}': _owner_reps[k - 1]
@@ -909,7 +995,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # detect the same way under both prefixes; only their repaired fits,
     # which are scored on the single representation, differ.
     _specs_one = space_specs(importance_methods, metrics, exponents,
-                             include_hybrid=hybrid_meta['present'])
+                             include_hybrid=hybrid_meta['present'],
+                             hybrid_recipes=hybrid_recipes)
     specs = {}
     for _b, _rn in base_used.items():
         for _key, _spec in _specs_one.items():
@@ -1248,26 +1335,29 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 # labels. hybrid_for_fold reads the objective off the
                 # blueprint and drops the model and metric under a geometry
                 # one, so the same call serves both.
+                # One build per (downstream model, recipe of the owner's set),
+                # each with that model (dropped under a geometry recipe).
                 hybrid_X = hybrid_sim_X = None
-                for _fam, _bp in (('hybrid', bp),
-                                  ('hybrid_similarity', bp_sim)):
-                    if _bp is None:
-                        continue
-                    _X, why = _build_hybrid_space(
-                        train_reps, val_reps, y_noisy, _bp, g_train,
-                        train_augs, val_augs,
-                        model_factories[downstream_models[0]](),
-                        metric_fn, lower_is_better,
-                        cache={'dataset': dataset_name,
-                               'model_name': downstream_models[0],
-                               'metric_name': metric_name,
-                               'train_idx': train_idx})
-                    if _X is None:
-                        errors[f'{pass_key}|{_fam}'] = why
-                    elif _fam == 'hybrid':
-                        hybrid_X = _X
-                    else:
-                        hybrid_sim_X = _X
+                hybrid_X_by_key = {}
+                for _m, _rs in hybrid_recipes.items():
+                    for _r in _rs:
+                        _hk = f"{_r['space']}@{_m}"
+                        _X, why = _build_hybrid_space(
+                            train_reps, val_reps, y_noisy, _r['blueprint'],
+                            g_train, train_augs, val_augs,
+                            model_factories[_m](), metric_fn, lower_is_better,
+                            cache={'dataset': dataset_name, 'model_name': _m,
+                                   'metric_name': metric_name,
+                                   'train_idx': train_idx})
+                        if _X is None:
+                            errors[f'{pass_key}|{_hk}'] = why
+                        else:
+                            hybrid_X_by_key[_hk] = _X
+                            if _m == downstream_models[0]:
+                                if _r['space'] == 'hybrid':
+                                    hybrid_X = _X
+                                elif _r['space'] == 'hybrid_similarity':
+                                    hybrid_sim_X = _X
 
                 # The hybrid distances do not depend on the single
                 # representation, so their neighbours are found once per pass
@@ -1280,7 +1370,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                         X_base_raw, X_base_std, y_noisy, is_clf, _specs_one,
                         importance_methods, forest_kw, hybrid_X, errors,
                         f'{_b}|{pass_key}', hybrid_sim_X=hybrid_sim_X,
-                        dataset=dataset_name)
+                        dataset=dataset_name, hybrid_X_by_key=hybrid_X_by_key)
                     for key in _zero1:
                         _pk = f'{_b}/{key}'
                         zero_imp_builds[_pk] = zero_imp_builds.get(_pk, 0) + 1
@@ -1346,7 +1436,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                                            f'{est_key}|weights'] = \
                                         f'{type(exc).__name__}: {exc}'
                                     continue
-                                for mn in downstream_models:
+                                # A per-model hybrid distance is scored for
+                                # its own model only (owner's set, 2026-10-02).
+                                _rm = _specs_one[key1].get('recipe_model')
+                                for mn in (downstream_models if _rm is None
+                                           else [_rm]):
                                     cell = f'{mn}|{est_key}|{pass_key}'
                                     try:
                                         mdl = model_factories[mn]()

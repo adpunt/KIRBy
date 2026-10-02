@@ -43,6 +43,14 @@ what it was allowed to see when it was chosen.
             blueprint is inflated by roughly this much, and the suite must move to
             the noisy blueprint.
 
+THE OWNER'S SET, 2026-10-02. Each arm now carries three recipes per model: its
+top 2 from the general searches and its top 1 from the distance searches. Each
+is compared clean against noisy at the same slot ('by_slot' in every cell,
+'mean_oracle_advantage_by_slot' in the summary). general1 is the comparison
+above and keeps its keys. A slot either arm could not fill is named in
+'rule_missing'. Cost: two more live searches per cell (the distance searches,
+clean and noisy) and three times the builds per fold.
+
 Also reported: BLUEPRINT AGREEMENT — do the two searches even pick the same thing
 (rep set, allocation, importance, budget)? If they agree, the advantage is ~0 by
 construction and we learn it cheaply.
@@ -109,6 +117,7 @@ from experiments._shared import (
     save_experiment_results, cv_split, get_domain_metric, get_model_factories,
     get_best_search_for_downstream, build_fold_hybrid,
     extract_top3_base_reps, DOWNSTREAM_MODELS_NOISE,
+    get_rule_hybrids,
 )
 from experiments.noise.noise_helpers import noisy_search_specs
 from kirby.noise_spec import TrainingNoise, noisy_labels_hash
@@ -332,6 +341,99 @@ def _reusable_caches(search, n_folds, arm, model_name):
           f"{len(imp)} (fold, importance method) entries and {len(alloc)} "
           f"(fold, evaluator) entries at n_folds={n_folds}")
     return imp, alloc
+
+
+# The owner's set (2026-10-02): for each model, the top 2 hybrids from the
+# general searches and the top 1 from the distance searches. n15 compares a
+# clean-label pick with a noisy-label pick, so each of those three slots is
+# compared clean against noisy: the clean arm's slot k against the noisy arm's
+# slot k. 'general1' is the recipe this file always compared (keys clean_bp /
+# noisy_bp, unchanged). 'general2' and 'distance1' are new pairs.
+RULE_SLOTS = ('general1', 'general2', 'distance1')
+
+
+def _bp_identity(bp, aug_cond):
+    """What makes two recipes the same recipe, for picking a distinct rank 2."""
+    fp = _bp_fingerprint(bp)
+    return None if fp is None else (tuple(fp['reps']), fp['allocation_method'],
+                                    fp['importance_method'], fp['budget'],
+                                    fp['internal_evaluator'], aug_cond)
+
+
+def _rule_slots(reps, labels, groups, augmentations, dataset_name, task_type,
+                model, general1, spec=None, search_settings=None):
+    """The general2 and distance1 recipes for one arm, read with the same
+    settings and the same labels as that arm's own search (_fetch_bp).
+
+    general1 stays the recipe _fetch_bp returned, so every number this file
+    reported before 2026-10-02 is unchanged. general2 is the best general
+    recipe that is not general1: the reader ranks on the mean over every fold
+    and _fetch_bp on the pool winner, and the two can order a tie differently,
+    so taking 'rank 2' blindly could hand back general1 again.
+
+    The distance search is the distance-tier counterpart (DISTANCE_EVALUATORS,
+    DISTANCE_BUDGETS), run here under this arm's labels and settings. The noisy
+    arm's distance search is therefore also chosen on the noisy labels.
+
+    Returns ({slot: (blueprint, aug_condition, entry)}, [why a slot is missing]).
+    """
+    out, missing = {}, []
+    try:
+        rule = get_rule_hybrids(
+            reps, labels, groups, downstream_model=model, budget=None,
+            dataset_name=dataset_name, augmentations=augmentations,
+            task_type=task_type, data=None, label_noise=spec, n_general=3,
+            **({'score_on_noisy_labels': True} if spec is not None else {}),
+            **(search_settings or {}))
+    except Exception as exc:
+        from kirby.result_cache import StaleResultDB as _Stale
+        if isinstance(exc, _Stale):
+            raise
+        return out, [f'the read of the general and distance searches raised '
+                     f'{type(exc).__name__}: {exc}']
+    fam = (rule.get('by_objective') or {}).get('predictive') or {}
+    g1_id = _bp_identity(*general1) if general1[0] is not None else None
+    for h in fam.get('general') or []:
+        bp, aug = h.get('blueprint'), h.get('aug_condition')
+        if bp is None or _bp_identity(bp, aug) == g1_id:
+            continue
+        out['general2'] = (bp, aug, h)
+        break
+    if 'general2' not in out:
+        missing.append('general2: no general recipe other than general1 was '
+                       'scored for this model')
+    dist = fam.get('distance') or []
+    if dist and dist[0].get('blueprint') is not None:
+        out['distance1'] = (dist[0]['blueprint'], dist[0].get('aug_condition'),
+                            dist[0])
+    else:
+        missing.append('distance1: the distance searches returned no recipe '
+                       'for this model')
+    missing += list(fam.get('missing') or rule.get('missing') or [])
+    return out, missing
+
+
+def _paired(scores_c, scores_n, lower_is_better):
+    """One clean-against-noisy comparison over the folds both arms scored."""
+    paired = sorted(set(scores_c) & set(scores_n))
+    dropped = sorted(set(scores_c) ^ set(scores_n))
+    if not paired:
+        return None
+    c_fold = [scores_c[f] for f in paired]
+    n_fold = [scores_n[f] for f in paired]
+    deltas = [((n - c) if lower_is_better else (c - n))
+              for c, n in zip(c_fold, n_fold)]
+    return {
+        'clean_score_mean': float(np.mean(c_fold)),
+        'clean_score_std': float(np.std(c_fold)),
+        'noisy_score_mean': float(np.mean(n_fold)),
+        'noisy_score_std': float(np.std(n_fold)),
+        'clean_fold_scores': c_fold, 'noisy_fold_scores': n_fold,
+        'paired_fold_indices': paired,
+        'oracle_advantage': float(np.mean(deltas)),
+        'oracle_advantage_fold_deltas': deltas,
+        'n_paired_folds': len(paired), 'dropped_fold_indices': dropped,
+    }
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -591,6 +693,45 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                              'noisy_bp', model_name),
             }
 
+            # The owner's set (2026-10-02): general rank 2 and distance rank 1
+            # for each arm, each read under that arm's own labels and settings.
+            # Each pair is built and scored below exactly as general1 is.
+            clean_extra, clean_miss = _rule_slots(
+                reps, labels, groups, augmentations, dataset_name, task_type,
+                model_name, (clean_bp, clean_aug), spec=None,
+                search_settings=search_settings)
+            noisy_extra, noisy_miss = _rule_slots(
+                reps, labels, groups, augmentations, dataset_name, task_type,
+                model_name, (noisy_bp, noisy_aug), spec=spec,
+                search_settings=search_settings)
+            if clean_miss or noisy_miss:
+                results.setdefault('rule_missing', {}).setdefault(sid, {})[
+                    model_name] = {'clean': clean_miss, 'noisy': noisy_miss}
+            # arm name -> (blueprint, aug_condition, (importance, alloc) caches).
+            # general1 keeps the arm names 'clean_bp' / 'noisy_bp'. general2
+            # comes out of the same stored search as general1 only when its
+            # tier and condition match; its caches are reused only then.
+            # The distance recipes come from a different search, so none.
+            _clean_tier = getattr(clean_search, 'tier', None)
+            _noisy_tier = getattr(noisy_search, 'tier', None)
+            def _caches_for(entry, aug, own_aug, own_tier, own):
+                if (entry.get('lineage') == 'general' and aug == own_aug
+                        and (own_tier is None or entry.get('tier') == own_tier)):
+                    return own
+                return ({}, {})
+            arm_specs = {'clean_bp': (clean_bp, clean_aug, arm_caches['clean_bp']),
+                         'noisy_bp': (noisy_bp, noisy_aug, arm_caches['noisy_bp'])}
+            slot_arms = {'general1': ('clean_bp', 'noisy_bp')}
+            for slot in ('general2', 'distance1'):
+                if slot in clean_extra and slot in noisy_extra:
+                    cb, ca, ce = clean_extra[slot]
+                    nb, na, ne = noisy_extra[slot]
+                    arm_specs[f'clean_{slot}'] = (cb, ca, _caches_for(
+                        ce, ca, clean_aug, _clean_tier, arm_caches['clean_bp']))
+                    arm_specs[f'noisy_{slot}'] = (nb, na, _caches_for(
+                        ne, na, noisy_aug, _noisy_tier, arm_caches['noisy_bp']))
+                    slot_arms[slot] = (f'clean_{slot}', f'noisy_{slot}')
+
             fp_c, fp_n = _bp_fingerprint(clean_bp), _bp_fingerprint(noisy_bp)
             agree = _agreement(fp_c, fp_n)
             # HOW MANY CONFIGURATIONS EACH ARM ACTUALLY SCORED. The run-time
@@ -619,7 +760,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Keyed by fold index, not appended, so a fold that failed in one
             # arm cannot silently pair with a different fold in the other.
-            scores = {'clean_bp': {}, 'noisy_bp': {}}
+            scores = {a: {} for a in arm_specs}
             for fold_i, (train_idx, val_idx) in enumerate(
                     cv_split(groups, n_folds, sample_X, labels, mode=mode)):
                 # Noise on TRAIN rows only; validation labels stay clean.
@@ -629,8 +770,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
                 val_reps = {k: v[val_idx] for k, v in reps.items()}
 
-                for arm, bp, aug_cond in (('clean_bp', clean_bp, clean_aug),
-                                          ('noisy_bp', noisy_bp, noisy_aug)):
+                for arm, (bp, aug_cond, _arm_cache) in arm_specs.items():
                     augs = augmentations if aug_cond != 'none' else None
                     tr_augs = ({k: v[train_idx] for k, v in augs.items()}
                                if augs else None)
@@ -641,7 +781,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # costs the rebuild it always cost. The metric-keyed
                     # allocation entry is preferred over the default one, the
                     # order the engine itself reads them in.
-                    imp_cache, alloc_cache = arm_caches[arm]
+                    imp_cache, alloc_cache = _arm_cache
                     pre_imp = imp_cache.get(
                         (fold_i, getattr(bp, 'importance_method', None)))
                     _ev = getattr(bp, 'internal_evaluator', None)
@@ -708,6 +848,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             c_mean = float(np.mean(c_fold))
             n_mean = float(np.mean(n_fold))
 
+            # Every slot of the owner's set, clean against noisy (2026-10-02).
+            # general1 is the same comparison as the keys below.
+            _by_slot = {}
+            for slot, (a_c, a_n) in slot_arms.items():
+                _cell = _paired(scores[a_c], scores[a_n], lower_is_better)
+                if _cell is None:
+                    continue
+                _cell['clean_blueprint'] = _bp_fingerprint(arm_specs[a_c][0])
+                _cell['noisy_blueprint'] = _bp_fingerprint(arm_specs[a_n][0])
+                _cell['clean_aug_condition'] = arm_specs[a_c][1]
+                _cell['noisy_aug_condition'] = arm_specs[a_n][1]
+                _cell['tier'] = ('general_distance' if slot.startswith('distance')
+                                 else 'general')
+                _cell['blueprints_identical'] = (
+                    _cell['clean_blueprint'] == _cell['noisy_blueprint'])
+                _by_slot[slot] = _cell
             results['per_noise_per_model'][sid][model_name] = {
                 # Every mean and spread below covers the paired folds only.
                 'clean_bp_score_mean': c_mean,
@@ -723,6 +879,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'n_folds_dropped': len(dropped),
                 'dropped_fold_indices': dropped,
                 'blueprints_identical': agree['identical'],
+                'by_slot': _by_slot,
             }
             if model_name not in results['models']:
                 results['models'].append(model_name)
@@ -732,6 +889,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"over {len(paired)} paired folds"
                   f"{f', {len(dropped)} dropped' if dropped else ''} "
                   f"{'(identical blueprints)' if agree['identical'] else ''}")
+            for slot, _c in _by_slot.items():
+                if slot != 'general1':
+                    print(f"    {slot}: clean={_c['clean_score_mean']:.4f} "
+                          f"noisy={_c['noisy_score_mean']:.4f} "
+                          f"oracle_advantage={_c['oracle_advantage']:+.4f}")
             ck.save(f'{sid}|{model_name}', results)
 
     # ── One row per (level, model), averaging that level's noise draws ──
@@ -817,6 +979,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if c.get('both_arms_saw_the_same_labels')
                 and not c.get('candidate_counts_match')],
         }
+        # The same mean per slot of the owner's set (2026-10-02). 'general1'
+        # is the figure above; the other two are the new pairs.
+        _by = {}
+        for per_model in results['per_noise_per_model'].values():
+            for cell in per_model.values():
+                for slot, c in (cell.get('by_slot') or {}).items():
+                    if np.isfinite(c['oracle_advantage']):
+                        _by.setdefault(slot, []).append(c['oracle_advantage'])
+        results['summary']['mean_oracle_advantage_by_slot'] = {
+            slot: float(np.mean(v)) for slot, v in _by.items()}
+        results['summary']['n_cells_by_slot'] = {
+            slot: len(v) for slot, v in _by.items()}
         s = results['summary']
         print("\n" + "=" * 70)
         print(f"SUMMARY over {s['n_cells']} (noise x model) cells "

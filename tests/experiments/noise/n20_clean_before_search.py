@@ -209,7 +209,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
-    get_best_for_downstream, resolve_pruning_kwargs,
+    get_best_for_downstream, resolve_pruning_kwargs, top_hybrids,
     DOWNSTREAM_MODELS_NOISE, FULL_BUDGETS,
     noise_base_reps_by_model, NOISE_BASE_REP_COUNT,
 )
@@ -564,6 +564,55 @@ def _run_one_search(train_reps, y_score, y_train_col, groups_train, *,
         print(f"      search failed ({namespace}): "
               f"{type(exc).__name__}: {exc}")
         return None
+
+
+# The owner's set (2026-10-02) asks for each model's top 2 general hybrids and
+# its top 1 distance hybrid. n20 reads its hybrids out of its OWN per-fold
+# searches, and those searches are what it studies, so they stay as they are.
+# What it adds is general rank 2 out of the same two searches: each arm is run
+# again in the rank-2 recipe of each side, filed under the model name with this
+# suffix. The distance hybrid would need a distance search per fold per label
+# column beside each general one; that is not added here (see the report).
+GENERAL2_SUFFIX = '__general2'
+
+
+def _bp_key(bp):
+    """What makes two recipes the same recipe, for picking a distinct rank 2."""
+    return (tuple(sorted(getattr(bp, 'reps', []) or [])),
+            getattr(bp, 'allocation_method', None),
+            getattr(bp, 'importance_method', None),
+            getattr(bp, 'budget', None),
+            getattr(bp, 'internal_evaluator', None),
+            getattr(bp, 'step_size', None),
+            getattr(bp, 'rep_count', None))
+
+
+def _recipe_at(search, mname, slot):
+    """The blueprint for one slot of one model's recipes in one search.
+
+    'general1' is get_best_for_downstream's winner, exactly what n20 always
+    built. 'general2' is the best configuration in all_results for this model
+    that is not that winner (top_hybrids, no other model's rows). None when the
+    search holds no such configuration.
+    """
+    if search is None:
+        return None
+    best = get_best_for_downstream(search, mname, budget=None)
+    bp1 = (best or {}).get('blueprint')
+    if slot == 'general1':
+        return bp1
+    try:
+        got = top_hybrids(search, mname, 3, require_full=False)
+    except Exception as exc:
+        print(f"      rank-2 recipe for {mname} unreadable: "
+              f"{type(exc).__name__}: {exc}")
+        return None
+    k1 = _bp_key(bp1) if bp1 is not None else None
+    for e in got.get('selected') or []:
+        bp = e.get('blueprint')
+        if bp is not None and _bp_key(bp) != k1:
+            return bp
+    return None
 
 
 def _fingerprint(best):
@@ -1011,6 +1060,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'flag_rates': list(flag_rates),
         'arms': list(ARMS),
         'arm_the_suite_runs_today': ARM_TODAY,
+        'owners_set_note': (
+            "Owner's set, 2026-10-02: every arm runs in each model's rank-1 "
+            "and rank-2 recipe from the same per-fold search. Rank 2 is filed "
+            f"under '<model>{GENERAL2_SUFFIX}'. The distance hybrid is not "
+            "built: n20 reads only its own per-fold general searches, and a "
+            "distance one would be another search per fold per label column."),
         'arm_the_question_is_about': ARM_ORDERED,
         'models': downstream_models,
         'base_rank_model': BASE_RANK_MODEL,
@@ -1396,14 +1451,41 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     s = StandardScaler()
                     space_asis[mname] = (s.fit_transform(X_tr_h),
                                          s.transform(X_va_h))
+                # The owner's set (2026-10-02): the rank-2 recipe of the same
+                # search, built the same way, for the same two arms.
+                space_asis_g2 = {}
+                for mname in downstream_models:
+                    _bp2 = _recipe_at(search_asis, mname, 'general2')
+                    if _bp2 is None:
+                        errors[f'{regime}|{lvl_key}|d{draw}|f{fold_i}|'
+                               f'{mname}|general2_asis'] = (
+                            'the search on the labels as they are holds no '
+                            'second distinct configuration for this model')
+                        continue
+                    X_tr_h, X_va_h = nc.cached_hybrid_for_fold(
+                        dataset_name, train_reps, val_reps, y0, _bp2, g_tr,
+                        model_factories[mname](), metric_fn, lower_is_better,
+                        model_name=mname, metric_name=metric_name,
+                        train_idx=train_idx)
+                    if X_tr_h is None:
+                        continue
+                    s = StandardScaler()
+                    space_asis_g2[mname] = (s.fit_transform(X_tr_h),
+                                            s.transform(X_va_h))
 
                 # The model fitted on the CLEAN training labels in those same
                 # features, the row's score_clean. Injected regime only: under
                 # the other there is no clean column. Added 2026-09-25.
                 clean_by_model = {}
+                clean_by_model_g2 = {}
                 if spec is not None:
                     for mname, (X_tr_a, X_va_a) in space_asis.items():
                         clean_by_model[mname] = sx.fit_score(
+                            dataset_name, mname, model_factories[mname],
+                            X_tr_a, np.asarray(labels[train_idx]), X_va_a,
+                            y_val, metric)
+                    for mname, (X_tr_a, X_va_a) in space_asis_g2.items():
+                        clean_by_model_g2[mname] = sx.fit_score(
                             dataset_name, mname, model_factories[mname],
                             X_tr_a, np.asarray(labels[train_idx]), X_va_a,
                             y_val, metric)
@@ -1759,13 +1841,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             rate_cell = (cell.setdefault(cleanup, {})
                                              .setdefault(f'{rate:g}', {}))
 
-                            for mname in downstream_models:
-                                arm_cell = rate_cell.setdefault(mname, {})
+                            # general1 is filed under the model's name as
+                            # before; general2 under name + GENERAL2_SUFFIX.
+                            for mname, slot in [
+                                    (_m, _sl) for _m in downstream_models
+                                    for _sl in ('general1', 'general2')]:
+                                mkey = (mname if slot == 'general1'
+                                        else mname + GENERAL2_SUFFIX)
+                                _sp_asis = (space_asis if slot == 'general1'
+                                            else space_asis_g2)
+                                arm_cell = rate_cell.setdefault(mkey, {})
 
                                 # ── the two arms whose features came from the
                                 #    labels as they are ──
-                                if mname in space_asis:
-                                    X_tr_a, X_va_a = space_asis[mname]
+                                if mname in _sp_asis:
+                                    X_tr_a, X_va_a = _sp_asis[mname]
                                     for arm, yv, wv in (
                                             ('search_asis__fit_asis', y0, None),
                                             ('search_asis__fit_cleaned',
@@ -1792,9 +1882,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 #    cleaned labels ──
                                 if search_cleaned is None:
                                     continue
-                                best_c = get_best_for_downstream(search_cleaned,
-                                                                 mname, budget=None)
-                                if not best_c:
+                                _bp_c = _recipe_at(search_cleaned, mname, slot)
+                                if _bp_c is None:
                                     continue
                                 if keep is not None:
                                     # The hybrid is built on the kept rows. Both
@@ -1806,7 +1895,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     X_keep, X_rest = hybrid_for_fold(
                                         {k: v[keep] for k, v in train_reps.items()},
                                         _stack(train_reps, val_reps),
-                                        y0[keep], best_c['blueprint'],
+                                        y0[keep], _bp_c,
                                         (g_tr[keep] if g_tr is not None else None),
                                         model_factories[mname](), metric_fn,
                                         lower_is_better)
@@ -1824,7 +1913,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 else:
                                     X_tr_h, X_va_h = hybrid_for_fold(
                                         train_reps, val_reps, col,
-                                        best_c['blueprint'], g_tr,
+                                        _bp_c, g_tr,
                                         model_factories[mname](), metric_fn,
                                         lower_is_better)
                                     if X_tr_h is None:
@@ -1864,26 +1953,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             _strat = RANDOM_FLAG_CLEANUPS.get(cleanup, cleanup)
                             _sim = _DEFAULT_SIM.get(_strat, sx.NO_SIMILARITY)
                             for mname in downstream_models:
-                                _arms = rate_cell.get(mname, {})
+                              for slot in ('general1', 'general2'):
+                                # general2 rows carry the slot in the model
+                                # input name; general1's are unchanged.
+                                _sfx = '' if slot == 'general1' else GENERAL2_SUFFIX
+                                _arms = rate_cell.get(mname + _sfx, {})
                                 _D = _arms.get('search_asis__fit_asis',
                                                {}).get(fold_key)
                                 if _D is None:
                                     continue
+                                _cl = (clean_by_model if slot == 'general1'
+                                       else clean_by_model_g2)
                                 for arm in ARMS[1:]:
                                     _P = _arms.get(arm, {}).get(fold_key)
                                     if _P is None and arm != ARM_TODAY:
                                         continue
-                                    _mi = (f'hybrid_asis:{mname}'
+                                    _mi = (f'hybrid_asis{_sfx}:{mname}'
                                            if arm.startswith('search_asis')
-                                           else f'hybrid_searched_on_cleaned:'
-                                                f'{mname}')
+                                           else f'hybrid_searched_on_cleaned'
+                                                f'{_sfx}:{mname}')
                                     fold_rows.append(sx.row(
                                         _ident(regime, level, draw, fold_i,
                                                cleanup, rate, base_sp, base_rn,
                                                arm, _mi, _sim),
                                         model=mname, metric=metric,
                                         score_D=_D, score_Dprime=_P,
-                                        score_clean=clean_by_model.get(mname)))
+                                        score_clean=_cl.get(mname)))
+                                if slot != 'general1':
+                                    continue
                                 # The shared twins of the fit-side arm, under
                                 # KIRBY_NOISE_CONTROLS=1. n20's own
                                 # random-flag control (a permuted suspicion
@@ -1971,7 +2068,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if errors:
         results['_errors'] = errors
     results['summary'] = convert_numpy(
-        _summarise(acc, downstream_models, run_cleanups, flag_rates,
+        # general2 keys (the owner's set, 2026-10-02) are summarised beside
+        # each model's general1 keys.
+        _summarise(acc, list(downstream_models) + [
+                       m + GENERAL2_SUFFIX for m in downstream_models],
+                   run_cleanups, flag_rates,
                    metric_name, lower_is_better, identity_probe,
                    recipe_probe))
     results['rows'] = rows.summary()
