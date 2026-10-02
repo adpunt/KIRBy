@@ -6896,6 +6896,10 @@ def get_fold_pool_recipes(
                 'importance_method': r.get('importance_method'),
                 'internal_evaluator': r.get('internal_evaluator'),
                 'budget': r.get('budget'),
+                # How many representations this configuration used (None = the
+                # whole pool). Two entries with the same recipe string differ
+                # here; the rebuild honours it (restrict_to_rep_count).
+                'rep_count': r.get('rep_count'),
                 'metric_name': getattr(search, 'metric_name', None),
                 'lower_is_better': bool(lower),
                 'score_other_folds': float(m),
@@ -7244,7 +7248,17 @@ def build_hybrid_from_entry(reps, labels, groups, entry, *,
 def _create_hybrid_from_blueprint(reps, labels, groups, bp, aug_strat, augs,
                                   objective):
     from kirby.hybrid import create_hybrid
-    return create_hybrid(
+    from kirby.find_best_hybrid import restrict_to_rep_count
+    # Only the representations the recipe was searched over, and only as many
+    # as it used (rep_count). Both were ignored by the whole-data builders.
+    _bp_reps = getattr(bp, 'reps', None)
+    if _bp_reps:
+        _sub = {k: reps[k] for k in _bp_reps if k in reps}
+        if _sub:
+            reps = _sub
+    reps, _rc_note = restrict_to_rep_count(
+        reps, bp, context='build_hybrid_from_entry')
+    X_h, fi = create_hybrid(
         reps, labels,
         allocation_method=bp.allocation_method,
         budget=bp.budget,
@@ -7265,6 +7279,9 @@ def _create_hybrid_from_blueprint(reps, labels, groups, bp, aug_strat, augs,
         groups=groups,
         **({'objective': objective} if objective is not None else {}),
     )
+    if _rc_note and isinstance(fi, dict):
+        fi.update(_rc_note)
+    return X_h, fi
 
 
 def get_fitted_pool_hybrid(
@@ -7301,54 +7318,16 @@ def get_fitted_pool_hybrid(
         )
 
     bp = meta['best_config']['blueprint']
+    # Trust meta['aug_condition'] (the condition that loaded this search), not
+    # the blueprint's stored strategy (2026-04-21 cache-collision bug). The
+    # rebuild forwards every recipe setting, the grouping, the winner's own
+    # objective, and -- since 2026-10-02 -- only the representations the
+    # recipe was searched over (rep_count), via _create_hybrid_from_blueprint.
     aug_strat = meta['aug_condition']
     augs = augmentations if aug_strat != 'none' else None
-
-    X_hybrid, fi = create_hybrid(
-        reps, labels,
-        allocation_method=bp.allocation_method,
-        budget=bp.budget,
-        step_size=getattr(bp, 'step_size', 5),
-        importance_method=bp.importance_method,
-        internal_evaluator=bp.internal_evaluator,
-        augmentations=augs,
-        # Trust meta['aug_condition'] (the actual condition that loaded this
-        # SearchResult), not blueprint's stored augmentation_strategy. The
-        # blueprint can be stale due to the 2026-04-21 cache-collision bug.
-        augmentation_strategy=aug_strat,
-        # The rest of the recipe. Until 2026-09-11 this call named the
-        # allocation method, the budget, the step size, the importance method
-        # and the internal evaluator, and stopped — so the six settings below
-        # took create_hybrid's defaults whatever the search ran under. Five of
-        # them decide whether a block of extra features is kept at all, so the
-        # matrix this function hands back could hold different features from
-        # the one that won the search it is rebuilding. build_fold_hybrid has
-        # forwarded all of them since 2026-08-26; this door had not.
-        # getattr guards blueprints pickled before a field existed.
-        augmentation_margin=float(
-            getattr(bp, 'augmentation_margin', 0.0) or 0.0),
-        augmentation_fraction=getattr(bp, 'augmentation_fraction', None),
-        candidate_ranking=getattr(bp, 'candidate_ranking',
-                                  'residual_correlation'),
-        augmentation_threshold=getattr(bp, 'augmentation_threshold', None),
-        augmentation_budget=int(getattr(bp, 'augmentation_budget', 20) or 20),
-        aug_max_candidates=int(getattr(bp, 'aug_max_candidates', 50) or 50),
-        aug_per_source_budget=getattr(bp, 'aug_per_source_budget', None),
-        # The search that chose this blueprint ran group-aware; the full-data
-        # rebuild must use the same grouping for create_hybrid's internal
-        # split, else it falls back to a random 20% carve.
-        groups=groups,
-        # Rebuild under the SAME objective the search selected under, so the
-        # internal allocation/admission tests score the same quantity. Without
-        # this the full-data rebuild of a geometry-selected blueprint silently
-        # reverted to predictive scoring. Under a pool subset spanning two
-        # families the winner's own objective is the one to rebuild with, and
-        # meta['objective'] names it; it equals `objective` on every call that
-        # names one, and 'predictive' on every call that names neither, which
-        # is create_hybrid's own default.
-        **({'objective': meta.get('objective', objective)}
-           if meta.get('objective', objective) is not None else {}),
-    )
+    X_hybrid, fi = _create_hybrid_from_blueprint(
+        reps, labels, groups, bp, aug_strat, augs,
+        meta.get('objective', objective))
     return X_hybrid, fi, search, meta
 
 
