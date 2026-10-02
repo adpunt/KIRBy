@@ -122,6 +122,18 @@ changed, and `results['budgets']` is still keyed by the number of features.
   'delta_vs_best_rep' (the best single base representation for that model).
   Positive means the hybrid won, whichever way the metric runs.
 All four read rows the pool search already stored: 0 new model fits.
+
+The owner's set (2026-10-02): top 2 general + top 1 distance hybrids per model
+per family. Each (budget, family) now builds three cells, one per slot, read
+with get_rule_hybrids: 'general1', 'general2' and 'distance1'. In each cell the
+similarity numbers are measured on knn's recipe in that slot and each model's
+prediction score on that model's own recipe in that slot. distance1 is what this
+file built before, so results['budgets'] and results['budgets_by_family'] hold
+it unchanged in meaning; every cell is under
+results['budgets_by_slot'][family][slot][budget]. The held-out SAC blocks add
+the predictive general1/general2 cells as candidates 'budget_<b>|<slot>'.
+The optimal-budget and Pareto blocks still read results['budgets'] (distance1).
+Empty slots and why: results['rule_missing'].
 """
 import sys
 import os
@@ -136,7 +148,8 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_fitted_hybrid, get_fitted_pool_hybrid, flatten_fold_weights,
+    get_fitted_hybrid, flatten_fold_weights,
+    get_best_search_for_downstream, get_rule_hybrids, build_hybrid_from_entry,
     estimate_intrinsic_dim_mle, make_cv_splitter,
     get_domain_metric, get_model_factories,
     build_fold_hybrid, extract_top3_base_reps, fold_reselection,
@@ -168,6 +181,25 @@ POOL_SUBSET = 'predictive_and_similarity'
 # The family whose cells fill results['budgets']. It is the one the subset
 # returned on every run before 2026-09-19, so that key does not move.
 PRIMARY_FAMILY = 'predictive'
+
+# THE OWNER'S SET (top 2 general + top 1 distance per model per family,
+# 2026-10-02). Each (budget, family) now builds three cells, one per slot:
+# 'general1' and 'general2' (the top 2 recipes from the general searches) and
+# 'distance1' (the top recipe from the distance searches). The similarity side
+# of a cell is built from knn's recipe in that slot; the prediction side from
+# each downstream model's own recipe in that slot. distance1 is what this file
+# built before that date, so results['budgets'] and
+# results['budgets_by_family'] hold the distance1 cells; every slot is under
+# results['budgets_by_slot'][family][slot][budget].
+RULE_SLOTS = ('general1', 'general2', 'distance1')
+PRIMARY_SLOT = 'distance1'
+
+
+def _entry_summary(h):
+    """The recipe fields of one get_rule_hybrids entry, without the Blueprint."""
+    return {k: h.get(k) for k in (
+        'slot', 'objective', 'tier', 'aug_condition', 'recipe', 'budget',
+        'budget_relaxed', 'metric_name', 'score_other_folds')}
 
 
 def _drop_blueprint(obj):
@@ -302,61 +334,108 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         experiment_sidecar(output_dir, 's08_optimal_dimension', dataset_name),
         run_identity('s08_optimal_dimension', dataset_name, data, config,
                      kwargs=kwargs, budgets=list(budgets),
-                     families=list(families), n_sample=n_sample))
+                     families=list(families), n_sample=n_sample,
+                     # 2026-10-02: cells are per slot of the owner's set.
+                     hybrid_set='top2_general_top1_distance'))
 
-    for budget, family in [(_b, _f) for _b in budgets for _f in families]:
-        print(f"\n  Budget={budget}, {family} family:")
-        if _ck.done(budget=budget, family=family):
-            _saved = _ck.get(budget=budget, family=family)
+    # The owner's set for one (budget, family, downstream model), read once.
+    results['budgets_by_slot'] = {}
+    results['rule_missing'] = {}
+    _rule_cache = {}
+
+    def _rule_for(budget, family, model):
+        key = (budget, family, model)
+        if key not in _rule_cache:
+            try:
+                _rule_cache[key] = get_rule_hybrids(
+                    reps, labels, groups, downstream_model=model,
+                    budget=budget, augmentations=augmentations,
+                    metric=metric_name, task_type=task_type, domain=domain,
+                    dataset_name=dataset_name, objective=family)
+            except Exception as e:
+                _rule_cache[key] = {
+                    'hybrids': [], 'base_reps': [],
+                    'missing': [f'the read raised {type(e).__name__}: {e}']}
+            for _m in _rule_cache[key].get('missing') or []:
+                (results['rule_missing'].setdefault(family, {})
+                 .setdefault(str(budget), [])).append(f'{model}: {_m}')
+        return _rule_cache[key]
+
+    def _slot_entry(rule, slot):
+        return next((h for h in rule.get('hybrids') or []
+                     if h.get('slot') == slot), None)
+
+    def _store_cell(budget, family, slot, cell):
+        (results['budgets_by_slot'].setdefault(family, {})
+         .setdefault(slot, {}))[budget] = cell
+        if slot == PRIMARY_SLOT:
+            results['budgets_by_family'].setdefault(family, {})[budget] = cell
+            if family == PRIMARY_FAMILY:
+                results['budgets'][budget] = cell
+
+    for budget, family, slot in [(_b, _f, _s) for _b in budgets
+                                 for _f in families for _s in RULE_SLOTS]:
+        print(f"\n  Budget={budget}, {family} family, {slot}:")
+        if _ck.done(budget=budget, family=family, slot=slot):
+            _saved = _ck.get(budget=budget, family=family, slot=slot)
             if _saved['top3_base_reps'] is not None:
                 results['top3_base_reps'] = _saved['top3_base_reps']
             if _saved['top3_reported']:
                 _top3_reported = True
-            if _saved['pool_family'] is not None:
+            if _saved['pool_family'] is not None and slot == PRIMARY_SLOT:
                 if family == PRIMARY_FAMILY:
                     results['hybrid_family_by_budget'][budget] = \
                         _saved['pool_family']
                 (results.setdefault('hybrid_family_by_budget_and_family', {})
                     .setdefault(family, {}))[budget] = _saved['pool_family']
-            results['budgets_by_family'].setdefault(family, {})[budget] = \
-                _saved['cell']
-            if family == PRIMARY_FAMILY:
-                results['budgets'][budget] = _saved['cell']
+            _store_cell(budget, family, slot, _saved['cell'])
             continue
         _top3_before = _top3_reported
         _pool_family = None
         t0 = time.time()
 
+        # knn's recipe in this slot carries the similarity side of the cell.
+        _knn_rule = _rule_for(budget, family, 'knn')
+        _knn_entry = _slot_entry(_knn_rule, slot)
+        search, _meta = None, None
         try:
-            # Dimension is the study variable: pool helper picks best
-            # (tier, aug_cond) cache file for (knn, budget). 'capped' enters
-            # the comparison naturally via the pool (top tier carries it).
-            # 2026-09-12, owner decision: the subset of the pool this file may
-            # pick from now includes similarity-built hybrids, not only
-            # prediction-built ones. distance=True on the next line is a
-            # different setting (evaluator + budget lineage) and is unchanged.
-            X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
-                reps, labels, groups,
-                downstream_model='knn', budget=budget,
-                augmentations=data.get('augmentations'),
-                metric=metric_name, task_type=task_type, domain=domain,
-                dataset_name=dataset_name, distance=True,
-                # The family BY NAME. Passing pool_subset here returned the
-                # first family the subset names on every call, so the geometry
-                # one was never built. objective= and pool_subset= cannot both
-                # be passed; the pool refuses the pair.
-                objective=family)
+            if _knn_entry is None:
+                raise RuntimeError(
+                    'no knn recipe in this slot: '
+                    + ('; '.join(_knn_rule.get('missing') or [])
+                       or 'none returned'))
+            # Built on every row from the recipe's full settings and its own
+            # family's objective, as get_fitted_pool_hybrid built the single
+            # distance winner before 2026-10-02.
+            X_hybrid, fi = build_hybrid_from_entry(
+                reps, labels, groups, _knn_entry,
+                augmentations=data.get('augmentations'))
             # Clamp to >=0: weights feed compute_distance_matrix (X*sqrt(w),
             # no internal guard). lightgbm_gain is non-negative today, so this
             # is a no-op now but prevents silent NaN if importance ever becomes
             # signed. Mirrors the per-rep clamp below.
             weights_flat = (np.maximum(flatten_fold_weights(fi), 0) if fi
                             else np.ones(X_hybrid.shape[1]))
+            # The distance1 cell also reads the stored distance search the
+            # pool picks for knn, for the report rows below (top 2 base
+            # representations, top 2 hybrids and hybrid deltas per model),
+            # as before. 0 model fits.
+            if slot == PRIMARY_SLOT:
+                try:
+                    search, _meta = get_best_search_for_downstream(
+                        reps, labels, groups,
+                        downstream_model='knn', budget=budget,
+                        augmentations=data.get('augmentations'),
+                        metric=metric_name, task_type=task_type,
+                        domain=domain, dataset_name=dataset_name,
+                        distance=True, objective=family)
+                except Exception as _e:
+                    print(f"    report-row search not read: {_e}")
+                    search, _meta = None, None
             # Reported from the PREDICTIVE family's search, which is the one
-            # this key held before 2026-09-19. Each family's own ranking of the
-            # single representations is a different quantity -- a similarity
-            # search ranks them by the neighbour correlation and fits no model.
-            if family == PRIMARY_FAMILY and not _top3_reported:
+            # this key held before 2026-09-19.
+            if (family == PRIMARY_FAMILY and not _top3_reported
+                    and search is not None):
                 top3 = extract_top3_base_reps(search)
                 if top3:
                     # Use distinct loop vars (rep_n/rep_s) to avoid shadowing the
@@ -366,53 +445,45 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _top3_reported = True
         except Exception as e:
             print(f"    Failed: {e}")
-            _err = {'error': str(e), 'family': family}
-            results['budgets_by_family'].setdefault(family, {})[budget] = _err
-            results['family_unavailable'].setdefault(family, {})[budget] = (
-                f'the pool held no usable search under objective={family} for '
-                f'this dataset at {budget} features: {e}')
-            if family == PRIMARY_FAMILY:
-                results['budgets'][budget] = _err
+            _err = {'error': str(e), 'family': family, 'slot': slot}
+            if slot == PRIMARY_SLOT:
+                results['family_unavailable'].setdefault(family, {})[budget] = (
+                    f'the pool held no usable search under objective={family} '
+                    f'for this dataset at {budget} features: {e}')
+            _store_cell(budget, family, slot, _err)
             continue
 
-        # 2026-09-12: record which family this budget's recipe came from. The
-        # two families' stored scores are in different units — a prediction
-        # search stores the dataset's own metric, a similarity search stores a
-        # Spearman correlation between each held-out molecule's activity and
-        # what its five nearest neighbours predict, which find_best_hybrid names
-        # 'readacross' — so the pool does not rank one against the other. It
-        # returns the first family the subset names and hands back every
-        # family's own best, which is what pool_by_objective holds.
-        _pool_family = {}
+        # Which recipe this cell is: the slot of the owner's set, and the
+        # family it came from.
+        _pool_family = {
+            'hybrid_family': _knn_entry.get('objective'),
+            'hybrid_family_choice': 'named by the caller',
+            'hybrid_family_metric': _knn_entry.get('metric_name'),
+            'hybrid_family_score_mean': _knn_entry.get('score_other_folds'),
+            'pool_subset': f'objective={family}',
+            'slot': slot,
+            'knn_recipe': _entry_summary(_knn_entry),
+        }
         if _meta:
-            _pool_family = {
-                'hybrid_family': _meta.get('objective'),
-                'hybrid_family_choice': _meta.get('objective_choice'),
-                'hybrid_family_metric': _meta.get('metric_name'),
-                'hybrid_family_score_mean': _meta.get('score_mean'),
-                'pool_subset': _meta.get('pool_subset'),
-                'pool_by_objective': {
-                    _o: {'tier': _d.get('tier'),
-                         'aug_condition': _d.get('aug_condition'),
-                         'score_mean': _d.get('score_mean'),
-                         'metric_name': _d.get('metric_name'),
-                         'lower_is_better': _d.get('lower_is_better')}
-                    for _o, _d in (_meta.get('by_objective') or {}).items()
-                },
+            _pool_family['pool_by_objective'] = {
+                _o: {'tier': _d.get('tier'),
+                     'aug_condition': _d.get('aug_condition'),
+                     'score_mean': _d.get('score_mean'),
+                     'metric_name': _d.get('metric_name'),
+                     'lower_is_better': _d.get('lower_is_better')}
+                for _o, _d in (_meta.get('by_objective') or {}).items()
             }
+        if slot == PRIMARY_SLOT:
             # Keyed by budget for the predictive family, unchanged; every
             # family's own row is under the key below it.
             if family == PRIMARY_FAMILY:
                 results['hybrid_family_by_budget'][budget] = _pool_family
             (results.setdefault('hybrid_family_by_budget_and_family', {})
                 .setdefault(family, {}))[budget] = _pool_family
-            _fam_str = ', '.join(
-                f"{_o}={_d['score_mean']:.4f} ({_d['metric_name']})"
-                for _o, _d in _pool_family['pool_by_objective'].items()
-                if _d.get('score_mean') is not None)
-            print(f"    hybrid family: {_pool_family['hybrid_family']} "
-                  f"(picked by {_pool_family['hybrid_family_choice']}); "
-                  f"each family's own best: {_fam_str or 'none'}")
+        print(f"    knn recipe: {_knn_entry.get('tier')}/"
+              f"{_knn_entry.get('aug_condition')} {_knn_entry.get('recipe')}"
+              + ("  [budget relaxed]" if _knn_entry.get('budget_relaxed')
+                 else ""))
 
         actual_dim = X_hybrid.shape[1]
 
@@ -441,16 +512,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # this budget row -- the held-out neighbour correlation and its
         # unweighted twin below -- because knn is the distance evaluator this
         # lineage searched and X_hybrid above was fetched for it.
-        bp = search.best_by_model['knn']['blueprint'] if search.best_by_model.get('knn') else None
+        # knn's recipe in this slot (owner's set, 2026-10-02). Its blueprint
+        # already carries the augmentation condition the search was loaded
+        # under (get_fold_pool_recipes sets it on a copy).
+        bp = _knn_entry.get('blueprint')
         if bp is None:
             print(f"    No blueprint at budget={budget}, skipping prediction")
             continue
-
-        # 2026-04-21 cache-collision fix: align blueprint.augmentation_strategy
-        # with the pool helper's winning aug_condition BEFORE fold loop so
-        # build_fold_hybrid sees the correct strategy.
-        aug_cond = _meta.get('aug_condition', 'uncapped') if _meta else 'uncapped'
-        bp.augmentation_strategy = aug_cond
+        aug_cond = _knn_entry.get('aug_condition') or 'none'
 
         # ── ONE RECIPE PER DOWNSTREAM MODEL FOR THE PREDICTION ARM ──
         #
@@ -474,19 +543,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Identical recipes share one build per fold (keyed by the recipe's own
         # fields), so this costs one extra build per fold only where the recipes
         # genuinely differ.
+        # 2026-10-02: each model's recipe is ITS OWN recipe in this slot of
+        # the owner's set (get_rule_hybrids for that model), not the single
+        # distance search's best_by_model entry.
         bp_by_model = {}
         prediction_recipe_missing = {}
+        _aug_by_model = {}
         for mname in model_factories:
-            _e = search.best_by_model.get(mname) or {}
+            _rm = _rule_for(budget, family, mname)
+            _e = _slot_entry(_rm, slot) or {}
             _bp_m = _e.get('blueprint')
             if _bp_m is None:
                 prediction_recipe_missing[mname] = (
-                    'the search stored no recipe for this downstream model, so '
-                    "it has no features of its own; no other model's recipe is "
-                    'put in its place')
+                    'no recipe for this downstream model in this slot ('
+                    + ('; '.join(_rm.get('missing') or []) or 'none returned')
+                    + "); no other model's recipe is put in its place")
                 continue
-            _bp_m.augmentation_strategy = aug_cond
             bp_by_model[mname] = _bp_m
+            _aug_by_model[mname] = _e.get('aug_condition') or 'none'
         for mname, _why in prediction_recipe_missing.items():
             print(f"    {mname} not scored at budget={budget}: {_why}")
         # Both go on this budget's own row below, so a resumed run restores
@@ -604,10 +678,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             # The same recipe the similarity side above built.
                             _Xtr_m, _Xva_m = X_tr_h, X_va_h
                         else:
+                            # This model's own augmentation condition.
+                            _use_aug_m = (augmentations if augmentations and
+                                          _aug_by_model.get(mname, 'none')
+                                          != 'none' else None)
                             _Xtr_m, _Xva_m, _ = build_fold_hybrid(
                                 train_reps_fold, val_reps_fold, y_train, _bp_m,
-                                augmentations_train=aug_tr,
-                                augmentations_val=aug_va,
+                                augmentations_train=(
+                                    {k: v[train_idx] for k, v in
+                                     _use_aug_m.items()} if _use_aug_m
+                                    else None),
+                                augmentations_val=(
+                                    {k: v[val_idx] for k, v in
+                                     _use_aug_m.items()} if _use_aug_m
+                                    else None),
                                 groups=(groups[train_idx]
                                         if groups is not None else None),
                                 # The swept axis, as above.
@@ -665,8 +749,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # reports does not change: DISTANCE_MODELS goes in as `requested`, not
         # None. A name the search never scored is dropped and named, never
         # swapped for another model's rows.
-        _cmp_models, _cmp_dropped = resolve_comparison_models(
-            search, DISTANCE_MODELS)
+        # Only the distance1 cell reads a stored search (above); the other
+        # slots carry 'rule_rows_by_model' instead.
+        _cmp_models, _cmp_dropped = (
+            resolve_comparison_models(search, DISTANCE_MODELS)
+            if search is not None else ([], []))
         # {downstream model: why it is not in the rows below}. These reasons used
         # to be printed to the terminal only.
         _models_dropped = {_n: _w for _n, _w in _cmp_dropped}
@@ -813,17 +900,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # would have returned on its own.
         budget_result['requested_family'] = family
         budget_result['features_chosen_by'] = describe_pool_family(family)
-        results['budgets_by_family'].setdefault(family, {})[budget] = \
-            budget_result
-        if family == PRIMARY_FAMILY:
-            results['budgets'][budget] = budget_result
+        # Owner's set (2026-10-02): which slot this cell is, and per model the
+        # slot recipes and top 2 single representations the rule returned.
+        budget_result['slot'] = slot
+        budget_result['rule_rows_by_model'] = {
+            mname: {'hybrids': [_entry_summary(h) for h in
+                                _rule_for(budget, family, mname).get('hybrids')
+                                or []],
+                    'base_reps': [
+                        (b.get('rep'), b.get('score_other_folds'))
+                        for b in _rule_for(budget, family, mname).get(
+                            'base_reps') or []]}
+            for mname in model_factories}
+        _store_cell(budget, family, slot, budget_result)
         _ck.put({'cell': budget_result,
-                 'pool_family': (_pool_family if _meta else None),
+                 'pool_family': (_pool_family if slot == PRIMARY_SLOT
+                                 else None),
                  'top3_reported': bool(_top3_reported and not _top3_before),
                  'top3_base_reps': (results.get('top3_base_reps')
                                     if _top3_reported and not _top3_before
                                     else None)},
-                budget=budget, family=family)
+                budget=budget, family=family, slot=slot)
 
         scores_str = ', '.join(f"{mn}={model_means[mn]:.4f}" for mn in model_means
                                if not np.isnan(model_means[mn]))
@@ -1231,6 +1328,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if 'error' not in results['budgets'][b]
         and results['budgets'][b].get('sac_fold_scores')
     ]}
+    # The owner's set (2026-10-02): the general1 and general2 cells of the
+    # predictive family are candidates too, named 'budget_<b>|<slot>'.
+    # 'budget_<b>' alone is the distance1 cell, as before.
+    _extra_slot_cells = [
+        (f'budget_{b}|{_sl}', _c)
+        for _sl in RULE_SLOTS if _sl != PRIMARY_SLOT
+        for b, _c in sorted(((results.get('budgets_by_slot') or {})
+                             .get(PRIMARY_FAMILY, {}).get(_sl, {})).items())
+        if 'error' not in _c]
+    sac_candidates['sac'] += [
+        {'name': _n, 'fold_scores': _c.get('sac_fold_scores', [])}
+        for _n, _c in _extra_slot_cells if _c.get('sac_fold_scores')]
     sac_baselines = {'sac': {
         rep_name: r['sac_fold_scores']
         for rep_name, r in results['per_rep'].items()
@@ -1242,6 +1351,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         f'budget_{b}': v.get('hybrid_family')
         for b, v in results['hybrid_family_by_budget'].items()
     }
+    _hybrid_family_by_candidate.update(
+        {_n: _c.get('hybrid_family') for _n, _c in _extra_slot_cells})
     # Reader-ready block in the shared json_convention so analysis code can call
     # fold_reselection(block['candidates_by_model'], block['baselines_by_model'],
     # block['lower_is_better']) directly. NOTE: for s08 this block carries the
@@ -1277,7 +1388,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for b in budget_list
         if 'error' not in results['budgets'][b]
         and results['budgets'][b].get('sac_fold_scores_unweighted')
-    ]}
+    ] + [
+        {'name': _n, 'fold_scores': _c.get('sac_fold_scores_unweighted', [])}
+        for _n, _c in _extra_slot_cells
+        if _c.get('sac_fold_scores_unweighted')]}
     results['fold_reselection_unweighted'] = {
         'lower_is_better': False,
         # Every fold counts. The candidates here are the arms this file built itself,

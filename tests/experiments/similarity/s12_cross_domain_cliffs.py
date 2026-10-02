@@ -23,6 +23,11 @@ objective='similarity' — because the cliffs are defined on the standardised
 concatenation of every representation, a space outside every hybrid, so an arm
 whose features were picked by distance could not be attributed.
 
+The owner's set (2026-10-02): the three recipes per fold and model are the top 2
+from the general searches ('pool_rank1', 'pool_rank2') and the top 1 from the
+distance searches ('pool_distance1'), still predictive_only. They used to be the
+top 3 from the general searches. Empty slots and why: results['rule_missing'].
+
 Usage:
     python s12_cross_domain_cliffs.py --dataset flab_thermo_tresanco --mode intermediary
     python s12_cross_domain_cliffs.py --dataset tcga_luad_vs_lusc --mode intermediary
@@ -41,7 +46,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, get_model_factories, get_precomputed_search,
-    get_fold_pool_recipes,
+    get_rule_hybrids,
     build_fold_hybrid, DOWNSTREAM_MODELS,
     fold_reselection,
     hr_exclude_folds,
@@ -65,7 +70,18 @@ _POOL_SUBSET = 'predictive_only'
 
 # How many hybrid configurations the pool returns per fold. Each one is built
 # and scored on the fold; none is dropped.
+#
+# THE OWNER'S SET (top 2 general + top 1 distance per model, 2026-10-02): the
+# three are the top 2 recipes from the general searches and the top 1 from the
+# distance searches, read with get_rule_hybrids, still predictive_only. Until
+# that date they were the top 3 from the general searches. Result keys:
+# 'pool_rank1' is general1 (and the headline under results['hybrid'], as
+# before), 'pool_rank2' is general2, 'pool_distance1' is distance1. The general
+# rank-3 recipe is no longer read: it is not in the owner's set.
 _N_POOL_HYBRIDS = 3
+_RULE_SLOTS = ('general1', 'general2', 'distance1')
+_ARM_KEY = {'general1': 'pool_rank1', 'general2': 'pool_rank2',
+            'distance1': 'pool_distance1'}
 
 from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_feature_selection
@@ -401,10 +417,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     _pool_cache = {}
     pool_warnings = {}
+    # Every slot of the owner's set a read could not fill, and why.
+    rule_missing = {}
     pool_n_folds_seen = set()
     print(f"  Hybrid recipes: read from the pool, subset={_POOL_SUBSET} "
           f"(regular and augmented only, no similarity-built hybrids), "
-          f"budget={budget} features, top {_N_POOL_HYBRIDS} per fold")
+          f"budget={budget} features, top 2 general + top 1 distance per fold")
 
     def _fold_pool(mname, fold_i):
         """The pool's ranking for one model on one held-out fold, or None."""
@@ -412,7 +430,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if ck in _pool_cache:
             return _pool_cache[ck]
         try:
-            pool = get_fold_pool_recipes(
+            # The owner's set (top 2 general + top 1 distance, 2026-10-02).
+            # n_base=3 so the fold-0 base ranking below still lists three.
+            pool = get_rule_hybrids(
                 reps, labels, groups,
                 fold_i=fold_i, n_outer_folds=len(folds),
                 downstream_model=mname, budget=budget,
@@ -420,19 +440,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=data.get('augmentations'),
                 data=data, metric=metric_name, task_type=task_type,
                 domain=domain,
-                pool_subset=_POOL_SUBSET,
-                n_hybrids=_N_POOL_HYBRIDS)
+                pool_subset=_POOL_SUBSET, n_base=3)
         except Exception as e:
             print(f"  [warn] pool read ({mname}, fold {fold_i}): "
                   f"{type(e).__name__}: {str(e)[:100]}")
+            rule_missing[f"{mname}|fold{fold_i}"] = [
+                f'the read raised {type(e).__name__}: {e}']
             pool = None
         if pool is not None:
             for w in pool.get('warnings') or []:
                 print(f"  [pool {mname} fold {fold_i}] {w}")
             pool_warnings[f"{mname}|fold{fold_i}"] = list(
                 pool.get('warnings') or [])
-            if pool.get('n_folds_in_pool') is not None:
-                pool_n_folds_seen.add(int(pool['n_folds_in_pool']))
+            if pool.get('missing'):
+                rule_missing[f"{mname}|fold{fold_i}"] = list(pool['missing'])
+            # get_rule_hybrids does not return the pool's fold count; each
+            # entry's per-fold score list has one score per pool fold.
+            for h in pool.get('hybrids') or []:
+                if h.get('fold_scores'):
+                    pool_n_folds_seen.add(len(h['fold_scores']))
         _pool_cache[ck] = pool
         return pool
 
@@ -442,7 +468,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _pool0 = _fold_pool('rf', 0) if 'rf' in model_factories else None
     if _pool0 is not None:
         _ranked0 = ((_pool0.get('by_objective') or {}).get('predictive')
-                    or {}).get('base_reps_ranked') or []
+                    or {}).get('base_reps') or []
         top3 = [(b['rep'], float(b['score_other_folds'])) for b in _ranked0[:3]]
         if top3:
             print(f"  Top-3 base reps for fold 0 (by RF, pool mean over the "
@@ -465,7 +491,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         experiment_sidecar(output_dir, 's12_cross_domain_cliffs', dataset_name),
         run_identity('s12_cross_domain_cliffs', dataset_name, data, config,
                      kwargs=kwargs, models=sorted(model_factories),
-                     budget=budget, n_pool_hybrids=_N_POOL_HYBRIDS))
+                     budget=budget, n_pool_hybrids=_N_POOL_HYBRIDS,
+                     # 2026-10-02: the arms are the owner's set now.
+                     hybrid_set='top2_general_top1_distance'))
     _hyb_threw = []
 
     for rep_name, X_rep in reps.items():
@@ -602,13 +630,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pool = _fold_pool(mname, fold_i)
             hybrids = (pool or {}).get('hybrids') or []
             if pool is not None:
+                # get_rule_hybrids does not pass fold0_pruned through; None
+                # reads as pruned, the conservative reading.
                 _p = pool.get('fold0_pruned')
                 _p = True if _p is None else bool(_p)
                 fold0_pruned_any = (_p if fold0_pruned_any is None
                                     else (fold0_pruned_any or _p))
                 _fold0_pruned_this = (_p if _fold0_pruned_this is None
                                       else (_fold0_pruned_this or _p))
-                _base = pool.get('base_rep') or {}
+                _base = (pool.get('base_reps') or [None])[0] or {}
                 sel_by_fold[fold_i] = {
                     'pool_subset': pool.get('pool_subset'),
                     'objectives': pool.get('objectives'),
@@ -617,8 +647,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'selection_scope': pool.get('selection_scope'),
                     'base_rep': _base.get('rep'),
                     'base_rep_score_other_folds': _base.get('score_other_folds'),
+                    'base_rep2': ((pool.get('base_reps') or [None, None])
+                                  + [None])[1],
+                    'missing': pool.get('missing'),
                     'hybrids': [
-                        {'rank': h.get('rank'), 'name': h.get('name'),
+                        {'rank': h.get('rank'), 'slot': h.get('slot'),
+                         'tier': h.get('tier'),
+                         'budget': h.get('budget'),
+                         'budget_relaxed': h.get('budget_relaxed'),
+                         'name': h.get('name'),
                          'objective': h.get('objective'),
                          'aug_condition': h.get('aug_condition'),
                          'metric_name': h.get('metric_name'),
@@ -629,12 +666,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if not hybrids:
                 print(f"  [warn] the pool held no hybrid configuration for "
                       f"{mname} on fold {fold_i}")
-            for r in range(_N_POOL_HYBRIDS):
-                if r >= len(hybrids):
+            _by_slot = {h.get('slot'): h for h in hybrids}
+            for r, _slot in enumerate(_RULE_SLOTS):
+                h = _by_slot.get(_slot)
+                if h is None:
                     rank_cliff[r].append(float('nan'))
                     rank_noncliff[r].append(float('nan'))
                     continue
-                h = hybrids[r]
                 bp = h.get('blueprint')
                 if bp is None:
                     rank_cliff[r].append(float('nan'))
@@ -653,6 +691,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'pool_name': h.get('name'),
                     'pool_objective': h.get('objective'),
                     'pool_tier': h.get('tier'),
+                    'pool_slot': h.get('slot'),
                     'pool_score_other_folds': h.get('score_other_folds'),
                     'pool_metric_name': h.get('metric_name'),
                 }
@@ -664,7 +703,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         pool_selection_by_model[mname] = {int(fi): s
                                           for fi, s in sorted(sel_by_fold.items())}
         pool_rank_results_by_model[mname] = {
-            f'pool_rank{r + 1}': {
+            _ARM_KEY[_RULE_SLOTS[r]]: {
+                'slot': _RULE_SLOTS[r],
                 'cliff_score': _finite_mean(rank_cliff[r]),
                 'noncliff_score': _finite_mean(rank_noncliff[r]),
                 'cliff_fold_scores': rank_cliff[r],
@@ -716,6 +756,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'pool_read': {
             'pool_subset': _POOL_SUBSET,
             'n_hybrids_per_fold': _N_POOL_HYBRIDS,
+            'rule': 'top 2 general + top 1 distance per model per fold',
+            'arm_keys': dict(_ARM_KEY),
             'budget': budget,
             'searches_run_by_this_file': 0,
             'note': ('recipes read from the stored pool searches and ranked per '
@@ -724,6 +766,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      "fold's scores, not its rows"),
             'warnings': pool_warnings,
         },
+        # Every slot of the owner's set a read could not fill, per (model,
+        # fold), and why (2026-10-02).
+        'rule_missing': rule_missing,
     }
     if top3:
         # Now the pool's mean over the other folds for fold 0, in the dataset's

@@ -33,7 +33,7 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    get_fitted_hybrid, get_fitted_pool_hybrid,
+    get_rule_hybrids, build_hybrid_from_entry,
     estimate_mutual_information_knn, compute_effective_rank,
     FULL_BUDGETS,
 )
@@ -90,14 +90,138 @@ def _mi_knn_capped(X, y, k=5, max_rows=MI_MAX_ROWS, seed=42):
     return estimate_mutual_information_knn(X, y, k=k), n_components
 
 
-def _cell_key(downstream_model, budget):
+# The owner's set, in the order each cell builds them (2026-10-02).
+_RULE_SLOTS = ('general1', 'general2', 'distance1')
+
+
+def _cell_key(downstream_model, budget, slot='general1'):
     """The results['per_rep'] key for one (downstream model, budget) cell.
 
     A Python tuple used to be assigned here, which convert_numpy stringified on
     the way to JSON into keys like "('rf', 25)" — a reader had to parse a repr
     to get the model and the budget back. An explicit string is written instead.
     """
-    return f'{downstream_model}|{budget}'
+    if slot == 'general1':
+        return f'{downstream_model}|{budget}'
+    return f'{downstream_model}|{budget}|{slot}'
+
+
+def _analyse_hybrid(reps, labels, fi, rng):
+    """MI, effective rank and the random/PCA comparisons for every
+    representation, against the features one hybrid kept from it. `fi` is the
+    feature_info create_hybrid returned for that hybrid."""
+    per_rep_results = {}
+    for rep_name, X in reps.items():
+        print(f"\n  {rep_name} (dim={X.shape[1]}):")
+        rep_result = {}
+
+        n_features = X.shape[1]
+        n_samples = X.shape[0]
+
+        # Full rep MI — let estimate_mutual_information_knn handle PCA
+        # internally (max_dim=50, capped at n_samples//5). This ensures
+        # consistent dimensionality treatment across full/selected/random.
+        X_scaled_full = StandardScaler().fit_transform(X)
+        try:
+            mi_full, n_comp_full = _mi_knn_capped(
+                X_scaled_full, labels, k=5)  # large-n row cap
+        except Exception:
+            mi_full, n_comp_full = float('nan'), 0
+        rep_result['mi_full'] = mi_full
+        rep_result['mi_components_full'] = n_comp_full
+        rep_result['effective_rank_full'] = compute_effective_rank(X)
+
+        # Selected features for this rep. Read off the feature_info the
+        # full-data rebuild returned, not search.fitted_results — that
+        # dict is empty here, so this whole comparison never ran.
+        # feature_info also holds 'allocation' and 'augmentation_info',
+        # hence the isinstance check.
+        _fi_rep = fi.get(rep_name) if isinstance(fi, dict) else None
+        if isinstance(_fi_rep, dict) and len(
+                _fi_rep.get('selected_indices', [])) > 0:
+            sel_idx = list(_fi_rep['selected_indices'])
+            n_selected = len(sel_idx)
+
+            if n_selected > 0:
+                X_sel = X[:, sel_idx]
+
+                # MI of selected
+                try:
+                    mi_sel, n_comp_sel = _mi_knn_capped(
+                        StandardScaler().fit_transform(X_sel), labels, k=5)
+                except Exception:
+                    mi_sel, n_comp_sel = float('nan'), 0
+                rep_result['mi_selected'] = mi_sel
+                rep_result['mi_components_selected'] = n_comp_sel
+                rep_result['n_selected'] = n_selected
+                rep_result['effective_rank_selected'] = compute_effective_rank(X_sel)
+
+                # Random subset of same size
+                rand_idx = rng.choice(n_features, n_selected, replace=False)
+                X_rand = X[:, rand_idx]
+                try:
+                    mi_rand, n_comp_rand = _mi_knn_capped(
+                        StandardScaler().fit_transform(X_rand), labels, k=5)
+                except Exception:
+                    mi_rand, n_comp_rand = float('nan'), 0
+                rep_result['mi_random'] = mi_rand
+                rep_result['mi_components_random'] = n_comp_rand
+                rep_result['effective_rank_random'] = compute_effective_rank(X_rand)
+
+                # PCA to same dim — cap at min(50, n//5) so the KSG
+                # estimator's internal PCA does not further reduce
+                # this arm. Matches the implicit cap applied to the
+                # full/selected/random arms inside the helper.
+                ksg_cap = min(50, max(1, n_samples // 5))
+                n_pca_comp = min(n_selected, n_samples - 1, ksg_cap)
+                X_scaled_rep = StandardScaler().fit_transform(X)
+                if n_features > 2000:
+                    from sklearn.decomposition import TruncatedSVD
+                    X_pca_match = TruncatedSVD(n_components=n_pca_comp, random_state=42).fit_transform(X_scaled_rep)
+                else:
+                    X_pca_match = PCA(n_components=n_pca_comp, random_state=42).fit_transform(X_scaled_rep)
+                try:
+                    mi_pca, n_comp_pca = _mi_knn_capped(
+                        X_pca_match, labels, k=5)
+                except Exception:
+                    mi_pca, n_comp_pca = float('nan'), 0
+                rep_result['mi_pca'] = mi_pca
+                rep_result['mi_components_pca'] = n_comp_pca
+                rep_result['effective_rank_pca'] = compute_effective_rank(X_pca_match)
+
+                # MI density = nats per PCA COMPONENT, on both sides.
+                # It used to be nats per feature: mi_full divided by
+                # n_features, which can be 2048, while mi_full is a sum
+                # over at most 50 components (_mi_knn_capped's
+                # docstring). The two sides of the ratio below were
+                # therefore divided by different things. DESCRIPTIVE
+                # ONLY: this ratio is a full-data concentration
+                # diagnostic (no held-out fold), NOT a hybrid win — see
+                # module docstring.
+                rep_result['mi_density_full'] = (
+                    mi_full / n_comp_full if n_comp_full > 0 else 0)
+                rep_result['mi_density_selected'] = (
+                    mi_sel / n_comp_sel if n_comp_sel > 0 else 0)
+                rep_result['mi_density_unit'] = 'nats_per_pca_component'
+                rep_result['mi_density_ratio'] = (
+                    rep_result['mi_density_selected'] / rep_result['mi_density_full']
+                    if rep_result['mi_density_full'] > 0 else float('nan')
+                )
+
+                print(f"    MI full={mi_full:.4f} ({n_features} features "
+                      f"-> {n_comp_full} components), "
+                      f"selected={mi_sel:.4f} ({n_selected} features "
+                      f"-> {n_comp_sel} components), "
+                      f"random={mi_rand:.4f}, pca={mi_pca:.4f}")
+                print(f"    MI density ratio (selected/full): "
+                      f"{rep_result['mi_density_ratio']:.2f}x")
+            else:
+                print(f"    No features selected from this rep")
+        else:
+            print(f"    Not in hybrid selection")
+
+        per_rep_results[rep_name] = rep_result
+    return per_rep_results
 
 
 # =============================================================================
@@ -118,7 +242,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
 
-    results = {'per_rep': {}, 'gini': {}}
+    results = {'per_rep': {}, 'gini': {}, 'hybrid_recipe': {},
+               'rule_missing': []}
 
     # DESCRIPTIVE-ONLY marker (2026-07-11, decision B). s03 has no held-out
     # fold: MI/density/rank/Gini are all measured on the FULL dataset with the
@@ -159,145 +284,72 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         experiment_sidecar(output_dir, 's03_feature_concentration', dataset_name),
         run_identity('s03_feature_concentration', dataset_name, data, config,
                      kwargs=kwargs, budgets=list(budgets),
-                     downstream_models=list(downstream_models)))
+                     downstream_models=list(downstream_models),
+                     hybrid_set='top2_general_top1_distance'))
 
     for downstream_model in downstream_models:
         for budget in budgets:
             print(f"\n  ── model={downstream_model}, budget={budget} ──")
-            _ckey = dict(model=downstream_model, budget=budget)
-            if _ck.done(**_ckey):
-                _saved = _ck.get(**_ckey)
-                results['per_rep'][_cell_key(downstream_model, budget)] = \
-                    _saved['cell']
-                rng.set_state(_saved['rng_state'])
-                continue
+            # THE OWNER'S SET (top 2 general + top 1 distance per model per
+            # family, 2026-10-02). Until that date this cell read only the
+            # single best general recipe (get_fitted_pool_hybrid). Each of the
+            # three recipes get_rule_hybrids returns is now built on every row
+            # and analysed. Keys: '<model>|<budget>' is general1, as before;
+            # '<model>|<budget>|general2' and '<model>|<budget>|distance1' are
+            # new. A slot the pool could not fill is in results['rule_missing'].
             try:
-                X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
+                rule = get_rule_hybrids(
                     reps, labels, groups,
                     downstream_model=downstream_model, budget=budget,
                     augmentations=augmentations,
                     dataset_name=dataset_name, task_type=task_type)
             except Exception as e:
-                print(f"  find_best_hybrid failed: {e}")
+                print(f"  pool read failed: {e}")
                 results['per_rep'][_cell_key(downstream_model, budget)] = {
                     'error': str(e)}
+                results['rule_missing'].append(
+                    f'{downstream_model} budget={budget} features: pool read '
+                    f'raised {type(e).__name__}: {e}')
                 continue
-
-            per_rep_results = {}
-            for rep_name, X in reps.items():
-                print(f"\n  {rep_name} (dim={X.shape[1]}):")
-                rep_result = {}
-
-                n_features = X.shape[1]
-                n_samples = X.shape[0]
-
-                # Full rep MI — let estimate_mutual_information_knn handle PCA
-                # internally (max_dim=50, capped at n_samples//5). This ensures
-                # consistent dimensionality treatment across full/selected/random.
-                X_scaled_full = StandardScaler().fit_transform(X)
+            results['rule_missing'] += [
+                f'{downstream_model} budget={budget} features: {m}'
+                for m in rule['missing']]
+            _by_slot = {h['slot']: h for h in rule['hybrids']}
+            for _slot in _RULE_SLOTS:
+                _key = _cell_key(downstream_model, budget, _slot)
+                _ckey = dict(model=downstream_model, budget=budget, slot=_slot)
+                if _ck.done(**_ckey):
+                    _saved = _ck.get(**_ckey)
+                    results['per_rep'][_key] = _saved['cell']
+                    results['hybrid_recipe'][_key] = _saved.get('recipe')
+                    rng.set_state(_saved['rng_state'])
+                    continue
+                entry = _by_slot.get(_slot)
+                if entry is None:
+                    results['per_rep'][_key] = {
+                        'error': 'slot empty: ' + ('; '.join(rule['missing'])
+                                                   or 'no recipe returned')}
+                    continue
+                print(f"\n  -- {_slot}: {entry.get('objective')} "
+                      f"{entry.get('tier')}/{entry.get('aug_condition')} "
+                      f"{entry.get('recipe')} --")
                 try:
-                    mi_full, n_comp_full = _mi_knn_capped(
-                        X_scaled_full, labels, k=5)  # large-n row cap
-                except Exception:
-                    mi_full, n_comp_full = float('nan'), 0
-                rep_result['mi_full'] = mi_full
-                rep_result['mi_components_full'] = n_comp_full
-                rep_result['effective_rank_full'] = compute_effective_rank(X)
-
-                # Selected features for this rep. Read off the feature_info the
-                # full-data rebuild returned, not search.fitted_results — that
-                # dict is empty here, so this whole comparison never ran.
-                # feature_info also holds 'allocation' and 'augmentation_info',
-                # hence the isinstance check.
-                _fi_rep = fi.get(rep_name) if isinstance(fi, dict) else None
-                if isinstance(_fi_rep, dict) and len(
-                        _fi_rep.get('selected_indices', [])) > 0:
-                    sel_idx = list(_fi_rep['selected_indices'])
-                    n_selected = len(sel_idx)
-
-                    if n_selected > 0:
-                        X_sel = X[:, sel_idx]
-
-                        # MI of selected
-                        try:
-                            mi_sel, n_comp_sel = _mi_knn_capped(
-                                StandardScaler().fit_transform(X_sel), labels, k=5)
-                        except Exception:
-                            mi_sel, n_comp_sel = float('nan'), 0
-                        rep_result['mi_selected'] = mi_sel
-                        rep_result['mi_components_selected'] = n_comp_sel
-                        rep_result['n_selected'] = n_selected
-                        rep_result['effective_rank_selected'] = compute_effective_rank(X_sel)
-
-                        # Random subset of same size
-                        rand_idx = rng.choice(n_features, n_selected, replace=False)
-                        X_rand = X[:, rand_idx]
-                        try:
-                            mi_rand, n_comp_rand = _mi_knn_capped(
-                                StandardScaler().fit_transform(X_rand), labels, k=5)
-                        except Exception:
-                            mi_rand, n_comp_rand = float('nan'), 0
-                        rep_result['mi_random'] = mi_rand
-                        rep_result['mi_components_random'] = n_comp_rand
-                        rep_result['effective_rank_random'] = compute_effective_rank(X_rand)
-
-                        # PCA to same dim — cap at min(50, n//5) so the KSG
-                        # estimator's internal PCA does not further reduce
-                        # this arm. Matches the implicit cap applied to the
-                        # full/selected/random arms inside the helper.
-                        ksg_cap = min(50, max(1, n_samples // 5))
-                        n_pca_comp = min(n_selected, n_samples - 1, ksg_cap)
-                        X_scaled_rep = StandardScaler().fit_transform(X)
-                        if n_features > 2000:
-                            from sklearn.decomposition import TruncatedSVD
-                            X_pca_match = TruncatedSVD(n_components=n_pca_comp, random_state=42).fit_transform(X_scaled_rep)
-                        else:
-                            X_pca_match = PCA(n_components=n_pca_comp, random_state=42).fit_transform(X_scaled_rep)
-                        try:
-                            mi_pca, n_comp_pca = _mi_knn_capped(
-                                X_pca_match, labels, k=5)
-                        except Exception:
-                            mi_pca, n_comp_pca = float('nan'), 0
-                        rep_result['mi_pca'] = mi_pca
-                        rep_result['mi_components_pca'] = n_comp_pca
-                        rep_result['effective_rank_pca'] = compute_effective_rank(X_pca_match)
-
-                        # MI density = nats per PCA COMPONENT, on both sides.
-                        # It used to be nats per feature: mi_full divided by
-                        # n_features, which can be 2048, while mi_full is a sum
-                        # over at most 50 components (_mi_knn_capped's
-                        # docstring). The two sides of the ratio below were
-                        # therefore divided by different things. DESCRIPTIVE
-                        # ONLY: this ratio is a full-data concentration
-                        # diagnostic (no held-out fold), NOT a hybrid win — see
-                        # module docstring.
-                        rep_result['mi_density_full'] = (
-                            mi_full / n_comp_full if n_comp_full > 0 else 0)
-                        rep_result['mi_density_selected'] = (
-                            mi_sel / n_comp_sel if n_comp_sel > 0 else 0)
-                        rep_result['mi_density_unit'] = 'nats_per_pca_component'
-                        rep_result['mi_density_ratio'] = (
-                            rep_result['mi_density_selected'] / rep_result['mi_density_full']
-                            if rep_result['mi_density_full'] > 0 else float('nan')
-                        )
-
-                        print(f"    MI full={mi_full:.4f} ({n_features} features "
-                              f"-> {n_comp_full} components), "
-                              f"selected={mi_sel:.4f} ({n_selected} features "
-                              f"-> {n_comp_sel} components), "
-                              f"random={mi_rand:.4f}, pca={mi_pca:.4f}")
-                        print(f"    MI density ratio (selected/full): "
-                              f"{rep_result['mi_density_ratio']:.2f}x")
-                    else:
-                        print(f"    No features selected from this rep")
-                else:
-                    print(f"    Not in hybrid selection")
-
-                per_rep_results[rep_name] = rep_result
-
-            results['per_rep'][_cell_key(downstream_model, budget)] = per_rep_results
-            _ck.put({'cell': per_rep_results, 'rng_state': rng.get_state()},
-                    **_ckey)
+                    _X_hybrid, fi = build_hybrid_from_entry(
+                        reps, labels, groups, entry,
+                        augmentations=augmentations)
+                except Exception as e:
+                    print(f"  hybrid build failed: {e}")
+                    results['per_rep'][_key] = {'error': str(e)}
+                    continue
+                _recipe = {k: entry.get(k) for k in (
+                    'slot', 'objective', 'tier', 'aug_condition', 'recipe',
+                    'budget', 'budget_relaxed', 'metric_name',
+                    'score_other_folds')}
+                results['hybrid_recipe'][_key] = _recipe
+                per_rep_results = _analyse_hybrid(reps, labels, fi, rng)
+                results['per_rep'][_key] = per_rep_results
+                _ck.put({'cell': per_rep_results, 'recipe': _recipe,
+                         'rng_state': rng.get_state()}, **_ckey)
 
     # Gini coefficient of importance scores per method
     for wm in weight_methods:

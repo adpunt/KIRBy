@@ -20,6 +20,13 @@ folds' scores. Its subset admits both families of stored search: the predictive
 ones and the ones built under objective='similarity', where a configuration is
 scored by predicting each held-out molecule's activity from its five nearest
 neighbours. Three per family, so six hybrid arms per fold, not three.
+
+2026-10-02, the owner's set: the three per family are now kNN's top 2 recipes
+from the general searches plus its top 1 from the distance searches (they used
+to be the top 3 from the distance searches), read with get_rule_hybrids. Arms
+are named '<family>|<slot>' with slot general1, general2 or distance1. The base
+side adds the pool's second single representation per fold. Slots the pool
+could not fill are listed per fold in results['rule_missing'].
 """
 import sys
 import os
@@ -34,7 +41,7 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    flatten_fold_weights, get_fold_pool_recipes,
+    flatten_fold_weights, get_rule_hybrids,
     get_domain_metric, get_model_factories, build_fold_hybrid,
     fold_hybrid_scoring_kwargs,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
@@ -57,8 +64,38 @@ _FOLD_SEARCH_SEED = 42
 # five nearest neighbours). The owner put similarity hybrids in s04's subset.
 _POOL_SUBSET = 'predictive_and_similarity'
 
-# How many hybrid configurations the pool returns per family, per fold.
-_N_POOL_HYBRIDS = 3
+# THE OWNER'S SET (top 2 general + top 1 distance per model per family,
+# 2026-10-02). Each fold's read returns, per family, kNN's top 2 recipes from
+# the general searches and its top 1 from the distance searches, ranked on the
+# other folds. Before that date this file read the top 3 from the distance
+# searches only. The three positions are the arms.
+_RULE_SLOTS = ('general1', 'general2', 'distance1')
+
+
+def _rule_as_pool(rule):
+    """get_rule_hybrids' return with the keys this file read off
+    get_fold_pool_recipes before 2026-10-02: 'base_rep' (rank 1),
+    by_objective[family]['base_reps_ranked'], and the selection labels.
+    get_rule_hybrids does not pass through fold0_pruned or n_folds_in_pool, so
+    both are None here and the fold_reselection block below treats fold 0 as
+    pruned (the conservative reading)."""
+    out = dict(rule)
+    out['base_rep'] = (rule.get('base_reps') or [None])[0]
+    out['by_objective'] = {}
+    for o, fam in (rule.get('by_objective') or {}).items():
+        fam = dict(fam)
+        fam['base_reps_ranked'] = list(fam.get('base_reps') or [])
+        out['by_objective'][o] = fam
+    out['selection_scope'] = 'other_folds_of_pool_search'
+    out['selection_note'] = (
+        "top 2 general + top 1 distance hybrids per family and the top 2 "
+        "single representations, each ranked by its mean over the pool "
+        "search's other folds; the held-out fold's score chose nothing. The "
+        "searches ran over every row, so this holds out the fold's SCORES, "
+        "not its rows.")
+    out['fold0_pruned'] = None
+    out['n_folds_in_pool'] = None
+    return out
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
 from experiments.similarity._summary_keys import (
@@ -261,22 +298,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         """The pool read for held-out fold `fold_i`, ranked for `model`."""
         key = (int(fold_i), model)
         if key not in _pool_cache:
-            _pool_cache[key] = get_fold_pool_recipes(
+            # The owner's set (top 2 general + top 1 distance per model per
+            # family, 2026-10-02), ranked on the folds other than fold_i.
+            _pool_cache[key] = _rule_as_pool(get_rule_hybrids(
                 reps, labels, groups,
                 fold_i=fold_i, n_outer_folds=len(fold_splits),
                 downstream_model=model, budget=budget,
                 dataset_name=dataset_name, augmentations=augmentations,
-                distance=True, data=data,
+                data=data,
                 metric=metric_name, task_type=task_type, domain=domain,
-                pool_subset=_POOL_SUBSET, n_hybrids=_N_POOL_HYBRIDS)
+                pool_subset=_POOL_SUBSET))
         return _pool_cache[key]
 
     knn_pools = {}
-    hybrid_arms = []          # [(objective, rank), ...] in subset order
+    hybrid_arms = []          # [(objective, slot), ...] in subset order
     fold0_pruned = None
     try:
         for _fi in range(len(fold_splits)):
             knn_pools[_fi] = _fold_pool(_fi, 'knn')
+        # Every slot of the owner's set the pool could not fill, per fold, and
+        # why. Before 2026-10-02 a family with no stored search simply had no
+        # arm and nothing in the result file said so.
+        results['rule_missing'] = {
+            str(_fi): list(knn_pools[_fi].get('missing') or [])
+            for _fi in sorted(knn_pools)}
+        results['rule'] = knn_pools[0].get('rule') if knn_pools else None
         results['hybrid_search_status'] = {
             'ok': bool(any(p['hybrids'] for p in knn_pools.values())),
             'error': (None if any(p['hybrids'] for p in knn_pools.values())
@@ -295,17 +341,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     if knn_pools:
         _p0 = knn_pools[0]
-        # One arm per (family, rank) slot. The RECIPE inside a slot is re-picked
-        # for every fold from that fold's other-folds ranking, so the arm is the
-        # slot, not one fixed recipe. Under 'predictive_and_similarity' that is
-        # three predictive slots plus three similarity slots, not three in total.
+        # One arm per (family, slot): general1, general2, distance1 for each
+        # family (owner's set, 2026-10-02). The RECIPE inside a slot is
+        # re-picked for every fold from that fold's other-folds ranking, so the
+        # arm is the slot, not one fixed recipe. Under
+        # 'predictive_and_similarity' that is up to six arms.
         _seen = []
         for _fi in sorted(knn_pools):
             for h in knn_pools[_fi]['hybrids']:
-                if (h['objective'], h['rank']) not in _seen:
-                    _seen.append((h['objective'], h['rank']))
+                if (h['objective'], h['slot']) not in _seen:
+                    _seen.append((h['objective'], h['slot']))
         _obj_order = {o: i for i, o in enumerate(_p0['objectives'])}
-        hybrid_arms = sorted(_seen, key=lambda k: (_obj_order.get(k[0], 99), k[1]))
+        _slot_order = {sl: i for i, sl in enumerate(_RULE_SLOTS)}
+        hybrid_arms = sorted(_seen, key=lambda k: (_obj_order.get(k[0], 99),
+                                                   _slot_order.get(k[1], 99)))
+        # A (family, slot) pair the rule asked for that no fold filled.
+        results['rule_arms_absent'] = [
+            f'{o}|{sl}' for o in _p0['objectives'] for sl in _RULE_SLOTS
+            if (o, sl) not in _seen]
 
         for _fi in sorted(knn_pools):
             for w in knn_pools[_fi]['warnings']:
@@ -325,9 +378,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     for o in knn_pools[_fi]['by_objective']
                     for b in knn_pools[_fi]['by_objective'][o]['base_reps_ranked'][:3]
                 ],
+                'missing': knn_pools[_fi].get('missing'),
                 'hybrids': [
                     {'name': h['name'], 'objective': h['objective'],
-                     'rank': h['rank'], 'recipe': h['recipe'],
+                     'rank': h['rank'], 'slot': h['slot'],
+                     'tier': h['tier'], 'recipe': h['recipe'],
+                     'budget': h.get('budget'),
+                     'budget_relaxed': h.get('budget_relaxed'),
                      'metric_name': h['metric_name'],
                      'score_other_folds': h['score_other_folds']}
                     for h in knn_pools[_fi]['hybrids']],
@@ -362,7 +419,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for b in _p0['by_objective'][o]['base_reps_ranked'][:3]]
         if hybrid_arms:
             print(f"  Pool hybrid arms: {len(hybrid_arms)} "
-                  f"({', '.join(f'{o} rank {r}' for o, r in hybrid_arms)})")
+                  f"({', '.join(f'{o} {sl}' for o, sl in hybrid_arms)})")
 
     hybrid_blueprint_available = bool(hybrid_arms)
 
@@ -387,7 +444,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         experiment_sidecar(output_dir, 's04_activity_cliffs', dataset_name),
         run_identity('s04_activity_cliffs', dataset_name, data, config,
                      kwargs=kwargs, budget=budget, knn_k=knn_k,
-                     weight_exponent=weight_exponent))
+                     weight_exponent=weight_exponent,
+                     # 2026-10-02: arms are the owner's set now; a sidecar
+                     # written under the old top-3 distance arms is not read.
+                     hybrid_set='top2_general_top1_distance'))
 
     def _evaluate_condition(get_Xy_fn, pre_scaled=False, ck_name=None):
         """Run CV for a condition, return cliff/noncliff metrics."""
@@ -632,18 +692,74 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                            'fold, or every cliff-CV fold was dropped'),
             }
 
-    # --- Hybrid kNN, one arm per (family, rank) slot the pool returned ---
+    # --- The pool's SECOND single representation, re-picked per fold -------
+    # The owner's set (2026-10-02) puts each model's top 2 single
+    # representations on the base side. The arm above is rank 1; this is
+    # rank 2, chosen the same way from the other folds' scores.
+    if knn_pools:
+        _pool_base2_by_fold = {
+            _fi: ((knn_pools[_fi].get('base_reps') or [None, None]) + [None])[1]
+            for _fi in knn_pools}
+        _pool_base2_by_fold = {_fi: (b or {}).get('rep')
+                               for _fi, b in _pool_base2_by_fold.items()}
+
+        def _get_pool_base2(tr, va, yt, fold_i):
+            _rname = _pool_base2_by_fold.get(fold_i)
+            if _rname is None or _rname not in reps:
+                return None, None
+            return reps[_rname][tr], reps[_rname][va]
+
+        res_pb2 = _evaluate_condition(_get_pool_base2, ck_name='pool_base2|uw')
+        res_pb2_w = None
+        if res_pb2:
+            def _get_pool_base2_w(tr, va, yt, fold_i):
+                _rname = _pool_base2_by_fold.get(fold_i)
+                if _rname is None or _rname not in reps:
+                    return None, None
+                imp_arr = fold_importance[_rname].get(_fold_key(tr))
+                if imp_arr is None:
+                    return None, None
+                w = np.maximum(imp_arr, 0) ** weight_exponent
+                _X = reps[_rname]
+                scaler = StandardScaler()
+                return (scaler.fit_transform(_X[tr]) * w,
+                        scaler.transform(_X[va]) * w)
+
+            res_pb2_w = _evaluate_condition(_get_pool_base2_w, pre_scaled=True,
+                                            ck_name='pool_base2|w')
+            reselected_baselines.setdefault('knn', {})[
+                'pool_base_rep2|per_fold'] = res_pb2['fold_scores_cliff']
+            if res_pb2_w:
+                reselected_baselines['knn'][
+                    'pool_base_rep2|per_fold|weighted'] = \
+                    res_pb2_w['fold_scores_cliff']
+        results['pool_base_rep2'] = {
+            'reps_by_fold': {str(_fi): _pool_base2_by_fold.get(_fi)
+                             for _fi in sorted(_pool_base2_by_fold)},
+            'unweighted': res_pb2,
+            'weighted': res_pb2_w,
+            'selection_scope': 'other_folds_of_pool_search',
+            **({} if res_pb2 else {
+                'computed': False,
+                'reason': ('the pool named no second single representation '
+                           'for any fold, or every cliff-CV fold was '
+                           'dropped')}),
+        }
+
+    # --- Hybrid kNN, one arm per (family, slot) of the owner's set ---
     if hybrid_blueprint_available:
         print(f"\n  Hybrid kNN (k=5), {len(hybrid_arms)} pool arms "
-              f"(subset {_POOL_SUBSET}, top {_N_POOL_HYBRIDS} per family):")
+              f"(subset {_POOL_SUBSET}, top 2 general + top 1 distance "
+              f"per family):")
 
         def _arm_entry(fold_i, objective, rank):
-            """The pool's hybrid for this fold in the (family, rank) slot."""
+            """The pool's hybrid for this fold in the (family, slot) arm.
+            `rank` is the slot name: 'general1', 'general2' or 'distance1'."""
             pool = knn_pools.get(fold_i)
             if pool is None:
                 return None
             for h in pool['hybrids']:
-                if h['objective'] == objective and h['rank'] == rank:
+                if h['objective'] == objective and h['slot'] == rank:
                     return h
             return None
 
@@ -670,7 +786,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results['pool_hybrid_arms'] = {}
         for _obj, _rank in hybrid_arms:
-            _arm = f'{_obj}|rank{_rank}'
+            # Arm name: '<family>|<slot>', e.g. 'predictive|general1'.
+            _arm = f'{_obj}|{_rank}'
 
             def _get_arm_uw(tr, va, yt, fold_i, _o=_obj, _r=_rank):
                 X_tr_h, X_va_h, _fi, _bp = _build_arm(tr, va, yt, fold_i, _o, _r)
@@ -712,7 +829,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             _entry = {
                 'objective': _obj,
-                'rank': _rank,
+                'slot': _rank,
+                'tier': next(
+                    ((_arm_entry(_fi, _obj, _rank) or {}).get('tier')
+                     for _fi in sorted(knn_pools)
+                     if _arm_entry(_fi, _obj, _rank) is not None), None),
+                # The distance searches stop at 500 features; a larger budget
+                # is ranked over every budget they hold. Per fold.
+                'budget_by_fold': {
+                    str(_fi): ((_arm_entry(_fi, _obj, _rank) or {})
+                               .get('budget'))
+                    for _fi in sorted(knn_pools)},
+                'budget_relaxed': any(
+                    (_arm_entry(_fi, _obj, _rank) or {}).get('budget_relaxed')
+                    for _fi in sorted(knn_pools)),
                 # The recipe in this slot is re-picked per fold, so store the
                 # one each fold used rather than one name for the arm.
                 'recipe_by_fold': {
@@ -746,11 +876,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Each arm is its own candidate for fold_reselection (model=knn).
             if res:
                 reselection_candidates.setdefault('knn', []).append(
-                    {'name': f'hybrid_{_obj}_rank{_rank}_unweighted',
+                    {'name': f'hybrid_{_obj}_{_rank}_unweighted',
                      'fold_scores': res['fold_scores_cliff']})
             if res_w:
                 reselection_candidates.setdefault('knn', []).append(
-                    {'name': f'hybrid_{_obj}_rank{_rank}_weighted',
+                    {'name': f'hybrid_{_obj}_{_rank}_weighted',
                      'fold_scores': res_w['fold_scores_cliff']})
 
             for _label, _r in (('uw', res), ('w', res_w)):
@@ -765,11 +895,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"{metric_name}_noncliff={_r['score_noncliff']:.4f}")
 
         # results['hybrid']['unweighted'] / ['weighted'] are what s09 and the
-        # first-pass reader read. They now hold the FIRST arm in subset order —
-        # the predictive family's rank-1 hybrid where that family is present —
-        # so those readers keep getting one hybrid number. Every arm is in
+        # first-pass reader read. They hold the lead arm below, so those
+        # readers keep getting one hybrid number. Every arm is in
         # results['pool_hybrid_arms'].
-        _lead = f'{hybrid_arms[0][0]}|rank{hybrid_arms[0][1]}' if hybrid_arms else None
+        # The lead arm is the predictive family's distance1 -- the recipe
+        # this file read as rank 1 before 2026-10-02 (it read the distance
+        # searches only) -- so results['hybrid'] keeps its meaning. If that
+        # slot is empty, the first arm present.
+        _lead_pair = next((a for a in hybrid_arms
+                           if a == ('predictive', 'distance1')),
+                          hybrid_arms[0] if hybrid_arms else None)
+        _lead = f'{_lead_pair[0]}|{_lead_pair[1]}' if _lead_pair else None
         _lead_entry = results['pool_hybrid_arms'].get(_lead, {})
         results['hybrid']['lead_arm'] = _lead
         for _cond in ('unweighted', 'weighted'):
@@ -922,6 +1058,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if _pb.get('weighted'):
         all_methods.append(("kNN(pool_base_rep)_w",
                             _pb['weighted'].get('score_cliff', float('nan'))))
+    _pb2 = results.get('pool_base_rep2') or {}
+    if _pb2.get('unweighted'):
+        all_methods.append(("kNN(pool_base_rep2)",
+                            _pb2['unweighted'].get('score_cliff', float('nan'))))
+    if _pb2.get('weighted'):
+        all_methods.append(("kNN(pool_base_rep2)_w",
+                            _pb2['weighted'].get('score_cliff', float('nan'))))
     # One line per pool arm, both weightings. The lead arm also appears under
     # results['hybrid'] for the readers that expect one hybrid there.
     for _arm, _entry in (results.get('pool_hybrid_arms') or {}).items():
