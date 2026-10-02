@@ -129,6 +129,19 @@ nine widths each task builds an arm at are untouched.
 Top level, not inside a task block, because _orient_deltas negates every field
 named 'delta*' inside the four task blocks and these two are already oriented.
 All four read rows the pool search already stored: 0 new model fits.
+
+The owner's set (2026-10-02): top 2 general + top 1 distance hybrids per model
+per family. Per held-out fold and per task model, get_rule_hybrids returns per
+family the top 2 recipes from the general searches and the top 1 from the
+distance searches, ranked on the other folds; each is its own hybrid space and
+all four tasks run in each, so there are up to six spaces where there were two.
+distance1 keeps the names 'hybrid' and 'hybrid_similarity' (it is the recipe
+this file read before, from the distance searches only); the general recipes
+are '<space>__general1' and '<space>__general2'. A task model with no stored
+row (the Gaussian process) takes the best configuration over every model: the
+distance search for distance1, and ranks 1 and 2 of the general search the pool
+picks for rf for general1 and general2. results['rule_missing'] lists every
+slot a read could not fill, per (model, fold), and why.
 """
 import sys
 import os
@@ -153,7 +166,7 @@ from experiments._shared import (
     compute_feature_importance, build_fold_hybrid,
     fold_hybrid_scoring_kwargs,
     get_precomputed_search, get_best_for_downstream, extract_top3_base_reps,
-    get_best_search_for_downstream, get_fold_pool_recipes,
+    get_best_search_for_downstream, get_rule_hybrids,
     # One sentence saying what a search family chose its features for. Added
     # 2026-09-19 with the second hybrid space.
     describe_pool_family,
@@ -233,6 +246,26 @@ _MODEL_FOR_TASK = {
 
 # One recipe per held-out fold: the pool's rank-1 hybrid for that fold.
 _N_POOL_HYBRIDS = 1
+
+# THE OWNER'S SET (top 2 general + top 1 distance per model per family,
+# 2026-10-02). Per held-out fold and per task model, get_rule_hybrids returns
+# per family the top 2 recipes from the general searches and the top 1 from the
+# distance searches, each ranked on the other folds. Each is its own hybrid
+# space, and all four tasks run in each. distance1 keeps the space name it had
+# ('hybrid', 'hybrid_similarity'), because before that date this file read the
+# distance searches only and its rank-1 recipe is that slot; the general
+# recipes are '<space>__general1' and '<space>__general2'. 3x the hybrid
+# builds of before.
+_RULE_SLOTS = ('distance1', 'general1', 'general2')
+
+
+def _rule_space(family, slot):
+    base = _SPACE_FOR_FAMILY.get(family, f'hybrid_{family}')
+    return base if slot == 'distance1' else f'{base}__{slot}'
+
+
+_FAMILY_OF_SPACE = {_rule_space(f, sl): f
+                    for f in _SPACE_FOR_FAMILY for sl in _RULE_SLOTS}
 
 # How many features every hybrid arm is built with. Owner's decision: s10
 # sweeps the canonical eight rather than one number. None is the ninth entry
@@ -1962,31 +1995,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     pool_fold0_pruned = None
     pool_n_folds_seen = set()
     print(f"  Reading the pool per fold (subset={_POOL_SUBSET}, model=knn, "
-          f"{requested_budget} features asked for, top {_N_POOL_HYBRIDS} "
-          f"per fold)...")
+          f"{requested_budget} features asked for, top 2 general + top 1 "
+          f"distance per family per fold)...")
+    rule_missing = {}
     for fold_i in range(len(fold_splits)):
         try:
-            pool = get_fold_pool_recipes(
+            # The owner's set (top 2 general + top 1 distance per family,
+            # 2026-10-02) for knn, ranked on the folds other than fold_i.
+            pool = get_rule_hybrids(
                 reps, labels, groups,
                 fold_i=fold_i, n_outer_folds=len(fold_splits),
                 downstream_model='knn', budget=requested_budget,
                 dataset_name=dataset_name,
                 augmentations=data.get('augmentations'),
-                distance=True, data=data,
+                data=data,
                 metric=metric_name, task_type=task_type, domain=domain,
-                pool_subset=_POOL_SUBSET,
-                n_hybrids=_N_POOL_HYBRIDS)
+                pool_subset=_POOL_SUBSET)
         except Exception as e:
             pool_fold_errors[f'fold{fold_i}'] = f'{type(e).__name__}: {e}'
             print(f"  [warn] pool read failed (fold {fold_i}): "
                   f"{type(e).__name__}: {e}")
             continue
-        _p = pool.get('fold0_pruned')
-        _p = True if _p is None else bool(_p)
-        pool_fold0_pruned = (_p if pool_fold0_pruned is None
-                             else (pool_fold0_pruned or _p))
-        if pool.get('n_folds_in_pool') is not None:
-            pool_n_folds_seen.add(int(pool['n_folds_in_pool']))
+        # get_rule_hybrids does not pass through whether a search pruned on
+        # fold 0, nor the fold count it holds; both stay unrecorded here.
+        if pool.get('missing'):
+            rule_missing[f'knn/fold{fold_i}'] = list(pool['missing'])
         _warn = list(pool.get('warnings') or [])
         if _warn:
             pool_fold_warnings[f'fold{fold_i}'] = _warn
@@ -1996,56 +2029,54 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if not hybrids:
             pool_fold_errors[f'fold{fold_i}'] = (
                 f'the pool held no kNN hybrid configuration under subset '
-                f'{_POOL_SUBSET}')
+                f'{_POOL_SUBSET}: ' + '; '.join(pool.get('missing') or []))
             continue
 
-        # ⛔ ONE RECIPE PER FAMILY, NOT THE FIRST OF THE LIST. Added 2026-09-19.
-        #
-        # `hybrids` is ordered by the subset's PREFERENCE order, so hybrids[0]
-        # is the predictive family's on every dataset that has one -- which is
-        # every dataset. From 2026-09-12 to 2026-09-19 this file asked for both
-        # families and built that one, and the other appeared only in
-        # 'pool_by_objective'. get_fold_pool_recipes already returns each
-        # family's own ranked list under by_objective[family]['hybrids'];
-        # this reads the top of each.
-        #
-        # It matters here because three of the four tasks turn on a distance
-        # between molecules -- the weighted k-nearest-neighbours fit, and the
-        # Gaussian-process and support-vector arms whose RBF kernel is a
-        # distance -- and the similarity search chooses features so that
-        # exactly that distance predicts activity from the five nearest
-        # neighbours. The fourth, q-RASAR, adds similarity-derived FEATURES
-        # rather than reweighting a distance.
+        # One space per (family, slot) of the owner's set.
         for _fam, _fam_block in (pool.get('by_objective') or {}).items():
-            _fam_hybrids = (_fam_block or {}).get('hybrids') or []
-            _space = _SPACE_FOR_FAMILY.get(_fam, f'hybrid_{_fam}')
-            if not _fam_hybrids:
-                (pool_family_errors.setdefault(_space, {}))[f'fold{fold_i}'] = (
-                    f'the pool held no kNN hybrid configuration under '
-                    f'objective={_fam} on the other folds')
-                continue
-            _ftop = _fam_hybrids[0]
-            fold_entries_by_space.setdefault(_space, {})[fold_i] = _ftop
-            fold_blueprints_by_space.setdefault(_space, {})[fold_i] = \
-                _ftop['blueprint']
-            (fold_recipes_by_space.setdefault(_space, {}))[fold_i] = {
-                'objective': _ftop['objective'],
-                'tier': _ftop['tier'],
-                'aug_condition': _ftop['aug_condition'],
-                'allocation_method': _ftop['allocation_method'],
-                'importance_method': _ftop['importance_method'],
-                'internal_evaluator': _ftop['internal_evaluator'],
-                'budget': _ftop['budget'],
-                'metric_name': _ftop['metric_name'],
-                'lower_is_better': _ftop['lower_is_better'],
-                'score_other_folds': _ftop['score_other_folds'],
-                'n_other_folds': _ftop['n_other_folds'],
-            }
+            _have = {h['slot']: h for h in (_fam_block or {}).get('hybrids')
+                     or []}
+            for _slot in _RULE_SLOTS:
+                _space = _rule_space(_fam, _slot)
+                _ftop = _have.get(_slot)
+                if _ftop is None:
+                    (pool_family_errors.setdefault(_space, {}))[
+                        f'fold{fold_i}'] = (
+                        f'no kNN {_slot} recipe under objective={_fam} on the '
+                        f'other folds: '
+                        + ('; '.join((_fam_block or {}).get('missing') or [])
+                           or 'none returned'))
+                    continue
+                fold_entries_by_space.setdefault(_space, {})[fold_i] = _ftop
+                fold_blueprints_by_space.setdefault(_space, {})[fold_i] = \
+                    _ftop['blueprint']
+                (fold_recipes_by_space.setdefault(_space, {}))[fold_i] = {
+                    'objective': _ftop['objective'],
+                    'slot': _ftop['slot'],
+                    'tier': _ftop['tier'],
+                    'aug_condition': _ftop['aug_condition'],
+                    'allocation_method': _ftop['allocation_method'],
+                    'importance_method': _ftop['importance_method'],
+                    'internal_evaluator': _ftop['internal_evaluator'],
+                    'budget': _ftop['budget'],
+                    'budget_relaxed': _ftop.get('budget_relaxed'),
+                    'metric_name': _ftop['metric_name'],
+                    'lower_is_better': _ftop['lower_is_better'],
+                    'score_other_folds': _ftop['score_other_folds'],
+                    'n_other_folds': _ftop['n_other_folds'],
+                }
 
-        top = hybrids[0]
+        # The unsuffixed recipe: predictive distance1, the slot this file's
+        # rank-1 read was before 2026-10-02; the first entry when that is empty.
+        top = next((h for h in hybrids if h.get('objective') == 'predictive'
+                    and h.get('slot') == 'distance1'), None)
+        if top is None:
+            top = next((h for h in hybrids if h.get('slot') == 'distance1'),
+                       hybrids[0])
         fold_blueprints[fold_i] = top['blueprint']
         fold_recipes[fold_i] = {
             'objective': top['objective'],
+            'slot': top['slot'],
             'tier': top['tier'],
             'aug_condition': top['aug_condition'],
             'allocation_method': top['allocation_method'],
@@ -2061,6 +2092,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"imp={top['importance_method']}, "
               f"ev={top['internal_evaluator']}, "
               f"budget={top['budget']} features, {top['objective']} family "
+              f"{top['slot']} "
               f"({top['metric_name']}={top['score_other_folds']:.4f} on "
               f"{top['n_other_folds']} other folds)")
     # 'hybrid_status' is the per-fold read's outcome, because that is what
@@ -2098,27 +2130,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
         for fold_i in range(len(fold_splits)):
             try:
-                _pm = get_fold_pool_recipes(
+                # The owner's set for this task's model (2026-10-02).
+                _pm = get_rule_hybrids(
                     reps, labels, groups,
                     fold_i=fold_i, n_outer_folds=len(fold_splits),
                     downstream_model=_model, budget=requested_budget,
                     dataset_name=dataset_name,
                     augmentations=data.get('augmentations'),
-                    distance=True, data=data,
+                    data=data,
                     metric=metric_name, task_type=task_type, domain=domain,
-                    pool_subset=_POOL_SUBSET,
-                    n_hybrids=_N_POOL_HYBRIDS)
+                    pool_subset=_POOL_SUBSET)
             except Exception as e:
                 (task_recipe_errors.setdefault(f'model:{_model}', {})
                  )[f'fold{fold_i}'] = f'{type(e).__name__}: {e}'
                 continue
+            if _pm.get('missing'):
+                rule_missing[f'{_model}/fold{fold_i}'] = list(_pm['missing'])
             for _fam, _blk in (_pm.get('by_objective') or {}).items():
-                _fh = (_blk or {}).get('hybrids') or []
-                if not _fh:
-                    continue
-                _sp = _SPACE_FOR_FAMILY.get(_fam, f'hybrid_{_fam}')
-                (_by_model_space.setdefault(_model, {})
-                 .setdefault(_sp, {}))[fold_i] = _fh[0]
+                for _h in (_blk or {}).get('hybrids') or []:
+                    _sp = _rule_space(_fam, _h['slot'])
+                    (_by_model_space.setdefault(_model, {})
+                     .setdefault(_sp, {}))[fold_i] = _h
 
     # One stored search per family, read once, for a model the search never
     # scored. top_hybrids_across_models needs the SearchResult itself, which
@@ -2132,6 +2164,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # results['cross_model_family_member'].
     family_search = {}
     family_member = {}
+    # The general searches too (2026-10-02), so a model with no stored row
+    # still gets general1 and general2 from the ranking over every model: the
+    # general search the pool picks for rf, the model every general search
+    # scores.
+    family_search_general = {}
+    for _fam in _POOL_FAMILIES:
+        try:
+            _sg, _mg = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model='rf', budget=requested_budget,
+                augmentations=data.get('augmentations'),
+                metric=metric_name, task_type=task_type, domain=domain,
+                dataset_name=dataset_name, data=data,
+                distance=False, objective=_fam)
+        except Exception as e:
+            family_member[f'{_fam}__general'] = {
+                'absent_reason': f'{type(e).__name__}: {e}'}
+            continue
+        if _sg is None or _mg is None:
+            family_member[f'{_fam}__general'] = {
+                'absent_reason': 'the pool holds no general search of this '
+                                 'family'}
+            continue
+        family_search_general[_fam] = _sg
+        family_member[f'{_fam}__general'] = {
+            'tier': _mg['tier'],
+            'aug_condition': _mg['aug_condition'],
+            'metric_name': _mg['metric_name'],
+            'member_chosen_for_model': 'rf',
+            'models_the_search_scored': sorted(
+                (getattr(_sg, 'best_by_model', None) or {}).keys()),
+        }
     for _fam in _POOL_FAMILIES:
         try:
             _sf, _mf = get_best_search_for_downstream(
@@ -2166,8 +2230,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # {space: {task: {fold: the model whose score chose that fold's recipe}}}
     task_recipe_chosen_by = {}
     for _task_name, _model in sorted(_MODEL_FOR_TASK.items()):
-        for _fam in _POOL_FAMILIES:
-            _sp = _SPACE_FOR_FAMILY.get(_fam, f'hybrid_{_fam}')
+        for _fam, _slot in [(f, sl) for f in _POOL_FAMILIES
+                            for sl in _RULE_SLOTS]:
+            _sp = _rule_space(_fam, _slot)
             _own = ((_by_model_space.get(_model) or {}).get(_sp)) or {}
             if _own:
                 for _f, _e in _own.items():
@@ -2176,12 +2241,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     (fold_recipes_by_space_task.setdefault(_sp, {})
                      .setdefault(_task_name, {}))[_f] = {
                         'objective': _e['objective'],
+                        'slot': _e.get('slot'),
                         'tier': _e['tier'],
                         'aug_condition': _e['aug_condition'],
                         'allocation_method': _e['allocation_method'],
                         'importance_method': _e['importance_method'],
                         'internal_evaluator': _e['internal_evaluator'],
                         'budget': _e['budget'],
+                        'budget_relaxed': _e.get('budget_relaxed'),
                         'metric_name': _e['metric_name'],
                         'lower_is_better': _e['lower_is_better'],
                         'score_other_folds': _e['score_other_folds'],
@@ -2193,15 +2260,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"stored rows, per fold, on the other folds")
                 continue
             # No stored row for this model in this family. Rank every model's
-            # rows together instead, still leaving the held-out fold out.
-            _sf = family_search.get(_fam)
+            # rows together instead, still leaving the held-out fold out. The
+            # distance search for distance1; the general search for general1
+            # (its rank 1) and general2 (its rank 2).
+            _general_slot = _slot != 'distance1'
+            _sf = (family_search_general if _general_slot
+                   else family_search).get(_fam)
+            _member = family_member.get(
+                f'{_fam}__general' if _general_slot else _fam, {})
+            _xm_n = 2 if _slot == 'general2' else 1
             if _sf is None:
                 task_recipe_source.setdefault(_sp, {})[_task_name] = 'unavailable'
                 (task_recipe_errors.setdefault(_sp, {}))[_task_name] = (
                     f'no stored row for {_model} in the {_fam} family, and that '
                     f'family\'s search could not be read either, so nothing '
                     f'could be ranked over the other models: '
-                    f'{family_member.get(_fam, {}).get("absent_reason")}')
+                    f'{_member.get("absent_reason")}')
                 print(f"  {_sp}/{_task_name}: no hybrid space here -- "
                       f"{task_recipe_errors[_sp][_task_name]}")
                 continue
@@ -2209,15 +2283,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for fold_i in range(len(fold_splits)):
                 try:
                     _xm = top_hybrids_across_models(
-                        _sf, n=_N_POOL_HYBRIDS, rule='other_folds',
+                        _sf, n=_xm_n, rule='other_folds',
                         held_out_fold=fold_i)
                 except Exception as e:
                     (task_recipe_errors.setdefault(_sp, {})
                      )[f'{_task_name}/fold{fold_i}'] = \
                         f'{type(e).__name__}: {e}'
                     continue
-                _cand = next((_e for _e in (_xm.get('selected') or [])
-                              if _e.get('blueprint') is not None), None)
+                _sel = [_e for _e in (_xm.get('selected') or [])
+                        if _e.get('blueprint') is not None]
+                _cand = (_sel[_xm_n - 1] if len(_sel) >= _xm_n else None)
                 if _cand is None:
                     (task_recipe_errors.setdefault(_sp, {})
                      )[f'{_task_name}/fold{fold_i}'] = (
@@ -2228,15 +2303,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 _bpx = copy.deepcopy(_cand['blueprint'])
                 # Trust the condition the search was loaded under over the
                 # blueprint's own field, the same way get_fold_pool_recipes does.
-                _bpx.augmentation_strategy = family_member[_fam].get(
-                    'aug_condition')
+                _bpx.augmentation_strategy = _member.get('aug_condition')
                 (fold_bps_by_space_task.setdefault(_sp, {})
                  .setdefault(_task_name, {}))[fold_i] = _bpx
                 (fold_recipes_by_space_task.setdefault(_sp, {})
                  .setdefault(_task_name, {}))[fold_i] = {
                     'objective': _fam,
-                    'tier': family_member[_fam].get('tier'),
-                    'aug_condition': family_member[_fam].get('aug_condition'),
+                    'slot': _slot,
+                    'tier': _member.get('tier'),
+                    'aug_condition': _member.get('aug_condition'),
                     'allocation_method': _cand.get('allocation_method'),
                     'importance_method': _cand.get('importance_method'),
                     'internal_evaluator': _cand.get('internal_evaluator'),
@@ -2329,7 +2404,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         "every row, so fold i's ROWS were seen when the pool was built.")
     results['pool_fold_read'] = {
         'pool_subset': _POOL_SUBSET,
+        # 2026-10-02: the owner's set, not one recipe per fold.
         'n_hybrids_per_fold': _N_POOL_HYBRIDS,
+        'rule': 'top 2 general + top 1 distance per family per fold',
         'downstream_model': 'knn',
         'budget': requested_budget,
         'n_folds': len(fold_splits),
@@ -2408,13 +2485,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # The per-representation baselines inside each task do not depend on the
     # recipe, so they are recomputed identically in each space; the hybrid arms
     # are what differ.
-    _spaces_to_run = [sp for sp in (_SPACE_FOR_FAMILY.get('predictive'),
-                                    _SPACE_FOR_FAMILY.get('similarity'))
+    # One space per (family, slot) of the owner's set (2026-10-02).
+    _spaces_to_run = [sp for sp in (_rule_space(f, sl)
+                                    for f in ('predictive', 'similarity')
+                                    for sl in _RULE_SLOTS)
                       if (fold_blueprints_by_space.get(sp)
                           or fold_bps_by_space_task.get(sp))]
     results['hybrid_spaces_scored'] = list(_spaces_to_run)
     results['hybrid_space_recipes'] = convert_numpy(fold_recipes_by_space)
     results['hybrid_space_errors'] = pool_family_errors
+    # Every slot of the owner's set a read could not fill, per (model, fold),
+    # and why (2026-10-02).
+    results['rule_missing'] = rule_missing
+    results['hybrid_space_slots'] = {
+        sp: {'family': _FAMILY_OF_SPACE.get(sp),
+             'slot': next((sl for sl in _RULE_SLOTS
+                           if _rule_space(_FAMILY_OF_SPACE.get(sp, ''), sl)
+                           == sp), None)}
+        for sp in _spaces_to_run}
     # ── The recipe each TASK is built from, per hybrid space ─────────────────
     # 'hybrid_space_recipes' above is the k-nearest-neighbours recipe, which is
     # what all four tasks were built from until 2026-09-28. These four keys say
@@ -2481,7 +2569,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      # holds, so a block written before 2026-09-28 -- when all
                      # four tasks were built from the k-nearest-neighbours one --
                      # must not be read back into this run.
-                     task_recipes=results['task_recipes']))
+                     task_recipes=results['task_recipes'],
+                     # 2026-10-02: spaces are per slot of the owner's set.
+                     hybrid_set='top2_general_top1_distance'))
 
     def _had_build_failure(obj):
         if isinstance(obj, dict):
@@ -2573,8 +2663,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             hybrid_budgets=sweep_budgets, per_rep_cache=_per_rep_cache))
         print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
 
-        _space_out['built_under_objective'] = (
-            'predictive' if _space == _primary_space else 'similarity')
+        _space_out['built_under_objective'] = _FAMILY_OF_SPACE.get(
+            _space, 'predictive' if _space == _primary_space else 'similarity')
+        _space_out['slot'] = (results['hybrid_space_slots'].get(_space)
+                              or {}).get('slot')
         _space_out['features_chosen_by'] = describe_pool_family(
             _space_out['built_under_objective'])
         # Repeated inside the space so a reader of one block can see which model's

@@ -309,12 +309,14 @@ def main():
     for _m, _needle in (
             ('experiments.similarity.s02_hybrid_similarity',
              "['predictive', 'similarity']"),
+            # Keyed by (family, slot) since 2026-10-02, when the arms became
+            # the owner's set: general1, general2, distance1 per family.
             ('experiments.similarity.s04_activity_cliffs',
-             "h['objective'], h['rank']"),
+             "(h['objective'], h['slot'])"),
             ('experiments.similarity.s05_knn_prediction',
-             "(h['objective'], h['rank'])"),
+             "(h['objective'], h['slot'])"),
             ('experiments.similarity.s13_clustering_retrieval',
-             "f\"hybrid_{h['objective']}_r{h['rank']}\"")):
+             "f\"hybrid_{h['objective']}_{h['slot']}\"")):
         _src = inspect.getsource(importlib.import_module(_m))
         check(f"{_m.rsplit('.', 1)[-1]} still keys its arms by family",
               _needle in _src, 'yes' if _needle in _src else 'GONE')

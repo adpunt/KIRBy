@@ -69,6 +69,12 @@ sets. `summary.metrics_agree` flags that divergence.
 Usage:
     python s13_clustering_retrieval.py --dataset logd --mode intermediary
     python s13_clustering_retrieval.py --dataset flab_thermo_tresanco --mode intermediary
+2026-10-02, the owner's set: the three hybrids per family are now kNN's top 2
+from the general searches and its top 1 from the distance searches
+(get_rule_hybrids), not the top 3 from the distance searches. Spaces are
+'hybrid_<family>_<slot>' (slot general1, general2, distance1). Every slot a
+fold's read could not fill is in results['pool_read']['rule_missing'] with the
+reason.
 """
 import sys
 import os
@@ -85,7 +91,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     compute_feature_importance, get_domain_metric,
-    build_fold_hybrid, get_fold_pool_recipes,
+    build_fold_hybrid, get_rule_hybrids,
     fold_reselection,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
     hr_exclude_folds,
@@ -129,6 +135,12 @@ MATCHED_N_CLUSTERS = ([int(v) for v in _ENV_MATCHED_CLUSTERS.split(',')
 # its subset.
 POOL_SUBSET = 'predictive_and_similarity'
 N_HYBRIDS_PER_FAMILY = 3
+# THE OWNER'S SET (top 2 general + top 1 distance per model per family,
+# 2026-10-02): the three per family are kNN's top 2 recipes from the general
+# searches and its top 1 from the distance searches (get_rule_hybrids). They
+# used to be the top 3 from the distance searches. Space names are
+# 'hybrid_<family>_<slot>', slot general1, general2 or distance1.
+RULE_SLOTS = ('general1', 'general2', 'distance1')
 
 
 # =========================================================================
@@ -415,9 +427,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # the searches already on disk are read and their stored per-fold scores
     # ranked, so fold i's recipes were chosen without fold i's scores.
     print(f"  Reading the pool per fold "
-          f"(subset={POOL_SUBSET}, {N_HYBRIDS_PER_FAMILY} hybrids per family, "
-          f"model=knn, evaluators={DISTANCE_EVALUATORS}, "
-          f"budgets={DISTANCE_BUDGETS})...")
+          f"(subset={POOL_SUBSET}, top 2 general + top 1 distance per "
+          f"family, model=knn)...")
     _pool_cache = {}
     _pool_warnings_seen = set()
     # True as soon as any pool member filtered its own candidate list on fold 0's
@@ -434,6 +445,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'objectives': None,
         'warnings': [],
         'errors': {},
+        # Every slot of the owner's set a fold's read could not fill, and why.
+        'rule_missing': {},
+        'rule': 'top 2 general + top 1 distance per family',
     }
 
     def _fold_pool(fold_i):
@@ -446,29 +460,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if fold_i in _pool_cache:
             return _pool_cache[fold_i]
         try:
-            pool = get_fold_pool_recipes(
+            # The owner's set (2026-10-02), ranked on the folds other than
+            # fold_i.
+            pool = get_rule_hybrids(
                 reps, labels, groups,
                 fold_i=fold_i, n_outer_folds=len(folds),
                 downstream_model='knn', budget=None,
                 dataset_name=dataset_name, augmentations=augmentations,
-                distance=True, data=data,
+                data=data,
                 metric=metric_name, task_type=task_type, domain=domain,
-                pool_subset=POOL_SUBSET,
-                n_hybrids=N_HYBRIDS_PER_FAMILY)
+                pool_subset=POOL_SUBSET)
         except Exception as e:
             print(f"  [warn] pool read failed (fold {fold_i}): "
                   f"{type(e).__name__}: {e}")
             pool_read['errors'][f"fold{fold_i}"] = f"{type(e).__name__}: {e}"
+            pool_read['rule_missing'][f"fold{fold_i}"] = [
+                f"the read raised {type(e).__name__}: {e}"]
             _pool_cache[fold_i] = None
             return None
+        # get_rule_hybrids does not pass fold0_pruned through; None reads as
+        # pruned below, the conservative reading.
         _p = pool.get('fold0_pruned')
         _p = True if _p is None else bool(_p)
         pool_fold0_pruned = (_p if pool_fold0_pruned is None
                              else (pool_fold0_pruned or _p))
-        pool_read['selection_scope'] = pool.get('selection_scope')
-        pool_read['selection_note'] = pool.get('selection_note')
-        pool_read['n_folds_in_pool'] = pool.get('n_folds_in_pool')
+        pool_read['selection_scope'] = 'other_folds_of_pool_search'
+        pool_read['selection_note'] = (
+            "each recipe ranked by its mean over the pool search's other "
+            "folds; the searches ran over every row, so this holds out the "
+            "fold's SCORES, not its rows")
+        # One score per pool fold on every entry.
+        _nf = {len(h['fold_scores']) for h in pool.get('hybrids') or []
+               if h.get('fold_scores')}
+        pool_read['n_folds_in_pool'] = (max(_nf) if _nf else None)
         pool_read['objectives'] = list(pool.get('objectives') or [])
+        if pool.get('missing'):
+            pool_read['rule_missing'][f"fold{fold_i}"] = list(pool['missing'])
         for w in (pool.get('warnings') or []):
             if w not in _pool_warnings_seen:
                 _pool_warnings_seen.add(w)
@@ -486,7 +513,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         top3 = []
         for _obj, _fam in (pool0.get('by_objective') or {}).items():
-            _ranked = (_fam.get('base_reps_ranked') or [])[:3]
+            _ranked = (_fam.get('base_reps') or [])[:3]
             if _ranked:
                 print(f"  Top-3 base reps for kNN, fold 0, {_obj} family "
                       f"(ranked on the other folds, "
@@ -496,7 +523,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 top3.extend([(b['rep'], b['score_other_folds'])
                              for b in _ranked])
             for _h in (_fam.get('hybrids') or []):
-                print(f"  Fold 0 kNN hybrid, {_obj} family rank {_h['rank']}: "
+                print(f"  Fold 0 kNN hybrid, {_obj} family {_h['slot']}: "
                       f"alloc={_h['allocation_method']}, "
                       f"imp={_h['importance_method']}, "
                       f"ev={_h['internal_evaluator']}, "
@@ -506,11 +533,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pool_first_fold[_obj] = {
                 'metric_name': _fam.get('metric_name'),
                 'lower_is_better': _fam.get('lower_is_better'),
-                'n_hybrid_candidates': _fam.get('n_hybrid_candidates'),
-                'n_base_reps': _fam.get('n_base_reps'),
-                'base_reps_top3': [(b['rep'], b['score_other_folds'])
+                'missing': _fam.get('missing'),
+                'base_reps_top2': [(b['rep'], b['score_other_folds'])
                                    for b in _ranked],
-                'hybrids': [{'rank': h['rank'], 'name': h['name'],
+                'hybrids': [{'rank': h['rank'], 'slot': h['slot'],
+                             'tier': h['tier'], 'name': h['name'],
                              'recipe': h['recipe'],
                              'metric_name': h['metric_name'],
                              'score_other_folds': h['score_other_folds']}
@@ -595,7 +622,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         run_identity('s13_clustering_retrieval', dataset_name, data, config,
                      kwargs=kwargs, budget=budget, k_retrieval=k_retrieval,
                      n_clusters_list=list(n_clusters_list),
-                     matched_on=matched_on, n_folds=len(folds)))
+                     matched_on=matched_on, n_folds=len(folds),
+                     # 2026-10-02: spaces are the owner's set now.
+                     hybrid_set='top2_general_top1_distance'))
 
     def _slice2(d, f):
         return {a: v[f] for a, v in d.items() if f in v}
@@ -705,17 +734,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         pool = _fold_pool(fold_i)
         _slot_blueprints = {}
         if pool is not None:
-            if pool.get('base_rep') is not None:
-                _br = pool['base_rep']
+            # The model's top 2 single representations (owner's set); rank 1
+            # under the keys it had, rank 2 beside it. s13 scores every
+            # representation itself either way.
+            _brs = pool.get('base_reps') or []
+            if _brs:
+                _br = _brs[0]
                 pool_base_rep[fold_i] = {
                     'rep': _br['rep'],
                     'objective': _br['objective'],
                     'metric_name': _br['metric_name'],
                     'score_other_folds': _br['score_other_folds'],
-                    'n_other_folds': _br['n_other_folds'],
+                    'n_other_folds': _br.get('n_other_folds'),
+                    'rep2': (_brs[1]['rep'] if len(_brs) > 1 else None),
+                    'rep2_score_other_folds': (
+                        _brs[1]['score_other_folds'] if len(_brs) > 1
+                        else None),
                 }
             for h in (pool.get('hybrids') or []):
-                sname = f"hybrid_{h['objective']}_r{h['rank']}"
+                # One space per (family, slot) of the owner's set.
+                sname = f"hybrid_{h['objective']}_{h['slot']}"
                 blueprint = h.get('blueprint')
                 if blueprint is None:
                     print(f"    fold {fold_i}: pool entry {h['name']} carries "
@@ -744,6 +782,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         'augmentation_strategy': blueprint.augmentation_strategy,
                         'objective': h['objective'],
                         'rank': h['rank'],
+                        'slot': h['slot'],
+                        'tier': h.get('tier'),
+                        'budget_relaxed': h.get('budget_relaxed'),
                         'recipe': h.get('recipe'),
                         'pool_name': h.get('name'),
                         # The pool's own score of this recipe on the other

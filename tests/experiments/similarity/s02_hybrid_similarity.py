@@ -29,6 +29,14 @@ any of them: the finished searches on disk already hold every budget. The keys
 that used to sit at the top level still do, mirroring one named cell — the
 general lineage at budget 100, which is the only cell this file scored before —
 and results['primary_cell'] says which cell that is.
+
+2026-10-02, the owner's set: top 2 general + top 1 distance hybrids per model
+per family. For each (budget, family) get_rule_hybrids returns knn's top 2
+recipes from the general searches and top 1 from the distance searches; each is
+built and scored, under results['rule_slots'][slot]['budgets'][budget] with
+slot 'general1', 'general2' or 'distance1'. results['lineages'] still holds
+general1 (as 'general') and distance1 (as 'general_distance'). Empty slots and
+why: results['rule_missing'].
 """
 import sys
 import os
@@ -40,7 +48,8 @@ import numpy as np
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
-    save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid,
+    save_experiment_results, get_rule_hybrids, build_hybrid_from_entry,
+    get_best_search_for_downstream,
     flatten_fold_weights, extract_top3_base_reps,
     cv_split, fold_reselection, build_fold_hybrid,
     hr_exclude_folds, MAIN_MODELS_WITH_KNN, FULL_BUDGETS,
@@ -267,308 +276,183 @@ def _cv_reselected_sac(reps, labels, groups, blueprint, aug_condition,
 # A cell whose pool lookup raises records hybrid_status and returns. It never
 # falls back to the other lineage, and never to another budget.
 
-def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
-                     is_clf, augmentations, config, n_sample, weight_methods,
-                     importance, budget, distance,
-                     best_rep_sac, best_rep_name,
-                     best_rep_sac_weighted, best_rep_name_weighted,
-                     family=None):
-    """Every hybrid number in this file, for ONE (lineage, budget, family) cell.
+def _search_report_rows(search, *, dataset_name, distance, budget):
+    """The rows read off the stored search the pool picks for one lineage.
 
-    Returns the cell dict: the pool metadata, the recipe that was built, one
-    block per weight method, and the held-out fold_reselection block with its
-    resolved summary. run() stores these under
-    results['lineages'][lineage]['budgets'][budget], and under
-    ['families'][family] when run() asked for one family at a time.
-
-    family: which search family the recipe comes from, 'predictive' or
-        'similarity'. None asks for the POOL_SUBSET below and lets the pool
-        choose, which is what this file did before.
-
-        Why naming it matters. The two families store their scores in two
-        different metrics — a predictive search stores the dataset's own
-        metric, a similarity search stores each held-out molecule's activity
-        predicted from its five nearest neighbours — so nothing puts them on
-        one ruler and the pool falls back to whichever family the subset names
-        first. That is always 'predictive'. Every number in this file is a
-        distance between molecules, re-scored here in this file's own
-        statistic, so the two families CAN be compared — on that statistic,
-        not on their stored scores. Asking for one family at a time is what
-        makes that comparison possible.
+    These used to be written inside every scored cell, from the search
+    get_fitted_pool_hybrid returned. Since 2026-10-02 the scored hybrids come
+    from get_rule_hybrids, which hands back recipes rather than a search, so
+    these rows are read here once per (lineage, budget, family) from the search
+    get_best_search_for_downstream picks for knn. They describe that search;
+    the hybrids this file scores are named in each cell's 'slot' and 'recipe'.
+    0 new model fits.
     """
-    cell = {'budget': budget, 'distance_lineage': bool(distance),
-            'requested_family': family, 'weight_methods': {}}
-
-    # best_sac is the best SAC any HYBRID arm reached, and nothing else. It used
-    # to be seeded with best_rep_sac, so it could only ever rise above the best
-    # single representation. s09 reads this key and subtracts best_rep_sac from
-    # it, so every dataset where the hybrid LOST contributed exactly 0.0000 to
-    # the cross-dataset SAC delta instead of its real negative value. Seeded
-    # with None so a losing hybrid reports a negative delta and a hybrid that
-    # never ran reports nothing at all.
-    best_sac = None
-    best_method = None
-
-    t0 = time.time()
-    try:
-        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
-            reps, labels, groups,
-            downstream_model='knn', budget=budget,
-            augmentations=augmentations,
-            # Every number in this file is a distance statistic over the
-            # features of the recipe that won for knn, so the search this reads
-            # has to have scored knn. knn is tier 'extra', so models=None does
-            # not score it and this lookup had nothing to find. Naming the list
-            # files a separate general-tier search; the models=None searches
-            # every other experiment reads are untouched.
-            models=MAIN_MODELS_WITH_KNN,
-            # 2026-09-12, owner's decision: this file's pool subset includes
-            # similarity hybrids. 'predictive_and_similarity' admits both the
-            # searches built for prediction and the searches built under
-            # objective='similarity', where the features were chosen so the
-            # distance predicts each molecule's activity from its five nearest
-            # neighbours. Default was 'predictive_only', which is what every
-            # earlier run of this file used. Both lineages keep this subset.
-            # One family when run() named one, the subset otherwise. The pool
-            # refuses both at once.
-            **({'objective': family} if family
-               else {'pool_subset': 'predictive_and_similarity'}),
-            # 2026-09-12, owner's decision: s02 asks BOTH lineages. False reads
-            # the general/top pools, True reads the general_distance/top_distance
-            # pools (_shared.py:5329-5337). Until now only the general one was
-            # asked, while s04 asked the distance one, and both were called the
-            # knn hybrid.
-            distance=distance,
-            dataset_name=dataset_name, task_type=task_type)
-    except Exception as e:
-        print(f"    Search FAILED: {e}")
-        # No hybrid exists, so there is no hybrid SAC. Reporting best_rep_sac
-        # here would have read downstream as a hybrid that exactly tied.
-        cell['best_weight_method'] = None
-        cell['best_sac'] = None
-        cell['hybrid_status'] = f'search failed: {e}'
-        # No hybrid, so no family to name. The key is written on every path so
-        # a reader never has to tell "predictive" from "absent" (2026-09-12).
-        cell['hybrid_family'] = None
-        cell['pool_subset'] = 'predictive_and_similarity'
-        return cell
-
-    search_time = time.time() - t0
-    hybrid_dim = X_hybrid.shape[1]
-
-    # 2026-09-12, owner's decision: record which of the two search families the
-    # hybrid this file went on to score was built under, so a reader can tell a
-    # prediction-built hybrid from a similarity-built one.
-    #   hybrid_family        — 'predictive' or 'similarity'.
-    #   hybrid_family_choice — how the pool picked between the families:
-    #                          'only_family' (one family had a usable recipe),
-    #                          'score' (both stored the same metric, so the
-    #                          scores are comparable), or 'subset_order' (the
-    #                          two stored different metrics, so the pool took
-    #                          the first family the subset names — prediction).
-    #   hybrid_search_metric — the metric the winning family's stored score is
-    #                          in: the dataset's own metric for prediction,
-    #                          'readacross' for similarity.
-    #   pool_by_objective    — every eligible family's own best, because the
-    #                          two scores are not on one ruler.
-    _meta = _meta or {}
-    cell['pool_subset'] = _meta.get('pool_subset')
-    cell['hybrid_family'] = _meta.get('objective')
-    cell['hybrid_family_choice'] = _meta.get('objective_choice')
-    cell['hybrid_search_metric'] = _meta.get('metric_name')
-    cell['hybrid_search_score'] = _meta.get('score_mean')
-    cell['pool_by_objective'] = {
-        o: {'tier': d.get('tier'), 'aug_condition': d.get('aug_condition'),
-            'score_mean': d.get('score_mean'),
-            'metric_name': d.get('metric_name'),
-            'lower_is_better': d.get('lower_is_better')}
-        for o, d in (_meta.get('by_objective') or {}).items()
-    }
-    print(f"    Pool subset: {cell['pool_subset']}; hybrid built under "
-          f"objective={cell['hybrid_family']} "
-          f"(chosen by {cell['hybrid_family_choice']}, stored score "
-          f"{cell['hybrid_search_score']} in "
-          f"{cell['hybrid_search_metric']})")
-    for _o, _d in cell['pool_by_objective'].items():
-        print(f"      {_o}: {_d['tier']}/{_d['aug_condition']} "
-              f"score={_d['score_mean']} metric={_d['metric_name']}")
-
-    # The recipe every number in this cell belongs to. It is the one
-    # get_fitted_pool_hybrid built the matrix from — meta['best_config']
-    # ['blueprint'], filled per (downstream_model, budget) at _shared.py:
-    # 5556-5563 — not search.best_by_model['knn']['blueprint'], which is the
-    # best across ALL budgets and so named a different recipe from the one the
-    # scored matrix holds. The held-out fold loop rebuilds from this same
-    # object, so the recorded recipe and the rebuilt recipe are one thing.
-    _blueprint_for_folds = (_meta.get('best_config') or {}).get('blueprint')
-
+    rows = {}
     top3 = extract_top3_base_reps(search)
     if top3:
-        # 2026-09-12: the label used to read "(by RF)" on every run. Under the
-        # widened subset the winning search may be a similarity one, and its
-        # stored per-representation score is then the correlation between each
-        # held-out molecule's activity and what its five nearest neighbours
-        # predict, not an RF prediction score. The print now names the metric
-        # the numbers are actually in and the family they came from.
-        print(f"  Top-3 base reps (model=rf, metric="
-              f"{cell['hybrid_search_metric']}, "
-              f"objective={cell['hybrid_family']}): "
-              f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        cell['top3_base_reps'] = [(n, s) for n, s in top3]
-        cell['top3_base_reps_metric'] = cell['hybrid_search_metric']
-        cell['top3_base_reps_family'] = cell['hybrid_family']
-
-    # --- Top-2 rows, added 2026-09-18 beside the top-3 above -----------------
-    # Every key written below is new. Nothing above or below it is read, moved
-    # or recomputed, and all four helpers read rows this search already stored,
-    # so the cell costs 0 new model fits.
-    #
-    # WHY IT IS HERE. extract_top3_base_reps above ranks by downstream model
-    # 'rf' whatever model the cell asked the pool for, while every SAC number in
-    # this file is a distance statistic over the features of the recipe that won
-    # for 'knn'. The ranking printed above and the hybrid scored below were
-    # therefore two different downstream models, and nothing in the result file
-    # said so. The rows below name 'knn', the model this cell's pool lookup
-    # asked for.
-    #
-    # require_full=False on every call: a stored search that never scored a
-    # downstream model returns a short list instead of raising. A raise here
-    # would lose every SAC number the cell has already computed, so each call is
-    # wrapped as well and a failure prints and leaves the key absent.
+        rows['top3_base_reps'] = [(n, s) for n, s in top3]
     _sel_ctx = (f"s02/{dataset_name}/"
                 f"{'general_distance' if distance else 'general'}/"
                 f"budget={budget} features")
     try:
-        cell['top2_base_reps'] = top_base_reps(
+        rows['top2_base_reps'] = top_base_reps(
             search, _SAC_MODEL_KEY, 2, require_full=False, context=_sel_ctx)
     except Exception as e:
         print(f"    top2_base_reps not added: {type(e).__name__}: {e}")
     try:
-        # ⛔ NO budget= FILTER, changed 2026-09-28. It used to be
-        # budget=budget while top_base_reps above took no budget at all, so the
-        # two halves of one comparison were filtered differently: the hybrid
-        # half was cut to this cell's number of features and the base half
-        # ranked every representation at its own native width. Which way they
-        # were made consistent, and why it is this way and not the other:
-        #
-        # A base representation has no budget to be filtered by -- its width is
-        # whatever the builder produced -- and every other number in this cell,
-        # best_rep_sac included, is measured on representations at their native
-        # widths. Cutting the base half to `budget` features would change what
-        # this file reports. So the filter comes off the hybrid half instead,
-        # and both halves now rank over every row the search stored.
-        #
-        # There is a second reason it has to come off. get_fitted_pool_hybrid
-        # above resolves the cell's recipe through get_best_for_downstream
-        # (_shared.py:7184-7225), which falls back to the best recipe across all
-        # budgets when it holds none at the budget asked for. So the hybrid this
-        # cell actually scored need not be stored at `budget` at all, and
-        # filtering these rows to `budget` could name a pair the cell never used
-        # or return nothing.
-        #
-        # Every returned entry carries its own 'budget' -- the number of
-        # features that configuration was searched at -- so the widths stay
-        # readable rather than assumed. This matches
-        # s08_optimal_dimension.py:566-576 and
-        # s10_importance_downstream.py:2353-2361.
-        cell['top2_hybrids'] = top_hybrids(
-            search, _SAC_MODEL_KEY, 2, require_full=False,
-            context=_sel_ctx)
+        # No budget= filter (2026-09-28): a base representation has no budget,
+        # so both halves rank over every stored row. Each entry carries its own
+        # 'budget'.
+        rows['top2_hybrids'] = top_hybrids(
+            search, _SAC_MODEL_KEY, 2, require_full=False, context=_sel_ctx)
     except Exception as e:
         print(f"    top2_hybrids not added: {type(e).__name__}: {e}")
-    # WHICH DOWNSTREAM MODELS THE ROWS BELOW COVER, resolved 2026-09-28.
-    # MAIN_MODELS_WITH_KNN is a fixed list of six names in _shared.py:586 --
-    # rf, xgboost, svm, dnn, lightgbm, knn. The search on disk scored whatever
-    # it scored: svm drops itself above 10,000 molecules, and a dataset's skip
-    # policy can drop a name too. The two lists disagree whenever that happened,
-    # and the loops below then asked for a model with no stored rows and wrote
-    # nothing down.
-    #
-    # The six names are still what this file ASKS for, so the set of models it
-    # reports does not change: MAIN_MODELS_WITH_KNN goes in as `requested`, not
-    # None. A name the search never scored is dropped and named, never swapped
-    # for another model's rows.
+    # The six models this file asks for; a name the search never scored is
+    # dropped and named (resolve_comparison_models), never swapped.
     _cmp_models, _cmp_dropped = resolve_comparison_models(
         search, MAIN_MODELS_WITH_KNN)
-    cell['top2_models_compared'] = list(_cmp_models)
-    # {downstream model: why it is not in the rows below}. Until now this was
-    # printed to the terminal only and the saved result said nothing.
-    cell['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
-    for _n, _w in _cmp_dropped:
-        print(f"    downstream model {_n} not compared: {_w}")
+    rows['top2_models_compared'] = list(_cmp_models)
+    rows['top2_models_dropped'] = {_n: _w for _n, _w in _cmp_dropped}
     try:
-        # Every downstream model the search scored out of the six this file
-        # asks for, not knn alone. 2 representations + 2 hybrids per model, so
-        # six models is 24 rows.
-        # No budget= here either, for the same reason as top2_hybrids above:
-        # select_model_rep_pairs passes budget only to its top_hybrids half and
-        # never to its top_base_reps half (_shared.py:8021-8027), so budget=
-        # filtered one half of every model's row and not the other.
-        cell['top2_pairs_by_model'] = select_model_rep_pairs(
+        rows['top2_pairs_by_model'] = select_model_rep_pairs(
             search, models=_cmp_models, n_base=2, n_hybrids=2,
             require_full=False, context=_sel_ctx)
     except Exception as e:
         print(f"    top2_pairs_by_model not added: {type(e).__name__}: {e}")
-        cell['top2_pairs_by_model_absent_reason'] = \
-            f"{type(e).__name__}: {e}"
-    # The hybrid against TWO reference numbers rather than one, per downstream
-    # model: the mean of the representations that actually fed it — read off
-    # allocation_per_fold, so a representation given 0 features is excluded —
-    # and the best single representation for that model. Positive means the
-    # hybrid is better on either metric direction.
-    #
-    # hybrid= is passed rather than left to default. hybrid_deltas with
-    # hybrid=None reaches _shared.py:7432, which reads a key 'row' off the entry
-    # top_hybrids returns; top_hybrids builds that entry at _shared.py:7043-7068
-    # and it carries no 'row', so the default path raises KeyError on every
-    # call and no delta would ever be recorded. The rank-1 entry handed in below
-    # carries the two keys hybrid_deltas then reads, 'score_mean' and
-    # 'blueprint'. Both calls read stored rows: 0 new model fits.
-    #
-    # One try per downstream model, so a model with no stored hybrid does not
-    # cost the other five their entry. The keys are downstream model names; this
-    # dict is new and nothing iterates it.
-    #
-    # ⛔ NO budget= ON EITHER CALL, changed 2026-09-28. Two calls in this cell
-    # ranked the same thing under two different filters. 'top2_hybrids' above
-    # ranks every hybrid configuration the search stored, at any number of
-    # features. The top_hybrids call below used to be filtered to `budget`
-    # features, so the rank-1 configuration it handed to hybrid_deltas could be
-    # a different configuration from rank 1 in 'top2_hybrids'.
-    #
-    # Which way they were made consistent: the filter comes off this call, so
-    # both rank over every stored row. The other direction -- putting budget=
-    # back on 'top2_hybrids' -- would cut the base-representation half of the
-    # same comparison differently, since a base representation has no budget to
-    # be filtered by. Each returned entry carries its own 'budget', the number
-    # of features that configuration was searched at, so the widths stay
-    # readable.
-    #
-    # budget= came off the hybrid_deltas call as well. hybrid_deltas reads
-    # budget only when hybrid= is None (_shared.py:8133-8135) and hybrid= is
-    # named here, so that one was inert either way; it goes for consistency,
-    # not because it changed a number.
+        rows['top2_pairs_by_model_absent_reason'] = f"{type(e).__name__}: {e}"
+    # hybrid= is passed: hybrid_deltas with hybrid=None reads a 'row' key the
+    # top_hybrids entry does not carry.
     _deltas = {}
     for _m in _cmp_models:
         try:
             _top1 = top_hybrids(search, _m, 1,
                                 require_full=False, context=_sel_ctx)
             if not _top1['selected']:
-                print(f"    hybrid_deltas for downstream model {_m} not added: "
-                      f"{_top1['shortfall_reason']}")
-                cell['top2_models_dropped'][_m] = (
+                rows['top2_models_dropped'][_m] = (
                     'no hybrid delta: %s' % _top1['shortfall_reason'])
                 continue
             _deltas[_m] = hybrid_deltas(search, _m,
                                         hybrid=_top1['selected'][0],
                                         context=_sel_ctx)
         except Exception as e:
-            print(f"    hybrid_deltas for downstream model {_m} not added: "
-                  f"{type(e).__name__}: {e}")
-            cell['top2_models_dropped'][_m] = (
+            rows['top2_models_dropped'][_m] = (
                 'no hybrid delta: %s: %s' % (type(e).__name__, e))
     if _deltas:
-        cell['hybrid_deltas_by_model'] = _deltas
+        rows['hybrid_deltas_by_model'] = _deltas
+    return rows
+
+
+def _rule_summary(rule):
+    """A JSON-safe copy of one get_rule_hybrids return: the recipes and their
+    stored scores, without the Blueprint objects."""
+    def _e(h):
+        return {k: h.get(k) for k in (
+            'slot', 'lineage', 'objective', 'tier', 'aug_condition', 'recipe',
+            'budget', 'budget_relaxed', 'metric_name', 'lower_is_better',
+            'score_other_folds', 'n_other_folds', 'fold_scores')}
+
+    def _b(b):
+        return {k: b.get(k) for k in (
+            'rep', 'objective', 'tier', 'aug_condition', 'metric_name',
+            'score_other_folds', 'fold_scores')}
+    return {
+        'rule': rule.get('rule'), 'pool_subset': rule.get('pool_subset'),
+        'hybrids': [_e(h) for h in rule.get('hybrids', [])],
+        'base_reps': [_b(b) for b in rule.get('base_reps', [])],
+        'missing': list(rule.get('missing', [])),
+        'warnings': list(rule.get('warnings', [])),
+    }
+
+
+def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
+                     is_clf, augmentations, config, n_sample, weight_methods,
+                     importance, budget, distance,
+                     best_rep_sac, best_rep_name,
+                     best_rep_sac_weighted, best_rep_name_weighted,
+                     family=None, entry=None, slot=None, pool_subset=None,
+                     missing_reason=None):
+    """Every hybrid number in this file, for ONE (slot, budget, family) cell.
+
+    The owner's set (top 2 general + top 1 distance per model per family,
+    2026-10-02): `entry` is one of the three recipes get_rule_hybrids returned
+    for knn — slot 'general1', 'general2' or 'distance1' — and this cell builds
+    and scores it. Before that date each cell read only the single best recipe
+    of one lineage through get_fitted_pool_hybrid.
+
+    Returns the cell dict: the recipe that was built, one block per weight
+    method, and the held-out fold_reselection block with its resolved summary.
+    entry=None writes the reason the slot is empty and returns.
+
+    family: 'predictive' or 'similarity', the search family the recipe comes
+        from. The two families store their scores in different metrics, so
+        they are compared here on this file's own statistic, one family per
+        cell.
+    """
+    cell = {'budget': budget, 'distance_lineage': bool(distance),
+            'requested_family': family, 'slot': slot, 'weight_methods': {}}
+
+    # best_sac is the best SAC any HYBRID arm reached, and nothing else. Seeded
+    # with None so a losing hybrid reports a negative delta and a hybrid that
+    # never ran reports nothing at all.
+    best_sac = None
+    best_method = None
+
+    # 2026-10-02: the pool subset written is the one the read actually used.
+    # It used to be written as 'predictive_and_similarity' on every cell,
+    # including cells that had asked for one family only.
+    cell['pool_subset'] = pool_subset
+    if entry is None:
+        cell['best_weight_method'] = None
+        cell['best_sac'] = None
+        cell['hybrid_status'] = f'slot empty: {missing_reason}'
+        cell['hybrid_family'] = None
+        return cell
+
+    t0 = time.time()
+    try:
+        # Built on every row from the recipe's full settings and its own
+        # family's objective (build_hybrid_from_entry), as
+        # get_fitted_pool_hybrid built the single winner before.
+        X_hybrid, fi = build_hybrid_from_entry(
+            reps, labels, groups, entry, augmentations=augmentations)
+    except Exception as e:
+        print(f"    Build FAILED: {e}")
+        cell['best_weight_method'] = None
+        cell['best_sac'] = None
+        cell['hybrid_status'] = f'build failed: {type(e).__name__}: {e}'
+        cell['hybrid_family'] = entry.get('objective')
+        return cell
+
+    search_time = time.time() - t0
+    hybrid_dim = X_hybrid.shape[1]
+
+    # Which recipe this cell is. hybrid_search_score is the recipe's stored
+    # score averaged over every fold of the pool search, in hybrid_search_metric
+    # (the dataset's own metric for a predictive recipe, the five-nearest-
+    # neighbour prediction score for a similarity one).
+    cell['hybrid_family'] = entry.get('objective')
+    cell['hybrid_family_choice'] = 'named by the caller'
+    cell['hybrid_search_metric'] = entry.get('metric_name')
+    cell['hybrid_search_score'] = entry.get('score_other_folds')
+    cell['tier'] = entry.get('tier')
+    cell['aug_condition'] = entry.get('aug_condition')
+    cell['recipe'] = entry.get('recipe')
+    # The number of features the recipe was searched at. Differs from `budget`
+    # only when budget_relaxed is True: the distance searches stop at 500
+    # features, and a larger budget is ranked over every budget they hold.
+    cell['recipe_budget'] = entry.get('budget')
+    cell['budget_relaxed'] = bool(entry.get('budget_relaxed'))
+    print(f"    {slot}: {cell['hybrid_family']} {cell['tier']}/"
+          f"{cell['aug_condition']} {cell['recipe']} "
+          f"(stored {cell['hybrid_search_metric']}="
+          f"{cell['hybrid_search_score']})"
+          + ("  [budget relaxed]" if cell['budget_relaxed'] else ""))
+
+    _blueprint_for_folds = entry.get('blueprint')
+    _aug_condition = entry.get('aug_condition') or 'none'
+    _recipe_selection = (
+        "whole-dataset pool ranking: the recipe's mean over every fold of "
+        "the stored pool search, which ran over every row")
 
     # Hybrid unweighted (same for all weight methods -- only compute once)
     D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
@@ -689,11 +573,12 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
             raise RuntimeError('no blueprint for this budget')
         hr_block = _cv_reselected_sac(
             reps, labels, groups, _blueprint_for_folds,
-            _meta.get('aug_condition', 'none'),
+            _aug_condition,
             augmentations, weight_methods,
             n_splits=n_splits, n_sample=n_sample, is_clf=is_clf,
             task_type=task_type)
-        hr_block['recipe_selection'] = _meta.get('selection_scope')
+        hr_block['recipe_selection'] = _recipe_selection
+        hr_block['slot'] = slot
         # 2026-09-12: the per-fold hybrid arms below are rebuilt from the pool
         # winner's recipe, so the held-out numbers belong to whichever family
         # won. Name it inside the block a reader loads on its own.
@@ -713,7 +598,7 @@ def _score_pool_cell(reps, labels, groups, *, dataset_name, task_type,
             # evaluator all came from the pool search over every row. The
             # number below is held out for the weights and not for the recipe;
             # s09 prints this label next to it.
-            recipe_selection=_meta.get('selection_scope'))
+            recipe_selection=_recipe_selection)
         cell['fold_reselection_result'] = hr_summary
         knn = hr_summary.get(_SAC_MODEL_KEY, {})
         if knn:
@@ -887,54 +772,118 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         run_identity('s02_hybrid_similarity', dataset_name, data, config,
                      kwargs=kwargs, weight_methods=weight_methods,
                      budgets=budgets, families=results['families'],
-                     lineages=list(lineages)))
+                     lineages=list(lineages),
+                     # 2026-10-02: cells are per slot now (owner's set), so a
+                     # sidecar written under one recipe per lineage is not read.
+                     hybrid_set='top2_general_top1_distance'))
 
-    for _lineage, _distance in (('general', False), ('general_distance', True)):
-        if _lineage not in lineages:
-            continue
-        print(f"\n  ===== lineage {_lineage} (distance={_distance}) =====")
-        lineage_block = {'distance': _distance, 'budgets': {}}
-        results['lineages'][_lineage] = lineage_block
-        for budget in budgets:
-            budget_block = {}
-            for _fam in (families or [None]):
-                _label = f"{_lineage}, budget={budget} features"
+    # THE OWNER'S SET (top 2 general + top 1 distance per model per family,
+    # 2026-10-02). For each budget and family, get_rule_hybrids returns knn's
+    # top 2 recipes from the general searches and its top 1 from the distance
+    # searches, and each of the three is built and scored as its own cell:
+    # results['rule_slots'][slot]['budgets'][budget]. Before that date each
+    # lineage scored only its single best recipe. A slot the pool could not
+    # fill is written as a cell whose hybrid_status says why, and every reason
+    # is also listed in results['rule_missing'].
+    # results['lineages'] keeps the shape existing readers expect: 'general'
+    # holds slot general1 and 'general_distance' holds slot distance1.
+    _slot_lineage = {'general1': 'general', 'general2': 'general',
+                     'distance1': 'general_distance'}
+    _slots = [sl for sl, lin in _slot_lineage.items() if lin in lineages]
+    results['rule_slots'] = {sl: {'distance': _slot_lineage[sl] ==
+                                  'general_distance', 'budgets': {}}
+                             for sl in _slots}
+    results['rule_missing'] = []
+    results['rule_by_budget'] = {}
+    results['search_report_rows'] = {}
+    for budget in budgets:
+        slot_blocks = {sl: {} for sl in _slots}
+        rule_b = results['rule_by_budget'].setdefault(str(budget), {})
+        for _fam in (families or [None]):
+            _famkey = _fam or 'pool_choice'
+            _fam_kw = ({'objective': _fam} if _fam
+                       else {'pool_subset': 'predictive_and_similarity'})
+            try:
+                rule = get_rule_hybrids(
+                    reps, labels, groups, downstream_model=_SAC_MODEL_KEY,
+                    budget=budget, dataset_name=dataset_name,
+                    augmentations=augmentations, task_type=task_type,
+                    **_fam_kw)
+            except Exception as e:
+                rule = {'by_objective': {}, 'hybrids': [], 'base_reps': [],
+                        'missing': [f'pool read raised {type(e).__name__}: '
+                                    f'{e}'],
+                        'warnings': [], 'pool_subset': None}
+            rule_b[_famkey] = _rule_summary(rule)
+            results['rule_missing'] += [
+                f'budget={budget} features, {_famkey}: {m}'
+                for m in rule.get('missing', [])]
+            _by_slot = {h['slot']: h for h in rule.get('hybrids', [])
+                        if _fam is None or h.get('objective') == _fam}
+            for sl in _slots:
+                _label = f"{sl}, budget={budget} features"
                 if _fam:
                     _label += f", {_fam} family"
                 print(f"\n  -- {_label} --")
-                _ckey = dict(lineage=_lineage, budget=budget, family=_fam)
+                _ckey = dict(slot=sl, budget=budget, family=_fam)
                 if _ck.done(**_ckey):
-                    budget_block[_fam or 'pool_choice'] = _ck.get(**_ckey)
+                    slot_blocks[sl][_famkey] = _ck.get(**_ckey)
                     continue
-                budget_block[_fam or 'pool_choice'] = _score_pool_cell(
+                _entry = _by_slot.get(sl)
+                _why = None
+                if _entry is None:
+                    _why = ('; '.join(rule.get('missing', []))
+                            or 'get_rule_hybrids returned no recipe for '
+                               'this slot')
+                slot_blocks[sl][_famkey] = _score_pool_cell(
                     reps, labels, groups,
                     dataset_name=dataset_name, task_type=task_type,
                     is_clf=is_classification, augmentations=augmentations,
                     config=config, n_sample=n_sample,
                     weight_methods=weight_methods, importance=importance,
-                    budget=budget, distance=_distance,
+                    budget=budget,
+                    distance=_slot_lineage[sl] == 'general_distance',
                     best_rep_sac=best_rep_sac, best_rep_name=best_rep_name,
                     best_rep_sac_weighted=best_rep_sac_weighted,
                     best_rep_name_weighted=best_rep_name_weighted,
-                    family=_fam)
-                if 'fold_reselection_error' not in budget_block[_fam or 'pool_choice']:
-                    _ck.put(budget_block[_fam or 'pool_choice'], **_ckey)
-            # The cell kept under the budget key is the one every existing
-            # reader expects: one dict with best_sac, weight_methods and
-            # fold_reselection on it. When more than one family was scored,
-            # that is the family with the better HELD-OUT delta — the number
-            # this file already computes per cell, where the winning arm and
-            # the winning single representation are each re-picked on the
-            # other folds.
-            #
-            # Not best_sac. best_sac is the whole-dataset statistic, and the
-            # two quantities disagree: measured on caco2, the similarity
-            # family reads +0.0263 on the whole dataset at 100 features and
-            # -0.0083 held out, while the predictive family reads +0.0244 and
-            # +0.0260. Picking on the whole-dataset number would name the
-            # family that overfits the rows its features were selected on,
-            # which is the same mistake as picking on subset order, with a
-            # number in front of it.
+                    family=_fam, entry=_entry, slot=sl,
+                    pool_subset=rule.get('pool_subset'),
+                    missing_reason=_why)
+                if ('fold_reselection_error' not in slot_blocks[sl][_famkey]
+                        and _entry is not None):
+                    _ck.put(slot_blocks[sl][_famkey], **_ckey)
+            # Rows read off the search the pool picks per lineage (top 2 base
+            # representations, top 2 hybrids and hybrid deltas for six
+            # models). Kept from before 2026-10-02; 0 model fits.
+            for _lineage, _distance in (('general', False),
+                                        ('general_distance', True)):
+                if _lineage not in lineages:
+                    continue
+                try:
+                    _srch, _ = get_best_search_for_downstream(
+                        reps, labels, groups,
+                        downstream_model=_SAC_MODEL_KEY, budget=budget,
+                        augmentations=augmentations,
+                        models=MAIN_MODELS_WITH_KNN,
+                        distance=_distance, dataset_name=dataset_name,
+                        task_type=task_type, **_fam_kw)
+                    _rows = _search_report_rows(
+                        _srch, dataset_name=dataset_name,
+                        distance=_distance, budget=budget)
+                except Exception as e:
+                    _rows = {'absent_reason': f'{type(e).__name__}: {e}'}
+                (results['search_report_rows'].setdefault(_lineage, {})
+                 .setdefault(str(budget), {}))[_famkey] = _rows
+
+        for sl in _slots:
+            budget_block = slot_blocks[sl]
+            # The cell kept under the budget key is the family with the better
+            # HELD-OUT delta, where the winning arm and the winning single
+            # representation are each re-picked on the other folds. Not
+            # best_sac, the whole-dataset statistic: measured on caco2, the
+            # similarity family reads +0.0263 on the whole dataset at 100
+            # features and -0.0083 held out, while the predictive family reads
+            # +0.0244 and +0.0260.
             def _heldout(fc):
                 r = ((fc.get('fold_reselection_result') or {}).get('knn') or {})
                 v = r.get('delta_mean_of_folds')
@@ -964,14 +913,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             cell['family_heldout_deltas'] = _heldout_scored
             cell['family_wholedata_sac'] = _sac_scored
             if len(budget_block) > 1:
-                print(f"    family chosen: {_win} ({_rule})")
-                print(f"      held-out delta   "
-                      + ', '.join(f"{k}={v:+.4f}"
-                                  for k, v in sorted(_heldout_scored.items())))
-                print(f"      whole-dataset    "
-                      + ', '.join(f"{k}={v:.4f}"
-                                  for k, v in sorted(_sac_scored.items())))
-            lineage_block['budgets'][str(budget)] = cell
+                print(f"    {sl} b={budget}: family chosen: {_win} ({_rule})")
+            results['rule_slots'][sl]['budgets'][str(budget)] = cell
+
+    # results['lineages'] in its old shape: general = slot general1,
+    # general_distance = slot distance1.
+    for _lineage, _sl in (('general', 'general1'),
+                          ('general_distance', 'distance1')):
+        if _sl in results['rule_slots']:
+            results['lineages'][_lineage] = {
+                'distance': _lineage == 'general_distance',
+                'slot': _sl,
+                'budgets': results['rule_slots'][_sl]['budgets']}
 
     # Back-compat top level. s09, firstpass_notready.py, quick_hybrid_summary.py
     # and make_supervisor_plots.py all read results['best_sac'],
@@ -982,8 +935,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # other cell lives only under results['lineages'].
     _primary_budget = 100 if 100 in budgets else budgets[0]
     results['primary_cell'] = {'lineage': 'general', 'budget': _primary_budget}
-    _primary = results['lineages']['general']['budgets'].get(
-        str(_primary_budget), {})
+    _primary = (results['lineages'].get('general') or {}).get(
+        'budgets', {}).get(str(_primary_budget), {})
     for _key in ('weight_methods', 'best_weight_method', 'best_sac',
                  'hybrid_status', 'hybrid_family', 'hybrid_family_choice',
                  'hybrid_search_metric', 'hybrid_search_score', 'pool_subset',
@@ -1001,7 +954,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if best_rep_name_weighted:
         print(f"    Best individual rep, weighted: {best_rep_name_weighted} "
               f"(SAC_w={best_rep_sac_weighted:.4f})")
-    for _lineage, _lin in results['lineages'].items():
+    for _lineage, _lin in results['rule_slots'].items():
         for _b in budgets:
             _cell = _lin['budgets'].get(str(_b), {})
             _bs = _cell.get('best_sac')

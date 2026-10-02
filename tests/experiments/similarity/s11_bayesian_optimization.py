@@ -31,6 +31,14 @@ Conditions:
        Per Moesser (2023) Ch. 2. Molecular datasets with SMILES only.
     8. multi_obj_random — random baseline on combined objective (for comparison)
 
+    The owner's set (2026-10-02): every hybrid condition above also runs as
+    '<condition>__general2' and '<condition>__distance1'. The plain name is
+    general1, the best recipe from the general search on the seed rows (as
+    before); general2 is the next recipe from that search; distance1 is the
+    best from a distance search on the same seed rows. Per-seed recipes:
+    results['hybrid_seed_recipes_by_slot']; empty slots and why:
+    results['hybrid_seed_recipe_missing'].
+
 Metrics:
     - Primary: AUC of best-found-so-far curve (area under cumulative max)
     - Secondary: iterations to find top-1% compound, iterations to find top-5%
@@ -69,7 +77,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, get_domain_metric,
     make_structured_output, get_precomputed_search, get_fold_best_search,
-    make_cv_splitter, build_fold_hybrid,
+    make_cv_splitter, build_fold_hybrid, top_hybrids,
 )
 
 from sklearn.gaussian_process.kernels import Kernel, NormalizedKernelMixin
@@ -416,8 +424,27 @@ def _hybrid_build_model(n_features=None):
         normalize_y=True, random_state=42)
 
 
+# THE OWNER'S SET (top 2 general + top 1 distance per model, 2026-10-02).
+# Every hybrid condition runs once per recipe slot: the plain name is general1
+# (the recipe this file always used: best on this seed's rows from the general
+# search), '<condition>__general2' is the second-best from that same search,
+# and '<condition>__distance1' is the best from a distance search run on the
+# same seed rows. 3x the hybrid BO loops of before.
+RULE_SLOTS = ('general1', 'general2', 'distance1')
+
+
+def _split_slot(condition):
+    """('hybrid_50d', 'general2') for 'hybrid_50d__general2'; a plain name is
+    general1."""
+    for _sl in RULE_SLOTS[1:]:
+        if condition.endswith(f'__{_sl}'):
+            return condition[:-len(f'__{_sl}')], _sl
+    return condition, 'general1'
+
+
 def _is_hybrid_condition(condition):
     """True for the conditions whose features come out of a KIRBy recipe."""
+    condition = _split_slot(condition)[0]
     if condition in ('hybrid_50d', 'hybrid_50d_refit', 'multi_obj_hybrid'):
         return True
     return (condition.startswith('hybrid_')
@@ -1072,32 +1099,93 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # be served from another seed's or from a cross-validation fold's.
     augmentations = data.get('augmentations')
     _seed_bp_cache = {}
+    # {seed_i: {slot: blueprint or None}} and why a slot is empty.
+    _seed_slots_cache = {}
+    _seed_slot_missing = {}
 
     def _seed_blueprint(seed_i, seed, seed_idx):
         """The blueprint searched on this seed's seed rows, or None."""
-        if seed_i in _seed_bp_cache:
-            return _seed_bp_cache[seed_i]
-        try:
-            _search, meta = get_fold_best_search(
-                reps, labels, groups,
-                train_idx=seed_idx, fold_i=seed_i, n_outer_folds=n_seeds,
-                # RF blueprint reused across surrogates — see EXPERIMENT_DEBUGGING.md
-                downstream_model='rf', budget=hybrid_budget,
-                augmentations=augmentations,
-                dataset_name=dataset_name, task_type=task_type,
-                domain=data.get('domain', 'molecular'),
-                seed=seed, objective=recipe_objective,
-                cache_namespace=f'bo_seed{int(seed_i)}_s{int(seed)}')
-            bp_s = (meta['best_config']['blueprint']
-                    if meta and 'blueprint' in meta['best_config'] else None)
-            if bp_s is not None:
-                bp_s.augmentation_strategy = meta['aug_condition']
-        except Exception as e:
-            print(f"      seed blueprint search failed: "
-                  f"{type(e).__name__}: {str(e)[:100]}")
-            bp_s = None
-        _seed_bp_cache[seed_i] = bp_s
-        return bp_s
+        return _seed_blueprints(seed_i, seed, seed_idx).get('general1')
+
+    def _seed_blueprints(seed_i, seed, seed_idx):
+        """The owner's set for this seed (2026-10-02), searched on its seed
+        rows only: {'general1', 'general2', 'distance1': blueprint or None}.
+
+        general1 is what this file always built (the general search's best
+        for rf at hybrid_budget features). general2 is the next-best distinct
+        recipe from that same search. distance1 is the best from a distance
+        search (tier general_distance, DISTANCE_EVALUATORS/BUDGETS/MODELS) on
+        the same seed rows. An empty slot's reason is kept in
+        results['hybrid_seed_recipe_missing'].
+        """
+        if seed_i in _seed_slots_cache:
+            return _seed_slots_cache[seed_i]
+        import copy as _copy
+        out = {sl: None for sl in RULE_SLOTS}
+        why = {}
+        for _dist in (False, True):
+            try:
+                _search, meta = get_fold_best_search(
+                    reps, labels, groups,
+                    train_idx=seed_idx, fold_i=seed_i, n_outer_folds=n_seeds,
+                    # RF blueprint reused across surrogates — see EXPERIMENT_DEBUGGING.md
+                    downstream_model='rf', budget=hybrid_budget,
+                    augmentations=augmentations,
+                    dataset_name=dataset_name, task_type=task_type,
+                    domain=data.get('domain', 'molecular'),
+                    seed=seed, objective=recipe_objective,
+                    distance=_dist,
+                    cache_namespace=f'bo_seed{int(seed_i)}_s{int(seed)}')
+            except Exception as e:
+                print(f"      seed blueprint search failed "
+                      f"({'distance' if _dist else 'general'}): "
+                      f"{type(e).__name__}: {str(e)[:100]}")
+                _w = f'search raised {type(e).__name__}: {e}'
+                for sl in (('distance1',) if _dist
+                           else ('general1', 'general2')):
+                    why[sl] = _w
+                continue
+            if not meta or 'blueprint' not in (meta.get('best_config') or {}):
+                for sl in (('distance1',) if _dist
+                           else ('general1', 'general2')):
+                    why[sl] = 'the search returned no recipe for rf'
+                continue
+            bp1 = _copy.deepcopy(meta['best_config']['blueprint'])
+            bp1.augmentation_strategy = meta['aug_condition']
+            out['distance1' if _dist else 'general1'] = bp1
+            if _dist:
+                continue
+            # general2: the next recipe of the same search at the same budget,
+            # skipping any entry that is the general1 recipe itself.
+            try:
+                _th = top_hybrids(_search, 'rf', 3, budget=hybrid_budget,
+                                  require_full=False)
+                _d1 = bp1.to_dict()
+                _d1.pop('augmentation_strategy', None)
+                bp2 = None
+                for _e in _th.get('selected') or []:
+                    _b = _e.get('blueprint')
+                    if _b is None:
+                        continue
+                    _d = _b.to_dict()
+                    _d.pop('augmentation_strategy', None)
+                    if _d != _d1:
+                        bp2 = _copy.deepcopy(_b)
+                        bp2.augmentation_strategy = meta['aug_condition']
+                        break
+                out['general2'] = bp2
+                if bp2 is None:
+                    why['general2'] = (
+                        _th.get('shortfall_reason')
+                        or 'the search scored only one recipe for rf at this '
+                           'budget')
+            except Exception as e:
+                why['general2'] = f'{type(e).__name__}: {e}'
+        _seed_slots_cache[seed_i] = out
+        _seed_bp_cache[seed_i] = out['general1']
+        if why:
+            _seed_slot_missing[int(seed_i)] = why
+        return out
 
     # Domain-aware metric for determining "lower_is_better"
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -1221,6 +1309,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     ]
     if multi_objective and y_multi is not None:
         conditions.extend(['multi_obj_hybrid', 'multi_obj_random'])
+    # The owner's set (2026-10-02): every hybrid condition once more for each
+    # of general2 and distance1, right after its general1 (plain) name.
+    conditions = [c2 for c in conditions
+                  for c2 in ([c] + ([f'{c}__{sl}' for sl in RULE_SLOTS[1:]]
+                                    if _is_hybrid_condition(c) else []))]
 
     # Per-rep BO: run BO in each individual rep's space (Moesser Ch.2 comparison)
     per_rep_bo = kwargs.get('per_rep_bo', False)
@@ -1278,6 +1371,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for condition in conditions:
         if condition in _resume:
             continue
+        # '<name>__general2' / '<name>__distance1' run the same code as
+        # <name> with that slot's recipe (owner's set, 2026-10-02).
+        _cond, _slot = _split_slot(condition)
         print(f"\n  {'='*60}")
         print(f"  Condition: {condition}")
         print(f"  {'='*60}")
@@ -1286,8 +1382,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # instead of running a degenerate curve that looks like a real method. ---
         # (1) Optional-surrogate hybrid_<surr> conditions: if the package is not
         #     installed, every fit fails -> pure random acquisition mislabelled.
-        if condition.startswith('hybrid_') and condition.split('_', 1)[1] in SURROGATE_MODELS:
-            _surr = condition.split('_', 1)[1]
+        if _cond.startswith('hybrid_') and _cond.split('_', 1)[1] in SURROGATE_MODELS:
+            _surr = _cond.split('_', 1)[1]
             if not _surrogate_available(_surr):
                 print(f"    SKIP: surrogate '{_surr}' package not installed "
                       f"-> would be pure random acquisition mislabelled as a method.")
@@ -1299,7 +1395,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # (2) tanimoto_ecfp4 needs real binary fingerprints. With no ecfp4 rep it
         #     falls back to a continuous max-dim rep, where the Tanimoto kernel is
         #     meaningless. Skip + flag rather than report a fake "tanimoto" result.
-        if condition == 'tanimoto_ecfp4' and not _has_ecfp4:
+        if _cond == 'tanimoto_ecfp4' and not _has_ecfp4:
             print("    SKIP: tanimoto_ecfp4 requires an 'ecfp4' rep "
                   "(Tanimoto kernel is meaningless on continuous features).")
             results['conditions'][condition] = {
@@ -1379,7 +1475,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
 
             # This seed's hybrid settings, searched on its seed rows only.
-            bp = _seed_blueprint(seed_i, seed, seed_idx)
+            bp = _seed_blueprints(seed_i, seed, seed_idx).get(_slot)
 
             # No recipe, no hybrid. The two builds used to fall back to fixed
             # settings — an allocation method the search no longer sweeps, and
@@ -1387,7 +1483,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # comparison's two arms — and the curve that came out was
             # indistinguishable from a searched one. The seed is refused and
             # counted instead.
-            if bp is None and _is_hybrid_condition(condition):
+            if bp is None and _is_hybrid_condition(_cond):
                 no_blueprint_seeds += 1
                 print(f"      SKIP seed {seed_i + 1}: no recipe was searched "
                       f"on this seed's seed rows, so there is nothing to "
@@ -1395,7 +1491,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
 
             # Select target: combined objective for multi_obj, else standard
-            y_cond = y_multi if condition.startswith('multi_obj_') else y_bo
+            y_cond = y_multi if _cond.startswith('multi_obj_') else y_bo
             y_seed = y_cond[seed_idx]
             y_pool = y_cond[pool_idx]
 
@@ -1403,11 +1499,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # --- Build features for this condition ---
             try:
-                if condition == 'ecfp4_raw':
+                if _cond == 'ecfp4_raw':
                     X_seed, X_pool, dim = build_ecfp4_features(
                         reps, seed_idx, pool_idx)
 
-                elif condition == 'tanimoto_ecfp4':
+                elif _cond == 'tanimoto_ecfp4':
                     # Same features as ecfp4_raw but with Tanimoto kernel
                     # (proper kernel for binary fingerprints). No scaling —
                     # Tanimoto operates on raw binary/count features.
@@ -1420,7 +1516,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_pool = X_all[pool_idx].astype(np.float64)
                     dim = X_all.shape[1]
 
-                elif condition == 'best_single':
+                elif _cond == 'best_single':
                     # SIMA-F09: groups threaded through so the comparator's rep
                     # is selected group-aware, like the hybrid arm's blueprint.
                     X_seed, X_pool, dim, _sel_info = build_best_single_features(
@@ -1428,11 +1524,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         task_type=task_type)
                     best_single_selection.append(_sel_info)
 
-                elif condition == 'pca_50d':
+                elif _cond == 'pca_50d':
                     X_seed, X_pool, dim = build_pca_features(
                         reps, seed_idx, pool_idx, n_components=target_dim)
 
-                elif condition == 'hybrid_50d':
+                elif _cond == 'hybrid_50d':
                     if rebuild_interval > 0:
                         # BO with periodic hybrid rebuilding. refit_interval=10
                         # keeps the GP-refit cadence aligned with run_bo_loop
@@ -1462,7 +1558,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                         'lower_is_better'),
                                        _hybrid_scoring())))
 
-                elif condition == 'hybrid_50d_refit':
+                elif _cond == 'hybrid_50d_refit':
                     # Always rebuild hybrid every 25 iterations; GP refit stays
                     # at 10 to match run_bo_loop (SIMA-12: rebuild cadence and
                     # refit cadence are distinct).
@@ -1482,19 +1578,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           f"flat-acquisition picks: {flat_acq}")
                     continue
 
-                elif condition == 'random_50d':
+                elif _cond == 'random_50d':
                     X_seed, X_pool, dim = build_random_features(
                         reps, seed_idx, pool_idx,
                         n_components=target_dim, rng=rng)
 
-                elif condition == 'random_acq':
+                elif _cond == 'random_acq':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
                     all_curves.append(curve)
                     best_final = curve[-1] if curve else float('nan')
                     print(f"      final best: {best_final:.4f} (random)")
                     continue
 
-                elif condition == 'multi_obj_hybrid':
+                elif _cond == 'multi_obj_hybrid':
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_cond, seed_idx, pool_idx,
                         budget=hybrid_budget, bp=bp,
@@ -1502,16 +1598,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         **dict(zip(('model', 'metric_fn', 'lower_is_better'),
                                    _hybrid_scoring())))
 
-                elif condition == 'multi_obj_random':
+                elif _cond == 'multi_obj_random':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
                     all_curves.append(curve)
                     best_final = curve[-1] if curve else float('nan')
                     print(f"      final best: {best_final:.4f} (random, multi-obj)")
                     continue
 
-                elif condition.startswith('single_'):
+                elif _cond.startswith('single_'):
                     # Per-rep BO: use a single rep's features (scaled)
-                    rep_name = condition[len('single_'):]
+                    rep_name = _cond[len('single_'):]
                     if rep_name not in reps:
                         print(f"      rep '{rep_name}' not found, skipping")
                         continue
@@ -1521,7 +1617,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_pool = scaler.transform(X_rep[pool_idx])
                     dim = X_rep.shape[1]
 
-                elif condition.startswith('hybrid_') and condition.split('_', 1)[1] in SURROGATE_MODELS:
+                elif _cond.startswith('hybrid_') and _cond.split('_', 1)[1] in SURROGATE_MODELS:
                     # Surrogate model variant on hybrid features
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_bo, seed_idx, pool_idx,
@@ -1543,13 +1639,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"      dim: {dim}")
 
             # --- Determine surrogate model ---
-            if condition.startswith('hybrid_') and condition.split('_', 1)[1] in SURROGATE_MODELS:
-                surr = condition.split('_', 1)[1]
+            if _cond.startswith('hybrid_') and _cond.split('_', 1)[1] in SURROGATE_MODELS:
+                surr = _cond.split('_', 1)[1]
             else:
                 surr = 'gp'
 
             # --- Run BO loop ---
-            kt = 'tanimoto' if condition == 'tanimoto_ecfp4' else 'rbf'
+            kt = 'tanimoto' if _cond == 'tanimoto_ecfp4' else 'rbf'
             curve, gp_fail, flat_acq = run_bo_loop(
                 X_seed, y_seed, X_pool, y_pool,
                 max_iterations=max_iterations,
@@ -1589,7 +1685,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 results['conditions'][condition] = {'error': 'no successful runs'}
             continue
 
-        y_for_metrics = y_multi if condition.startswith('multi_obj_') else y_bo
+        y_for_metrics = y_multi if _cond.startswith('multi_obj_') else y_bo
         metrics = compute_bo_metrics(all_curves, y_for_metrics, budget_checkpoints)
 
         # Sign-flip stored AUC back into the natural metric direction when the
@@ -1601,7 +1697,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Multi-objective curves use y_multi which is constructed in
         # "higher is better" orientation (see compute_combined_objective),
         # so they are not sign-flipped.
-        if lower_is_better and not condition.startswith('multi_obj_'):
+        if lower_is_better and not _cond.startswith('multi_obj_'):
             for bk_key, bk_metrics in metrics.items():
                 if 'auc_mean' in bk_metrics:
                     bk_metrics['auc_mean'] = -bk_metrics['auc_mean']
@@ -1638,7 +1734,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # not a coin's. It was on this list because of its name, and on herg_ki
         # it made all 90 of its picks on a tied Expected Improvement with
         # nothing saying so.
-        _is_random_only = condition in ('random_acq', 'multi_obj_random')
+        _is_random_only = _cond in ('random_acq', 'multi_obj_random')
         _max_possible_fails = n_seeds * max_iterations
         degenerate_random = (
             not _is_random_only
@@ -1777,6 +1873,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         })
         for si, b in sorted(_seed_bp_cache.items())
     }
+    # The owner's set per seed (2026-10-02): every slot's recipe, and why a
+    # slot was empty on a seed.
+    results['hybrid_seed_recipes_by_slot'] = {
+        int(si): {sl: (None if b is None else {
+            'allocation': b.allocation_method,
+            'importance': b.importance_method,
+            'evaluator': b.internal_evaluator,
+            'augmentation_strategy': b.augmentation_strategy,
+            'budget': getattr(b, 'budget', None),
+            'step_size': getattr(b, 'step_size', 5),
+        }) for sl, b in slots.items()}
+        for si, slots in sorted(_seed_slots_cache.items())
+    }
+    results['hybrid_seed_recipe_missing'] = _seed_slot_missing
 
     # Build structured output
     # bo_auc is stored in the dataset's natural metric direction (see the

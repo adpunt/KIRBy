@@ -7196,7 +7196,18 @@ def get_rule_hybrids(
         print(f"[rule] {dataset_name} model={downstream_model} "
               f"budget={budget} fold={fold_i}: "
               + ' | '.join(missing_all))
+    # Carried from the two reads so a caller can tell whether fold 0 filtered
+    # the candidates and how many fold scores the pool holds, as it could
+    # from get_fold_pool_recipes.
+    _f0 = [p.get('fold0_pruned') for p in out_parts.values()]
+    _nf = [p.get('n_folds_in_pool') for p in out_parts.values()
+           if p.get('n_folds_in_pool') is not None]
     return {
+        'fold0_pruned': (None if not _f0 or all(v is None for v in _f0)
+                         else any(bool(v) for v in _f0 if v is not None)),
+        'fold0_pruned_by_lineage': {k: p.get('fold0_pruned')
+                                    for k, p in out_parts.items()},
+        'n_folds_in_pool': (max(_nf) if _nf else None),
         'model': downstream_model, 'budget': budget, 'fold': fold_i,
         'pool_subset': subset_name, 'objectives': list(objectives),
         'by_objective': by_objective,
