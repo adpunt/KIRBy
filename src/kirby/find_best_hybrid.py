@@ -9650,6 +9650,47 @@ def _find_best_hybrid_inner(
 # PUBLIC API: APPLY A PUBLISHED BLUEPRINT
 # =============================================================================
 
+def restrict_to_rep_count(reps, blueprint, scores=None, *, context=''):
+    """The representations a recipe was searched over, when it used fewer
+    than the whole pool. Returns (reps kept, note or None).
+
+    DEFAULT_REP_COUNTS is a searched axis: a configuration can win on the top
+    2, 3 or 5 representations of the pool, ranked by that fold's allocation
+    scores, and is stored with rep_count=N. build_fold_hybrid rebuilt that
+    subset (since 2026-09-18); apply_blueprint and the whole-data builders in
+    _shared did not, so such a recipe was rebuilt over every representation --
+    different features from the configuration that won, under its name. Found
+    2026-10-02 when two different stored recipes rebuilt to the same matrix.
+
+    Ranked the way build_fold_hybrid ranks: `scores` when the caller has this
+    fold's allocation scores, else blueprint.rep_scores (the search's own,
+    carried on the recipe). Score first, then name. No silent fallback: a
+    recipe that asks for N and cannot be ranked raises.
+    """
+    rc = getattr(blueprint, 'rep_count', None)
+    if rc is None or int(rc) >= len(reps):
+        return reps, None
+    rc = int(rc)
+    src = 'fold_alloc_scores' if scores else 'blueprint.rep_scores'
+    scores = scores or getattr(blueprint, 'rep_scores', None)
+    if not scores:
+        raise ValueError(
+            f"{context}: the recipe was searched over {rc} of the pool's "
+            f"representations (rep_count={rc}) and no allocation scores are "
+            f"available to say which {rc}. Rebuilding on all {len(reps)} "
+            f"would give a different hybrid from the one that won.")
+    have = [r for r in reps if r in scores]
+    if len(have) < rc:
+        raise ValueError(
+            f"{context}: the recipe asks for {rc} representations and only "
+            f"{len(have)} of the {len(reps)} given carry a score ({src}).")
+    ranked = sorted(have, key=lambda r: (-float(scores[r]), r))
+    keep = set(ranked[:rc])
+    return ({k: v for k, v in reps.items() if k in keep},
+            {'rep_count_applied': rc, 'rep_count_ranked_by': src,
+             'rep_count_kept': sorted(keep)})
+
+
 def apply_blueprint(
     base_reps: Dict[str, np.ndarray],
     blueprint: Union[Blueprint, dict],
@@ -9730,6 +9771,10 @@ def apply_blueprint(
         raise ValueError(
             f"base_reps is missing representations required by the blueprint: "
             f"{sorted(missing)}")
+
+    # The recipe's representation count (restrict_to_rep_count, 2026-10-02).
+    bp_reps, _rc_note = restrict_to_rep_count(bp_reps, blueprint,
+                                              context='apply_blueprint')
 
     n_samples = next(iter(bp_reps.values())).shape[0]
 
@@ -9921,7 +9966,10 @@ def apply_blueprint(
     # name only. `rep_scores` stays on the Blueprint as provenance — what each
     # representation scored on its own, over every row the search ran on.
 
-    return create_hybrid(**kwargs)
+    X_h, _finfo = create_hybrid(**kwargs)
+    if _rc_note and isinstance(_finfo, dict):
+        _finfo.update(_rc_note)
+    return X_h, _finfo
 
 
 def get_best_hybrid(
