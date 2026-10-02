@@ -89,6 +89,90 @@ def _slot_suffix(slot):
     return '' if slot == 'general1' else f'__{slot}'
 
 
+# ── The rest of each recipe (2026-10-02) ────────────────────────────────────
+# Until 2026-10-02 this file rebuilt each hybrid from four of its recipe's
+# settings: allocation method, importance method, internal evaluator and
+# augmentation condition. Everything else the search had chosen took
+# create_hybrid's defaults, so general1 and general2 could build identical
+# features. The owner's decision: build with the whole recipe. The names and
+# defaults below are the ones _shared._create_hybrid_from_blueprint uses, which
+# is how the search's own rebuild (build_hybrid_from_entry) calls create_hybrid.
+#
+# Privacy check, done for this file: every one of these settings is a number
+# or a name chosen by the same stored search the four settings already came
+# from. None carries a row, a label or a feature, so passing them on shares
+# nothing across silos that the four settings did not already share.
+def _recipe_kwargs(bp, objective=None):
+    """create_hybrid keyword arguments for every recipe setting beyond the
+    allocation method, importance method, internal evaluator, augmentation
+    condition and budget. {} when there is no stored recipe."""
+    if bp is None:
+        return {}
+    kw = {
+        'step_size': int(getattr(bp, 'step_size', 5) or 5),
+        'augmentation_margin': float(
+            getattr(bp, 'augmentation_margin', 0.0) or 0.0),
+        'augmentation_fraction': getattr(bp, 'augmentation_fraction', None),
+        'candidate_ranking': getattr(bp, 'candidate_ranking',
+                                     'residual_correlation'),
+        'augmentation_threshold': getattr(bp, 'augmentation_threshold', None),
+        'augmentation_budget': int(
+            getattr(bp, 'augmentation_budget', 20) or 20),
+        'aug_max_candidates': int(getattr(bp, 'aug_max_candidates', 50) or 50),
+        'aug_per_source_budget': getattr(bp, 'aug_per_source_budget', None),
+    }
+    if objective is not None:
+        kw['objective'] = objective
+    return kw
+
+
+# The three recipe settings federated_feature_selection and
+# fluid_within_kirby_across take, besides the budget. Neither takes the rest
+# of the recipe, so their per-silo selections still run on create_hybrid's
+# defaults for it (changing that needs an edit to federated_helpers).
+_SILO_HELPER_SETTINGS = ('allocation_method', 'importance_method',
+                         'internal_evaluator')
+
+
+def _same_recipe_check(named, *, budget, silo_arms=None):
+    """Flag hybrids of the owner's set that would build the same features.
+
+    named: [(slot, {setting: value})], every setting the slot is built with.
+    Returns (duplicate_of, notes). duplicate_of maps a slot to the earlier
+    slot whose recipe it repeats. notes are sentences for rule_missing.
+    step_size is compared only for greedy allocations: create_hybrid reads it
+    on its 'greedy' and 'dominant_greedy' branches and nowhere else.
+    silo_arms names the arms built by the per-silo helpers; two slots that
+    agree on _SILO_HELPER_SETTINGS build the same features there.
+    """
+    def _effective(r):
+        r = dict(r)
+        a = str(r.get('allocation_method') or '')
+        if not (a.startswith('greedy') or a == 'dominant_greedy'):
+            r.pop('step_size', None)
+        return r
+
+    dup, notes = {}, []
+    for j, (sj, rj) in enumerate(named):
+        for si, ri in named[:j]:
+            if _effective(ri) == _effective(rj):
+                dup[sj] = si
+                notes.append(
+                    f"{sj} at budget {budget}: same recipe as {si} in every "
+                    f"setting it is built with, so its arms build the same "
+                    f"features as {si}'s")
+                break
+            if silo_arms and all(ri.get(k) == rj.get(k)
+                                 for k in _SILO_HELPER_SETTINGS):
+                notes.append(
+                    f"{sj} at budget {budget}: same allocation method, "
+                    f"importance method and internal evaluator as {si}; the "
+                    f"per-silo selection in {silo_arms} takes only those, so "
+                    f"there {sj} builds the same features as {si}")
+                break
+    return dup, notes
+
+
 def _rule_recipes(reps, labels, groups, *, downstream_model, budget,
                   augmentations, metric, task_type, domain, dataset_name,
                   data=None, label_noise=None, extra=None):
@@ -137,11 +221,11 @@ def _rule_recipes(reps, labels, groups, *, downstream_model, budget,
             continue
         slots.append({
             'slot': h.get('slot'),
-            # allocation|importance|budget|evaluator|step size as stored; this
-            # file applies the first, second and fourth plus the augmentation
-            # condition, so two slots that differ only in budget or step size
-            # build the same features here.
+            # allocation|importance|budget|evaluator|step size as stored.
             'recipe': h.get('recipe'),
+            # The rest of the recipe, passed to every create_hybrid call that
+            # builds this slot (2026-10-02; see _recipe_kwargs).
+            'build_kwargs': _recipe_kwargs(bp, h.get('objective')),
             'lineage': h.get('lineage'),
             'tier': h.get('tier'),
             'objective': h.get('objective'),
@@ -298,7 +382,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     # best recipe across every budget the search holds.
     def _recipe_for(_budget):
         """(search, meta, blueprint, aug condition, allocation, importance,
-        internal evaluator) for one budget. The last four fall back to the hard
+        internal evaluator, rest of recipe) for one budget. The last four fall back to the hard
         defaults when no recipe is stored, exactly as before, and the caller is
         told which happened."""
         try:
@@ -335,7 +419,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         _al = _b.allocation_method if _b else 'performance_weighted'
         _im = _b.importance_method if _b else 'treeshap'
         _ie = _b.internal_evaluator if _b else 'match'
-        return _s, _m, _b, _aug, _al, _im, _ie
+        return _s, _m, _b, _aug, _al, _im, _ie, _recipe_kwargs(_b)
 
     recipe_source_by_budget = {}
     # No budget named: the best recipe across every budget the search holds.
@@ -344,7 +428,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     # The owner's set, 2026-10-02: for this model, the top 2 hybrids from the
     # general searches plus the top 1 from the distance searches, read per
     # budget like _recipe_for. Returns [(slot, (aug, allocation, importance,
-    # internal evaluator)), ...]. When the set has no general1, the
+    # internal evaluator, rest of recipe)), ...]. When the set has no general1, the
     # _recipe_for settings passed in fill it, so the old keys are always
     # written as before.
     _rule_cache = {}
@@ -362,7 +446,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 extra=smoke_search_kwargs(config))
             _out = [(_s['slot'], (_s['aug_condition'], _s['allocation_method'],
                                   _s['importance_method'],
-                                  _s['internal_evaluator']))
+                                  _s['internal_evaluator'],
+                                  dict(_s.get('build_kwargs') or {})))
                     for _s in _slots]
             if 'general1' not in [_n for _n, _ in _out]:
                 _out.insert(0, ('general1', None))
@@ -370,8 +455,20 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     '_recipe_for (the set had no general1)')
             _rule_cache[_budget] = _out
             rule_info_by_budget[str(_budget)] = _info
-        return [(_n, (general1_fallback if _v is None else _v))
+        _res = [(_n, (general1_fallback if _v is None else _v))
                 for _n, _v in _rule_cache[_budget]]
+        # Two slots that still resolve to one recipe at this budget are
+        # recorded, not dropped: both are built and scored (2026-10-02).
+        _inf = rule_info_by_budget[str(_budget)]
+        if 'duplicate_of' not in _inf:
+            _inf['duplicate_of'], _dup_notes = _same_recipe_check(
+                [(_n, {'aug_condition': _ac, 'allocation_method': _a,
+                       'importance_method': _i, 'internal_evaluator': _e,
+                       **_kw})
+                 for _n, (_ac, _a, _i, _e, _kw) in _res],
+                budget=_budget, silo_arms='C6')
+            _inf['missing'] = list(_inf.get('missing') or []) + _dup_notes
+        return _res
 
     # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")
@@ -662,7 +759,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             # recipe, and because the lookup asked for an unbound name that
             # recipe was the hard defaults.
             (_bsearch, _bmeta, _bbp, aug_cond, _alloc, _imp,
-             _int_eval) = _recipe_for(BUDGET)
+             _int_eval, _rkw) = _recipe_for(BUDGET)
             recipe_source_by_budget[BUDGET] = (
                 'searched' if _bmeta is not None else 'hard_defaults')
             print(f"  budget={BUDGET}: allocation={_alloc} importance={_imp} "
@@ -671,10 +768,12 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             # The owner's set for this budget (top 2 general + top 1
             # distance, 2026-10-02). The recipe above stays general1 only when
             # the set has no general1 of its own.
-            _slot_list = _rule_for(BUDGET, (aug_cond, _alloc, _imp, _int_eval))
-            for _sn, (_ac, _a, _i, _e) in _slot_list:
+            _slot_list = _rule_for(BUDGET, (aug_cond, _alloc, _imp, _int_eval,
+                                            _rkw))
+            for _sn, (_ac, _a, _i, _e, _kw) in _slot_list:
                 print(f"    {_sn}: allocation={_a} importance={_i} "
-                      f"internal evaluator={_e} augmentation={_ac}")
+                      f"internal evaluator={_e} augmentation={_ac} "
+                      f"step_size={_kw.get('step_size')}")
 
             # Build silo-only rep dicts
             kirby_train = {silo_reps[s]: train_reps[silo_reps[s]]
@@ -687,7 +786,9 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             # its own allocation method, importance method, internal evaluator
             # and augmentation condition, applied to the silos' representations
             # exactly as the single recipe was. general1 fills the old keys.
-            for _slot_name, (aug_cond, _alloc, _imp, _int_eval) in _slot_list:
+            # The rest of each slot's recipe (_rkw: step size, augmentation
+            # settings, search family) goes to C4 and C5 since 2026-10-02.
+            for _slot_name, (aug_cond, _alloc, _imp, _int_eval, _rkw) in _slot_list:
                 # Condition 4: KIRBy hybrid (all K reps)
                 print(f"  C4 [{_slot_name}]: KIRBy hybrid (all)...", end=' ')
                 try:
@@ -701,7 +802,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         budget=BUDGET,
                         internal_evaluator=_int_eval,
                         augmentations=train_augs,
-                        augmentation_strategy=aug_cond)
+                        augmentation_strategy=aug_cond,
+                        **_rkw)
                     X_h_test = _append_test_augs(
                         apply_feature_selection(kirby_test, fi_c4), fi_c4)
 
@@ -757,7 +859,8 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         budget=BUDGET,
                         internal_evaluator=_int_eval,
                         augmentations=train_augs,
-                        augmentation_strategy=aug_cond)
+                        augmentation_strategy=aug_cond,
+                        **_rkw)
                     X_t3_test = _append_test_augs(
                         apply_feature_selection(kirby_top3_test, fi_c5), fi_c5)
 
@@ -804,6 +907,13 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         fluid_within_kirby_across(
                             kirby_train, kirby_test, y_train,
                             k_intra=K_INTRA,
+                            # Not passed before 2026-10-02, so C6 took the
+                            # helper's default of 100 features at every
+                            # budget of the sweep while C4 and C5 moved.
+                            budget=BUDGET,
+                            # The helper takes these three settings and the
+                            # budget only; the rest of the recipe (_rkw) has
+                            # no way in without a change to federated_helpers.
                             allocation_method=_alloc, importance_method=_imp,
                             internal_evaluator=_int_eval,
                             downstream_model=fed_to_kirby_model(fed_model),  # 'match' resolution

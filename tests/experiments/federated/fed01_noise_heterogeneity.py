@@ -87,6 +87,90 @@ def _slot_suffix(slot):
     return '' if slot == 'general1' else f'__{slot}'
 
 
+# ── The rest of each recipe (2026-10-02) ────────────────────────────────────
+# Until 2026-10-02 this file rebuilt each hybrid from four of its recipe's
+# settings: allocation method, importance method, internal evaluator and
+# augmentation condition. Everything else the search had chosen took
+# create_hybrid's defaults, so general1 and general2 could build identical
+# features. The owner's decision: build with the whole recipe. The names and
+# defaults below are the ones _shared._create_hybrid_from_blueprint uses, which
+# is how the search's own rebuild (build_hybrid_from_entry) calls create_hybrid.
+#
+# Privacy check, done for this file: every one of these settings is a number
+# or a name chosen by the same stored search the four settings already came
+# from. None carries a row, a label or a feature, so passing them on shares
+# nothing across silos that the four settings did not already share.
+def _recipe_kwargs(bp, objective=None):
+    """create_hybrid keyword arguments for every recipe setting beyond the
+    allocation method, importance method, internal evaluator, augmentation
+    condition and budget. {} when there is no stored recipe."""
+    if bp is None:
+        return {}
+    kw = {
+        'step_size': int(getattr(bp, 'step_size', 5) or 5),
+        'augmentation_margin': float(
+            getattr(bp, 'augmentation_margin', 0.0) or 0.0),
+        'augmentation_fraction': getattr(bp, 'augmentation_fraction', None),
+        'candidate_ranking': getattr(bp, 'candidate_ranking',
+                                     'residual_correlation'),
+        'augmentation_threshold': getattr(bp, 'augmentation_threshold', None),
+        'augmentation_budget': int(
+            getattr(bp, 'augmentation_budget', 20) or 20),
+        'aug_max_candidates': int(getattr(bp, 'aug_max_candidates', 50) or 50),
+        'aug_per_source_budget': getattr(bp, 'aug_per_source_budget', None),
+    }
+    if objective is not None:
+        kw['objective'] = objective
+    return kw
+
+
+# The three recipe settings federated_feature_selection and
+# fluid_within_kirby_across take, besides the budget. Neither takes the rest
+# of the recipe, so their per-silo selections still run on create_hybrid's
+# defaults for it (changing that needs an edit to federated_helpers).
+_SILO_HELPER_SETTINGS = ('allocation_method', 'importance_method',
+                         'internal_evaluator')
+
+
+def _same_recipe_check(named, *, budget, silo_arms=None):
+    """Flag hybrids of the owner's set that would build the same features.
+
+    named: [(slot, {setting: value})], every setting the slot is built with.
+    Returns (duplicate_of, notes). duplicate_of maps a slot to the earlier
+    slot whose recipe it repeats. notes are sentences for rule_missing.
+    step_size is compared only for greedy allocations: create_hybrid reads it
+    on its 'greedy' and 'dominant_greedy' branches and nowhere else.
+    silo_arms names the arms built by the per-silo helpers; two slots that
+    agree on _SILO_HELPER_SETTINGS build the same features there.
+    """
+    def _effective(r):
+        r = dict(r)
+        a = str(r.get('allocation_method') or '')
+        if not (a.startswith('greedy') or a == 'dominant_greedy'):
+            r.pop('step_size', None)
+        return r
+
+    dup, notes = {}, []
+    for j, (sj, rj) in enumerate(named):
+        for si, ri in named[:j]:
+            if _effective(ri) == _effective(rj):
+                dup[sj] = si
+                notes.append(
+                    f"{sj} at budget {budget}: same recipe as {si} in every "
+                    f"setting it is built with, so its arms build the same "
+                    f"features as {si}'s")
+                break
+            if silo_arms and all(ri.get(k) == rj.get(k)
+                                 for k in _SILO_HELPER_SETTINGS):
+                notes.append(
+                    f"{sj} at budget {budget}: same allocation method, "
+                    f"importance method and internal evaluator as {si}; the "
+                    f"per-silo selection in {silo_arms} takes only those, so "
+                    f"there {sj} builds the same features as {si}")
+                break
+    return dup, notes
+
+
 def _rule_recipes(reps, labels, groups, *, downstream_model, budget,
                   augmentations, metric, task_type, domain, dataset_name,
                   data=None, label_noise=None, extra=None):
@@ -135,11 +219,11 @@ def _rule_recipes(reps, labels, groups, *, downstream_model, budget,
             continue
         slots.append({
             'slot': h.get('slot'),
-            # allocation|importance|budget|evaluator|step size as stored; this
-            # file applies the first, second and fourth plus the augmentation
-            # condition, so two slots that differ only in budget or step size
-            # build the same features here.
+            # allocation|importance|budget|evaluator|step size as stored.
             'recipe': h.get('recipe'),
+            # The rest of the recipe, passed to every create_hybrid call that
+            # builds this slot (2026-10-02; see _recipe_kwargs).
+            'build_kwargs': _recipe_kwargs(bp, h.get('objective')),
             'lineage': h.get('lineage'),
             'tier': h.get('tier'),
             'objective': h.get('objective'),
@@ -269,14 +353,26 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     # folds, so the unweighted mean is what is available here. The search sees
     # the right AMOUNT of corruption; the way it is spread across silos is a
     # fold-level fact that only C5 and C6 act on.
-    def _search_settings(noise_spec):
+    # The widths C0, C5 and C6 sweep. Named here, before the recipe lookups,
+    # because each width now gets its own recipe (2026-10-02); the comment at
+    # the fold loop below says why the width is swept at all.
+    BUDGETS = federated_budgets()
+    HEADLINE_BUDGET = 100 if 100 in BUDGETS else BUDGETS[0]
+
+    def _search_settings(noise_spec, budget):
+        """The single best recipe at this noise level and this budget, as
+        (allocation, importance, evaluator, augmentation, rest of recipe).
+        It fills general1 only when the owner's set has none."""
         try:
             _search, _meta = get_best_search_for_downstream(
                 # labels_binary, not labels: the search has to rank recipes on
                 # the labels C0, C5 and C6 actually train on.
                 reps, labels_binary, groups,
                 downstream_model=fed_to_kirby_model(fed_model),
-                budget=100,   # searched once, at the headline width
+                # The budget the arm is built at. Until 2026-10-02 this was
+                # 100 at every width the arms swept, so a recipe chosen at 100
+                # features was built at 50, 250, 500 and 1000.
+                budget=budget,
                 augmentations=augs,
                 metric=metric_name,
                 task_type='classification',
@@ -313,18 +409,23 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         # forbidden (feedback_no_ridge.md). _resolve_match returns 'rf' when no
         # downstream model is known, which is the safe default for fed01's RF
         # final-layer classifiers.
-        return _a, _i, _resolve_match(_e, 'rf'), _aug_cond
+        return (_a, _i, _resolve_match(_e, 'rf'), _aug_cond,
+                _recipe_kwargs(_bp))
 
     # The owner's set, 2026-10-02: for this model, the top 2 hybrids from the
     # general searches plus the top 1 from the distance searches, each built
-    # and scored as its own C0, C5 and C6. Same noise level, same budget of
-    # 100 features and same metric as the lookup above. general1 is the slot
-    # the old keys keep; when the set has no general1 the lookup above (and
-    # its fallback to fixed settings) still fills it, as before.
-    def _rule_slot_settings(noise_spec, general1_settings):
+    # and scored as its own C0, C5 and C6. Read at each noise level AND each
+    # budget the arms are built at, so all three are recipes scored at that
+    # budget (a distance search stops at 500 features; above that the read
+    # ranks over every budget it holds and records budget_relaxed). general1
+    # is the slot the old keys keep; when the set has no general1 the single
+    # best lookup at the same budget (and its fallback to fixed settings)
+    # fills it, as before. Each slot is
+    # (allocation, importance, evaluator, augmentation, rest of recipe).
+    def _rule_slot_settings(noise_spec, general1_settings, budget):
         slots, info = _rule_recipes(
             reps, labels_binary, groups,
-            downstream_model=fed_to_kirby_model(fed_model), budget=100,
+            downstream_model=fed_to_kirby_model(fed_model), budget=budget,
             augmentations=augs, metric=metric_name,
             task_type='classification',
             domain=data.get('domain', 'molecular'),
@@ -339,11 +440,21 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                                     s['importance_method'],
                                     _resolve_match(s['internal_evaluator'],
                                                    'rf'),
-                                    s['aug_condition'])))
+                                    s['aug_condition'],
+                                    dict(s.get('build_kwargs') or {}))))
         out.sort(key=lambda x: _SLOT_ORDER.index(x[0])
                  if x[0] in _SLOT_ORDER else len(_SLOT_ORDER))
+        # Two slots that still resolve to one recipe are recorded, not
+        # dropped: both are built and scored, and the result file says so.
+        info['duplicate_of'], _dup_notes = _same_recipe_check(
+            [(_n, {'allocation_method': _a, 'importance_method': _i,
+                   'internal_evaluator': _e, 'aug_condition': _ac, **_kw})
+             for _n, (_a, _i, _e, _ac, _kw) in out],
+            budget=budget, silo_arms='C5 and C6')
+        info['missing'] = list(info.get('missing') or []) + _dup_notes
         return out, info
 
+    # {sigma: {budget: [(slot, settings)]}} and the matching info.
     settings_by_sigma = {}
     slots_by_sigma = {}
     rule_info_by_sigma = {}
@@ -355,15 +466,22 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             _spec = NoiseSpec(strategy='uniform',
                               target_effective_noise=_mean_flip,
                               noise_seed=fed_seed)
-        settings_by_sigma[_sigma] = _search_settings(_spec)
-        _a, _i, _e, _ac = settings_by_sigma[_sigma]
-        print(f"  sigma={_sigma}: mean flip fraction {_mean_flip:.4f} — "
-              f"alloc={_a} importance={_i} evaluator={_e} aug={_ac}")
-        slots_by_sigma[_sigma], rule_info_by_sigma[str(_sigma)] = \
-            _rule_slot_settings(_spec, settings_by_sigma[_sigma])
-        for _sn, (_a, _i, _e, _ac) in slots_by_sigma[_sigma]:
-            print(f"    {_sn}: alloc={_a} importance={_i} evaluator={_e} "
-                  f"aug={_ac}")
+        settings_by_sigma[_sigma] = {}
+        slots_by_sigma[_sigma] = {}
+        rule_info_by_sigma[str(_sigma)] = {}
+        for _bud in BUDGETS:
+            settings_by_sigma[_sigma][_bud] = _search_settings(_spec, _bud)
+            _a, _i, _e, _ac, _ = settings_by_sigma[_sigma][_bud]
+            print(f"  sigma={_sigma} budget={_bud}: mean flip fraction "
+                  f"{_mean_flip:.4f} — alloc={_a} importance={_i} "
+                  f"evaluator={_e} aug={_ac}")
+            (slots_by_sigma[_sigma][_bud],
+             rule_info_by_sigma[str(_sigma)][str(_bud)]) = \
+                _rule_slot_settings(_spec, settings_by_sigma[_sigma][_bud],
+                                    _bud)
+            for _sn, (_a, _i, _e, _ac, _kw) in slots_by_sigma[_sigma][_bud]:
+                print(f"    {_sn}: alloc={_a} importance={_i} evaluator={_e} "
+                      f"aug={_ac} step_size={_kw.get('step_size')}")
 
     # 5-FOLD CV — scaffold-group-aware. Previous single 80/20 ran ALL
     # conditions × sigma × Phases 3/4/5 on one fold, so the noise contrast
@@ -383,8 +501,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
     # never varied it, so every MCC this file reported was a number about
     # 100. The folds are replayed at each width; KIRBY_FED_BUDGETS narrows
     # the list for a local run.
-    BUDGETS = federated_budgets()
-    HEADLINE_BUDGET = 100 if 100 in BUDGETS else BUDGETS[0]
+    # BUDGETS and HEADLINE_BUDGET are named above, before the recipe lookups.
     # Second guard: cv_split also falls back to random KFold when the
     # number of unique groups is below n_splits. That fallback violates
     # feedback_no_random_splits.md just as silently as `groups is None`.
@@ -443,7 +560,9 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 # This level's own settings, from the search trained on labels
                 # corrupted at this level: one per hybrid in the owner's set
                 # (top 2 general + top 1 distance, 2026-10-02).
-                _slot_settings = slots_by_sigma[sigma_frac]
+                # Read at this budget: each slot's recipe was scored at the
+                # width it is built at here (2026-10-02).
+                _slot_settings = slots_by_sigma[sigma_frac][BUDGET]
 
                 # Inject noise on training labels only using a heterogeneous linspace
                 # pattern: silo 1 = 0.0, silo K = sigma_frac, others interpolated.
@@ -520,7 +639,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 # -- Condition 0: Centralized KIRBy hybrid trained on NOISY labels --
                 # One C0 per hybrid in the owner's set (top 2 general + top 1
                 # distance for this model, 2026-10-02). The first keeps the old key.
-                for _slot_name, (_alloc, _imp, _int_eval, aug_cond) in _slot_settings:
+                for _slot_name, (_alloc, _imp, _int_eval, aug_cond, _rkw) in _slot_settings:
                     _sfx = _slot_suffix(_slot_name)
                     # NOT a clean-label oracle / upper bound. C0 sees the SAME noisy labels
                     # the federated conditions see — it just gets centralized access to all
@@ -548,7 +667,11 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                             importance_method=_imp,
                             internal_evaluator=_int_eval,
                             augmentations=train_augs,
-                            augmentation_strategy=aug_cond)
+                            augmentation_strategy=aug_cond,
+                            # The rest of this slot's recipe: step size, the
+                            # augmentation settings and the search family
+                            # (2026-10-02, see _recipe_kwargs).
+                            **_rkw)
                         X_h_test = apply_feature_selection(
                             {r: arr[test_idx] for r, arr in reps.items()}, fi_central)
                         _aug_info = fi_central.get('augmentation_info') if isinstance(fi_central, dict) else None
@@ -633,7 +756,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 # -- Condition 5: KIRBy federated feature selection --
                 # One C5 per hybrid in the owner's set (top 2 general + top 1
                 # distance for this model, 2026-10-02). The first keeps the old key.
-                for _slot_name, (_alloc, _imp, _int_eval, aug_cond) in _slot_settings:
+                for _slot_name, (_alloc, _imp, _int_eval, aug_cond, _rkw) in _slot_settings:
                     _sfx = _slot_suffix(_slot_name)
                     print(f"    C5 [{_slot_name}]: KIRBy federated FS...", end=' ')
                     try:
@@ -643,6 +766,12 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
 
                         train_groups_c5 = (groups[train_idx]
                                            if groups is not None else None)
+                        # federated_feature_selection takes four recipe
+                        # settings and the budget; the rest of the recipe
+                        # (_rkw) has no way in without a change to
+                        # federated_helpers. _same_recipe_check records a
+                        # slot that builds the same features here for that
+                        # reason. Same for C6 and the smooth-factor C5.
                         X_hybrid_train, silo_budgets, silo_scores, silo_fis = \
                             federated_feature_selection(
                                 train_reps, train_labels_noisy, train_silo_indices,
@@ -779,7 +908,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     n_excluded = int((~cleaned_train_mask).sum())
                     clean_idx = np.where(cleaned_train_mask)[0]
 
-                    for _slot_name, (_alloc, _imp, _int_eval, aug_cond) in _slot_settings:
+                    for _slot_name, (_alloc, _imp, _int_eval, aug_cond, _rkw) in _slot_settings:
                         _sfx = _slot_suffix(_slot_name)
                         print(f"      [{_slot_name}]", end=' ')
                         if len(clean_idx) > 20:
@@ -943,7 +1072,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             # KIRBY_SMOKE_N the grid is [0, 0.2] and 0.2 is still in it; the
             # fallback is the largest level present.
             _sf_sigma = 0.2 if 0.2 in settings_by_sigma else max(settings_by_sigma)
-            _slot_settings_sf = slots_by_sigma[_sf_sigma]
+            _slot_settings_sf = slots_by_sigma[_sf_sigma][BUDGET]
 
             for sf in SMOOTH_FACTORS:
                 print(f"  smooth_factor={sf}...", end=' ')
@@ -1014,7 +1143,7 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     # One C5 per hybrid in the owner's set (top 2 general +
                     # top 1 distance, 2026-10-02); general1 keeps the old key.
                     c5_sf_by_slot = {}
-                    for _slot_name, (_alloc, _imp, _int_eval, aug_cond) in _slot_settings_sf:
+                    for _slot_name, (_alloc, _imp, _int_eval, aug_cond, _rkw) in _slot_settings_sf:
                         try:
                             train_reps_sf = {r: arr[train_idx] for r, arr in reps.items()}
                             test_reps_sf = {r: arr[test_idx] for r, arr in reps.items()}
@@ -1192,14 +1321,19 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         # 2026-10-02), per noise level: which recipe each slot used, the
         # model's top 2 single representations, and every slot that could not
         # be filled with the reason. C0, C5 and C6 are scored once per slot.
+        # {sigma: {budget: ...}} since 2026-10-02: each budget has its own
+        # set, read at that budget. 'duplicate_of' in each entry names a
+        # slot whose recipe repeats an earlier slot's.
         'rule_set_by_sigma': convert_numpy(rule_info_by_sigma),
         'rule_slots_by_sigma': {
-            str(_s): [_n for _n, _ in slots_by_sigma[_s]]
+            str(_s): {str(_b): [_n for _n, _ in _sl]
+                      for _b, _sl in slots_by_sigma[_s].items()}
             for _s in SIGMA_FRACS},
         'rule_missing': {
-            _s: _inf.get('missing', [])
-            for _s, _inf in rule_info_by_sigma.items()
-            if _inf.get('missing')},
+            _s: {_b: _inf.get('missing', [])
+                 for _b, _inf in _by_b.items() if _inf.get('missing')}
+            for _s, _by_b in rule_info_by_sigma.items()
+            if any(_inf.get('missing') for _inf in _by_b.values())},
         'primary_sweep': primary_agg,
         'noise_detection': detection_agg,
         'importance_noise_correlation': correlation_agg,
