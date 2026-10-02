@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read f34_reduced_sweep's output and say, per (dataset, representation), which kNN
+"""Read f34_full_sweep's output and say, per (dataset, representation), which kNN
 setting scores best, and which setting values ever come near the top.
 
 A setting is one (weighting, coefficient, neighbour count). Its score is the mean
@@ -7,7 +7,7 @@ over the 5 folds, in the dataset's own metric. A setting missing a fold is not
 ranked, and the count of those is printed.
 
 Usage:
-    python tests/experiments/framework/f34_reduced_analyse.py [results dir]
+    python tests/experiments/framework/f34_full_analyse.py [results dir]
 """
 import sys
 import json
@@ -18,7 +18,7 @@ import numpy as np
 
 DIR = Path(sys.argv[1] if len(sys.argv) > 1 else
            Path(__file__).resolve().parents[2] / 'results' / 'framework'
-           / 'f34_reduced_sweep')
+           / 'f34_full_sweep')
 N_FOLDS = 5
 TOP = 5
 
@@ -56,7 +56,7 @@ n_files = sum(1 for _ in DIR.glob('*/*.jsonl'))
 print(f'{DIR}: {n_files} task files, {len(groups)} (dataset, representation) '
       f'groups with all {N_FOLDS} folds')
 if not groups:
-    sys.exit('Nothing complete to rank. Look at f34_reduced.log for why the '
+    sys.exit('Nothing complete to rank. Look at f34_full.log for why the '
              'tasks stopped.')
 
 
@@ -100,3 +100,29 @@ for key in sorted(groups):
     gap = abs(c[r[0]] - c[r[1]]) if len(r) > 1 else float('nan')
     print(f'  {key[0]:10s} {key[1]:26s} {r[0]:42s} {c[r[0]]:.4f}  '
           f'2nd {c[r[1]]:.4f}  gap {gap:.4f}')
+
+
+# The shortlist proposed from the first f34 run (base representations only, 3
+# datasets). For each group: the best score inside the shortlist, against the
+# best score overall. A gap of 0 means the shortlist caught the winner.
+SHORTLIST_WEIGHTING = {'inverse_square', 'rank'}
+SHORTLIST_K = {'k10', 'k15', 'k20', 'k25'}
+SHORTLIST_COEFF = {
+    'binary': {'dice', 'cosine', 'manhattan', 'tversky'},
+    'count': {'dice', 'cosine', 'manhattan', 'soergel'},
+    'continuous': {'minkowski_p0.3', 'minkowski_p0.5', 'cosine'},
+}
+print('\nDoes the shortlist from the first run catch the winner? Gap = best in '
+      'shortlist minus best overall, in the dataset metric (0 = caught).')
+for key in sorted(groups):
+    kinds = info[key][2]
+    allowed = set().union(*(SHORTLIST_COEFF[k] for k in kinds))
+    c = groups[key]
+    inside = [s for s in ranked(key) if s.split('|')[0] in SHORTLIST_WEIGHTING
+              and s.split('|')[1] in allowed and s.split('|')[2] in SHORTLIST_K]
+    best = ranked(key)[0]
+    if not inside:
+        print(f'  {key[0]:10s} {key[1]:26s} no shortlist setting scored')
+        continue
+    gap = abs(c[best] - c[inside[0]])
+    print(f'  {key[0]:10s} {key[1]:26s} gap {gap:.4f}   overall best {best}')

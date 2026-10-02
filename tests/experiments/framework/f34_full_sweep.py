@@ -1,26 +1,17 @@
 #!/usr/bin/env python3
-"""f34 reduced sweep: the kNN settings that reached the top on the base-representation
-run, now on the server's real representation pools, the two best hybrids at a budget
-of 100 features, and herg as the classification dataset.
+"""f34 full sweep on the server: every kNN setting f34 defines, on each dataset's real
+representation pool, the two best hybrids at a budget of 100 features, and herg as the
+classification dataset.
 
-What is swept, and where each list came from (the 2026-10-01 base-representation run,
-tests/results/framework/f34_neighbour_weighting_cross/):
+Nothing is cut. The point of the run is to see which settings win on each
+(dataset, representation), so a value left out could never be seen to win.
 
-  weighting          inverse_square, rank. uniform never ranked better than 39th
-                     of 180-240 settings on any of 21 (dataset, representation)
-                     groups; gaussian and inverse never won a group that these
-                     two did not also win.
-  neighbour count    10, 15, 20, 25, 30, 40. 5 and 7 never won a group. 25 was the
-                     largest count swept and won 7 of 21 groups, so 30 and 40 are
-                     added to see whether the best count lies beyond it.
-  binary fingerprint dice, cosine, manhattan, tversky. Together these reach the
-                     best score on every binary group.
-  count fingerprint  dice, cosine, manhattan, soergel.
-  continuous         every continuous coefficient except chebyshev and
-                     mahalanobis, which never ranked better than 174th. The
-                     earlier run had one continuous representation (pdv), so
-                     there is no evidence for cutting the rest; the server pools
-                     are mostly continuous.
+  weighting          all six in neighbour_weighting: uniform, inverse_sqrt,
+                     inverse, inverse_square, gaussian, rank.
+  neighbour count    5, 7, 10, 15, 20, 25 (f34's own), plus 30 and 40 because 25
+                     was the largest f34 swept and won 7 of its 21 groups.
+  coefficients       every one f18 defines for the representation's kind:
+                     binary 6, count 6, continuous 10.
 
 Uses f34's own distance code and hybrid builder, so the two runs are comparable.
 
@@ -32,9 +23,9 @@ as it finishes, so a task stopped by a time limit keeps what it completed and a
 re-run skips it.
 
 Usage on the server (inside an interactive session):
-    python tests/experiments/framework/f34_reduced_sweep.py --check
-    python tests/experiments/framework/f34_reduced_sweep.py --list-tasks tasks.txt
-    python tests/experiments/framework/f34_reduced_sweep.py --task herg mordred 0 main
+    python tests/experiments/framework/f34_full_sweep.py --check
+    python tests/experiments/framework/f34_full_sweep.py --list-tasks tasks.txt
+    python tests/experiments/framework/f34_full_sweep.py --task herg mordred 0 main
 """
 import os
 import sys
@@ -66,17 +57,13 @@ from kirby.find_best_hybrid import nested_cv_outer_folds  # noqa: E402
 from kirby.similarity import neighbour_weighting  # noqa: E402
 
 DATASETS = ('herg', 'herg_ki', 'caco2', 'adme_mdr1')
-WEIGHTING = ('inverse_square', 'rank')
-K_VALUES = (10, 15, 20, 25, 30, 40)
-COEFFS = {
-    'binary': ('dice', 'cosine', 'manhattan', 'tversky'),
-    'count': ('dice', 'cosine', 'manhattan', 'soergel'),
-    'continuous': ('euclidean', 'manhattan', 'minkowski_p0.5', 'minkowski_p0.3',
-                   'cosine', 'correlation', 'canberra', 'braycurtis'),
-}
+WEIGHTING = neighbour_weighting.WEIGHTING_SCHEMES
+K_VALUES = (5, 7, 10, 15, 20, 25, 30, 40)
+COEFFS = {kind: tuple(f18.coefficients_for(kind))
+          for kind in ('binary', 'count', 'continuous')}
 HYBRIDS = dict(f34.HYBRID_LINEAGES)          # name -> distance flag
 OUT_DEFAULT = (f34._ROOT / 'tests' / 'results' / 'framework'
-               / 'f34_reduced_sweep')
+               / 'f34_full_sweep')
 
 # 'narrow' is what f34 asked the pool for locally: lightgbm_gain only, because the
 # local result database held nothing else at a kNN budget of 100. 'full' leaves
@@ -173,6 +160,32 @@ def _fractional_minkowski(p):
 FRACTIONAL = {'minkowski_p0.5': _fractional_minkowski(0.5),
               'minkowski_p0.3': _fractional_minkowski(0.3)}
 
+
+def _mahalanobis_whitened(X):
+    """f18's mahalanobis, computed as euclidean after whitening.
+
+    Same covariance as f18 (EmpiricalCovariance on the same rows) and the same
+    rule: undefined when there are at least as many features as rows. scipy's
+    cdist does d*d work per pair, which on grover (4800 features) and herg is
+    out of reach; (u-v)' P (u-v) = |L'(u-v)|^2 with P = L L' gives the same
+    distance from one matrix product.
+    """
+    from sklearn.covariance import EmpiricalCovariance
+    from scipy.spatial.distance import cdist
+    n, d = X.shape
+    if d >= n:
+        return None
+    try:
+        P = EmpiricalCovariance().fit(X).precision_
+    except Exception:
+        return None
+    w, V = np.linalg.eigh((P + P.T) / 2)
+    Z = X @ (V * np.sqrt(np.clip(w, 0, None)))
+    return cdist(Z, Z, metric='euclidean')
+
+
+FAST = dict(FRACTIONAL, mahalanobis=_mahalanobis_whitened)
+
 # One task's share of the coefficients. The two fractional Minkowskis are each
 # their own task because on herg's largest representations one alone takes
 # hours; 'main' is every other coefficient; 'all' is everything, used where no
@@ -240,7 +253,7 @@ def run_task(dataset, space, fold_i, part, out_dir, pool_ask_name):
         if (space, fold_i, cname) in done:
             continue
         fn, needs_nonneg = fns[cname]
-        fn = FRACTIONAL.get(cname, fn)
+        fn = FAST.get(cname, fn)
         rec = {'dataset': dataset, 'representation': space, 'fold': fold_i,
                'kind': kind, 'n_features': int(Xt.shape[1]),
                'coefficient': cname, 'metric': metric_name,
