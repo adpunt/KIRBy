@@ -252,8 +252,10 @@ def test_run_base_only():
           r['base_reps_by_model'] == {'rf': ['toy', 'second']},
           str(r.get('base_reps_by_model')))
     check('one model means one matrix per space, named by the space',
-          r['feature_matrices'] == {'base_1': {'rf': 'base_1'},
-                                    'base_2': {'rf': 'base_2'}},
+          # Named '<space>/<model>' since each model scores its own recipe
+          # (01e309a, 2026-09-28); this check predated that.
+          r['feature_matrices'] == {'base_1': {'rf': 'base_1/rf'},
+                                    'base_2': {'rf': 'base_2/rf'}},
           str(r.get('feature_matrices')))
     check('the three arms are named', list(r['arms']) ==
           ['plain', 'cliff_exempt', 'random_exempt'], str(r['arms']))
@@ -308,7 +310,7 @@ def test_run_base_only():
               'rewrites_the_label'},
           str({c: cell['what_the_cleanup_does'] for c, cell in row.items()}))
 
-    sp = blk['molecules_spared_by_matrix']['base_1']
+    sp = blk['molecules_spared_by_matrix']['base_1/rf']
     print("\n  molecules each cleanup actually spared, per pass:")
     for c in sorted(sp):
         for pk in sorted(sp[c]):
