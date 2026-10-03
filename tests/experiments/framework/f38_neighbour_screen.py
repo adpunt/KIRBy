@@ -663,18 +663,40 @@ def run_tasks(path, jobs, out_dir):
     env.setdefault('KIRBY_LGBM_THREADS', '1')
     env.setdefault('OMP_NUM_THREADS', '1')
 
+    import threading
+    state = {'done': 0, 'running': set()}
+    lock = threading.Lock()
+    stop = threading.Event()
+    t_start = time.time()
+
+    def heartbeat():
+        # A line every 60 s, so an interactive session never sits silent.
+        while not stop.wait(60):
+            with lock:
+                print(f"  [{(time.time() - t_start) / 60:.0f} min] "
+                      f"{state['done']} of {len(lines)} finished, running: "
+                      f"{'; '.join(sorted(state['running']))}", flush=True)
+    threading.Thread(target=heartbeat, daemon=True).start()
+
     def one(t):
         log = logs / ('__'.join(t) + '.log')
         t0 = time.time()
+        with lock:
+            state['running'].add(' '.join(t))
+        print(f"start {' '.join(t)}  log {log}", flush=True)
         with open(log, 'a') as fh:
             rc = subprocess.call([sys.executable, __file__, '--out', str(out_dir),
                                   '--task', *t], stdout=fh,
                                  stderr=subprocess.STDOUT, env=env)
+        with lock:
+            state['running'].discard(' '.join(t))
+            state['done'] += 1
         print(f"{'ok  ' if rc == 0 else 'FAIL'} {' '.join(t)}  "
               f"{time.time() - t0:.0f}s  log {log}", flush=True)
         return rc
     with ThreadPoolExecutor(max_workers=jobs) as ex:
         rcs = list(ex.map(one, lines))
+    stop.set()
     n_fail = sum(rc != 0 for rc in rcs)
     print(f'{len(lines) - n_fail} of {len(lines)} tasks ok, {n_fail} failed')
     return 1 if n_fail else 0
