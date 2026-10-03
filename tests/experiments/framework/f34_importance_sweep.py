@@ -262,7 +262,16 @@ def run_coefficient(dataset, space, fold_i, cname, kind, A, B, y_tr, y_va,
         if blocks is None:
             rec['skipped'] = 'undefined on this block'
         else:
-            d_tr, d_va = blocks
+            # Weighted fingerprints are no longer whole numbers, so two
+            # identical fingerprints can come out a rounding error below 0
+            # (tanimoto, dice: shared bits a hair above a row's own total).
+            # sklearn refuses any negative. Clip that; raise on anything
+            # larger, which would be a real fault, not rounding.
+            lo = min(float(d_tr.min()), float(d_va.min()))
+            if lo < -1e-9:
+                raise RuntimeError(f'{cname} {vname}: distance {lo:.3e}')
+            rec['min_distance_before_clip'] = lo
+            d_tr, d_va = np.maximum(d_tr, 0.0), np.maximum(d_va, 0.0)
             rec['scores'] = {
                 f'{wt}|k{k}': sweep.score(d_tr, y_tr, d_va, y_va, k, wt,
                                           task_type, metric_name,
