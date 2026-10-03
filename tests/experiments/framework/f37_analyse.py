@@ -25,7 +25,18 @@ import numpy as np
 
 
 def load(ds_dir):
-    rows = [json.loads(l) for l in open(os.path.join(ds_dir, 'rows.jsonl'))]
+    import glob
+    rows, seen = [], set()
+    for path in sorted(glob.glob(os.path.join(ds_dir, 'rows*.jsonl'))):
+        for l in open(path):
+            try:
+                r = json.loads(l)
+            except ValueError:
+                continue
+            k = (r['model'], r['rep'], r['kind'], r['level'], r['draw'], r['fold'])
+            if k not in seen:
+                seen.add(k)
+                rows.append(r)
     folds = json.load(open(os.path.join(ds_dir, 'folds.json')))
     return [r for r in rows if r['preds'] is not None], folds
 
