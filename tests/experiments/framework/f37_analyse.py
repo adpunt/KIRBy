@@ -179,6 +179,90 @@ def main(ds_dir):
     open(os.path.join(ds_dir, 'report.md'), 'w').write(
         '\n'.join(report) + '\n\n## Drop table\n\n```\n'
         + open(os.path.join(ds_dir, 'drop_table.csv')).read() + '```\n')
+
+    # ---- change in predictions: damaged minus clean, per molecule --------------
+    # The clean predictions are in every kind's predictions, which is why the plain
+    # correlations above are all 0.9+. Subtracting them leaves only what the damage
+    # did, and two kinds that do the same thing to a model move the same molecules
+    # the same way.
+    dsumm = []
+    for li in range(3):
+        D = np.full((len(kinds), len(kinds)), np.nan)
+        for i, a in enumerate(kinds):
+            for j, b in enumerate(kinds):
+                cs = []
+                for m, rp in pairs:
+                    c = clean_full.get((m, rp))
+                    xa = full.get((m, rp, a, li, 0))
+                    xb = (full.get((m, rp, a, li, 1)) if i == j
+                          else full.get((m, rp, b, li, 0)))
+                    if c is None or xa is None or xb is None:
+                        continue
+                    cs.append(corr(xa - c, xb - c))
+                if cs:
+                    D[i, j] = np.mean(cs)
+        with open(os.path.join(ds_dir, f'delta_corr_L{li}.csv'), 'w') as fh:
+            fh.write('kind,' + ','.join(kinds) + '\n')
+            for i, a in enumerate(kinds):
+                fh.write(a + ',' + ','.join('' if np.isnan(v) else f'{v:.4f}'
+                                            for v in D[i]) + '\n')
+        dsumm.append(f'== change in predictions, level position {li}: kind | '
+                     'same kind, draw 0 vs 1 | five most similar other kinds ==')
+        for i, a in enumerate(kinds):
+            others = sorted((j for j in range(len(kinds))
+                             if j != i and not np.isnan(D[i, j])),
+                            key=lambda j: -D[i, j])[:5]
+            dsumm.append(f'{a:<22} own {D[i, i]:.3f} | ' + ', '.join(
+                f'{kinds[j]} {D[i, j]:.3f}' for j in others))
+        dsumm.append('')
+    open(os.path.join(ds_dir, 'summary_delta.txt'), 'w').write('\n'.join(dsumm))
+
+    # ---- auc_norm per kind and pair (the noise suite's own robustness number) ---
+    # Curve = clean score at level 0 plus the three levels, mean over folds and
+    # draws. Four points, the minimum robustness_metrics accepts. Levels are in
+    # each kind's own unit, so compare across pairs for one kind, not across kinds.
+    try:
+        from kirby.noise_robustness import robustness_metrics
+        al = ['kind,' + ','.join(f'{m}_{rp}' for m, rp in pairs)]
+        sc = {}
+        for r in rows:
+            sc.setdefault((r['model'], r['rep'], r['kind'], r['level']), []).append(
+                r['score'])
+        for k in kinds:
+            vals = []
+            for m, rp in pairs:
+                base = sc.get((m, rp, 'clean', 0.0))
+                if not base:
+                    vals.append('')
+                    continue
+                x = [0.0] + list(levels_of[k])
+                y = [np.mean(base)] + [np.mean(sc[(m, rp, k, l)])
+                                       for l in levels_of[k]]
+                v = robustness_metrics(x, y, baseline_threshold=None,
+                                       lower_is_better=lower)['auc_norm']
+                vals.append(f'{v:.4f}')
+            al.append(k + ',' + ','.join(vals))
+        open(os.path.join(ds_dir, 'auc_norm.csv'), 'w').write('\n'.join(al) + '\n')
+    except Exception as exc:
+        print('auc_norm skipped:', exc)
+
+    # ---- draw-to-draw wobble: |rmse of draw 0 - rmse of draw 1|, mean over folds ----
+    sd = {}
+    for r in rows:
+        if r['kind'] == 'clean':
+            continue
+        sd.setdefault((r['kind'], r['model'], r['rep'], r['level'], r['fold']),
+                      {})[r['draw']] = r['score']
+    wl = ['kind,' + ','.join(f'{m}_{rp}_L{li}' for m, rp in pairs for li in range(3))]
+    for k in kinds:
+        vals = []
+        for m, rp in pairs:
+            for li, lv in enumerate(levels_of[k]):
+                d = [abs(v[0] - v[1]) for (kk, mm, rr, ll, ff), v in sd.items()
+                     if (kk, mm, rr, ll) == (k, m, rp, lv) and 0 in v and 1 in v]
+                vals.append(f'{np.mean(d):.4f}' if d else '')
+        wl.append(k + ',' + ','.join(vals))
+    open(os.path.join(ds_dir, 'draw_spread.csv'), 'w').write('\n'.join(wl) + '\n')
     open(os.path.join(ds_dir, 'summary.txt'), 'w').write(
         '\n'.join(summ) + '\n== drop table (mean over folds and draws) ==\n'
         + open(os.path.join(ds_dir, 'drop_table.csv')).read())
