@@ -872,6 +872,12 @@ SINGLE_DATASET_EXPERIMENTS = [
     'c33',                  # budget vs molecule count (standalone)
 ]
 
+# Run on some datasets only; run_all adds them to its default list itself.
+# Listed here so run_dataset.py accepts them by name: submit_dataset.sh runs
+# one experiment per process and names each one (added 2026-10-03; until then
+# c12 never ran on a tcga_* dataset under submit_dataset.sh).
+EXTRA_EXPERIMENTS = ['c12']     # TCGA only, after c11
+
 
 def _import_experiment(exp_id: str):
     """Dynamically import a complexity experiment module by ID (e.g. 'c01')."""
@@ -1192,10 +1198,20 @@ def run_all(dataset_name: str, output_dir: str,
 
         t_exp = time.time()
 
+        # An experiment that cannot be imported is a FAILED experiment, not a
+        # skip (2026-10-03, as similarity_helpers has done since 2026-09-25).
+        # Until now this printed SKIP and recorded nothing, so the process
+        # exited 0 and the job summary said ok for an experiment that never ran.
         try:
             mod = _import_experiment(exp_id)
-        except (ImportError, KeyError) as e:
-            print(f"  SKIP {exp_id}: import failed ({e})")
+        except Exception as e:
+            import traceback
+            print(f"  {exp_id} FAILED: import failed "
+                  f"({type(e).__name__}: {e})")
+            traceback.print_exc()
+            results[exp_id] = {'error': str(e) or type(e).__name__,
+                               'error_kind': f'import:{type(e).__name__}',
+                               'traceback': traceback.format_exc()}
             continue
 
         # Build kwargs for experiments that need upstream results dirs
@@ -1243,7 +1259,9 @@ def run_all(dataset_name: str, output_dir: str,
             print(f"  {exp_id} FAILED: {e}")
             import traceback
             traceback.print_exc()
-            results[exp_id] = {'error': str(e)}
+            results[exp_id] = {'error': str(e) or type(e).__name__,
+                               'error_kind': type(e).__name__,
+                               'traceback': traceback.format_exc()}
 
         except SystemExit as e:
             # ⛔ SystemExit IS NOT AN Exception. A third-party library that

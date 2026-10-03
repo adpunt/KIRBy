@@ -50,8 +50,9 @@
 # The /data/stat-ecr paths below are a filesystem; they do not bill anything.
 #
 # ── ONE PYTHON PROCESS PER EXPERIMENT. ADDED 2026-09-25. ────────────────────
-# Each experiment runs in its OWN python process, one after another, in the
-# order the category's SINGLE_DATASET_EXPERIMENTS lists them. Before this, one
+# Each experiment runs in its OWN python process, one after another. The order
+# is quickest first for complexity, similarity and federated (2026-10-03; see
+# resolve_experiments below) and the list order for noise. Before this, one
 # run_dataset.py process ran them all: a segfault (exit 139, LightGBM and torch
 # each bringing an OpenMP runtime) or an out-of-memory kill in one experiment
 # killed every experiment after it in the same job. Now it kills one.
@@ -60,9 +61,14 @@
 # again (run_all does both before its first experiment). Those reads are cache
 # hits; their time per process has not been measured.
 #
-# Order is kept because it matters in one place: noise n06 runs last and reads
-# the rankings n11 and n13 wrote in the same output directory
-# (noise_helpers.py, the n06 entry of SINGLE_DATASET_EXPERIMENTS).
+# Order matters where one experiment reads another's result file: noise n06
+# reads the rankings n11 and n13 wrote in the same output directory, complexity
+# c08 reads c02's and c09 reads c02's and c06's. resolve_experiments keeps each
+# of those after its inputs.
+#
+# A RESUBMITTED JOB (2026-10-03) skips, without starting python, every
+# experiment whose latest row in <output>/_job_summaries/*.tsv says ok. See
+# "FINISHED IN AN EARLIER JOB" below.
 #
 # Every experiment's exit code goes to <output>/_job_summaries/<jobid>.tsv, one
 # row each. The job exits non-zero if any experiment failed. An experiment that
@@ -233,11 +239,10 @@ echo "Start:  $(date)"
 
 # Which experiments to run, one per line: "run <id>" or "skip <id> <reason>".
 #
-# No list given: the category's SINGLE_DATASET_EXPERIMENTS, in order, which is
-# what run_all runs when handed experiments=None. For noise with a condition,
-# narrowed exactly as noise_helpers.run_all narrows its default list: only
-# HONOURS_NOISE_CONDITION | SWEEPS_ALL_CONDITIONS; the rest name their own
-# condition and run in the job with no condition.
+# No list given: the category's SINGLE_DATASET_EXPERIMENTS. For noise with a
+# condition, narrowed exactly as noise_helpers.run_all narrows its default
+# list: only HONOURS_NOISE_CONDITION | SWEEPS_ALL_CONDITIONS; the rest name
+# their own condition and run in the job with no condition.
 #
 # One addition to run_all's narrowing: n21 under a condition outside
 # DETECTION_IS_DEFINED is skipped with its reason. run_all would call it and n21
@@ -246,14 +251,31 @@ echo "Start:  $(date)"
 # process run_all caught that and carried on; as its own process it would mark
 # every such job failed for a refusal that is by design.
 #
+# c12 ON tcga_* (added 2026-10-03). complexity_helpers.run_all adds c12 after
+# c11 on a tcga_ dataset when it builds its own default list. This script names
+# every experiment itself, so until today c12 never ran on any tcga_ dataset.
+#
+# QUICKEST FIRST (added 2026-10-03, owner's request). complexity, similarity and
+# federated run in the order of RUN_ORDER below, shortest expected time first,
+# so that a job cut off by its wall has finished as many experiments as
+# possible. The times behind each order, and which are measured and which are
+# guessed, are in runbook/SUBMIT_TONIGHT.md. Two rules hold over that order:
+#   - AFTER: an experiment that reads another's result file runs after it.
+#     c08 reads c02's file; c09 reads c02's and c06's (complexity_helpers.py,
+#     the c08/c09 kwargs in run_all). noise n06 reads n11's and n13's.
+#   - An experiment in SINGLE_DATASET_EXPERIMENTS that RUN_ORDER does not name
+#     runs after the named ones, in its list order. Nothing is dropped.
+# noise keeps its list order (its order is the owner's separate call).
+# KIRBY_KEEP_LIST_ORDER=1 restores the plain list order everywhere.
+#
 # A list given on the command line runs as given, as run_all does with an
 # explicit list: an experiment that cannot honour the condition raises there
 # and is recorded as failed.
 resolve_experiments() {
-    python - "$1" "$NOISE_CONDITION" <<'PY'
-import sys, importlib
+    python - "$1" "$NOISE_CONDITION" "$DATASET" <<'PY'
+import os, sys, importlib
 sys.path[:0] = ['src', 'tests', 'tests/experiments']
-cat, cond = sys.argv[1], sys.argv[2]
+cat, cond, dataset = sys.argv[1], sys.argv[2], sys.argv[3]
 mods = {'complexity': 'experiments.complexity.complexity_helpers',
         'similarity': 'experiments.similarity.similarity_helpers',
         'noise': 'experiments.noise.noise_helpers',
@@ -261,7 +283,40 @@ mods = {'complexity': 'experiments.complexity.complexity_helpers',
 if cat not in mods:
     sys.exit(f"unknown category {cat!r}; run_dataset.py knows {sorted(mods)}")
 H = importlib.import_module(mods[cat])
-for e in H.SINGLE_DATASET_EXPERIMENTS:
+
+# Shortest expected time first. Sources in runbook/SUBMIT_TONIGHT.md.
+RUN_ORDER = {
+    'complexity': ['c06', 'c19', 'c22', 'c07', 'c18', 'c01', 'c02', 'c08',
+                   'c15', 'c04', 'c13', 'c11', 'c12', 'c16', 'c09', 'c24',
+                   'c05', 'c23', 'c33', 'c17', 'c21'],
+    'similarity': ['s04', 's03', 's01', 's12', 's06', 's13', 's02', 's10',
+                   's05', 's08', 's11'],
+    'federated':  ['fed02', 'fed03', 'fed04', 'fed05', 'fed01'],
+}
+AFTER = {'c08': ['c02'], 'c09': ['c02', 'c06'], 'n06': ['n11', 'n13']}
+
+exps = list(H.SINGLE_DATASET_EXPERIMENTS)
+if cat == 'complexity' and dataset.startswith('tcga_') and 'c12' not in exps:
+    exps.insert(exps.index('c11') + 1 if 'c11' in exps else len(exps), 'c12')
+
+if cat in RUN_ORDER and os.environ.get('KIRBY_KEEP_LIST_ORDER') != '1':
+    rank = {e: i for i, e in enumerate(RUN_ORDER[cat])}
+    exps = sorted(exps, key=lambda e: (rank.get(e, len(rank)), exps.index(e)))
+
+# Enforce AFTER: move an experiment to just after the last of its inputs.
+changed = True
+while changed:
+    changed = False
+    for e, deps in AFTER.items():
+        if e not in exps:
+            continue
+        last = max((exps.index(d) for d in deps if d in exps), default=-1)
+        if exps.index(e) < last:
+            exps.remove(e)
+            exps.insert(last, e)   # index `last` is now the slot after the input
+            changed = True
+
+for e in exps:
     if cat == 'noise' and cond:
         if e not in (H.HONOURS_NOISE_CONDITION | H.SWEEPS_ALL_CONDITIONS):
             print(f"skip {e} names its own condition; runs in the job with no condition")
@@ -334,6 +389,31 @@ for CAT in "${_CATEGORIES[@]}"; do
             continue
         fi
 
+        # FINISHED IN AN EARLIER JOB: skip without starting python. Added
+        # 2026-10-03. A resubmitted job reads every summary in
+        # <output>/_job_summaries/ and skips an experiment whose LATEST row for
+        # this category, dataset and condition says ok (or done_earlier).
+        # Before, each finished experiment still cost a python start, a data
+        # load and a read of the stored searches before run_all's own resume
+        # check skipped it. run_all's check stays as the second line: it also
+        # compares the input fingerprint.
+        # This trusts the output folder. A folder written by older code is not
+        # safe to resume into: give each new submission a new KIRBY_OUTPUT_DIR.
+        # KIRBY_FORCE_RERUN=1 turns this skip off.
+        if [ "${KIRBY_FORCE_RERUN:-0}" != "1" ]; then
+            PREV=$(cat "${OUT}"/_job_summaries/*.tsv 2>/dev/null \
+                   | awk -F'\t' -v c="$CAT" -v d="$DATASET" -v e="$EXP" -v k="${COND_TAG:--}" \
+                       '$1!="job" && $2==c && $3==d && $4==e && $5==k' \
+                   | sort -t$'\t' -k10,10 | tail -n 1 | awk -F'\t' '{print $1, $7}')
+            case "${PREV#* }" in
+                ok|done_earlier)
+                    echo ">>> ${CAT} ${DATASET} ${EXP} ${COND_TAG:+(${COND_TAG}) }finished in job ${PREV%% *}; skipped"
+                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$JOB_TAG" "$CAT" "$DATASET" \
+                        "$EXP" "${COND_TAG:--}" 0 "done_earlier" 0 "$(date -Iseconds)" "$(date -Iseconds)" "job ${PREV%% *}" >> "$SUMMARY"
+                    continue ;;
+            esac
+        fi
+
         LOGF=""
         if [ -n "${KIRBY_EXP_LOG_DIR:-}" ]; then
             mkdir -p "$KIRBY_EXP_LOG_DIR"
@@ -383,20 +463,17 @@ for CAT in "${_CATEGORIES[@]}"; do
         esac
         # An experiment whose exception was caught by run_all exits 0 on a
         # run_dataset.py that predates the exit-1 change; the new one leaves a
-        # file in <output>/_errors/. A file there counts against this
-        # experiment when it is newer than this experiment's start AND its name
-        # or content names both this dataset and this experiment: array tasks
-        # share one output directory, so newer alone would blame a neighbour.
-        # The _errors/ file format is being written in parallel (2026-09-25)
-        # and was not read when this was written.
-        if [ "$RC" -eq 0 ] && [ -d "${OUT}/_errors" ]; then
-            for f in "${OUT}"/_errors/*; do
-                [ -f "$f" ] && [ "$f" -nt "$MARK" ] || continue
-                if { basename "$f" | grep -q -- "$DATASET" || grep -q -- "$DATASET" "$f"; } \
-                   && { basename "$f" | grep -q -- "$EXP" || grep -q -- "$EXP" "$f"; }; then
-                    STATUS="error_file:$(basename "$f")"; RC=1; break
-                fi
-            done
+        # file in <output>/_errors/. Since 2026-10-03 run_dataset.py names that
+        # file after the one experiment it ran,
+        # <dataset>[__<condition>]__<experiment>.json, so only that exact name
+        # counts, and only when it is newer than this experiment's start. The
+        # older match (dataset and experiment anywhere in the name or text)
+        # could blame herg for a herg_ki file in the same folder. "Not older
+        # than the start" rather than "newer": -nt compares whole seconds on
+        # some systems, and a fast failure lands in the same second.
+        ERRF="${OUT}/_errors/${DATASET}${COND_TAG:+__${COND_TAG}}__${EXP}.json"
+        if [ "$RC" -eq 0 ] && [ -f "$ERRF" ] && ! [ "$MARK" -nt "$ERRF" ]; then
+            STATUS="error_file:$(basename "$ERRF")"; RC=1
         fi
         rm -f "$MARK" "$RUNNING"
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$JOB_TAG" "$CAT" "$DATASET" \

@@ -124,18 +124,21 @@ FEDERATED_DATASETS="lhasa_herg caco2 logd"
 #   inside the spread on every model, and with 3 or 4 folds no grid makes it
 #   measurable. The additive axis has 23 components and would be readable; the
 #   file runs all four axes together, so it goes as a whole.
+# ROW ORDER = SUBMISSION ORDER, quickest first (2026-10-03, owner's request).
+# The evidence for each row's place, measured or guessed, is in
+# tests/slurm_scripts/runbook/SUBMIT_TONIGHT.md. Every row is still submitted.
 OPIG_JOBS='
+shared_vectors_census|64G|opig_shared_vectors_census.py --check-freshness 200|
+scaffold_similarity|64G|opig_scaffold_similarity.py|ddg_combined flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig
 humanness|64G|opig_humanness.py --datasets humanness_therapeutic PM|humanness_therapeutic
-trastuzumab|64G|opig_trastuzumab_enrichment.py PM|tz_her2_binary
-ginkgo|128G|opig_ginkgo_developability.py PM|ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer
 graphinity|128G|opig_graphinity_ddg.py --max-foldx 5000 PM|ddg_combined
+trastuzumab|64G|opig_trastuzumab_enrichment.py PM|tz_her2_binary
+cgr_comparison|64G|opig_cgr_comparison.py PM|bh_doyle_plates buchwald_hartwig suzuki
+ginkgo|128G|opig_ginkgo_developability.py PM|ginkgo_acsins ginkgo_colloidal ginkgo_hic ginkgo_pr_cho ginkgo_titer
 qsar|64G|opig_activity_cliff_qsar.py PM|
 blueprint_transfer|64G|opig_blueprint_transfer.py --source logd --target herg_ki --mode full PM|logd herg_ki
-cgr_comparison|64G|opig_cgr_comparison.py PM|bh_doyle_plates buchwald_hartwig suzuki
-shared_vectors_census|64G|opig_shared_vectors_census.py --check-freshness 200|
-shared_vectors_remedy|64G|opig_shared_vectors_remedy.py|herg_ki
 scaffold_hybrid|64G|opig_scaffold_hybrid.py|flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig
-scaffold_similarity|64G|opig_scaffold_similarity.py|ddg_combined flab_binding_adams flab_binding_koenig flab_expression_adams flab_expression_koenig
+shared_vectors_remedy|64G|opig_shared_vectors_remedy.py|herg_ki
 '
 DO_OPIG=true
 DO_FED=true
