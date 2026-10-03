@@ -3,7 +3,7 @@
 Written 2026-10-03. Nothing here has been run on the cluster. The commands were dry-run on the laptop, with stand-in `squeue` and `sbatch` commands.
 
 What the submit command does, in four lines:
-- It sends one job per (category, dataset), plus one job per OPIG script.
+- It sends one job per (category, dataset), plus one job per OPIG script, plus one job each for s09, c03 and c14, which read several datasets.
 - Each job waits for that dataset's `pc_` jobs to end, on whichever cluster they are on.
 - It bills stat-ecr.
 - It writes to a new folder you name, so no result from older code is reused.
@@ -61,15 +61,16 @@ Read three things in its output:
 bash tests/slurm_scripts/runbook/submit_all_stages.sh --stages 3 --no-hold-stage3 --account stat-ecr --cluster htc --output-root tests/results/run_2026_10_03
 ```
 
-It submits 96 jobs when all 41 datasets are in the roster:
+It submits 99 jobs when all 41 datasets are in the roster:
 - 41 similarity jobs;
 - 3 federated jobs, for lhasa_herg, caco2 and logd;
 - 41 complexity jobs;
-- 11 OPIG jobs.
+- 11 OPIG jobs;
+- 3 jobs that read several datasets: s09, c03 and c14 (section 2a).
 
 The job numbers are saved to `logs/submit_all_stages_<date>_<time>.txt`.
 
-**One category at a time instead.** Add `--categories` with one of `complexity`, `similarity`, `federated` or `opig`. For example:
+**One category at a time instead.** Add `--categories` with one of `complexity`, `similarity`, `federated`, `opig` or `cross`. `cross` is the three jobs of section 2a; `s09`, `c03` or `c14` submits one of them. For example:
 
 ```bash
 bash tests/slurm_scripts/runbook/submit_all_stages.sh --stages 3 --no-hold-stage3 --account stat-ecr --cluster htc --output-root tests/results/run_2026_10_03 --categories complexity
@@ -91,6 +92,37 @@ bash tests/slurm_scripts/runbook/submit_all_stages.sh --stages 3 --no-hold-stage
 | job comment | `run_2026_10_03`, the folder's name |
 
 `afterany` means the job starts when the `pc_` jobs end, whether they passed or failed.
+
+### 2a. The three jobs that read several datasets
+
+s09, c03 and c14 are in no per-dataset job. `complexity_helpers.py` and `similarity_helpers.py` leave them out of their experiment lists, so `run_dataset.py` refuses them by name. Stage 3 now sends one job for each, after the OPIG jobs. Each runs `runbook/cross_one.sh`.
+
+One row is one job:
+
+| Job | What it reads | Waits for (`afterany`) | Datasets | Partition, wall | CPUs, memory | Writes |
+|---|---|---|---|---|---|---|
+| `x_cross_s09` | the s02, s04, s05, s06 and s08 result files in `<output-root>/similarity/` | every `x_similarity_*` job of this `--output-root`: the ones this command submits, and any still queued from an earlier paste | all 41, the similarity roster | short, 2 h | 1, 16 GB | `similarity/s09_cross_dataset_summary/results.json` |
+| `x_cross_c03` | the precompute's stored searches | every `pc_` job of all 41 datasets | all 41, the complexity roster | long, 7 days | 8, 256 GB | `complexity/c03_cross_dataset_transfer/multi.json` |
+| `x_cross_c14` | nothing; it runs its own searches | nothing | logd, caco2, herg, flab_thermo_tresanco, tcga_luad_vs_lusc | long, 29 days 23 h | 8, 128 GB | `complexity/c14_cross_domain_summary/results.json` |
+
+Where each choice comes from:
+- **s09's datasets.** Its code reads whichever of the five files exist for each dataset named, and skips a dataset with none. It restricts nothing, so it gets every dataset the similarity jobs cover.
+- **c03's datasets.** Its code and docstring give no fixed list (its default is logd, caco2 and herg_ki). So it gets every dataset the complexity jobs cover. It loads all of them into memory before it starts, hence 256 GB. That figure is not measured.
+- **c03's wall.** It fits SVR and ElasticNet on 5 folds of every regression dataset, kiba and bindingdb_kd included, and saves nothing until the end. Its time is not measured, so it goes to long rather than risk medium's 48 h.
+- **c14's datasets.** Its `--tasks` has no default. The five are the union of the two usage lines in its docstring, which name the three domains it compares: molecular, antibody and TCGA. Change them with `--c14-tasks "A B ..."`.
+- **c14's wall.** It runs two nested searches per dataset, neither cached, and writes one file at the very end. A job cut off by its wall keeps nothing. The 2026-09-18 compute audit counted about 1.84 million model fits per dataset for the first nested search alone (`EXPERIMENT_COMPUTE_AUDIT_2026_09_18.md`). Its time is not measured; long allows 30 days at most.
+- **c14 and `KIRBY_NO_COLD_SEARCH=1`.** Every stage-3 job carries it. It does not stop c14: c14 passes no cache setting, `find_best_hybrid` defaults to no cache, and the refusal is only checked when the cache is on (`find_best_hybrid.py`, the `if cache and not _own` line).
+- **c03 sees no augmented searches.** It loads each dataset without its augmentation representations, so it reads only the stored search without augmentation. The per-dataset complexity jobs load them. That is how `c03_cross_dataset_transfer.py` is written; it is not changed here.
+
+s09 and c03 can wait for jobs on both clusters. The same rule as below applies: such a job goes to htc, HELD, and its line names the arc jobs.
+
+**Submitting just these three later**, into the same folder:
+
+```bash
+bash tests/slurm_scripts/runbook/submit_all_stages.sh --stages 3 --no-hold-stage3 --account stat-ecr --cluster htc --output-root tests/results/run_2026_10_03 --categories cross
+```
+
+s09 then waits for the `x_similarity_*` jobs of that folder still queued or running. If none are left, it starts at once and reads what is there.
 
 ### Which cluster each job goes to
 
@@ -155,6 +187,8 @@ What happens then:
 | federated fed01 to fed05 | every finished (FLuID model, seed) pair, from `.partial.jsonl` (`_checkpoint.resumable_run`) |
 | all 11 OPIG scripts | every finished item, from `<output>.partial.jsonl` (`_checkpoint.script_checkpoint`). The item is a target, dataset, property, condition or model, depending on the script. |
 | every complexity experiment | nothing inside the experiment. No complexity file saves partial results. A cut-off complexity experiment starts from the beginning. Finished ones are skipped. |
+| c03 and c14 | the same: nothing inside the run; skipped once finished (`cross_one.sh`) |
+| s09 | never skipped. It runs again on every paste, because it takes minutes and the similarity files it reads may have grown since |
 
 No finished experiment runs again, as long as the folder is the same.
 
@@ -174,7 +208,7 @@ One failure does not stop anything else:
 - Each experiment runs in its own Python process, one after another.
 - A Python error, a crash, or running out of memory ends only that experiment. The job goes on to the next one.
 - When the job hits its 48-hour wall, the rest of that job's experiments do not run. Resubmitting continues from there (section 4).
-- No job waits for another experiment job. Each one waits only for `pc_` jobs, and `afterany` starts it whether those passed or failed.
+- Only s09 waits for other experiment jobs, the similarity ones. Every other job waits only for `pc_` jobs, or for nothing. `afterany` starts a job whether what it waits for passed or failed.
 
 Where each failure is written:
 
@@ -333,4 +367,5 @@ shared_vectors_remedy will not finish in one 48-hour job. Each resubmission keep
 - Whether `sbatch --clusters=arc` works from the htc login node.
 - The caches other than the precompute's: whether any of them keeps a value computed by last week's code. Only the folder-level skip is covered by the new folder.
 - Every time in section 7 comes from older code. The order may be wrong for large datasets.
-- s09, c03 and c14 are summaries across datasets. They are not in any per-dataset job and are not submitted here. They read the per-dataset result files, so they need `tests/results/run_2026_10_03/...` as their input folder when they run.
+- How long c03 and c14 take, and how much memory c03 needs with all 41 datasets loaded at once.
+- `EXPERIMENTS_FINALIZED.md` line 317 records "c14 | delete". c14 is submitted here because you asked for it on 2026-10-03.
