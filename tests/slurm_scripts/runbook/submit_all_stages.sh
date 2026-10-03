@@ -41,6 +41,23 @@
 # jobs that become eligible together. Inside each job the experiments run
 # quickest first (submit_dataset.sh, resolve_experiments).
 #
+# STAGE 3 ACROSS-DATASET JOBS (2026-10-03). Three experiments read several
+# datasets and are in no per-dataset job: s09, c03 and c14. Stage 3 sends one
+# job for each, through runbook/cross_one.sh, last:
+#   x_cross_s09  short, 2 h, 1 CPU. Waits (afterany) for every x_similarity_*
+#                job of this --output-root: the ones this command submits and
+#                the ones already queued under the same comment. Reads
+#                DIR/similarity/, writes DIR/similarity/s09_cross_dataset_summary/.
+#   x_cross_c03  long, 7 days, 256G. Reads the precompute, not other
+#                experiments, so it waits for the pc_ jobs of all its datasets
+#                (every --full dataset). Writes DIR/complexity/.
+#   x_cross_c14  long, 29 days 23 h, 128G. Runs its own searches and waits for
+#                nothing. Tasks: --c14-tasks, default the five datasets named in
+#                c14's usage lines. Writes DIR/complexity/.
+# A dependency names jobs on one cluster only; a job whose inputs are on both
+# is submitted HELD, as in PRECOMPUTE above. --categories cross submits just
+# these three; s09, c03 or c14 submits one.
+#
 # STAGE 3 OUTPUT (2026-10-03): --output-root DIR is required. Results go to
 # DIR/<category>/ and DIR/opig/, each experiment's log to logs/<DIR's name>/,
 # SLURM's own log to logs/<DIR's name>/slurm/. Use a NEW DIR for new code:
@@ -53,7 +70,12 @@
 #   --output-root DIR        stage 3 results root (required when --stages has 3)
 #   --cluster C              default cluster, htc (stage 3: see PRECOMPUTE)
 #   --categories "..."       stage 3 categories, default "similarity federated
-#                            complexity opig" (that order is the submission order)
+#                            complexity opig cross" (that order is the submission
+#                            order). cross = s09, c03 and c14; each can also be
+#                            named alone.
+#   --c14-tasks "A B"        c14's datasets (default: logd caco2 herg
+#                            flab_thermo_tresanco tcga_luad_vs_lusc, the union of
+#                            the two usage lines in c14_cross_domain_summary.py)
 #   --fed-datasets "A B"     stage 2 federated datasets (default: caco2); --fed-trial is the same
 #   --full "A B ..."         stage 3 and 4 datasets (default: every dataset in
 #                            DATASET_REPS except chembl_qsar and davis)
@@ -78,7 +100,8 @@ EMAIL=adelaide.punt@stcatz.ox.ac.uk
 BIG_RE='^(nt_|gb_|tcga_|kiba$|bindingdb_kd$|qm9$)'
 
 TRIAL=""; FED_TRIAL="caco2"; FULL=""; FED_FULL="lhasa_herg caco2 logd"
-OUTROOT=""; RUNTAG=""; S3CATS="similarity federated complexity opig"
+OUTROOT=""; RUNTAG=""; S3CATS="similarity federated complexity opig cross"
+C14_TASKS="logd caco2 herg flab_thermo_tresanco tcga_luad_vs_lusc"
 STAGES="1 2 3 4"; SIM=""; MAXC=40; ACCOUNT=""; HOLD4=true; HOLD3=""; DRY=false; HOLD_NOW=false
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -86,6 +109,7 @@ while [[ $# -gt 0 ]]; do
         --output-root)         OUTROOT=${2%/}; shift 2 ;;
         --cluster)             CLUSTER=$2; shift 2 ;;
         --categories)          S3CATS=$2; shift 2 ;;
+        --c14-tasks)           C14_TASKS=$2; shift 2 ;;
         --fed-trial|--fed-datasets) FED_TRIAL=$2; shift 2 ;;
         --full)                FULL=$2; shift 2 ;;
         --fed-full)            FED_FULL=$2; shift 2 ;;
@@ -97,7 +121,7 @@ while [[ $# -gt 0 ]]; do
         --hold-stage3)         HOLD3=true; shift ;;
         --no-hold-stage3)      HOLD3=false; shift ;;
         --dry-run)             DRY=true; shift ;;
-        -h|--help)             sed -n '2,70p' "$0"; exit 0 ;;
+        -h|--help)             sed -n '2,90p' "$0"; exit 0 ;;
         *) echo "unknown option $1"; exit 2 ;;
     esac
 done
@@ -201,14 +225,16 @@ order_by_size() {
 join_deps() { local s; s=$(printf '%s:' "$@" | tr -s ':'); s=${s#:}; echo "${s%:}"; }
 
 # sbatch one job; prints the id (or DRY). Args: name mem deps export-extra script args...
+# SUB_PART, SUB_TIME and SUB_CPUS, when set, replace medium,long, 47:59:00 and 8.
 # Cluster: SUB_CL when set (stage 3), else CLUSTER. HOLD_THIS=true holds this
 # one job. SLURM_LOG_DIR, when set, is where SLURM writes the job's own log.
 submit() {
     local name=$1 mem=$2 deps=$3 exports=$4; shift 4
     local cl=${SUB_CL:-$CLUSTER}
     local cmd=(sbatch --parsable --clusters="$cl" --account="$ACCOUNT"
-               --partition=medium,long --time=47:59:00 --nodes=1 --ntasks=1
-               --cpus-per-task=8 --mem="$mem" --job-name="$name"
+               --partition="${SUB_PART:-medium,long}" --time="${SUB_TIME:-47:59:00}"
+               --nodes=1 --ntasks=1
+               --cpus-per-task="${SUB_CPUS:-8}" --mem="$mem" --job-name="$name"
                --mail-user="$EMAIL" --mail-type=FAIL
                --export="ALL,KIRBY_REPO=${REPO},KIRBY_NO_PULL=1,KIRBY_SKIP_INSTALLS=1,KIRBY_NO_COLD_SEARCH=1,PRUNING_MODE=calibrated${exports:+,$exports}")
     [ -n "$deps" ] && cmd+=(--dependency="afterany:${deps}")
@@ -288,9 +314,10 @@ if has_stage 3; then
     show() {   # name id
         echo "  $1: ${2:-FAILED} on ${SUB_CL}${DEP:+ after ${DEP//:/ }}${NOTE:+  <- ${NOTE}}"
     }
+    SIMJOBS=""   # "<cluster>:<id>" of each x_similarity_* job this command submits
     for C in $S3CATS; do
-        [ "$C" = opig ] && continue
-        case " similarity federated complexity " in *" $C "*) ;; *) echo "  unknown category $C (stage 3 knows similarity federated complexity opig)"; continue ;; esac
+        case " opig cross s09 c03 c14 " in *" $C "*) continue ;; esac
+        case " similarity federated complexity " in *" $C "*) ;; *) echo "  unknown category $C (stage 3 knows similarity federated complexity opig cross s09 c03 c14)"; continue ;; esac
         if [ "$C" = federated ]; then LIST=$FED_ORDERED; else LIST=$FULL_ORDERED; fi
         for D in $LIST; do
             Q=$(queued_as "x_${C}_${D}")
@@ -301,6 +328,7 @@ if has_stage 3; then
                 "$SLURM_DIR/submit_dataset.sh" "$C" "$D")
             show "x_${C}_${D}" "$J"
             [ -n "$J" ] && S3="${S3}:${J}"
+            [ "$C" = similarity ] && [ -n "$J" ] && SIMJOBS="${SIMJOBS} ${SUB_CL}:${J}"
         done
     done
     while [[ " $S3CATS " == *" opig "* ]] && read -r N OM DSL; do
@@ -313,6 +341,58 @@ if has_stage 3; then
             "$HERE/opig_one.sh" "$N")
         show "opig_${N}" "$J"
     done < <(bash "$HERE/opig_one.sh" --list | sed 's/reads://')
+
+    # ── the three across-dataset experiments (2026-10-03) ──
+    want_cross() { [[ " $S3CATS " == *" cross "* || " $S3CATS " == *" $1 "* ]]; }
+    cross_submit() {   # name mem deps outdir partition time cpus datasets...
+        local n=$1 m=$2 d=$3 o=$4; SUB_PART=$5; SUB_TIME=$6; SUB_CPUS=$7; shift 7
+        J=$(submit "x_cross_${n}" "$m" "$d" \
+            "KIRBY_OUTPUT_DIR=${OUTROOT}/${o},KIRBY_EXP_LOG_DIR=${LOG3}" \
+            "$HERE/cross_one.sh" "$n" "$@")
+        SUB_PART=""; SUB_TIME=""; SUB_CPUS=""
+        show "x_cross_${n}" "$J"
+    }
+    if want_cross s09; then
+        Q=$(queued_as "x_cross_s09")
+        if [ -n "$Q" ]; then echo "  x_cross_s09: already queued or running (${Q% }); not submitted again"
+        else
+            # Every x_similarity_* job of this folder: submitted just now, or
+            # already queued under the same comment (those were skipped above,
+            # or --categories left similarity out).
+            ALLSIM="$SIMJOBS"
+            for D in $FULL_ORDERED; do
+                ALLSIM="${ALLSIM} $(queued_as "x_similarity_${D}" | awk '{for (i=1; i<NF; i+=2) printf "%s:%s ", $i, $(i+1)}')"
+            done
+            SIMCL=$(for x in $ALLSIM; do echo "${x%%:*}"; done | sort -u | xargs)
+            HOLD_THIS=false; NOTE=""
+            case $(echo $SIMCL | wc -w | tr -d ' ') in
+                0) SUB_CL=$CLUSTER ;;
+                1) SUB_CL=$SIMCL ;;
+                *) SUB_CL=$CLUSTER; HOLD_THIS=true
+                   NOTE="HELD: also waits for x_similarity_* jobs on the other cluster: $(for x in $ALLSIM; do [ "${x%%:*}" = "$CLUSTER" ] || printf '%s ' "$x"; done | xargs); release it once they have ended" ;;
+            esac
+            DEP=$(for x in $ALLSIM; do [ "${x%%:*}" = "$SUB_CL" ] && [ "${x#*:}" != DRY ] && printf '%s:' "${x#*:}"; done)
+            DEP=${DEP%:}
+            $DRY && [ -n "$SIMJOBS" ] && NOTE="${NOTE:+$NOTE; }dry run: also waits for the x_similarity_* jobs above, whose numbers exist only on a real submit"
+            cross_submit s09 16G "$DEP" similarity short 02:00:00 1 $FULL_ORDERED
+        fi
+    fi
+    if want_cross c03; then
+        Q=$(queued_as "x_cross_c03")
+        if [ -n "$Q" ]; then echo "  x_cross_c03: already queued or running (${Q% }); not submitted again"
+        else
+            place $FULL_ORDERED
+            cross_submit c03 256G "$DEP" complexity long 6-23:59:00 8 $FULL_ORDERED
+        fi
+    fi
+    if want_cross c14; then
+        Q=$(queued_as "x_cross_c14")
+        if [ -n "$Q" ]; then echo "  x_cross_c14: already queued or running (${Q% }); not submitted again"
+        else
+            SUB_CL=$CLUSTER; DEP=""; HOLD_THIS=false; NOTE=""
+            cross_submit c14 128G "" complexity long 29-23:00:00 8 $C14_TASKS
+        fi
+    fi
     SUB_CL=""; HOLD_THIS=false; SLURM_LOG_DIR=""; RUNTAG=""
 fi
 
