@@ -21,9 +21,10 @@ residual on the clean training labels. It is measured on ecfp4 for every pair
 those kinds say which representation set it.
 
 Output, per dataset:
-  <output>/f37_label_damage_map/<dataset>/rows.jsonl   one row per fit
+  <output>/f37_label_damage_map/<dataset>/rows*.jsonl  one row per fit
   <output>/f37_label_damage_map/<dataset>/folds.json   held-out positions per fold
-A rerun skips every row already on disk.
+With --slice K/N the rows go to rows_slice<K>of<N>.jsonl instead.
+A rerun skips every row already on disk, in any of those files.
 
 Usage:
   KIRBY_LGBM_THREADS=1 KIRBY_RF_JOBS=2 python f37_label_damage_map.py herg_ki \
@@ -75,9 +76,11 @@ def _key(r):
                        r['fold']])
 
 
-def _done(path):
+def _done(out_dir):
+    """Keys of every row in rows.jsonl and rows_slice*.jsonl of this dataset."""
+    import glob
     out = set()
-    if os.path.exists(path):
+    for path in glob.glob(os.path.join(out_dir, 'rows*.jsonl')):
         with open(path) as fh:
             for line in fh:
                 try:
@@ -112,12 +115,18 @@ def run(data, dataset, output, slice_=None, kinds=None, pairs=None):
 
     out_dir = os.path.join(output, EXP_ID, dataset)
     os.makedirs(out_dir, exist_ok=True)
-    rows_path = os.path.join(out_dir, 'rows.jsonl')
-    with open(os.path.join(out_dir, 'folds.json'), 'w') as fh:
-        json.dump({'val_idx': [np.asarray(v).tolist() for _, v in splits],
-                   'train_idx': [np.asarray(t).tolist() for t, _ in splits]},
-                  fh)
-    done = _done(rows_path)
+    # A sliced process writes its own file, so several sruns never append to
+    # one file; a rerun and the analysis read every rows*.jsonl.
+    rows_path = os.path.join(
+        out_dir, 'rows.jsonl' if not slice_ else
+        f"rows_slice{slice_.replace('/', 'of')}.jsonl")
+    folds_path = os.path.join(out_dir, 'folds.json')
+    if not os.path.exists(folds_path):
+        with open(folds_path, 'w') as fh:
+            json.dump({'val_idx': [np.asarray(v).tolist() for _, v in splits],
+                       'train_idx': [np.asarray(t).tolist() for t, _ in splits]},
+                      fh)
+    done = _done(out_dir)
 
     wanted = kinds_and_levels()
     if kinds:
