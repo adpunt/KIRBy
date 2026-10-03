@@ -86,6 +86,24 @@ RUNNING="$OUTDIR/_job_summaries/${JOB_TAG}.running"
 [ -f "$SUMMARY" ] || printf 'job\tcategory\tdataset\texperiment\tcondition\texit_code\tstatus\tseconds\tstarted\tended\tlog\n' > "$SUMMARY"
 LOGF="$LOGDIR/opig_${NAME}.log"
 
+# FINISHED IN AN EARLIER JOB (added 2026-10-03, as in submit_dataset.sh): when
+# the latest row for this script in $OUTDIR/_job_summaries/*.tsv says ok, a
+# resubmitted job exits 0 without starting python. A script cut off part-way
+# has no ok row; it reruns and reads back the units it finished
+# (_checkpoint.script_checkpoint). KIRBY_FORCE_RERUN=1 turns this skip off.
+if [ "${KIRBY_FORCE_RERUN:-0}" != "1" ]; then
+    PREV=$(cat "$OUTDIR"/_job_summaries/*.tsv 2>/dev/null \
+           | awk -F'\t' -v n="$NAME" '$1!="job" && $2=="opig" && $4==n' \
+           | sort -t$'\t' -k10,10 | tail -n 1 | awk -F'\t' '{print $1, $7}')
+    case "${PREV#* }" in
+        ok|done_earlier)
+            echo "=== opig ${NAME}: finished in job ${PREV%% *}; skipped"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$JOB_TAG" opig "${DSLIST:--}" "$NAME" "-" \
+                0 done_earlier 0 "$(date -Iseconds)" "$(date -Iseconds)" "job ${PREV%% *}" >> "$SUMMARY"
+            exit 0 ;;
+    esac
+fi
+
 # CMD is word-split on purpose: it is a script name and its flags, as
 # submit_everything.sh passes it to --wrap.
 # shellcheck disable=SC2206

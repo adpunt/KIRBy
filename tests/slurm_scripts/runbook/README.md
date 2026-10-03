@@ -1,5 +1,8 @@
 # Runbook: the four stages
 
+For the 2026-10-03 submission of complexity, similarity, federated and OPIG, read
+`SUBMIT_TONIGHT.md` first. Its stage 3 command replaces the stage 3 section below.
+
 Written 2026-09-25. Nothing here has been run on the cluster yet. Every script
 below was checked locally with `bash -n`, a `--dry-run`, and stand-in `sbatch`,
 `squeue`, `sshare` and `sacctmgr` commands.

@@ -152,7 +152,11 @@ def main():
 
     # Validate experiment IDs if specified
     if args.experiments:
-        valid = helpers.SINGLE_DATASET_EXPERIMENTS
+        # EXTRA_EXPERIMENTS: run only on some datasets, added to the default
+        # list by run_all itself (complexity's c12 on tcga_*). They must be
+        # nameable here, or a one-experiment-per-process job cannot run them.
+        valid = (list(helpers.SINGLE_DATASET_EXPERIMENTS)
+                 + list(getattr(helpers, 'EXTRA_EXPERIMENTS', ())))
         bad = [e for e in args.experiments if e not in valid]
         if bad:
             print(f"ERROR: Unknown experiments for {args.category}: {bad}")
@@ -196,7 +200,8 @@ def main():
     # exited 0 whatever happened, so a SLURM job with every experiment failed
     # read as COMPLETED and the only record was a traceback in the log. Now:
     # all experiments still run; afterwards each failed one is written to
-    # <output>/_errors/<dataset>[__<condition>].json with its traceback text,
+    # <output>/_errors/<dataset>[__<condition>][__<experiment>].json with its
+    # traceback text,
     # and the process exits 1. A run_all that raises (for example federated's
     # sys.exit(1) when FLuID is missing) is recorded the same way.
     results, run_all_error = None, None
@@ -222,8 +227,15 @@ def main():
                          'traceback': traceback.format_exc()}
 
     cond = args.noise_condition if 'noise_condition' in extra_kwargs else None
+    # One experiment per process (submit_dataset.sh, stage1_prelim_noise.py):
+    # the report is named after that experiment too. Named only after the
+    # dataset and condition, as it was until 2026-10-03, the NEXT experiment's
+    # process found no failure of its own and deleted the report, so a job's
+    # _errors/ kept only failures from its last experiment.
+    only = args.experiments[0] if args.experiments and len(args.experiments) == 1 else None
     n_failed = write_error_report(output_dir, args.category, args.dataset,
-                                  cond, results, run_all_error)
+                                  cond, results, run_all_error,
+                                  experiment=only)
     if n_failed:
         sys.exit(1)
 
@@ -243,12 +255,14 @@ def failed_experiments(results):
 
 
 def write_error_report(output_dir, category, dataset, condition, results,
-                       run_all_error=None):
-    """Write <output_dir>/_errors/<dataset>[__<condition>].json listing each
-    failed experiment and its traceback; return how many failures there are.
+                       run_all_error=None, experiment=None):
+    """Write <output_dir>/_errors/<dataset>[__<condition>][__<experiment>].json
+    listing each failed experiment and its traceback; return how many failures
+    there are. `experiment` is set when the process ran exactly one experiment.
 
-    With no failure, a report left by an earlier run of the same dataset and
-    condition is removed, so the directory only ever lists what is broken now.
+    With no failure, a report left by an earlier run of the same dataset,
+    condition and experiment is removed, so the directory only ever lists what
+    is broken now.
     A run_all that raised counts as one failure under the key '_run_all'.
 
     A record with no 'traceback' key is one of two things, and the report
@@ -264,7 +278,8 @@ def write_error_report(output_dir, category, dataset, condition, results,
     failed = failed_experiments(results)
     if run_all_error is not None:
         failed['_run_all'] = run_all_error
-    name = f"{dataset}__{condition}.json" if condition else f"{dataset}.json"
+    name = f"{dataset}__{condition}" if condition else f"{dataset}"
+    name = f"{name}__{experiment}.json" if experiment else f"{name}.json"
     path = os.path.join(output_dir, '_errors', name)
     if not failed:
         if os.path.exists(path):

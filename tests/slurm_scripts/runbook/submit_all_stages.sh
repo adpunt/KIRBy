@@ -22,15 +22,38 @@
 #     scontrol -M htc release <ids>        (the ids are printed and saved below)
 # --no-hold-stage4 submits it unheld.
 #
-# PRECOMPUTE. Every pc_ job is on htc now (precompute_status.py, 2026-09-25),
-# and a dependency can only name a job on the same cluster, so everything here
-# goes to htc. A dataset whose pc_ jobs have all ended gets no dependency and
-# may start at once. A dataset whose precompute failed still runs: its
-# experiments refuse the missing searches (KIRBY_NO_COLD_SEARCH=1) and the
-# refusal lands in _errors/.
+# PRECOMPUTE. A dependency can only name a job on the same cluster. Stages 1,
+# 2 and 4 go to --cluster (default htc) and wait for the pc_ jobs there. Stage 3
+# (changed 2026-10-03) reads the pc_ jobs on BOTH arc and htc and sends each
+# job to the cluster its datasets' pc_ jobs are on, with afterany on them. A
+# job whose datasets have pc_ jobs on both clusters goes to --cluster, waits
+# for the ones there, and is submitted HELD; the line printed for it names the
+# other cluster's jobs, and you release it once they have ended. A dataset
+# whose pc_ jobs have all ended gets no dependency and may start at once, on
+# --cluster. A dataset whose precompute failed still runs: its experiments
+# refuse a missing search of more than KIRBY_COLD_SEARCH_MAX_CONFIGS (default
+# 500) configurations (KIRBY_NO_COLD_SEARCH=1) and the refusal lands in
+# _errors/.
+#
+# STAGE 3 ORDER (2026-10-03): similarity, then federated, then complexity, then
+# opig; within each, datasets in the precompute's size classes SMALL, MEDIUM,
+# LARGE (run_precompute_dataset.sh). Submission order only breaks ties between
+# jobs that become eligible together. Inside each job the experiments run
+# quickest first (submit_dataset.sh, resolve_experiments).
+#
+# STAGE 3 OUTPUT (2026-10-03): --output-root DIR is required. Results go to
+# DIR/<category>/ and DIR/opig/, each experiment's log to logs/<DIR's name>/,
+# SLURM's own log to logs/<DIR's name>/slurm/. Use a NEW DIR for new code:
+# a resubmitted job skips every experiment DIR already records as finished.
+# Resubmitting the same command with the same DIR is how a timed-out run
+# continues.
 #
 # OPTIONS
-#   --trial "A B"            stage 1 and 2 datasets (required)
+#   --trial "A B"            stage 1 and 2 datasets (required when --stages has 1 or 2)
+#   --output-root DIR        stage 3 results root (required when --stages has 3)
+#   --cluster C              default cluster, htc (stage 3: see PRECOMPUTE)
+#   --categories "..."       stage 3 categories, default "similarity federated
+#                            complexity opig" (that order is the submission order)
 #   --fed-datasets "A B"     stage 2 federated datasets (default: caco2); --fed-trial is the same
 #   --full "A B ..."         stage 3 and 4 datasets (default: every dataset in
 #                            DATASET_REPS except chembl_qsar and davis)
@@ -39,7 +62,7 @@
 #   --stages "1 2 3 4"       which stages to submit (default all four)
 #   --similarity-settings S  KIRBY_SIMILARITY_SETTINGS for stages 1 and 4 (default unset = all)
 #   --max-concurrent N       %N on each noise array (default 40)
-#   --account A              default: best fair share on htc (where_to_submit.sh)
+#   --account A              default: best fair share on --cluster (where_to_submit.sh)
 #   --no-hold-stage4
 #   --hold-stage3 / --no-hold-stage3   default: held when stage 2 is not in
 #                            --stages (the trials were run by srun, so there is
@@ -55,10 +78,14 @@ EMAIL=adelaide.punt@stcatz.ox.ac.uk
 BIG_RE='^(nt_|gb_|tcga_|kiba$|bindingdb_kd$|qm9$)'
 
 TRIAL=""; FED_TRIAL="caco2"; FULL=""; FED_FULL="lhasa_herg caco2 logd"
+OUTROOT=""; RUNTAG=""; S3CATS="similarity federated complexity opig"
 STAGES="1 2 3 4"; SIM=""; MAXC=40; ACCOUNT=""; HOLD4=true; HOLD3=""; DRY=false; HOLD_NOW=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --trial)               TRIAL=$2; shift 2 ;;
+        --output-root)         OUTROOT=${2%/}; shift 2 ;;
+        --cluster)             CLUSTER=$2; shift 2 ;;
+        --categories)          S3CATS=$2; shift 2 ;;
         --fed-trial|--fed-datasets) FED_TRIAL=$2; shift 2 ;;
         --full)                FULL=$2; shift 2 ;;
         --fed-full)            FED_FULL=$2; shift 2 ;;
@@ -70,23 +97,31 @@ while [[ $# -gt 0 ]]; do
         --hold-stage3)         HOLD3=true; shift ;;
         --no-hold-stage3)      HOLD3=false; shift ;;
         --dry-run)             DRY=true; shift ;;
-        -h|--help)             sed -n '2,45p' "$0"; exit 0 ;;
+        -h|--help)             sed -n '2,70p' "$0"; exit 0 ;;
         *) echo "unknown option $1"; exit 2 ;;
     esac
 done
-[ -n "$TRIAL" ] || { echo "--trial \"<regression> <classification>\" is required"; exit 2; }
+has_stage() { [[ " $STAGES " == *" $1 "* ]]; }
+if has_stage 1 || has_stage 2; then
+    [ -n "$TRIAL" ] || { echo "--trial \"<regression> <classification>\" is required for stages 1 and 2"; exit 2; }
+fi
+if has_stage 3; then
+    [ -n "$OUTROOT" ] || { echo "--output-root DIR is required for stage 3 (a new folder for new code, e.g. tests/results/run_$(date +%Y_%m_%d))"; exit 2; }
+fi
 
 cd "$REPO" || exit 2
 export KIRBY_SKIP_INSTALLS=1
 . ./setup.sh >/dev/null 2>&1
 
 if [ -z "$ACCOUNT" ]; then
-    PAIR=$(bash "$SLURM_DIR/where_to_submit.sh" --best-cluster-account htc 2>/dev/null)
+    PAIR=$(bash "$SLURM_DIR/where_to_submit.sh" --best-cluster-account "$CLUSTER" 2>/dev/null)
     ACCOUNT=${PAIR##* }
 fi
-[ -n "$ACCOUNT" ] || { echo "Could not read fair share on htc. Pass --account stat-cadd (or stat-ecr)."; exit 1; }
-[ -n "$FULL" ] || FULL=$(python "$HERE/stage1_prelim_noise.py" --all-datasets --print-datasets 2>/dev/null | tail -1)
-[ -n "$FULL" ] || { echo "Could not list the full dataset roster. Pass --full."; exit 1; }
+[ -n "$ACCOUNT" ] || { echo "Could not read fair share on ${CLUSTER}. Pass --account stat-cadd (or stat-ecr)."; exit 1; }
+if has_stage 3 || has_stage 4; then
+    [ -n "$FULL" ] || FULL=$(python "$HERE/stage1_prelim_noise.py" --all-datasets --print-datasets 2>/dev/null | tail -1)
+    [ -n "$FULL" ] || { echo "Could not list the full dataset roster. Pass --full."; exit 1; }
+fi
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 RECORD="$REPO/logs/submit_all_stages_${STAMP}.txt"
@@ -96,36 +131,97 @@ echo "trial: ${TRIAL}   federated trial: ${FED_TRIAL}"
 echo "full ($(echo $FULL | wc -w | tr -d ' ')): ${FULL}"
 $DRY || { echo "# submit_all_stages.sh ${STAMP}  cluster ${CLUSTER} account ${ACCOUNT}"; } > "$RECORD"
 
-# pc_ jobs still queued or running on htc, per dataset.
-PCQ=$(squeue -M "$CLUSTER" -u "$USER" -h -o '%i %j' 2>/dev/null | awk '$1 ~ /^[0-9]+$/')
-pc_ids() {   # dataset names -> colon list of their pc_ job ids
-    local out="" d
+# pc_ jobs still queued or running, per cluster: lines "<cluster> <id> <name>".
+# Both clusters are read; stage 3 uses both, stages 1, 2 and 4 only $CLUSTER.
+PCQ=$(for C in arc htc; do
+          squeue -M "$C" -u "$USER" -h -o '%i %j' 2>/dev/null \
+              | awk -v c="$C" '$1 ~ /^[0-9]+$/ && $2 ~ /^pc_/ {print c, $1, $2}'
+      done)
+# Every job of this user on both clusters: "<cluster> <id> <name> <comment>".
+# Stage 3 stamps each job's comment with its output folder's name and does not
+# submit a job whose name AND comment are already queued or running. So pasting
+# the same command again while the first jobs still run cannot start two jobs
+# on one dataset's files, and a held job left from an older submission (no
+# comment, or another folder's) does not stop the new one.
+QALL=$(for C in arc htc; do
+           squeue -M "$C" -u "$USER" -h -o '%i %j %k' 2>/dev/null \
+               | awk -v c="$C" '$1 ~ /^[0-9]+$/ {print c, $1, $2, $3}'
+       done)
+queued_as() { printf '%s\n' "$QALL" | awk -v n="$1" -v t="$RUNTAG" '$3==n && $4==t {printf "%s %s ", $1, $2}'; }
+pc_on() {    # cluster dataset... -> colon list of those datasets' pc_ job ids there
+    local cl=$1 out="" d; shift
     for d in "$@"; do
-        # exact dataset: pc_<d>_<n> or pc_<d>_x<n> (a prefix match took
-        # herg_ki's jobs for herg, 2026-09-28)
-        out="${out}$(printf '%s\n' "$PCQ" | awk -v d="$d" '$2 ~ ("^pc_" d "_x?[0-9]+$") {printf "%s:", $1}')"
+        # exact dataset: pc_<d>_<n>, pc_<d>_x<n> or pc_<d>_general_... (a
+        # prefix match took herg_ki's jobs for herg, 2026-09-28)
+        out="${out}$(printf '%s\n' "$PCQ" | awk -v c="$cl" -v d="$d" \
+            '$1==c && $3 ~ ("^pc_" d "_(x?[0-9]+|general_.*)$") {printf "%s:", $2}')"
     done
     echo "${out%:}"
+}
+pc_ids() { pc_on "$CLUSTER" "$@"; }
+pc_clusters() {   # dataset... -> the clusters holding any of their pc_ jobs
+    local c
+    for c in arc htc; do [ -n "$(pc_on "$c" "$@")" ] && printf '%s ' "$c"; done
+}
+
+# Stage 3 placement for one job reading datasets "$@". Sets SUB_CL (cluster),
+# DEP (job ids to wait for there), HOLD_THIS and NOTE.
+place() {
+    local cls n
+    cls=$(pc_clusters "$@"); n=$(echo $cls | wc -w | tr -d ' ')
+    HOLD_THIS=false; NOTE=""
+    if [ "$n" = "0" ]; then
+        SUB_CL=$CLUSTER; DEP=""
+    elif [ "$n" = "1" ]; then
+        SUB_CL=${cls%% *}; DEP=$(pc_on "$SUB_CL" "$@")
+    else
+        SUB_CL=$CLUSTER; DEP=$(pc_on "$CLUSTER" "$@"); HOLD_THIS=true
+        local o; for o in arc htc; do [ "$o" = "$CLUSTER" ] || NOTE="HELD: also waits for ${o} jobs $(pc_on "$o" "$@" | tr ':' ' '); release it once they have ended"; done
+    fi
+    if [ -n "$S2" ]; then
+        if [ "$SUB_CL" = "$CLUSTER" ]; then DEP=$(join_deps "$DEP" "$S2")
+        else HOLD_THIS=true; NOTE="${NOTE:+$NOTE; }HELD: stage 2 is on ${CLUSTER}, this job on ${SUB_CL}; release it after stage 2"; fi
+    fi
+}
+
+# Datasets in the precompute's size classes: SMALL, then MEDIUM (everything
+# not listed), then LARGE, each in the given order. Read from
+# run_precompute_dataset.sh, which keeps the two lists.
+order_by_size() {
+    local f="$SLURM_DIR/run_precompute_dataset.sh" small large d s="" m="" l=""
+    small=$(sed -n 's/^SMALL_DATASETS="\${KIRBY_SMALL_DATASETS:-\(.*\)}"$/\1/p' "$f")
+    large=$(sed -n 's/^LARGE_DATASETS="\${KIRBY_LARGE_DATASETS:-\(.*\)}"$/\1/p' "$f")
+    for d in "$@"; do
+        if [[ " $small " == *" $d "* ]]; then s="$s $d"
+        elif [[ " $large " == *" $d "* ]]; then l="$l $d"
+        else m="$m $d"; fi
+    done
+    echo $s $m $l
 }
 join_deps() { local s; s=$(printf '%s:' "$@" | tr -s ':'); s=${s#:}; echo "${s%:}"; }
 
 # sbatch one job; prints the id (or DRY). Args: name mem deps export-extra script args...
+# Cluster: SUB_CL when set (stage 3), else CLUSTER. HOLD_THIS=true holds this
+# one job. SLURM_LOG_DIR, when set, is where SLURM writes the job's own log.
 submit() {
     local name=$1 mem=$2 deps=$3 exports=$4; shift 4
-    local cmd=(sbatch --parsable --clusters="$CLUSTER" --account="$ACCOUNT"
+    local cl=${SUB_CL:-$CLUSTER}
+    local cmd=(sbatch --parsable --clusters="$cl" --account="$ACCOUNT"
                --partition=medium,long --time=47:59:00 --nodes=1 --ntasks=1
                --cpus-per-task=8 --mem="$mem" --job-name="$name"
                --mail-user="$EMAIL" --mail-type=FAIL
                --export="ALL,KIRBY_REPO=${REPO},KIRBY_NO_PULL=1,KIRBY_SKIP_INSTALLS=1,KIRBY_NO_COLD_SEARCH=1,PRUNING_MODE=calibrated${exports:+,$exports}")
     [ -n "$deps" ] && cmd+=(--dependency="afterany:${deps}")
-    $HOLD_NOW && cmd+=(--hold)
+    [ -n "${SLURM_LOG_DIR:-}" ] && cmd+=(--output="${SLURM_LOG_DIR}/%x_%j.out")
+    [ -n "${RUNTAG:-}" ] && cmd+=(--comment="$RUNTAG")
+    { $HOLD_NOW || ${HOLD_THIS:-false}; } && cmd+=(--hold)
     cmd+=("$@")
     if $DRY; then
         echo "    ${cmd[*]}" >&2; echo "DRY"
     else
         local jid; jid=$("${cmd[@]}" 2>/tmp/sas_err_$$ | cut -d';' -f1)
         if [ -z "$jid" ]; then echo "    FAILED ${name}: $(cat /tmp/sas_err_$$)" >&2; echo ""; return; fi
-        echo "$name $jid" >> "$RECORD"; echo "$jid"
+        echo "$name $jid $cl$( { $HOLD_NOW || ${HOLD_THIS:-false}; } && echo ' held')" >> "$RECORD"; echo "$jid"
     fi
 }
 mem_for() { [[ $1 =~ $BIG_RE ]] && echo 128G || echo 64G; }
@@ -172,37 +268,66 @@ if [[ " $STAGES " == *" 2 "* ]]; then
 fi
 
 # ── stage 3 ──
-if [[ " $STAGES " == *" 3 "* ]]; then
-    if [ -z "$HOLD3" ]; then [[ " $STAGES " == *" 2 "* ]] && HOLD3=false || HOLD3=true; fi
+if has_stage 3; then
+    if [ -z "$HOLD3" ]; then has_stage 2 && HOLD3=false || HOLD3=true; fi
     HOLD_NOW=$HOLD3
+    RUNTAG=$(basename "$OUTROOT")
+    LOG3="logs/${RUNTAG}"
     echo; echo "== stage 3: full suite except noise$( [ -n "$S2" ] && echo ', after stage 2')$( $HOLD3 && echo ', HELD until you release it')"
-    for C in complexity similarity; do
-        for D in $FULL; do
-            J=$(submit "x_${C}_${D}" "$(mem_for "$D")" "$(join_deps "$(pc_ids "$D")" "$S2")" "" \
+    echo "   results ${OUTROOT}/<category>/   experiment logs ${LOG3}/   SLURM logs ${LOG3}/slurm/"
+    N_DONE=$(cat "$OUTROOT"/*/_job_summaries/*.tsv 2>/dev/null | awk -F'\t' '$7=="ok"' | wc -l | tr -d ' ')
+    if [ -d "$OUTROOT" ]; then
+        echo "   ${OUTROOT} already exists: ${N_DONE} finished experiment row(s) in it will be skipped."
+        echo "   That is right for a resubmission of the same code. For new code, use a new --output-root."
+    fi
+    $DRY || mkdir -p "$REPO/${LOG3}/slurm"
+    SLURM_LOG_DIR="$REPO/${LOG3}/slurm"
+    FULL_ORDERED=$(order_by_size $FULL)
+    FED_ORDERED=$(order_by_size $FED_FULL)
+    echo "   dataset order (SMALL, MEDIUM, LARGE): ${FULL_ORDERED}"
+    show() {   # name id
+        echo "  $1: ${2:-FAILED} on ${SUB_CL}${DEP:+ after ${DEP//:/ }}${NOTE:+  <- ${NOTE}}"
+    }
+    for C in $S3CATS; do
+        [ "$C" = opig ] && continue
+        case " similarity federated complexity " in *" $C "*) ;; *) echo "  unknown category $C (stage 3 knows similarity federated complexity opig)"; continue ;; esac
+        if [ "$C" = federated ]; then LIST=$FED_ORDERED; else LIST=$FULL_ORDERED; fi
+        for D in $LIST; do
+            Q=$(queued_as "x_${C}_${D}")
+            if [ -n "$Q" ]; then echo "  x_${C}_${D}: already queued or running (${Q% }); not submitted again"; continue; fi
+            place "$D"
+            J=$(submit "x_${C}_${D}" "$(mem_for "$D")" "$DEP" \
+                "KIRBY_OUTPUT_DIR=${OUTROOT}/${C},KIRBY_EXP_LOG_DIR=${LOG3}" \
                 "$SLURM_DIR/submit_dataset.sh" "$C" "$D")
+            show "x_${C}_${D}" "$J"
             [ -n "$J" ] && S3="${S3}:${J}"
         done
-        echo "  ${C}: $(echo $FULL | wc -w | tr -d ' ') jobs"
     done
-    for D in $FED_FULL; do
-        J=$(submit "x_federated_${D}" "$(mem_for "$D")" "$(join_deps "$(pc_ids "$D")" "$S2")" "" \
-            "$SLURM_DIR/submit_dataset.sh" federated "$D")
-        echo "  x_federated_${D}: ${J:-FAILED}"
-    done
-    while read -r N OM DSL; do
+    while [[ " $S3CATS " == *" opig "* ]] && read -r N OM DSL; do
         [ -n "$N" ] || continue
-        J=$(submit "opig_${N}" "$OM" "$(join_deps "$(pc_ids $DSL)" "$S2")" \
-            "KIRBY_OUTPUT_DIR=tests/results/opig,KIRBY_EXP_LOG_DIR=logs/opig" \
+        Q=$(queued_as "opig_${N}")
+        if [ -n "$Q" ]; then echo "  opig_${N}: already queued or running (${Q% }); not submitted again"; continue; fi
+        place $DSL
+        J=$(submit "opig_${N}" "$OM" "$DEP" \
+            "KIRBY_OUTPUT_DIR=${OUTROOT}/opig,KIRBY_EXP_LOG_DIR=${LOG3}" \
             "$HERE/opig_one.sh" "$N")
-        echo "  opig_${N}: ${J:-FAILED}"
+        show "opig_${N}" "$J"
     done < <(bash "$HERE/opig_one.sh" --list | sed 's/reads://')
+    SUB_CL=""; HOLD_THIS=false; SLURM_LOG_DIR=""; RUNTAG=""
 fi
 
 HOLD_NOW=false
-if [[ " $STAGES " == *" 3 "* ]] && ${HOLD3:-false} && ! $DRY; then
-    IDS3=$(awk '$1 ~ /^(x_|opig_)/ {print $2}' "$RECORD" | paste -sd, -)
-    echo "  release stage 3 when the srun trials look right:  scontrol -M htc release ${IDS3}"
-    echo "release stage 3: scontrol -M htc release ${IDS3}" >> "$RECORD"
+if has_stage 3 && ! $DRY; then
+    for CL in arc htc; do
+        if ${HOLD3:-false}; then
+            IDS3=$(awk -v c="$CL" '$1 ~ /^(x_|opig_)/ && $3==c {print $2}' "$RECORD" | paste -sd, -)
+        else
+            IDS3=$(awk -v c="$CL" '$1 ~ /^(x_|opig_)/ && $3==c && $4=="held" {print $2}' "$RECORD" | paste -sd, -)
+        fi
+        [ -n "$IDS3" ] || continue
+        echo "  held stage 3 jobs on ${CL}; release with:  scontrol -M ${CL} release ${IDS3}"
+        echo "release stage 3 on ${CL}: scontrol -M ${CL} release ${IDS3}" >> "$RECORD"
+    done
 fi
 
 # ── stage 4 ──
