@@ -12,7 +12,7 @@ What the submit command does, in four lines:
 
 ## 1. Before submitting, once
 
-The changes below are on the laptop only. They are not committed. The server pulls from GitHub, so it sees none of them until they are committed and pushed.
+The changes this doc relies on are in commit `31715d4`, pushed 2026-10-03. Later commits on the branch include it.
 
 Then, on the htc login node:
 
@@ -22,7 +22,7 @@ cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only origin similarity-metrics
 ```bash
 git log -1 --oneline
 ```
-The second line must print the commit you just pushed.
+The second line must print `31715d4` or a later commit.
 
 ```bash
 export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
