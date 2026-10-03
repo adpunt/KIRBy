@@ -106,6 +106,13 @@ def main(ds_dir):
               'Correlations: Pearson between held-out predictions of two kinds on the '
               f'same {n} molecules, mean over the pairs. Diagonal = same kind, draw 0 vs 1.', '']
     summ = []
+    clean_vec = {}
+    for r in rows:
+        if r['kind'] == 'clean':
+            clean_vec.setdefault((r['model'], r['rep']), {})[r['fold']] = r['preds']
+    clean_full = {k: np.concatenate([np.asarray(v[f]) for f in sorted(v)])
+                  for k, v in clean_vec.items()
+                  if len(v) == len(folds['val_idx'])}
     for li in range(3):
         M = np.full((len(kinds), len(kinds)), np.nan)
         for i, a in enumerate(kinds):
@@ -140,14 +147,30 @@ def main(ds_dir):
             plt.close(fig)
         except Exception as exc:
             print('heatmap skipped:', exc)
-        summ.append(f'== level position {li}: kind | same-kind draw0-vs-1 | '
-                    'three most similar other kinds (corr) ==')
+        summ.append(f'== level position {li} ==')
+        summ.append('kind | corr with clean-label predictions (mean over pairs) | '
+                    'same-kind draw0-vs-1 | kinds correlating at least as high as the '
+                    'lower of the two kinds\' same-kind values (censoring has no draw, '
+                    'so its own value is skipped)')
+        yard = {a: (np.nan if a == 'censoring' else M[i, i])
+                for i, a in enumerate(kinds)}
         for i, a in enumerate(kinds):
-            others = sorted((j for j in range(len(kinds))
-                             if j != i and not np.isnan(M[i, j])),
-                            key=lambda j: -M[i, j])[:3]
-            summ.append(f'{a:<22} {M[i, i]:.3f} | ' + ', '.join(
-                f'{kinds[j]} {M[i, j]:.3f}' for j in others))
+            cc = []
+            for m, rp in pairs:
+                x = full.get((m, rp, a, li, 0))
+                c = clean_full.get((m, rp))
+                if x is not None and c is not None:
+                    cc.append(corr(x, c))
+            same = []
+            for j, b in enumerate(kinds):
+                if j == i or np.isnan(M[i, j]):
+                    continue
+                thr = np.nanmin([yard[a], yard[b]])
+                if M[i, j] >= thr:
+                    same.append(b)
+            summ.append(f'{a:<22} clean {np.mean(cc) if cc else float("nan"):.3f} | '
+                        f'own {M[i, i]:.3f} | '
+                        f'{len(same)}: ' + ', '.join(same))
         summ.append('')
         report += [f'## Level position {li}', '',
                    'Same kind, draw 0 vs 1 (yardstick): ' + ', '.join(
