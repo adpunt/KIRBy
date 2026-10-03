@@ -1551,8 +1551,9 @@ def _mean_detection(rows):
 #                               sweeps: similarity_space.settings_from_env()
 #                               and SWEPT_KS = 5, 9, 10, 20
 #   fold_similarity_spaces      the matrices one fold's settings read -- each
-#                               model's top-2 single representations, the four
-#                               augmented spaces, the two hybrids -- every one
+#                               model's top-2 single representations, the two
+#                               uncapped augmented spaces, the three hybrids
+#                               (2026-10-03) -- every one
 #                               built through a noise_cache wrapper
 #   fold_neighbours             one neighbour list per setting, through
 #                               noise_cache.cached_neighbours
@@ -1582,7 +1583,7 @@ def sweep_settings():
     """The similarity settings this run sweeps, in order.
 
     similarity_space.settings_from_env() reads KIRBY_SIMILARITY_SETTINGS:
-    unset or 'all' is every setting (66 when every space exists), 'model_input'
+    unset or 'all' is every setting (58 when every space exists), 'model_input'
     is today's behaviour alone, a comma list is those names. Under unset or
     'all' MODEL_INPUT is put first, because enumerate_settings leaves it out
     and it is the row every other setting is read against: today's neighbours.
@@ -1649,12 +1650,14 @@ def fold_similarity_spaces(dataset_name, settings, *, model_input_tr,
             Every build below chooses its features from them, as the
             experiment's own hybrid build does.
         base_reps: the model's top-2 single representations, rank 1 first
-            (_shared.noise_base_reps_by_model). base_1, base_2 and the four
-            augmented spaces are built from them.
+            (_shared.noise_base_reps_by_model). base_1, base_2 and the two
+            uncapped augmented spaces are built from them.
         recipes: {'hybrid': (Blueprint, aug_condition),
+                  'hybrid__general2': (Blueprint, aug_condition),
                   'hybrid_similarity': (Blueprint, aug_condition)}, the model's
-            precomputed recipes. A space whose recipe is absent is reported
-            unavailable, never faked.
+            precomputed recipes (pool_recipes_by_family's space names). A
+            space whose recipe is absent is reported unavailable, never
+            faked.
         augmentations: {name: full matrix}, data['augmentations'].
         model_name / model_factory / metric: the downstream model and the
             get_domain_metric triple, for the builds' accept-or-reject step.
@@ -1662,9 +1665,11 @@ def fold_similarity_spaces(dataset_name, settings, *, model_input_tr,
             them, by their key in `recipes` -- e.g. 'hybrid__general2' and
             'hybrid__distance1', the owner's set (top 2 general + top 1
             distance hybrids per model and family, 2026-10-02), which n42
-            fits models on. A SimilaritySetting only accepts the two family
-            names, so these cannot come in through `settings`. Default ()
-            builds exactly what it built before.
+            fits models on. A SimilaritySetting accepts only the names in
+            similarity_space.HYBRID_SPACES ('hybrid', 'hybrid__general2' since
+            2026-10-03, 'hybrid_similarity'), so the others cannot come in
+            through `settings`. Default () builds only what `settings`
+            names.
 
     Returns (spaces_train, spaces_val, unavailable), where unavailable is
     {space: reason}. Every build goes through a noise_cache wrapper
@@ -1687,7 +1692,7 @@ def fold_similarity_spaces(dataset_name, settings, *, model_input_tr,
 
     for i in (1, 2):
         wanted_base = f'base_{i}' in need
-        wanted_aug = [st for st in ss.AUG_STRATEGIES
+        wanted_aug = [st for st in ss.SWEPT_AUG_STRATEGIES
                       if ss.aug_space_name(i, st) in need]
         if not wanted_base and not wanted_aug:
             continue
@@ -1742,13 +1747,17 @@ def fold_similarity_spaces(dataset_name, settings, *, model_input_tr,
                     continue
                 tr[sp], va[sp] = _scale_pair(built[0], built[1])
 
-    _hyb_spaces = [sp for sp in ('hybrid', 'hybrid_similarity') if sp in need]
+    _hyb_spaces = [sp for sp in ss.HYBRID_SPACES if sp in need]
     _hyb_spaces += [sp for sp in (extra_spaces or ()) if sp not in _hyb_spaces]
     for sp in _hyb_spaces:
         rec = (recipes or {}).get(sp)
         if rec is None or rec[0] is None:
-            unavailable[sp] = ('no stored recipe of this family for this model '
-                               '(pool_recipes_by_family)')
+            unavailable[sp] = (
+                'no predictive general rank-2 recipe for this model (the '
+                "rule read's 'general2' slot, pool_recipes_by_family)"
+                if sp == 'hybrid__general2' else
+                'no stored recipe of this family for this model '
+                '(pool_recipes_by_family)')
             continue
         bp, aug_cond = rec
         geometry = recipe_is_geometry(bp)

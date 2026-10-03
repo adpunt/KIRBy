@@ -600,7 +600,7 @@ def test_per_model_spaces():
 
 # ── the similarity sweep, the D-versus-D' rows, the resume (2026-09-25) ─────
 
-# Two settings, not the 66: a smoke checks the wiring, not the science.
+# Two settings, not the 58: a smoke checks the wiring, not the science.
 SWEEP_SETTINGS = ('base_1|none|manhattan', 'tanimoto_ecfp4|none|tanimoto')
 
 

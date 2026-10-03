@@ -887,6 +887,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _sim_recipes[_m]['hybrid'] = _bp
         elif _nm == model_space_name(_space_name('similarity'), _m):
             _sim_recipes[_m]['hybrid_similarity'] = _bp
+        elif _nm == model_space_name(
+                f"{_space_name('predictive')}__general2", _m):
+            # Predictive general rank 2, a similarity space since 2026-10-03.
+            _sim_recipes[_m]['hybrid__general2'] = _bp
     _sim_base_names = {
         m: [rn for sp, rn in base_spaces.items() if space_model.get(sp) == m]
         for m in models}

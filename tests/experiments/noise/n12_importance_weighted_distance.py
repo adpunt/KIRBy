@@ -1185,7 +1185,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     # The hybrid and hybrid_similarity similarity spaces: until 2026-10-02
     # rf's recipe stood in for every evaluation unit's model (a TODO asked the
     # owner). Owner's decision 2026-10-02: each model's own general rank-1
-    # recipe per family. The settings know those two names only.
+    # recipe per family. Since 2026-10-03 the settings also know
+    # 'hybrid__general2', each model's predictive general rank 2 (below).
     sim_recipes_by_model = {}
     for _r in hybrid_recipes:
         _fam_space = SPACE_FOR_FAMILY.get(_r['objective'])
@@ -1198,6 +1199,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         for _m in _owners:
             sim_recipes_by_model.setdefault(_m, {}).setdefault(
                 _fam_space, (_r['blueprint'], _r['aug_condition']))
+
+    # 'hybrid__general2' (owner decision 2026-10-03): each model's predictive
+    # general rank-2 recipe becomes a similarity space too, held by the same
+    # rule as rank 1 -- the entry's own model, plus every model listed in
+    # also_holds under that slot. A model with none gets the space reported
+    # unavailable by n07.fold_similarity_spaces.
+    for _r in hybrid_recipes:
+        if _r.get('objective') != 'predictive':
+            continue
+        _owners = ([_r['model']] if (_r.get('slot') == 'general2'
+                                      and _r.get('model')) else [])
+        _owners += [a['model'] for a in _r.get('also_holds') or []
+                    if a.get('slot') == 'general2']
+        for _m in _owners:
+            sim_recipes_by_model.setdefault(_m, {}).setdefault(
+                'hybrid__general2', (_r['blueprint'], _r['aug_condition']))
     sim_detection = {}
     sweep_ctx = sweep_context(
         experiment='n12_importance_weighted_distance',

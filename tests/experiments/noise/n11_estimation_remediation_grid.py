@@ -1275,9 +1275,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                    dataset_name, kwargs.get('noise_condition'))
     # The hybrid and hybrid_similarity similarity spaces: until 2026-10-02
     # rf's recipe stood in for every evaluation unit's model (a TODO asked the
-    # owner). The similarity settings know two hybrid spaces by name, 'hybrid' and
-    # 'hybrid_similarity', so only each family's general rank 1 is read there
-    # (2026-10-02); the other slots are estimation spaces above.
+    # owner). The similarity settings knew two hybrid spaces by name, 'hybrid'
+    # and 'hybrid_similarity', so only each family's general rank 1 was read
+    # there (2026-10-02); since 2026-10-03 they also know 'hybrid__general2',
+    # the predictive general rank 2, added below. The other slots are
+    # estimation spaces above.
     #
     # Owner's decision 2026-10-02: each model's own. sim_recipes_by_model[m]
     # holds m's general rank-1 recipe per family, read above; the single-
@@ -1297,6 +1299,22 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
         for _m in _owners:
             sim_recipes_by_model.setdefault(_m, {}).setdefault(
                 _sp, (_r['blueprint'], _r['aug_condition']))
+
+    # 'hybrid__general2' (owner decision 2026-10-03): each model's predictive
+    # general rank-2 recipe becomes a similarity space too, held by the same
+    # rule as rank 1 -- the entry's own model, plus every model listed in
+    # also_holds under that slot. A model with none gets the space reported
+    # unavailable by n07.fold_similarity_spaces.
+    for _r in hybrid_recipes:
+        if _r.get('objective') != 'predictive':
+            continue
+        _owners = ([_r['model']] if (_r.get('slot') == 'general2'
+                                      and _r.get('model')) else [])
+        _owners += [a['model'] for a in _r.get('also_holds') or []
+                    if a.get('slot') == 'general2']
+        for _m in _owners:
+            sim_recipes_by_model.setdefault(_m, {}).setdefault(
+                'hybrid__general2', (_r['blueprint'], _r['aug_condition']))
     sim_estimators = [e for e in available_estimators
                       if e in NEIGHBOUR_DETECTORS]
     sim_detection = {}

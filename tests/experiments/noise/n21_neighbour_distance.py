@@ -863,6 +863,7 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     include_hybrid = bool(kwargs.get('include_hybrid', True))
     bp = None
     bp_sim = None
+    bp_g2 = None
     # The SearchResult the first model's recipe came out of. It ranks the
     # single representations (see the module docstring) and is read by the
     # top-2 block at the end of run(). Held, it costs 0 model fits.
@@ -911,6 +912,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                     for r in hybrid_recipes.get(downstream_models[0], [])}
             bp = _own.get('hybrid')
             bp_sim = _own.get('hybrid_similarity')
+            # Predictive general rank 2, a similarity space since 2026-10-03.
+            bp_g2 = _own.get('hybrid__general2')
             hybrid_meta['similarity_present'] = any(
                 r['objective'] == 'similarity'
                 for _rs in hybrid_recipes.values() for r in _rs)
@@ -1159,7 +1162,8 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
                 dataset_name, sweep, X_model_tr=X_base_std,
                 train_reps=train_reps, val_reps=val_reps, train_idx=train_idx,
                 base_names=list(base_used.values()),
-                recipes={'hybrid': bp, 'hybrid_similarity': bp_sim},
+                recipes={'hybrid': bp, 'hybrid__general2': bp_g2,
+                         'hybrid_similarity': bp_sim},
                 y_train=y_noisy, groups_train=g_train, model_name=rank_owner,
                 model_factory=model_factories[rank_owner], metric=metric,
                 task_type=task_type, augmentations_train=train_augs,

@@ -17,10 +17,11 @@ Checks, each printed PASS / FAIL / SKIP with the numbers behind it:
       with exclude_groups=groups) equals the similarity_neighbours=None path
       for each neighbour detector; a non-MODEL_INPUT setting changes the
       scores; cross_val given a list is refused. Added 2026-09-25.
-  (d) enumerate_settings gives 66 settings when every space is available
-      (8 feature spaces x 4 weightings x 2 distances + Tanimoto + forest;
-      50 before the augmented space split into capped and uncapped on
-      2026-09-25), and settings_from_env reads KIRBY_SIMILARITY_SETTINGS.
+  (d) enumerate_settings gives 58 settings when every space is available
+      (7 feature spaces x 4 weightings x 2 distances + Tanimoto + forest;
+      50 before 2026-09-25, 66 from 2026-09-25 to 2026-10-03, when the two
+      capped augmented spaces were dropped and hybrid__general2 added), and
+      settings_from_env reads KIRBY_SIMILARITY_SETTINGS.
   (e) d_vs_dprime's gain is positive when D' helped, for an rmse dataset and
       an auc dataset, with the direction read from get_domain_metric.
   (f) resume: done_keys skips rows already written, and a row cut off by a
@@ -353,18 +354,19 @@ settings = ss.enumerate_settings()
 names = [s.name for s in settings]
 _n_wo = len(ss.enumerate_settings([s for s in ss.ALL_SPACES
                                    if s != 'hybrid_similarity']))
-report("d enumerate_settings", len(settings) == 66 and len(set(names)) == 66
-       and _n_wo == 58 and ss.SWEPT_KS == (5, 9, 10, 20)
+report("d enumerate_settings", len(settings) == 58 and len(set(names)) == 58
+       and _n_wo == 50 and ss.SWEPT_KS == (5, 9, 10, 20)
        and all(sp in ss.FEATURE_SPACES for sp in (
-           'base_1_aug_capped', 'base_1_aug_uncapped',
-           'base_2_aug_capped', 'base_2_aug_uncapped')),
+           'base_1_aug_uncapped', 'base_2_aug_uncapped', 'hybrid__general2'))
+       and not any(sp in ss.FEATURE_SPACES for sp in (
+           'base_1_aug_capped', 'base_2_aug_capped')),
        f"{len(settings)} settings, {len(set(names))} distinct names; without "
        f"hybrid_similarity: {_n_wo}; SWEPT_KS={ss.SWEPT_KS}")
 _e_all = ss.settings_from_env(env={})
 _e_all2 = ss.settings_from_env(env={'KIRBY_SIMILARITY_SETTINGS': 'all'})
 _e_mi = ss.settings_from_env(env={'KIRBY_SIMILARITY_SETTINGS': 'model_input'})
 _e_list = ss.settings_from_env(env={'KIRBY_SIMILARITY_SETTINGS':
-                                    'base_1_aug_capped|treeshap|manhattan, '
+                                    'base_1_aug_uncapped|treeshap|manhattan, '
                                     'tanimoto_ecfp4|none|tanimoto,'
                                     'model_input|none|process,'
                                     'hybrid_similarity|none|manhattan'},
@@ -375,9 +377,9 @@ try:
     _bad = False
 except ValueError:
     _bad = True
-report("d settings_from_env", len(_e_all) == 66 and len(_e_all2) == 66
+report("d settings_from_env", len(_e_all) == 58 and len(_e_all2) == 58
        and _e_mi == [ss.MODEL_INPUT]
-       and [s.name for s in _e_list] == ['base_1_aug_capped|treeshap|manhattan',
+       and [s.name for s in _e_list] == ['base_1_aug_uncapped|treeshap|manhattan',
                                          'tanimoto_ecfp4|none|tanimoto',
                                          'model_input|none|process'] and _bad,
        f"unset {len(_e_all)}, 'all' {len(_e_all2)}, 'model_input' "

@@ -1344,7 +1344,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         **model_factories)
 
     def _sim_recipes_for(mname):
-        """The two hybrid spaces this model's similarity settings read.
+        """The hybrid spaces this model's similarity settings read.
 
         'hybrid' is the prediction-objective recipe. It is the model's own where
         the pool held one, and otherwise the best configuration over every model
@@ -1376,6 +1376,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rec['hybrid'] = (_bp_m, aug_by_model.get(mname, aug_condition))
         if bp_sim is not None:
             rec['hybrid_similarity'] = (bp_sim, sim_aug_condition)
+        # 'hybrid__general2' (owner decision 2026-10-03): the model's own
+        # predictive general rank-2 recipe from the rule read above. Absent
+        # when the rule read has no such slot for this model; then
+        # fold_similarity_spaces reports the space unavailable.
+        for _h in rule_recipes_by_model.get(mname, []):
+            if (_h.get('source') == 'rule'
+                    and _h.get('objective') == 'predictive'
+                    and _h.get('slot') == 'general2'):
+                rec['hybrid__general2'] = (_h['blueprint'],
+                                           _h['aug_condition'])
+                break
         return rec
 
     # n13 wrote its result once, at the end, after every (condition, level)

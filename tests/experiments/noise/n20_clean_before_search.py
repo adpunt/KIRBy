@@ -1285,6 +1285,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_rf = get_best_for_downstream(search_asis, BASE_RANK_MODEL,
                                           budget=None)
         recipes = {'hybrid': best_rf['blueprint']} if best_rf else {}
+        # 'hybrid__general2' (owner decision 2026-10-03): the same search's
+        # rank-2 recipe for the same model (_recipe_at). Absent when the
+        # search holds none; build_spaces then reports it unavailable.
+        _bp_g2 = _recipe_at(search_asis, BASE_RANK_MODEL, 'general2')
+        if _bp_g2 is not None:
+            recipes['hybrid__general2'] = _bp_g2
         aug_tr = aug_va = None
         if augmentations_all:
             aug_tr = {a: np.asarray(m_[train_idx], dtype=np.float64)

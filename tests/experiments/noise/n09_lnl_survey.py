@@ -508,6 +508,16 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     sim_base = [rn for _k, rn in base_ranks]
     sim_recipes = {'hybrid': (bp, (meta or {}).get('aug_condition',
                                                     'uncapped'))}
+    # 'hybrid__general2' (owner decision 2026-10-03): the predictive general
+    # rank-2 recipe of the same clean-label rule read. Absent when that read
+    # has no such slot; fold_similarity_spaces then reports it unavailable.
+    for _h in ((clean_rule or {}).get('hybrids') or []):
+        if (_h.get('objective') == 'predictive'
+                and _h.get('slot') == 'general2'
+                and _h.get('blueprint') is not None):
+            sim_recipes['hybrid__general2'] = (
+                _h['blueprint'], _h.get('aug_condition') or 'uncapped')
+            break
     _ds_by_sim = {}
     from experiments._shared import input_fingerprint
     ckpt = FoldCheckpoint(output_dir, 'n09_lnl_survey', dataset_name,

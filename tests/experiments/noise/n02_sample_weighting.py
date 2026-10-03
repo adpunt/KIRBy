@@ -411,6 +411,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception as _exc:
                 sweep_ctx['unavailable'].setdefault(
                     f'{mname}|pool', f'{type(_exc).__name__}: {_exc}')
+            # 'hybrid__general2' (owner decision 2026-10-03): this model's
+            # predictive general rank-2 recipe, read from the rule set. Only
+            # that slot is taken, so 'hybrid' and 'hybrid_similarity' stay the
+            # pool winners they were. Missing -> fold_similarity_spaces
+            # reports the space unavailable.
+            if 'hybrid__general2' in _sim_need and 'hybrid__general2' not in rec:
+                try:
+                    _rule = get_rule_hybrids(
+                        reps, labels, groups, downstream_model=mname,
+                        budget=None, augmentations=augmentations,
+                        dataset_name=dataset_name, task_type=task_type,
+                        data=data, pool_subset=POOL_SUBSET)
+                    for _h in (_rule or {}).get('hybrids') or []:
+                        if (_h.get('objective') == 'predictive'
+                                and _h.get('slot') == 'general2'
+                                and _h.get('blueprint') is not None):
+                            rec['hybrid__general2'] = (
+                                _h['blueprint'],
+                                _h.get('aug_condition') or 'uncapped')
+                            break
+                except Exception as _exc:
+                    from kirby.result_cache import StaleResultDB as _Stale
+                    if isinstance(_exc, _Stale):
+                        raise
+                    sweep_ctx['unavailable'].setdefault(
+                        f'{mname}|hybrid__general2',
+                        f'the rule read raised {type(_exc).__name__}: {_exc}')
         _sim_info_memo[mname] = (base, rec)
         return base, rec
 

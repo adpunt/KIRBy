@@ -629,17 +629,20 @@ class FoldSimilarity:
       base_1, base_2          that model's rank-1 / rank-2 single
                               representation, standardised on the fold
                               (noise_cache.cached_scaled)
-      base_k_aug_capped/_uncapped
-                              base_k plus augmentation features, built with
+      base_k_aug_uncapped     base_k plus augmentation features (c21's
+                              uncapped method; the capped spaces were dropped
+                              2026-10-03), built with
                               similarity_space.base_aug_blueprint through
                               noise_cache.cached_hybrid_for_fold; the donors
                               are data['augmentations'] named in
                               DATASET_REPS[ds]['augmentation'], minus the base
                               itself (c21:429)
-      hybrid, hybrid_similarity
-                              the model's stored recipe for that family, built
-                              exactly as the model-input cell is, so the build
-                              is one cache entry for both
+      hybrid, hybrid__general2, hybrid_similarity
+                              the model's stored recipe for that slot
+                              (predictive general rank 1 and 2, similarity
+                              general rank 1; similarity_space.HYBRID_SPACES),
+                              built exactly as the model-input cell is, so the
+                              build is one cache entry for both
       tanimoto_ecfp4          SMILES, if the data carries them
       forest_proximity, model_input
                               the model-input matrix the caller passes
@@ -743,7 +746,7 @@ class FoldSimilarity:
                 elif space in _ss.AUG_SPACES:
                     _, k, _, st = space.split('_')
                     got = self._aug(model, int(k), st)
-                elif space in ('hybrid', 'hybrid_similarity'):
+                elif space in _ss.HYBRID_SPACES:
                     got = self._hyb(model, space)
                 else:
                     got = (None, None, f'{space} is not a feature space')

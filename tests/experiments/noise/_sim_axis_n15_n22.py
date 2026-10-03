@@ -12,9 +12,10 @@ those eight files would otherwise each carry a copy of:
                         one rule added on top of settings_from_env)
   build_spaces          one downstream model's similarity spaces for one fold:
                         its top 2 single representations, each of those plus
-                        augmented features (c21's capped and uncapped), its
-                        prediction-built and similarity-built hybrids, and the
-                        model-input matrix itself
+                        augmented features (c21's uncapped method only since
+                        2026-10-03), its top 2 prediction-built hybrids and
+                        its top similarity-built hybrid, and the model-input
+                        matrix itself
   neighbour_lists       noise_cache.cached_neighbours, returning (lists, None)
                         or (None, why)
   Rows                  one JSONL file of d_vs_dprime rows per (experiment,
@@ -90,9 +91,10 @@ def sweep_settings(available_spaces=None, env=None):
     out of it ("a caller adds it when it wants today's behaviour as a row",
     similarity_space.py:190). The owner asked for every k in use today to be
     swept (2026-09-25), and neighbours in the model-input matrix are what every
-    method uses today, so under 'all' MODEL_INPUT is put first: 67 settings,
-    not 66. 'model_input' alone returns [], because that setting IS the
-    experiment's unchanged code path, which always runs; sweeping it at the
+    method uses today, so under 'all' MODEL_INPUT is put first: 59 settings,
+    not 58 (67 and 66 before 2026-10-03). 'model_input' alone returns [],
+    because that setting IS the experiment's unchanged code path, which
+    always runs; sweeping it at the
     other ks would be more than today's run. A comma list is taken as written.
     """
     e = os.environ if env is None else env
@@ -179,14 +181,17 @@ def build_spaces(dataset, settings, *, X_model_tr, train_reps, val_reps,
         train_idx: the fold's training row indices, for the hybrid cache key.
         base_names: this model's top-2 single representations, rank order
             (_shared.noise_base_reps_by_model).
-        recipes: {'hybrid': Blueprint, 'hybrid_similarity': Blueprint}, this
-            model's prediction-built and similarity-built recipes.
+        recipes: {'hybrid': Blueprint, 'hybrid__general2': Blueprint,
+            'hybrid_similarity': Blueprint}, this model's predictive general
+            rank-1 and rank-2 recipes and its similarity general rank-1
+            recipe (similarity_space.HYBRID_SPACES). A missing one leaves its
+            space unavailable with the reason recorded.
         y_train: the labels the experiment holds for the training rows (noisy
             where noise was injected). Every build ranks features on these.
         metric: the get_domain_metric triple.
         augmentations_train / _val: {name: matrix} donors sliced to this fold,
-            for the four augmented spaces. None leaves them unavailable.
-        hybrid_augmentations: hand those donors to the two hybrid builds too.
+            for the two augmented spaces. None leaves them unavailable.
+        hybrid_augmentations: hand those donors to the hybrid builds too.
             Set it exactly when the experiment's own model-input hybrid build
             passes them (n21 does, n17-n20 do not), so the similarity space is
             the same build as the model input and the cache serves both.
@@ -205,7 +210,7 @@ def build_spaces(dataset, settings, *, X_model_tr, train_reps, val_reps,
 
     for i in (1, 2):
         sp = f'base_{i}'
-        aug_sps = [ss.aug_space_name(i, st) for st in ss.AUG_STRATEGIES
+        aug_sps = [ss.aug_space_name(i, st) for st in ss.SWEPT_AUG_STRATEGIES
                    if ss.aug_space_name(i, st) in need]
         if sp not in need and not aug_sps:
             continue
@@ -221,7 +226,7 @@ def build_spaces(dataset, settings, *, X_model_tr, train_reps, val_reps,
             tr[sp] = a
             if want_val:
                 va[sp] = b
-        for st in ss.AUG_STRATEGIES:
+        for st in ss.SWEPT_AUG_STRATEGIES:
             asp = ss.aug_space_name(i, st)
             if asp not in need:
                 continue
@@ -254,7 +259,7 @@ def build_spaces(dataset, settings, *, X_model_tr, train_reps, val_reps,
             if want_val:
                 va[asp] = b
 
-    for sp in ('hybrid', 'hybrid_similarity'):
+    for sp in ss.HYBRID_SPACES:
         if sp not in need:
             continue
         bp = (recipes or {}).get(sp)
