@@ -105,6 +105,7 @@ def main(ds_dir):
               'sign flipped when higher is better, so positive = worse.', '',
               'Correlations: Pearson between held-out predictions of two kinds on the '
               f'same {n} molecules, mean over the pairs. Diagonal = same kind, draw 0 vs 1.', '']
+    summ = []
     for li in range(3):
         M = np.full((len(kinds), len(kinds)), np.nan)
         for i, a in enumerate(kinds):
@@ -139,6 +140,15 @@ def main(ds_dir):
             plt.close(fig)
         except Exception as exc:
             print('heatmap skipped:', exc)
+        summ.append(f'== level position {li}: kind | same-kind draw0-vs-1 | '
+                    'three most similar other kinds (corr) ==')
+        for i, a in enumerate(kinds):
+            others = sorted((j for j in range(len(kinds))
+                             if j != i and not np.isnan(M[i, j])),
+                            key=lambda j: -M[i, j])[:3]
+            summ.append(f'{a:<22} {M[i, i]:.3f} | ' + ', '.join(
+                f'{kinds[j]} {M[i, j]:.3f}' for j in others))
+        summ.append('')
         report += [f'## Level position {li}', '',
                    'Same kind, draw 0 vs 1 (yardstick): ' + ', '.join(
                        f'{k} {M[i, i]:.3f}' for i, k in enumerate(kinds)
@@ -146,6 +156,9 @@ def main(ds_dir):
     open(os.path.join(ds_dir, 'report.md'), 'w').write(
         '\n'.join(report) + '\n\n## Drop table\n\n```\n'
         + open(os.path.join(ds_dir, 'drop_table.csv')).read() + '```\n')
+    open(os.path.join(ds_dir, 'summary.txt'), 'w').write(
+        '\n'.join(summ) + '\n== drop table (mean over folds and draws) ==\n'
+        + open(os.path.join(ds_dir, 'drop_table.csv')).read())
     print('wrote', ds_dir)
 
 
