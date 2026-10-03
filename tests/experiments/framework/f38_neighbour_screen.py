@@ -229,6 +229,41 @@ def detection_auroc(y, mask, idx, is_clf):
             float(roc_auc_score(mask, med_gap)))
 
 
+def recovery(y_noisy, y_clean, mask, idx, is_clf):
+    """How close the neighbours' label is to the CLEAN label on the corrupted
+    molecules -- what label_smooth, knn_smooth and n02's weights rely on.
+
+    regression      (RMSE of the neighbours' mean against the clean label,
+                     RMSE of the noisy label against the clean label), both in
+                     the label's own units, over the corrupted molecules. The
+                     second is the same for every setting: it is what the
+                     molecule carries before any cleaning.
+    classification  (share of corrupted molecules whose neighbours' majority
+                     label is the clean label, None)
+    """
+    m = np.asarray(mask, dtype=bool)
+    nb = y_noisy[idx[m]]
+    yc = y_clean[m]
+    if is_clf:
+        maj = np.array([np.bincount(r.astype(int)).argmax() for r in nb])
+        return float((maj == yc).mean()), None
+    return (float(np.sqrt(np.mean((nb.mean(axis=1) - yc) ** 2))),
+            float(np.sqrt(np.mean((y_noisy[m] - yc) ** 2))))
+
+
+def scores_at(y_noisy, y_clean, mask, idx, k, is_clf):
+    """Every score of one setting at one k, as row fields."""
+    a_mean, a_med = detection_auroc(y_noisy, mask, idx, is_clf)
+    rec, before = recovery(y_noisy, y_clean, mask, idx, is_clf)
+    return {f'auroc_mean_k{k}': a_mean, f'auroc_median_k{k}': a_med,
+            f'recovery_k{k}': rec, 'recovery_before_cleaning': before}
+
+
+def empty_at(k):
+    return {f'auroc_mean_k{k}': None, f'auroc_median_k{k}': None,
+            f'recovery_k{k}': None}
+
+
 def shared_share(a, b, k):
     """Mean over rows of |a's first k ∩ b's first k| / k."""
     A, B = a[:, :k], b[:, :k]
@@ -338,6 +373,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
         labels, spec, train_idx=train_idx, is_clf=is_clf,
         groups=noise_groups_for(data)[0], dataset_name=dataset)
     y0 = np.asarray(y0)
+    y_clean = labels[train_idx]
     mask = np.asarray(mask, dtype=bool)
     n_corrupt = int(mask.sum())
     base.update(level=float(level), n_train=int(len(y0)),
@@ -380,12 +416,8 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                    power=desc['power'], model_input=mi, grouped=grouped,
                    **(extra or {}))
         for k in KS:
-            if idx.shape[1] < k:
-                row[f'auroc_mean_k{k}'] = row[f'auroc_median_k{k}'] = None
-                continue
-            a_mean, a_med = detection_auroc(y0, mask, idx[:, :k], is_clf)
-            row[f'auroc_mean_k{k}'] = a_mean
-            row[f'auroc_median_k{k}'] = a_med
+            row.update(empty_at(k) if idx.shape[1] < k else
+                       scores_at(y0, y_clean, mask, idx[:, :k], k, is_clf))
         _append(out, row)
 
     # 1. The noise suite's own feature-space settings, and tanimoto_ecfp4.
@@ -460,14 +492,11 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                                    weighting='none', distance=s.metric,
                                    power=None, model_input=mi, grouped=grouped)
                         for k in KS:
-                            if k not in n07.usable_ks(got, KS):
-                                row[f'auroc_mean_k{k}'] = None
-                                row[f'auroc_median_k{k}'] = None
-                                continue
-                            i_k = ss.neighbours_at(got, k)[0]
-                            a, b = detection_auroc(y0, mask, i_k, is_clf)
-                            row[f'auroc_mean_k{k}'] = a
-                            row[f'auroc_median_k{k}'] = b
+                            row.update(
+                                empty_at(k) if k not in n07.usable_ks(got, KS)
+                                else scores_at(y0, y_clean, mask,
+                                               ss.neighbours_at(got, k)[0], k,
+                                               is_clf))
                         _append(out, row)
                         idx20 = ss.neighbours_at(got, max(n07.usable_ks(got, KS)))[0]
                     if grouped == 'plain':
