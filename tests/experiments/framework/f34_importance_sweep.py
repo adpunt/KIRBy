@@ -262,6 +262,7 @@ def run_coefficient(dataset, space, fold_i, cname, kind, A, B, y_tr, y_va,
         if blocks is None:
             rec['skipped'] = 'undefined on this block'
         else:
+            d_tr, d_va = blocks
             # Weighted fingerprints are no longer whole numbers, so two
             # identical fingerprints can come out a rounding error below 0
             # (tanimoto, dice: shared bits a hair above a row's own total).
