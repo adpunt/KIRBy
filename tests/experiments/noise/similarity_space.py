@@ -14,16 +14,26 @@ A similarity setting is three choices:
                tanimoto_ecfp4     2048-bit Morgan radius-2 bits from SMILES,
                                   distance 1 - Tanimoto (n01:92-122)
                base_1, base_2     each model's top 2 single representations
-               base_1_aug_capped,     each of those plus augmented
-               base_1_aug_uncapped,   features, built per fold the way c21
-               base_2_aug_capped,     builds 'B_aug', under both of c21's
-               base_2_aug_uncapped    admission methods (c21:200-207):
-                                      capped extras displace base features
-                                      inside the budget, uncapped extras are
-                                      appended outside it. Both, owner
-                                      decision 2026-09-25 (base_aug_blueprint)
-               hybrid             the prediction-built hybrid
-               hybrid_similarity  the similarity-built hybrid
+               base_1_aug_uncapped,   each of those plus augmented
+               base_2_aug_uncapped    features, built per fold the way c21
+                                      builds 'B_aug' under its uncapped
+                                      admission method (c21:200-207):
+                                      the extras are appended outside the
+                                      budget. The capped spaces (extras
+                                      displace base features inside the
+                                      budget) were swept from 2026-09-25 to
+                                      2026-10-03 and dropped by the owner on
+                                      2026-10-03.
+               hybrid             the model's top prediction-built hybrid
+                                  (predictive family, general rank 1)
+               hybrid__general2   the model's second prediction-built hybrid
+                                  (predictive family, general rank 2,
+                                  _shared.get_rule_hybrids slot 'general2';
+                                  pool_recipes_by_family names its space
+                                  '<hybrid space>__general2'). Added
+                                  2026-10-03 (owner decision)
+               hybrid_similarity  the model's top similarity-built hybrid
+                                  (similarity family, general rank 1)
                forest_proximity   1 - share of trees in which two molecules
                                   share a leaf (noise_estimation.py:2119-2162)
   weighting  none, lightgbm_gain, treeshap, deeplift. The importance is learned
@@ -35,10 +45,12 @@ A similarity setting is three choices:
   metric     manhattan or euclidean for the feature spaces; 'tanimoto' for
              tanimoto_ecfp4; 'forest' for forest_proximity.
 
-8 feature spaces x 4 weightings x 2 distances = 64, plus Tanimoto and forest
-proximity = 66 (enumerate_settings). Until 2026-09-25 there was one augmented
-space per base representation (base_k_aug, uncapped only) and the count was
-6 x 4 x 2 + 2 = 50; the owner asked for both admission methods on 2026-09-25.
+7 feature spaces x 4 weightings x 2 distances = 56, plus Tanimoto and forest
+proximity = 58 (enumerate_settings). History: until 2026-09-25 there was one
+augmented space per base representation (base_k_aug, uncapped only) and the
+count was 6 x 4 x 2 + 2 = 50; from 2026-09-25 both admission methods were
+swept, 8 x 4 x 2 + 2 = 66. On 2026-10-03 the owner dropped the two capped
+spaces and added hybrid__general2: 7 x 4 x 2 + 2 = 58.
 
 k is swept over SWEPT_KS = 5, 9, 10, 20: every count in use today (9 for
 label_smooth / knn_smooth, 10 for prox_smooth and the four neighbour
@@ -98,12 +110,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # The axis
 # ---------------------------------------------------------------------------
 
-# The augmented spaces, one per base representation and c21 admission method.
-# Replaced 'base_1_aug' / 'base_2_aug' (uncapped only) on 2026-09-25.
+# c21's two admission methods. base_aug_blueprint accepts either, because c21
+# ships both; only SWEPT_AUG_STRATEGIES become similarity spaces.
 AUG_STRATEGIES = ('capped', 'uncapped')
-AUG_SPACES = tuple(f'base_{i}_aug_{st}' for i in (1, 2) for st in AUG_STRATEGIES)
-FEATURE_SPACES = ('base_1', 'base_2') + AUG_SPACES + (
-    'hybrid', 'hybrid_similarity')
+# Owner decision 2026-10-03: the augmented similarity spaces are the UNCAPPED
+# ones only. From 2026-09-25 to 2026-10-03 both were swept (four spaces);
+# before 2026-09-25 there was one per base, 'base_k_aug', also uncapped.
+SWEPT_AUG_STRATEGIES = ('uncapped',)
+AUG_SPACES = tuple(f'base_{i}_aug_{st}' for i in (1, 2)
+                   for st in SWEPT_AUG_STRATEGIES)
+# The hybrid spaces, per model: predictive general rank 1, predictive general
+# rank 2 (added 2026-10-03, owner decision), similarity general rank 1. The
+# middle name is the one pool_recipes_by_family gives the predictive family's
+# 'general2' slot when the predictive space is called 'hybrid'.
+HYBRID_SPACES = ('hybrid', 'hybrid__general2', 'hybrid_similarity')
+FEATURE_SPACES = ('base_1', 'base_2') + AUG_SPACES + HYBRID_SPACES
 TANIMOTO_SPACE = 'tanimoto_ecfp4'
 FOREST_SPACE = 'forest_proximity'
 MODEL_INPUT_SPACE = 'model_input'
@@ -184,11 +205,12 @@ def enumerate_settings(available_spaces: Optional[Iterable[str]] = None,
                        k_max: int = DEFAULT_K_MAX):
     """Every similarity setting of plan section 1 whose space is available.
 
-    `available_spaces` None means all ten. With all ten this is 66:
-    8 feature spaces x 4 weightings x 2 distances, plus tanimoto_ecfp4 and
-    forest_proximity (50 before 2026-09-25, when the augmented space split
-    into capped and uncapped). MODEL_INPUT is not in the list; a caller adds it when it
-    wants today's behaviour as a row.
+    `available_spaces` None means all nine. With all nine this is 58:
+    7 feature spaces x 4 weightings x 2 distances, plus tanimoto_ecfp4 and
+    forest_proximity (50 before 2026-09-25; 66 from 2026-09-25 to 2026-10-03,
+    when both capped and uncapped augmented spaces were swept and there was no
+    hybrid__general2). MODEL_INPUT is not in the list; a caller adds it when
+    it wants today's behaviour as a row.
 
     A space missing from `available_spaces` is dropped, not faked. Which spaces
     are available is the caller's fact to state -- for example
@@ -265,12 +287,13 @@ def settings_from_env(available_spaces: Optional[Iterable[str]] = None,
 
 
 # ---------------------------------------------------------------------------
-# Augmented single-representation spaces (base_k_aug_capped / _uncapped)
+# Augmented single-representation spaces (base_k_aug_uncapped)
 # ---------------------------------------------------------------------------
 
 def aug_space_name(base_index, strategy):
-    """'base_1_aug_capped' etc. base_index is 1 or 2; strategy in
-    AUG_STRATEGIES."""
+    """'base_1_aug_uncapped' etc. base_index is 1 or 2; strategy in
+    AUG_STRATEGIES. A 'capped' name is still formed (c21 ships that method),
+    but it is not in AUG_SPACES since 2026-10-03, so no setting accepts it."""
     if int(base_index) not in (1, 2) or strategy not in AUG_STRATEGIES:
         raise ValueError(f"no augmented space for base {base_index!r}, "
                          f"strategy {strategy!r}")
@@ -299,7 +322,7 @@ def base_aug_blueprint(base_name, base_width, *, metric_name, task_type,
                      minus the base itself (c21:429)
         model, metric_fn, lower_is_better   as c21 passes them (c21:925-929)
     then standardise the result and hand it in spaces_train/spaces_val under
-    aug_space_name(k, strategy), e.g. 'base_1_aug_capped'.
+    aug_space_name(k, strategy), e.g. 'base_1_aug_uncapped'.
 
     Differences from c21, stated: no decoy donors are planted (c21:909-913 --
     they exist to count what an admission rule wrongly takes, and a similarity
@@ -307,9 +330,10 @@ def base_aug_blueprint(base_name, base_width, *, metric_name, task_type,
     precomputed_alloc_scores={base: 1.0} (c21:950), which c21 measured to give
     identical matrices at about half the time.
 
-    `strategy`: c21 ships 'capped' and 'uncapped' (c21:200-207). Both are
-    similarity spaces since 2026-09-25 (owner decision), so the caller builds
-    one per strategy. Every other field is the same for the two, as in c21,
+    `strategy`: c21 ships 'capped' and 'uncapped' (c21:200-207). Both were
+    similarity spaces from 2026-09-25 to 2026-10-03; since 2026-10-03 only
+    SWEPT_AUG_STRATEGIES ('uncapped') is (owner decision). Every other field
+    is the same for the two, as in c21,
     where one Blueprint call takes the strategy as its only varying argument
     (c21 at HEAD, lines 622-639). 'uncapped' stays the default argument
     because that is how c21's docstring defines B_aug (c21:10).

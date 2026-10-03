@@ -894,6 +894,17 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                .get(model_name) or {}).get('selected') or []
         return [e.get('rep') for e in sel if e.get('rep') in reps][:2]
 
+    def _sim_recipes_fold(model_name, fold_i, bp_f):
+        """The fold's hybrid recipes for the similarity spaces: 'hybrid' as
+        before, and 'hybrid__general2' (owner decision 2026-10-03) from this
+        fold's general rank-2 recipe (rule_bp, filled above) when the search
+        held one; otherwise fold_similarity_spaces reports it unavailable."""
+        rec = {'hybrid': (bp_f, 'none')} if bp_f is not None else {}
+        bp_g2 = (rule_bp.get(model_name) or {}).get('general2', {}).get(fold_i)
+        if bp_g2 is not None:
+            rec['hybrid__general2'] = (bp_g2, 'none')
+        return rec
+
     def _sim_strata(model_name, label, fold_i, train_idx, val_idx, X_tr_s,
                     X_va_s, y_val, y_pred):
         """Cliff against non-cliff under every (setting, k), for one fold's
@@ -906,7 +917,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             groups_train=(np.asarray(groups)[train_idx]
                           if groups is not None else None),
             base_reps=_fold_top2(model_name, fold_i),
-            recipes=({'hybrid': (bp_f, 'none')} if bp_f is not None else {}),
+            recipes=_sim_recipes_fold(model_name, fold_i, bp_f),
             augmentations=None, model_name=model_name,
             model_factory=model_factories.get(model_name),
             metric=(metric_name, metric_fn, lower_is_better),

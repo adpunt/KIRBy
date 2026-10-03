@@ -360,9 +360,8 @@ def _cliff_geometry_by_similarity(data, dataset_name, labels, output_dir,
     for i, rn in enumerate(base[:2], start=1):
         spaces[f'base_{i}'] = StandardScaler().fit_transform(
             np.asarray(reps[rn], dtype=float))
-    for sp in ('hybrid', 'hybrid_similarity', 'base_1_aug_capped',
-               'base_1_aug_uncapped', 'base_2_aug_capped',
-               'base_2_aug_uncapped'):
+    from experiments.noise import similarity_space as _ss
+    for sp in _ss.HYBRID_SPACES + _ss.AUG_SPACES:
         if sp in need:
             unavailable[sp] = ('a recipe build chooses features from training '
                                'labels and n14 has no fold; see the TODO in '

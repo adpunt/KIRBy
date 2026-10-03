@@ -593,7 +593,8 @@ def model_similarity_spaces(dataset_name, data, *, model_name, factory,
                          experiment here casts)
       base_k_aug_<st>    each base plus augmented features, built the way c21
                          builds B_aug (similarity_space.base_aug_blueprint),
-                         for st in capped and uncapped, through
+                         for st in SWEPT_AUG_STRATEGIES (uncapped only since
+                         2026-10-03; capped too before), through
                          noise_cache.cached_hybrid_for_fold with the model in
                          the accept test, as c21 passes it (c21:925-929). The
                          augmentation pool is data['augmentations'] minus the
@@ -601,10 +602,12 @@ def model_similarity_spaces(dataset_name, data, *, model_name, factory,
                          the ones the experiment holds, noisy under injection
                          (owner decision: importance and selection from the
                          noisy labels).
-      hybrid, hybrid_similarity
+      hybrid, hybrid__general2, hybrid_similarity
                          the experiment's own per-model build for this fold,
                          handed in as `hybrid_train` {space: matrix}; never
-                         rebuilt here.
+                         rebuilt here. hybrid__general2 (predictive general
+                         rank 2, added 2026-10-03) is there when the
+                         experiment's model inputs include it.
 
     A space that cannot be built is left out and its reason returned, never
     faked (similarity_space.neighbour_lists then reports it unavailable).
@@ -622,14 +625,14 @@ def model_similarity_spaces(dataset_name, data, *, model_name, factory,
         if rn is None or rn not in reps:
             why[f'base_{i}'] = (f'{model_name} has no rank-{i} single '
                                 f'representation')
-            for st in ss.AUG_STRATEGIES:
+            for st in ss.SWEPT_AUG_STRATEGIES:
                 why[ss.aug_space_name(i, st)] = why[f'base_{i}']
             continue
         X_tr_b, _ = nc.cached_scaled(dataset_name, reps[rn], train_idx,
                                      val_idx, dtype=np.float64)
         spaces[f'base_{i}'] = X_tr_b
         aug_names = [a for a in augs if a != rn]
-        for st in ss.AUG_STRATEGIES:
+        for st in ss.SWEPT_AUG_STRATEGIES:
             an = ss.aug_space_name(i, st)
             if not aug_names:
                 why[an] = (f'{dataset_name} loads no augmentation '
@@ -658,7 +661,7 @@ def model_similarity_spaces(dataset_name, data, *, model_name, factory,
                 why[an] = 'the augmented build returned nothing on this fold'
                 continue
             spaces[an] = _SS().fit_transform(np.asarray(got[0]))
-    for sp in ('hybrid', 'hybrid_similarity'):
+    for sp in ss.HYBRID_SPACES:
         X = (hybrid_train or {}).get(sp)
         if X is None:
             why[sp] = f'no {sp} matrix was built for {model_name} on this fold'

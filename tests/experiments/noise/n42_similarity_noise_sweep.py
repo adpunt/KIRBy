@@ -1101,8 +1101,11 @@ def _run_one_condition(data, config, output_dir, dataset_name, **kwargs):
     mi_settings = [ss.SimilaritySetting(sp, 'none', 'manhattan')
                    for sp in MODEL_INPUTS]
     # Per model, every hybrid of the owner's set it is fitted on (2026-10-02).
-    # The ones past MODEL_INPUTS have no SimilaritySetting name, so
-    # n07.fold_similarity_spaces builds them through extra_spaces.
+    # The ones past MODEL_INPUTS are built through extra_spaces. Since
+    # 2026-10-03 'hybrid__general2' is also a similarity space
+    # (similarity_space.HYBRID_SPACES), so a full sweep builds it anyway;
+    # 'hybrid__distance1' has no SimilaritySetting name and comes in only
+    # through extra_spaces.
     mi_by_model = {m: model_inputs_for(recipes.get(m, {})) for m in models}
     extra_mi_by_model = {m: [mi for mi in mi_by_model[m]
                              if mi not in MODEL_INPUTS] for m in models}
