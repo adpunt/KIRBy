@@ -2,8 +2,8 @@
 """Does the neighbour count list 10, 20, 40 lose anything, and does the best count
 depend on the representation kind or the coefficient?
 
-Reads f34_full_sweep (k 5 to 40) and, if present, f34_large_k (k 40 to 200 on the
-12 pairs that won at k=40). Only the shortlisted grid is looked at:
+Reads f34_full_sweep (k 5 to 40). k above 40 is in f34_importance_sweep and its
+analysis. Only the shortlisted grid is looked at:
 
   weighting          rank, inverse_square
   coefficients       binary: tanimoto, dice, euclidean
@@ -67,9 +67,6 @@ def best(cells, lower, keep=lambda s: True):
 
 
 full, meta = read('f34_full_sweep')
-large, meta_l = read('f34_large_k')
-meta.update(meta_l)
-lower_of = {key: meta[key][2] for key in meta}
 
 
 def name(s):
@@ -125,20 +122,3 @@ for key in full:
 for ds, cnt in sorted(by_ds.items()):
     print(f'  {ds:10s} ' + ', '.join(f'k{k}: {n}' for k, n in sorted(cnt.items())))
 
-print('\n3. k above 40 (f34_large_k), the 12 pairs that won at k=40.')
-if not large:
-    print('  no complete pair yet')
-for key in sorted(large):
-    kind, metric, lower = meta[key]
-    s40, v40 = best(large[key], lower, lambda s: s[2] == 40)
-    s_up, v_up = best(large[key], lower, lambda s: s[2] > 40)
-    print(f'  {key[0]:10s} {key[1]:24s} {metric}: best at k=40 {v40:.4f} '
-          f'({name(s40)})   best above 40 {v_up:.4f} ({name(s_up)})   '
-          f'change {v_up - v40:+.4f}')
-    for c in COEFFS[kind]:
-        row = []
-        for k in sorted({s[2] for s in large[key]}):
-            _, v = best(large[key], lower, lambda s, c=c, k=k: s[1] == c
-                        and s[2] == k)
-            row.append(f'k{k} {v:.4f}' if v is not None else f'k{k} -')
-        print(f'      {c:16s} ' + '  '.join(row))
