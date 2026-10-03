@@ -1,5 +1,8 @@
 # f38 steps
 
+**Claude's working plan, NOT signed off.** What the owner has signed off is in
+`F38_DECISIONS.md`; where the two differ, that file wins.
+
 The handoff is `F38_HANDOFF.md`. This file records what is being done and how. Tick a step only
 when it has been done and checked.
 
@@ -32,7 +35,8 @@ when it has been done and checked.
 
 ## Part 1. What the framework experiments decided
 
-**Input:** f00–f38 in `tests/experiments/framework/`, 39 experiments.
+**Input:** f34 onward only (owner, 2026-10-03): f34 (all its files), f35, f36 and f37. f00–f33 are
+not relevant to the noise suite's choices.
 
 **Output:** `tests/experiments/framework/F38_FRAMEWORK_INVENTORY.md`. One section per experiment:
 
@@ -50,10 +54,10 @@ when it has been done and checked.
 - [ ] 1b. Claude opens each cited line and checks it before it goes in the file.
 - [ ] 1c. The owner marks which results are real. f34_importance_sweep and f37 are still running.
 
-## Part 2. What the noise experiments do
+## Part 2. What the noise and similarity experiments do
 
-**Input:** n01–n42 in `tests/experiments/noise/`, 36 files. Also s05, s06, s10 and s13, which
-build importance-weighted distances with a different power (handoff fact 2).
+**Input:** every noise experiment, n01–n42 in `tests/experiments/noise/` (39 files), and every
+similarity experiment, s01–s13 in `tests/experiments/similarity/` (12 files), each read in full.
 
 **Output:** `tests/experiments/framework/F38_NOISE_INVENTORY.md`. One section per experiment.
 For each choice below: the value it uses, and the file:line where it is set.
@@ -96,12 +100,8 @@ The axes, and what the noise suite sweeps today:
 | k | 5, 9, 10, 20 |
 | fixed settings | tanimoto_ecfp4, forest_proximity, model_input |
 
-**4.1 What existing results already settle per axis.** This comes from part 1:
-- f34_full_sweep and f18: distance
-- f34_importance_sweep, f30 and f17: weighting, power, scaling
-- f22 and f23: feature space and cleaning
-
-Everything not settled goes to 4.2.
+**4.1 What existing results already settle per axis.** This comes from part 1, which covers f34
+(every file), f35, f36 and f37 only. Everything they don't settle goes to 4.2.
 
 **4.2 The screen, with no refits.** Script: `tests/experiments/framework/f38_neighbour_screen.py`.
 - What one task is: one (dataset, noise condition, fold, draw, model). The model matters because

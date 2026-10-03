@@ -52,3 +52,17 @@ def test_overlap_pairs_differ_in_one_axis():
     pairs = set(f38.overlap_pairs(d))
     assert (0, 1) in pairs and (1, 2) in pairs and (0, 2) not in pairs
     assert {(0, 3), (1, 3), (2, 3)} <= pairs
+
+
+def test_recovery_regression_and_classification():
+    # Corrupted molecule 3 (clean 0, noisy 5); its neighbours carry 0, 0.
+    y_noisy = np.array([0.0, 0.0, 0.0, 5.0])
+    y_clean = np.zeros(4)
+    mask = np.array([False, False, False, True])
+    idx = np.array([[1, 2], [0, 2], [0, 1], [0, 1]])
+    rec, before = f38.recovery(y_noisy, y_clean, mask, idx, is_clf=False)
+    assert rec == 0.0 and before == 5.0
+    yc = np.array([0, 0, 0, 0])
+    yn = np.array([0, 0, 0, 1])
+    share, none = f38.recovery(yn, yc, mask, idx, is_clf=True)
+    assert share == 1.0 and none is None
