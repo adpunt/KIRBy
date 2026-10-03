@@ -66,3 +66,18 @@ def test_recovery_regression_and_classification():
     yn = np.array([0, 0, 0, 1])
     share, none = f38.recovery(yn, yc, mask, idx, is_clf=True)
     assert share == 1.0 and none is None
+
+
+def test_scores_at_every_scheme():
+    # Molecule 3 is corrupted (+5). Neighbour distances differ, so the schemes
+    # weigh them differently but all neighbours carry the clean label 0.
+    y = np.array([0.0, 0.0, 0.0, 5.0])
+    mask = np.array([False, False, False, True])
+    idx = np.array([[1, 2], [0, 2], [0, 1], [0, 1]])
+    dist = np.array([[1.0, 2.0], [1.0, 3.0], [2.0, 3.0], [0.5, 4.0]])
+    row = f38.scores_at(y, np.zeros(4), mask, idx, dist, 2, is_clf=False)
+    for sc in f38.SCHEMES:
+        assert row[f'auroc_{sc}_k2'] == 1.0
+        assert row[f'recovery_{sc}_k2'] == 0.0
+    assert row['recovery_before_cleaning'] == 5.0 and row['auroc_median_k2'] == 1.0
+    assert set(f38.empty_at(2)) == {k for k in row if k.endswith('_k2')}

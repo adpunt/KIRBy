@@ -193,3 +193,28 @@ the refits it saves. The owner sets the cutoffs and decides.
 6. 4.2 full run and 4.3.
 7. 4.4 once f34_importance_sweep is finished.
 8. 4.6, then 4.7.
+
+## How to run the screen (srun only)
+
+Get a shell:
+`srun --clusters=htc --account=stat-cadd -p interactive --cpus-per-task=16 --mem=96G --time=03:00:00 --pty /bin/bash`
+
+Then type, one line at a time:
+```
+cd /data/stat-ecr/scat9264/KIRBy
+git pull
+export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
+python tests/experiments/framework/f38_neighbour_screen.py --list-tasks f38_tasks.txt
+head -1 f38_tasks.txt > f38_first.txt
+python tests/experiments/framework/f38_neighbour_screen.py --run-tasks f38_first.txt --jobs 1
+python tests/experiments/framework/f38_neighbour_screen.py --run-tasks f38_tasks.txt --jobs 8
+```
+
+- The fifth line runs the single cheapest task, to check that it works and to time it. It prints
+  `ok` or `FAIL`, the seconds taken, and where the log is.
+- The last line runs every task, 8 at a time.
+- Stopping and rerunning the same line skips every task already finished.
+- Results go to `tests/results/framework/f38_neighbour_screen/<dataset>/`, and logs to `logs/`
+  under that directory.
+- The default datasets are f34's four: herg, herg_ki, caco2 and adme_mdr1. `--datasets all`
+  gives every noise dataset.

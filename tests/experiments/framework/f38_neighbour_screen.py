@@ -98,8 +98,10 @@ from experiments.noise.noise_helpers import (  # noqa: E402
     noise_spec_for, inject_train_labels, conditions_for_task,
     pool_recipe_per_downstream_model, load_noise_data, DETECTION_IS_DEFINED)
 from experiments.noise import similarity_space as ss  # noqa: E402
+import f18_distance_metric_sweep as f18  # noqa: E402
 from experiments.noise import n07_remediation as n07  # noqa: E402
 from experiments.noise import n42_similarity_noise_sweep as n42  # noqa: E402
+from kirby.similarity import neighbour_weighting  # noqa: E402
 from kirby.similarity.preprocessing import (  # noqa: E402
     fold_weights, weight_exponent, importance_exponent_override)
 
@@ -182,7 +184,7 @@ def feature_space_settings(spaces):
 # ---------------------------------------------------------------------------
 
 def own_lists(Z_tr, distance, w, power, exclude_groups):
-    """(idx, n_rows_with_undefined_distance): each training row's K_MAX nearest
+    """(idx, dist, n_rows_with_undefined_distance): each training row's K_MAX nearest
     other training rows under one f38 setting, nearest first.
 
     The matrices are already z-scored (n07.fold_similarity_spaces), which
@@ -207,61 +209,90 @@ def own_lists(Z_tr, distance, w, power, exclude_groups):
             bad.update((np.where(nan.any(1))[0] + a).tolist())
             D[nan] = np.inf
         return D
-    idx, _ = ss._lists_from_distance(_d, n, n, k_eff, self_rows=True,
-                                     exclude_groups=exclude_groups)
-    return idx, len(bad)
+    idx, dist = ss._lists_from_distance(_d, n, n, k_eff, self_rows=True,
+                                        exclude_groups=exclude_groups)
+    return idx, dist, len(bad)
 
 
 # ---------------------------------------------------------------------------
 # Scores
 # ---------------------------------------------------------------------------
 
-def detection_auroc(y, mask, idx, is_clf):
-    """(AUROC on the mean gap, AUROC on the median gap). The second is None on
-    classification, where the gap is the share of neighbours that disagree."""
-    nb = y[idx]
+# How much each neighbour counts in the neighbours' label. f34's five schemes
+# (neighbour_weighting.WEIGHTING_SCHEMES without inverse_sqrt, which f34 dropped
+# with a measured reason: NEIGHBOUR_WEIGHTING_AND_DISTANCE_RESULTS.md).
+SCHEMES = ('uniform', 'inverse', 'inverse_square', 'gaussian', 'rank')
+
+
+def _weighted_value(y_noisy, idx, dist, scheme, is_clf):
+    """Each molecule's neighbours' label under one scheme: the weighted mean on
+    regression; on classification the weighted share of neighbours whose label
+    differs from the molecule's own, and the weighted majority class."""
+    nb = y_noisy[idx]
+    w = neighbour_weighting.weight_array(dist, scheme)
     if is_clf:
-        gap = (nb != y[:, None]).mean(axis=1)
-        return float(roc_auc_score(mask, gap)), None
-    mean_gap = np.abs(y - nb.mean(axis=1))
-    med_gap = np.abs(y - np.median(nb, axis=1))
-    return (float(roc_auc_score(mask, mean_gap)),
+        disagree = (w * (nb != y_noisy[:, None])).sum(1) / w.sum(1)
+        classes = np.unique(y_noisy)
+        votes = np.stack([(w * (nb == c)).sum(1) for c in classes], axis=1)
+        return disagree, classes[votes.argmax(1)]
+    return (w * nb).sum(1) / w.sum(1), None
+
+
+def detection_auroc(y, mask, idx, is_clf, dist=None, scheme='uniform'):
+    """(AUROC of the mask against the gap under `scheme`, AUROC against the gap
+    to the unweighted median). The median is what f23's simeval uses; it is
+    None on classification, where the gap is the (weighted) share of
+    neighbours that disagree."""
+    d = np.ones(idx.shape) if dist is None else dist
+    v, _ = _weighted_value(y, idx, d, scheme, is_clf)
+    if is_clf:
+        return float(roc_auc_score(mask, v)), None
+    med_gap = np.abs(y - np.median(y[idx], axis=1))
+    return (float(roc_auc_score(mask, np.abs(y - v))),
             float(roc_auc_score(mask, med_gap)))
 
 
-def recovery(y_noisy, y_clean, mask, idx, is_clf):
+def recovery(y_noisy, y_clean, mask, idx, is_clf, dist=None, scheme='uniform'):
     """How close the neighbours' label is to the CLEAN label on the corrupted
     molecules -- what label_smooth, knn_smooth and n02's weights rely on.
 
-    regression      (RMSE of the neighbours' mean against the clean label,
-                     RMSE of the noisy label against the clean label), both in
-                     the label's own units, over the corrupted molecules. The
-                     second is the same for every setting: it is what the
-                     molecule carries before any cleaning.
-    classification  (share of corrupted molecules whose neighbours' majority
-                     label is the clean label, None)
+    regression      (RMSE of the neighbours' weighted mean against the clean
+                     label, RMSE of the noisy label against the clean label),
+                     both in the label's own units, over the corrupted
+                     molecules. The second is the same for every setting: it is
+                     what the molecule carries before any cleaning.
+    classification  (share of corrupted molecules whose neighbours' weighted
+                     majority is the clean label, None)
     """
     m = np.asarray(mask, dtype=bool)
-    nb = y_noisy[idx[m]]
+    d = np.ones(idx.shape) if dist is None else dist
+    v, maj = _weighted_value(y_noisy, idx, d, scheme, is_clf)
     yc = y_clean[m]
     if is_clf:
-        maj = np.array([np.bincount(r.astype(int)).argmax() for r in nb])
-        return float((maj == yc).mean()), None
-    return (float(np.sqrt(np.mean((nb.mean(axis=1) - yc) ** 2))),
+        return float((maj[m] == yc).mean()), None
+    return (float(np.sqrt(np.mean((v[m] - yc) ** 2))),
             float(np.sqrt(np.mean((y_noisy[m] - yc) ** 2))))
 
 
-def scores_at(y_noisy, y_clean, mask, idx, k, is_clf):
-    """Every score of one setting at one k, as row fields."""
-    a_mean, a_med = detection_auroc(y_noisy, mask, idx, is_clf)
-    rec, before = recovery(y_noisy, y_clean, mask, idx, is_clf)
-    return {f'auroc_mean_k{k}': a_mean, f'auroc_median_k{k}': a_med,
-            f'recovery_k{k}': rec, 'recovery_before_cleaning': before}
+def scores_at(y_noisy, y_clean, mask, idx, dist, k, is_clf):
+    """Every score of one setting at one k, as row fields: detection AUROC and
+    recovery under each of SCHEMES, plus the unweighted-median AUROC."""
+    out = {}
+    for sc in SCHEMES:
+        a, med = detection_auroc(y_noisy, mask, idx, is_clf, dist, sc)
+        rec, before = recovery(y_noisy, y_clean, mask, idx, is_clf, dist, sc)
+        out[f'auroc_{sc}_k{k}'] = a
+        out[f'recovery_{sc}_k{k}'] = rec
+        out['recovery_before_cleaning'] = before
+    out[f'auroc_median_k{k}'] = med
+    return out
 
 
 def empty_at(k):
-    return {f'auroc_mean_k{k}': None, f'auroc_median_k{k}': None,
-            f'recovery_k{k}': None}
+    out = {f'auroc_median_k{k}': None}
+    for sc in SCHEMES:
+        out[f'auroc_{sc}_k{k}'] = out[f'recovery_{sc}_k{k}'] = None
+    return out
 
 
 def shared_share(a, b, k):
@@ -326,6 +357,9 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
     out_ov = task_path(out_dir, dataset, condition, fold_i, draw, model, True)
     out.parent.mkdir(parents=True, exist_ok=True)
     done = done_keys(out)
+    if ('_done', None, None) in done or ('_skipped', None, None) in done:
+        print(f'  already done: {out}')
+        return 0
 
     data, _rep_names = load_noise_data(dataset)
     task_type = data['task_type']
@@ -408,7 +442,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                                       else (('grouped', g_tr),))
     plain_lists = []          # (desc, idx) for the overlap step
 
-    def score_and_write(desc, mi, grouped, idx, extra=None):
+    def score_and_write(desc, mi, grouped, idx, dist, extra=None):
         if (desc['name'], mi, grouped) in done:
             return
         row = dict(base, setting=desc['name'], space=desc['space'],
@@ -417,7 +451,8 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                    **(extra or {}))
         for k in KS:
             row.update(empty_at(k) if idx.shape[1] < k else
-                       scores_at(y0, y_clean, mask, idx[:, :k], k, is_clf))
+                       scores_at(y0, y_clean, mask, idx[:, :k], dist[:, :k],
+                                 k, is_clf))
         _append(out, row)
 
     # 1. The noise suite's own feature-space settings, and tanimoto_ecfp4.
@@ -439,7 +474,8 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
             if got.get('weights') is not None:
                 weights_by[(s.space, s.weighting)] = np.asarray(got['weights'])
             idx = np.asarray(got['idx_train'])
-            score_and_write(desc, None, grouped, idx)
+            score_and_write(desc, None, grouped, idx,
+                            np.asarray(got['dist_train']))
             if grouped == 'plain':
                 plain_lists.append((desc, idx))
 
@@ -460,8 +496,9 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
             need = (desc['name'], None, grouped) not in done
             if not need and grouped != 'plain':
                 continue
-            idx, n_bad = own_lists(Z, desc['distance'], w, desc['power'], eg)
-            score_and_write(desc, None, grouped, idx,
+            idx, dist, n_bad = own_lists(Z, desc['distance'], w,
+                                         desc['power'], eg)
+            score_and_write(desc, None, grouped, idx, dist,
                             {'rows_with_undefined_distance': n_bad})
             if grouped == 'plain':
                 plain_lists.append((desc, idx))
@@ -492,22 +529,65 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                                    weighting='none', distance=s.metric,
                                    power=None, model_input=mi, grouped=grouped)
                         for k in KS:
-                            row.update(
-                                empty_at(k) if k not in n07.usable_ks(got, KS)
-                                else scores_at(y0, y_clean, mask,
-                                               ss.neighbours_at(got, k)[0], k,
-                                               is_clf))
+                            if k not in n07.usable_ks(got, KS):
+                                row.update(empty_at(k))
+                                continue
+                            i_k, d_k = ss.neighbours_at(got, k)
+                            row.update(scores_at(y0, y_clean, mask, i_k, d_k,
+                                                 k, is_clf))
                         _append(out, row)
                         idx20 = ss.neighbours_at(got, max(n07.usable_ks(got, KS)))[0]
                     if grouped == 'plain':
                         plain_lists.append((desc, np.asarray(idx20)))
                 else:
                     idx = np.asarray(got['idx_train'])
-                    score_and_write(desc, mi, grouped, idx)
+                    score_and_write(desc, mi, grouped, idx,
+                                    np.asarray(got['dist_train']))
                     if grouped == 'plain':
                         plain_lists.append((desc, idx))
 
-    # 4. Neighbour-list overlap, plain lists only.
+    # 4. The raw representations behind base_1 and base_2, under every
+    # coefficient f18 defines for what the array holds (binary or count;
+    # f18.classify_representation). The noise suite only ever z-scores them,
+    # which turns a fingerprint bit into a signed number; f34 found dice,
+    # tanimoto and the other set-overlap coefficients win most fingerprint
+    # representations for prediction. Unweighted only. A continuous base
+    # representation is skipped: the z-scored base_k settings above cover it.
+    for i_b, rep_name in enumerate(base_by_model.get(model, [])[:2], start=1):
+        X = reps.get(rep_name)
+        if X is None:
+            continue
+        X_tr = np.asarray(X)[train_idx].astype(np.float64)
+        kind = f18.classify_representation(X_tr)
+        if kind == 'continuous':
+            continue
+        space = f'base_{i_b}_raw'
+        for coef, (fn, _needs_nonneg) in f18.coefficients_for(kind).items():
+            desc = describe(space, 'none', coef, None)
+            todo = [g for g in groupings
+                    if (desc['name'], None, g[0]) not in done or g[0] == 'plain']
+            try:
+                D = fn(X_tr)
+            except Exception as exc:
+                unavailable.setdefault(desc['name'],
+                                       f'{type(exc).__name__}: {exc}')
+                continue
+            if D is None:
+                unavailable.setdefault(desc['name'], 'coefficient undefined')
+                continue
+            D = np.asarray(D, dtype=np.float64)
+            D[np.isnan(D)] = np.inf
+            for grouped, eg in todo:
+                k_eff = ss._k_eff(len(X_tr), K_MAX, eg)
+                idx, dist = ss._lists_from_distance(
+                    lambda a, b: D[a:b].copy(), len(X_tr), len(X_tr), k_eff,
+                    self_rows=True, exclude_groups=eg)
+                score_and_write(desc, None, grouped, idx, dist,
+                                {'representation': rep_name, 'kind': kind})
+                if grouped == 'plain':
+                    plain_lists.append((desc, idx))
+
+    # 5. Neighbour-list overlap, plain lists only.
     descs = [d for d, _ in plain_lists]
     idxs = [i for _, i in plain_lists]
     pairs = overlap_pairs(descs)
@@ -523,6 +603,8 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
         fh.write(json.dumps(dict(base, a='_unavailable', b=None,
                                  unavailable=unavailable)) + '\n')
     os.replace(tmp, out_ov)
+    _append(out, dict(base, setting='_done', model_input=None, grouped=None,
+                      seconds=round(time.time() - t0, 1)))
     print(f'  {len(descs)} settings scored, {len(pairs)} overlap pairs, '
           f'{time.time() - t0:.0f}s -> {out}')
     return 0
@@ -563,24 +645,64 @@ def list_tasks(datasets, models, path):
     print(f'{len(tasks)} tasks written to {path}')
 
 
+# f34's four datasets, so the screen's ranking can be set beside f34's.
+F34_DATASETS = ('herg', 'herg_ki', 'caco2', 'adme_mdr1')
+
+
+def run_tasks(path, jobs, out_dir):
+    """Run every task in `path` (one per line, as --list-tasks writes them),
+    `jobs` at a time, each in its own process with its own log under
+    <out>/logs/. A finished task is skipped by run_task itself, so rerunning
+    this after a stop picks up where it left off."""
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+    lines = [l.split() for l in Path(path).read_text().splitlines() if l.strip()]
+    logs = Path(out_dir) / 'logs'
+    logs.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env.setdefault('KIRBY_LGBM_THREADS', '1')
+    env.setdefault('OMP_NUM_THREADS', '1')
+
+    def one(t):
+        log = logs / ('__'.join(t) + '.log')
+        t0 = time.time()
+        with open(log, 'a') as fh:
+            rc = subprocess.call([sys.executable, __file__, '--out', str(out_dir),
+                                  '--task', *t], stdout=fh,
+                                 stderr=subprocess.STDOUT, env=env)
+        print(f"{'ok  ' if rc == 0 else 'FAIL'} {' '.join(t)}  "
+              f"{time.time() - t0:.0f}s  log {log}", flush=True)
+        return rc
+    with ThreadPoolExecutor(max_workers=jobs) as ex:
+        rcs = list(ex.map(one, lines))
+    n_fail = sum(rc != 0 for rc in rcs)
+    print(f'{len(lines) - n_fail} of {len(lines)} tasks ok, {n_fail} failed')
+    return 1 if n_fail else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--datasets', nargs='+', default=None,
-                    help='default: every noise-suite dataset')
+    ap.add_argument('--datasets', nargs='+', default=list(F34_DATASETS),
+                    help="default: f34's four; 'all' for every noise dataset")
     ap.add_argument('--models', nargs='+', default=list(DOWNSTREAM_MODELS_NOISE))
     ap.add_argument('--out', default=str(OUT_DEFAULT))
     ap.add_argument('--list-tasks', metavar='PATH')
     ap.add_argument('--task', nargs=5,
                     metavar=('DATASET', 'CONDITION', 'FOLD', 'DRAW', 'MODEL'))
+    ap.add_argument('--run-tasks', metavar='PATH',
+                    help='run every task listed in PATH')
+    ap.add_argument('--jobs', type=int, default=4)
     a = ap.parse_args()
     from experiments import dataset_policy  # noqa: F401  (fills the registry)
     if a.list_tasks:
-        return list_tasks(a.datasets or all_noise_datasets(), a.models,
-                          a.list_tasks)
+        ds = all_noise_datasets() if a.datasets == ['all'] else a.datasets
+        return list_tasks(ds, a.models, a.list_tasks)
+    if a.run_tasks:
+        return run_tasks(a.run_tasks, a.jobs, a.out)
     if a.task:
         ds, cond, fi, d, m = a.task
         return run_task(ds, cond, int(fi), int(d), m, a.out)
-    ap.error('give --list-tasks or --task')
+    ap.error('give --list-tasks, --run-tasks or --task')
 
 
 if __name__ == '__main__':
