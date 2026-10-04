@@ -130,3 +130,40 @@ def test_fast_minkowski_matches_scipy():
     Z = np.random.RandomState(2).randn(20, 7)
     assert np.allclose(f38._minkowski_square(Z, 0.5),
                        cdist(Z, Z, 'minkowski', p=0.5), atol=1e-8)
+
+
+def test_minkowski_in_one_pass_matches_one_at_a_time():
+    from kirby.similarity.preprocessing import normalise_weights
+    rng = np.random.RandomState(3)
+    Z = rng.randn(30, 8)
+    w = np.abs(rng.randn(8)) + 0.1
+    v = normalise_weights(w, 'mean1')
+    cols = {'none': np.ones(8)}
+    for pw in f38.powers_for('minkowski_p0.5'):
+        cols[pw] = v ** (pw * 0.5)
+    got = f38.minkowski_squares(Z, 0.5, cols)
+    D0, _ = f38.square_distance(Z, 'minkowski_p0.5', None, None)
+    assert np.allclose(got['none'], D0)
+    for pw in f38.powers_for('minkowski_p0.5'):
+        D, _ = f38.square_distance(Z, 'minkowski_p0.5', w, pw)
+        assert np.allclose(got[pw], D)
+
+
+def test_forest_lists_match_the_noise_suite():
+    from experiments.noise import similarity_space as ss
+    rng = np.random.RandomState(4)
+    X = rng.randn(50, 6)
+    y = rng.randn(50)
+    groups = np.repeat(np.arange(25), 2)
+    for eg in (None, groups):
+        ref = ss.neighbour_lists(ss.SimilaritySetting(ss.FOREST_SPACE, 'none', 'forest'),
+                                 spaces_train={'model_input': X}, spaces_val=None,
+                                 y_train=y, exclude_groups=eg)
+        L, _ = ss._forest_leaves(X, y, False)
+        D = ss._forest_distance(L, L)
+        k_eff = ss._k_eff(50, f38.K_MAX, eg)
+        idx, dist = ss._lists_from_distance(lambda a, b: D[a:b].copy(), 50, 50,
+                                            k_eff, self_rows=True,
+                                            exclude_groups=eg, itemsize=4,
+                                            sorter='numpy')
+        assert np.array_equal(idx, ref['idx_train'])
