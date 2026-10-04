@@ -81,6 +81,11 @@ OUT_DEFAULT = sweep.OUT_DEFAULT.parent / 'f34_importance_sweep'
 POOL_ASK = 'full'      # --local-pool switches to f34's local 'narrow' ask
 
 
+# --variant runs one importance variant of a task, so a slow task's 7
+# variants can run side by side. Each variant has its own partial directory.
+ONLY_VARIANT = None
+
+
 def variant_name(method, power):
     return 'none' if method == 'none' else f'{method}^{power:g}'
 
@@ -180,7 +185,8 @@ def run_task(dataset, space, fold_i, cname, out_dir):
     out = Path(out_dir) / dataset / f'{space}__fold{fold_i}__{cname}.jsonl'
     out.parent.mkdir(parents=True, exist_ok=True)
     done = done_keys(out)
-    if cname != 'all' and len(done) >= len(VARIANTS):
+    if cname != 'all' and (len(done) >= len(VARIANTS) or
+                           (cname, ONLY_VARIANT) in done):
         return
     data, labels, groups, folds = sweep.load(dataset)
     task_type = data['task_type']
@@ -229,7 +235,7 @@ def run_coefficient(dataset, space, fold_i, cname, kind, A, B, y_tr, y_va,
     fn = sweep.FAST.get(cname, fn)
     for method, power in VARIANTS:
         vname = variant_name(method, power)
-        if (cname, vname) in done:
+        if (cname, vname) in done or ONLY_VARIANT not in (None, vname):
             continue
         rec = {'dataset': dataset, 'representation': space, 'fold': fold_i,
                'kind': kind, 'n_features': int(n_features),
@@ -313,17 +319,43 @@ def list_tasks(datasets, path):
     print(f'{len(tasks)} tasks written to {path}')
 
 
+def list_unfinished(out_dir, path):
+    """One line per missing (task, importance variant), slowest first, for
+    the single-coefficient tasks. Run with: xargs -L 1 ... --task < path."""
+    lines = []
+    for f in sorted(Path(out_dir).glob('*/*.jsonl')):
+        ds = f.parent.name
+        rep, fold, cname = f.stem.rsplit('__', 2)
+        if cname == 'all':
+            continue
+        have = {i for c, i in done_keys(f) if c == cname}
+        slow = cname in sweep.FRACTIONAL
+        for m, pw in VARIANTS:
+            v = variant_name(m, pw)
+            if v not in have:
+                lines.append((not slow, f'{ds} {rep} {fold[4:]} {cname} '
+                                        f'--variant {v}'))
+    lines.sort()
+    Path(path).write_text(''.join(t + '\n' for _, t in lines))
+    print(f'{len(lines)} missing (task, variant) runs written to {path}')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--datasets', nargs='+', default=list(sweep.DATASETS))
     ap.add_argument('--out', default=str(OUT_DEFAULT))
     ap.add_argument('--list-tasks', metavar='PATH')
     ap.add_argument('--local-pool', action='store_true')
+    ap.add_argument('--list-unfinished', metavar='PATH')
+    ap.add_argument('--variant', help='run only this importance variant')
     ap.add_argument('--task', nargs=4,
                     metavar=('DATASET', 'REP', 'FOLD', 'COEFFICIENT'))
     a = ap.parse_args()
     from experiments import dataset_policy  # noqa: F401  (fills the registry)
-    global POOL_ASK
+    global POOL_ASK, ONLY_VARIANT
+    ONLY_VARIANT = a.variant
+    if a.list_unfinished:
+        return list_unfinished(a.out, a.list_unfinished)
     sweep.LOCAL_POOL = a.local_pool
     if a.local_pool:
         POOL_ASK = 'narrow'
