@@ -44,6 +44,11 @@ Claude's proposal. `F38_STEPS.md` is Claude's working plan and is NOT signed off
     typed inside it. Never sbatch.
 11. No dynamic workflows (multi-agent runs) without the owner's explicit go.
 
+12. The precompute will be redone per fold on a much smaller grid (owner, 2026-10-04). The
+    stored results can be used for testing. So f38 reads stored rows only and never searches.
+    Its hybrid spaces are test spaces from the old whole-dataset searches, not the ones the
+    rebuilt precompute will give.
+
 ## Not decided yet
 
 - Activity-cliff prediction: (a) finding the cliff partner among the k nearest neighbours, or
