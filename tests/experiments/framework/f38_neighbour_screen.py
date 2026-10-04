@@ -97,13 +97,12 @@ sys.path.insert(0, str(_HERE.parents[1]))
 sys.path.insert(0, str(_HERE.parent))
 
 from experiments._shared import (  # noqa: E402
-    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS_NOISE,
-    get_best_search_for_downstream, noise_base_reps_by_model)
+    cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS_NOISE)
 from experiments.dataset_policy import (  # noqa: E402
     noise_groups_for, reference_noise_level)
 from experiments.noise.noise_helpers import (  # noqa: E402
     noise_spec_for, inject_train_labels, conditions_for_task,
-    pool_recipe_per_downstream_model, load_noise_data, DETECTION_IS_DEFINED)
+    load_noise_data, DETECTION_IS_DEFINED)
 from experiments.noise import similarity_space as ss  # noqa: E402
 import f18_distance_metric_sweep as f18  # noqa: E402
 from experiments.noise import n07_remediation as n07  # noqa: E402
@@ -330,6 +329,132 @@ def overlap_pairs(descs):
 
 
 # ---------------------------------------------------------------------------
+# Recipes and base representations, from what is stored only
+# ---------------------------------------------------------------------------
+#
+# Owner, 2026-10-04: the precompute is to be redone per fold on a much smaller
+# grid, but the stored results can be used for testing. So f38 reads the stored
+# rows directly and never runs a search: a recipe that is not stored makes its
+# space unavailable, recorded with the reason. These recipes come from the old
+# whole-dataset searches, partly filled, so hybrid, hybrid__general2 and
+# hybrid_similarity here are test spaces, not the ones the rebuilt precompute
+# will give.
+#
+#   hybrid             the best stored row for this model: tier 'general',
+#                      objective 'predictive', augmentation none or uncapped
+#   hybrid__general2   the next-best stored row there with a different recipe.
+#                      NOT _shared.get_rule_hybrids' rank-2 rule, which needs the
+#                      full search
+#   hybrid_similarity  the best stored row under tier 'general__obj-similarity'
+#   base_1, base_2     the model's top two single representations by its cached
+#                      5-fold baseline (f34_loss_functions.top_base_reps); where
+#                      those files are missing, ranked once on this run's folds
+#                      and kept in <out>/<dataset>/base_reps.json
+
+def _labels_hash(labels):
+    from kirby.find_best_hybrid import _hash_bytes, _canonical_bytes
+    out = {_hash_bytes(_canonical_bytes(np.asarray(labels)))}
+    try:
+        out.add(_hash_bytes(_canonical_bytes(np.asarray(labels, dtype=float))))
+    except (TypeError, ValueError):
+        pass
+    return {str(h) for h in out}
+
+
+def stored_recipes(dataset, model, labels, rep_names):
+    """({space: (Blueprint, aug_condition)}, {space: why unavailable})."""
+    import pickle
+    import sqlite3
+    from kirby.paths import cache_root
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+    path = cache_root() / 'result_db' / f'{dataset}.db'
+    want = {'hybrid': ('general', 'predictive', 0),
+            'hybrid__general2': ('general', 'predictive', 1),
+            'hybrid_similarity': ('general__obj-similarity', 'similarity', 0)}
+    if not path.exists():
+        return {}, {sp: f'no result database at {path}' for sp in want}
+    con = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+    rows = con.execute(
+        "SELECT tier, objective, aug_strategy, metric, score_mean, labels_hash, "
+        "blueprint FROM results WHERE model=? AND blueprint IS NOT NULL "
+        "AND score_mean IS NOT NULL AND aug_strategy IN ('none', 'uncapped') "
+        "AND tier IN ('general', 'general__obj-similarity')", (model,)).fetchall()
+    con.close()
+    hashes = _labels_hash(labels)
+    recipes, why = {}, {}
+    for sp, (tier, obj, rank) in want.items():
+        cand = [r for r in rows if r[0] == tier and r[1] == obj
+                and str(r[5]) in hashes]
+        if not cand:
+            why[sp] = (f'no stored {tier}/{obj} row for {model} whose labels '
+                       f'match the loaded data')
+            continue
+        lower = BUILTIN_METRICS.get(cand[0][3], (None, False))[1]
+        cand.sort(key=lambda r: r[4], reverse=not lower)
+        # Only recipes whose representations are all loaded can be rebuilt; a
+        # stored row from an older representation list is passed over.
+        seen, picked, n_other_pool = [], None, 0
+        for r in cand:
+            if r[6] in seen:
+                continue
+            bp_r = pickle.loads(r[6])
+            if any(x not in rep_names for x in (getattr(bp_r, 'reps', None) or [])):
+                n_other_pool += 1
+                continue
+            seen.append(r[6])
+            if len(seen) - 1 == rank:
+                picked, bp = r, bp_r
+                break
+        if picked is None:
+            why[sp] = (f'fewer than {rank + 1} distinct stored recipes built '
+                       f'only from loaded representations ({n_other_pool} '
+                       f'use representations not loaded)')
+            continue
+        aug = picked[2] or 'none'
+        try:
+            bp.augmentation_strategy = aug
+        except Exception:
+            pass
+        recipes[sp] = (bp, aug)
+    return recipes, why
+
+
+def base_reps_for(dataset, model, data, labels, groups, task_type, out_dir):
+    """The model's top two single representations (see the block comment)."""
+    import f34_loss_functions as f34l
+    from kirby.find_best_hybrid import BUILTIN_METRICS, get_model
+    metric_name = get_domain_metric(data)[0]
+    metric_fn, lower = BUILTIN_METRICS[metric_name]
+    reps = data['reps']
+    for h in _labels_hash(labels):
+        base, info = f34l.top_base_reps(dataset, list(reps), model, metric_name,
+                                        lower, len(labels), h)
+        if len(base) == 2:
+            return base, 'cached 5-fold baselines'
+    store = Path(out_dir) / dataset / 'base_reps.json'
+    got = json.loads(store.read_text()) if store.exists() else {}
+    if model not in got:
+        from sklearn.preprocessing import StandardScaler
+        splits = list(cv_split(groups, 5, next(iter(reps.values())), labels))
+        means = {}
+        for rep, X in reps.items():
+            sc = []
+            for tr, va in splits:
+                z = StandardScaler().fit(X[tr])
+                est = get_model(model, task_type)
+                est.fit(np.nan_to_num(z.transform(X[tr])), labels[tr])
+                sc.append(float(metric_fn(labels[va], est.predict(
+                    np.nan_to_num(z.transform(X[va]))))))
+            means[rep] = float(np.mean(sc))
+        got[model] = sorted(means, key=means.get, reverse=not lower)[:2]
+        store.parent.mkdir(parents=True, exist_ok=True)
+        tmp = store.with_suffix('.tmp')
+        tmp.write_text(json.dumps(got, indent=1))
+        os.replace(tmp, store)
+    return got[model], 'ranked on this run\'s 5 folds (no cached baselines)'
+
+
+# ---------------------------------------------------------------------------
 # One task
 # ---------------------------------------------------------------------------
 
@@ -391,19 +516,18 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
     if model not in DOWNSTREAM_MODELS_NOISE:
         return skipped(f'{model} is not in DOWNSTREAM_MODELS_NOISE')
 
-    # The precompute: this model's recipes and its top-2 single reps (n42).
+    # This model's recipes and its top-2 single reps, from stored rows only.
     metric = get_domain_metric(data)
     factories = get_model_factories([model], task_type=task_type,
                                     n_samples=len(labels))
-    lookup = functools.partial(
-        get_best_search_for_downstream, reps, labels, groups, budget=None,
-        augmentations=data.get('augmentations'), dataset_name=dataset,
-        task_type=task_type, data=data, pool_subset=n42.POOL_SUBSET)
-    by_model, _no_recipe = pool_recipe_per_downstream_model(lookup, [model])
-    recipes, recipes_unavail = n42._recipes_for(by_model, [model])
-    base_by_model, base_missing = noise_base_reps_by_model(
-        {m: by_model[m]['search'] for m in by_model}, [model], reps=reps,
-        dataset_name=dataset, verbose=False)
+    recipes_m, recipes_unavail = stored_recipes(dataset, model, labels,
+                                                set(reps))
+    base_names, base_source = base_reps_for(dataset, model, data, labels,
+                                            groups, task_type, out_dir)
+    base.update(base_reps=list(base_names), base_reps_source=base_source,
+                recipes={sp: {'aug': aug, 'reps': list(getattr(bp, 'reps', []) or []),
+                              'budget': getattr(bp, 'budget', None)}
+                         for sp, (bp, aug) in recipes_m.items()})
 
     folds = list(cv_split(groups, 5, next(iter(reps.values())), labels))
     train_idx, val_idx = (np.asarray(a) for a in folds[fold_i])
@@ -432,15 +556,13 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
         dataset, list(settings) + mi_settings, model_input_tr=None,
         model_input_va=None, reps=reps, train_idx=train_idx,
         val_idx=val_idx, y_train=y0, groups_train=g_tr,
-        base_reps=base_by_model.get(model, []),
-        recipes=recipes.get(model, {}), augmentations=data.get('augmentations'),
+        base_reps=list(base_names),
+        recipes=recipes_m, augmentations=data.get('augmentations'),
         model_name=model, model_factory=factories.get(model), metric=metric,
         task_type=task_type)
     unavailable = dict(sp_unavail)
-    for sp, why in (recipes_unavail.get(model) or {}).items():
+    for sp, why in recipes_unavail.items():
         unavailable.setdefault(sp, why)
-    if base_missing.get(model):
-        unavailable.setdefault('base', base_missing[model])
     print(f'  {dataset} {condition} fold {fold_i} draw {draw} {model}: '
           f'{n_corrupt}/{len(y0)} training molecules corrupted; spaces '
           f'{sorted(sp_tr)}; unavailable {unavailable}')
@@ -560,7 +682,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
     # tanimoto and the other set-overlap coefficients win most fingerprint
     # representations for prediction. Unweighted only. A continuous base
     # representation is skipped: the z-scored base_k settings above cover it.
-    for i_b, rep_name in enumerate(base_by_model.get(model, [])[:2], start=1):
+    for i_b, rep_name in enumerate(list(base_names)[:2], start=1):
         X = reps.get(rep_name)
         if X is None:
             continue
