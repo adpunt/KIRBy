@@ -106,7 +106,7 @@ def main():
 
     lookup = functools.partial(
         get_best_search_for_downstream, reps, labels, groups,
-        augmentations=data.get('augmentations'), dataset_name=ds,
+        budget=None, augmentations=data.get('augmentations'), dataset_name=ds,
         task_type=data['task_type'], data=data,
         pool_subset=f36.POOL_SUBSET)
     by_model, no_recipe = tick(
