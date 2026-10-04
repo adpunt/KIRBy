@@ -754,32 +754,10 @@ def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
     if not todo:
         return 0
 
-    # ONE KERNEL PER UNIT FOR THE SVM. Only the labels change between
-    # combinations, so the RBF kernel between the training molecules (and
-    # between held-out and training molecules) is the same for every fit.
-    # Computed once with the gamma the SVM's own gamma='scale' would pick
-    # (1 / (features x variance of X_tr)) and handed over as
-    # kernel='precomputed', on the repo's own SVM class (SVRScaledTarget,
-    # which standardises the labels). MEASURED 2026-10-04 on logd fold 0,
-    # mhg_gnn, 4,022 training molecules: 9.5 s a fit before, 0.5 s after, and
-    # predictions within 0.00099 logD units of the usual fit -- the size of
-    # the solver's own stopping tolerance (tol=1e-3). D, D' and the clean fit
-    # all go this way, so every gain is computed on one footing.
-    # Regression only; herg keeps the usual path (12 combinations).
-    kern = None
-    if m == 'svm' and not is_clf:
-        from sklearn.metrics.pairwise import rbf_kernel
-        probe = factory()
-        if probe.get_params().get('kernel') == 'rbf' and \
-                probe.get_params().get('gamma') == 'scale':
-            Xa = np.asarray(X_tr, dtype=float)
-            var = float(Xa.var())
-            gamma = 1.0 / (Xa.shape[1] * var) if var > 0 else 1.0
-            params = {k: v for k, v in probe.get_params().items()
-                      if k not in ('kernel', 'gamma', 'degree', 'coef0')}
-            kern = (rbf_kernel(Xa, Xa, gamma=gamma),
-                    rbf_kernel(np.asarray(X_va, dtype=float), Xa, gamma=gamma),
-                    type(probe), params)
+    # The regression SVM's kernel is computed once per unit and reused by
+    # every fit (noise_cache.svm_kernel_fit_predict, measured there). D, D'
+    # and the clean fit all go that way.
+    kern = (not is_clf) and nc.svm_kernel_applies(factory(), X_tr)
 
     # IDENTICAL LABEL COLUMNS ARE FITTED ONCE. Different combinations can
     # give exactly the same D' labels (a rule that moves nothing gives D
@@ -787,11 +765,8 @@ def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
     seen_scores = {}
 
     def _fit_predict(y_fit):
-        if kern is not None:
-            K_tr, K_va, cls, params = kern
-            mdl = cls(kernel='precomputed', **params)
-            mdl.fit(K_tr, y_fit)
-            return mdl.predict(K_va)
+        if kern:
+            return nc.svm_kernel_fit_predict(factory(), X_tr, y_fit, X_va)
         mdl = factory()
         mdl.fit(X_tr, y_fit)
         return nc._predict(mdl, X_va, mode)
@@ -805,8 +780,6 @@ def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
         return seen_scores[h]
 
     def cached_score(y_fit):
-        if kern is not None:
-            return fit_score(y_fit)
         pred = nc.cached_fit_predict(ds, m, factory, X_tr, y_fit, X_va,
                                      predict_mode=mode)
         return float(metric_fn(y_val, pred))
