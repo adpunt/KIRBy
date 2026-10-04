@@ -201,35 +201,78 @@ def feature_space_settings(spaces):
 # f38's own lists
 # ---------------------------------------------------------------------------
 
-def own_lists(Z_tr, distance, w, power, exclude_groups):
-    """(idx, dist, n_rows_with_undefined_distance): each training row's K_MAX nearest
-    other training rows under one f38 setting, nearest first.
+def _correlation_square(Z, w=None):
+    """Correlation distance between every pair of rows, optionally weighted, as
+    one matrix product. Same formula as scipy's correlation(u, v, w): centre each
+    row on its w-weighted mean, then 1 - the w-weighted cosine. scipy's cdist
+    computes the weighted form one pair at a time in Python, about 1.3 million
+    calls on 1129 molecules; this is the same numbers in one product. A row with
+    no spread gives NaN, as scipy does."""
+    v = np.ones(Z.shape[1]) if w is None else np.asarray(w, dtype=np.float64)
+    v = v / v.sum()
+    C = (Z - (Z @ v)[:, None]) * np.sqrt(v)[None, :]
+    nrm = np.sqrt((C * C).sum(axis=1))
+    with np.errstate(invalid='ignore', divide='ignore'):
+        Cn = C / nrm[:, None]
+    D = 1.0 - Cn @ Cn.T
+    np.clip(D, 0.0, 2.0, out=D)
+    return D
+
+
+def _minkowski_square(Z, p, chunk_elements=50_000_000):
+    """Fractional Minkowski between every pair of rows, in torch row blocks
+    (the same arithmetic as f34_full_sweep._fractional_minkowski)."""
+    import torch
+    T = torch.from_numpy(np.ascontiguousarray(Z, dtype=np.float64))
+    n, d = T.shape
+    ch = max(1, int(chunk_elements // max(1, n * d)))
+    D = np.empty((n, n), dtype=np.float64)
+    for s0 in range(0, n, ch):
+        e = min(s0 + ch, n)
+        D[s0:e] = ((T[s0:e, None, :] - T[None, :, :])
+                   .abs_().pow_(p).sum(-1).pow_(1.0 / p)).numpy()
+    return D
+
+
+def square_distance(Z_tr, distance, w, power):
+    """(D, n_rows_with_undefined_distance): every training row against every
+    other under one setting, computed once and shared by the plain and the
+    group-excluding lists.
 
     The matrices are already z-scored (n07.fold_similarity_spaces), which
-    fold_weights requires. cosine and correlation are undefined for a row with
-    no spread (all zero, or all equal); those distances are set to +inf, so such
-    a row is nobody's neighbour, and the count is returned."""
+    fold_weights requires. Under manhattan, euclidean and cosine the importance
+    weight is folded into the features at `power` (fold_weights); under
+    minkowski p=0.5 likewise; under correlation it goes inside the formula.
+    Undefined distances (cosine or correlation on a row with no spread) become
+    +inf, so such a row is nobody's neighbour, and are counted."""
     scipy_name, kw, coeff, p = DISTANCES[distance]
-    kw = dict(kw)
     Z = np.asarray(Z_tr, dtype=np.float64)
-    if w is not None:
-        Z, scipy_kw = fold_weights(Z, w, coeff, p=p, convention='mean1',
-                                   exponent=power)
-        kw.update(scipy_kw)
-    n = len(Z)
-    k_eff = ss._k_eff(n, K_MAX, exclude_groups)
-    bad = set()
+    if distance == 'correlation':
+        D = _correlation_square(Z, None if w is None else
+                                fold_weights(Z, w, coeff, convention='mean1')[1]['w'])
+    else:
+        if w is not None:
+            Z, _ = fold_weights(Z, w, coeff, p=p, convention='mean1',
+                                exponent=power)
+        if distance == 'minkowski_p0.5':
+            D = _minkowski_square(Z, 0.5)
+        else:
+            D = cdist(Z, Z, metric=scipy_name, **kw)
+    bad = np.isnan(D)
+    n_bad = int(bad.any(axis=1).sum())
+    D[bad] = np.inf
+    return D, n_bad
 
-    def _d(a, b):
-        D = cdist(Z[a:b], Z, metric=scipy_name, **kw)
-        nan = np.isnan(D)
-        if nan.any():
-            bad.update((np.where(nan.any(1))[0] + a).tolist())
-            D[nan] = np.inf
-        return D
-    idx, dist = ss._lists_from_distance(_d, n, n, k_eff, self_rows=True,
-                                        exclude_groups=exclude_groups)
-    return idx, dist, len(bad)
+
+def lists_from_square(D, exclude_groups):
+    """(idx, dist): each row's K_MAX nearest other rows, nearest first, ties by
+    column index (similarity_space._lists_from_distance, the noise suite's own
+    list builder), the row itself and, if given, its group excluded."""
+    n = len(D)
+    k_eff = ss._k_eff(n, K_MAX, exclude_groups)
+    return ss._lists_from_distance(lambda a, b: D[a:b].copy(), n, n, k_eff,
+                                   self_rows=True,
+                                   exclude_groups=exclude_groups)
 
 
 # ---------------------------------------------------------------------------
@@ -666,14 +709,11 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                                  k, is_clf))
         _append(out, row)
 
-    # 1. The noise suite's own feature-space settings, and tanimoto_ecfp4.
-    weights_by = {}
+    # 1. tanimoto_ecfp4, through the noise suite's own code and cache.
     for s in settings:
-        if s.space in (ss.MODEL_INPUT_SPACE, ss.FOREST_SPACE):
+        if s.space != ss.TANIMOTO_SPACE:
             continue
-        power = (None if s.weighting == 'none' or s.space == ss.TANIMOTO_SPACE
-                 else implied_power(s.metric))
-        desc = describe(s.space, s.weighting, s.metric, power)
+        desc = describe(s.space, s.weighting, s.metric, None)
         for grouped, eg in groupings:
             got = n07.fold_neighbours(dataset, [s], sp_tr, None, y0,
                                       exclude_groups=eg, smiles_train=smi_tr,
@@ -682,20 +722,24 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                 unavailable.setdefault(desc['name'],
                                        (got or {}).get('reason', 'not built'))
                 break
-            if got.get('weights') is not None:
-                weights_by[(s.space, s.weighting)] = np.asarray(got['weights'])
             idx = np.asarray(got['idx_train'])
             score_and_write(desc, None, grouped, idx,
                             np.asarray(got['dist_train']))
             if grouped == 'plain':
                 plain_lists.append((desc, idx))
+    t_s = _stage('1. tanimoto_ecfp4', t_s)
 
-    t_s = _stage('1. noise-suite settings', t_s)
-    # 2. f38's additions on the same matrices.
+    # 2. Every feature-space setting: the noise suite's own (manhattan and
+    # euclidean at the power the distance implies) and f38's additions. The
+    # noise suite's are computed here rather than through n07.fold_neighbours
+    # because that path recomputes the importance for every list; the
+    # arithmetic is the same (fold_weights, cdist, _lists_from_distance), checked
+    # list for list in tests/test_f38_neighbour_screen.py. Importance is
+    # computed once per (space, method); each distance matrix once per setting.
+    weights_by = {}
     for desc in feature_space_settings(sp_tr):
-        if is_noise_suite_setting(desc['weighting'], desc['distance'],
-                                  desc['power']):
-            continue
+        todo = [g for g in groupings
+                if (desc['name'], None, g[0]) not in done or g[0] == 'plain']
         Z = sp_tr[desc['space']]
         w = None
         if desc['weighting'] != 'none':
@@ -704,16 +748,14 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                 weights_by[key] = ss._importance_weights(Z, y0,
                                                          desc['weighting'])
             w = weights_by[key]
-        for grouped, eg in groupings:
-            need = (desc['name'], None, grouped) not in done
-            if not need and grouped != 'plain':
-                continue
-            idx, dist, n_bad = own_lists(Z, desc['distance'], w,
-                                         desc['power'], eg)
+        D, n_bad = square_distance(Z, desc['distance'], w, desc['power'])
+        for grouped, eg in todo:
+            idx, dist = lists_from_square(D, eg)
             score_and_write(desc, None, grouped, idx, dist,
                             {'rows_with_undefined_distance': n_bad})
             if grouped == 'plain':
                 plain_lists.append((desc, idx))
+        del D
 
     t_s = _stage('2. extra distances and powers', t_s)
     # 3. model_input and forest_proximity, once per model input.
