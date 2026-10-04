@@ -473,6 +473,13 @@ def base_reps_for(dataset, model, data, labels, groups, task_type, out_dir):
         if len(base) == 2:
             return base, 'cached 5-fold baselines'
     store = Path(out_dir) / dataset / 'base_reps.json'
+    store.parent.mkdir(parents=True, exist_ok=True)
+    # One process ranks; every other task on this (dataset, model) waits on the
+    # lock and reads the file, instead of all of them fitting the same 50
+    # models at once.
+    import fcntl
+    lock_fh = open(store.with_suffix('.lock'), 'w')
+    fcntl.flock(lock_fh, fcntl.LOCK_EX)
     got = json.loads(store.read_text()) if store.exists() else {}
     if model not in got:
         from sklearn.preprocessing import StandardScaler
@@ -492,6 +499,8 @@ def base_reps_for(dataset, model, data, labels, groups, task_type, out_dir):
         tmp = store.with_suffix('.tmp')
         tmp.write_text(json.dumps(got, indent=1))
         os.replace(tmp, store)
+    fcntl.flock(lock_fh, fcntl.LOCK_UN)
+    lock_fh.close()
     return got[model], 'ranked on this run\'s 5 folds (no cached baselines)'
 
 
