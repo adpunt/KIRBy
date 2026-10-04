@@ -609,6 +609,7 @@ def _append(path, row):
 
 
 _STAGES = {}
+_TASK_LOCK = None
 
 
 def _stage(name, t_prev):
@@ -633,6 +634,17 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
     out = task_path(out_dir, dataset, condition, fold_i, draw, model)
     out_ov = task_path(out_dir, dataset, condition, fold_i, draw, model, True)
     out.parent.mkdir(parents=True, exist_ok=True)
+    # One process per task, across sruns: a task another process is running
+    # is skipped here (that process finishes it). The lock is released when
+    # the holder exits, however it exits.
+    import fcntl
+    global _TASK_LOCK
+    _TASK_LOCK = open(out.with_suffix('.lock'), 'w')
+    try:
+        fcntl.flock(_TASK_LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print(f'  running in another process, skipped here: {out}')
+        return 0
     done = done_keys(out)
     if ('_done', None, None) in done or ('_skipped', None, None) in done:
         print(f'  already done: {out}')
@@ -993,7 +1005,7 @@ def list_tasks(datasets, models, path, draws=DRAWS):
 F34_DATASETS = ('herg', 'herg_ki', 'caco2', 'adme_mdr1')
 
 
-def run_tasks(path, jobs, out_dir, part=None):
+def run_tasks(path, jobs, out_dir, part=None, only=None, reverse=False):
     """Run every task in `path` (one per line, as --list-tasks writes them),
     `jobs` at a time, each in its own process with its own log under
     <out>/logs/. A finished task is skipped by run_task itself, so rerunning
@@ -1001,6 +1013,10 @@ def run_tasks(path, jobs, out_dir, part=None):
     import subprocess
     from concurrent.futures import ThreadPoolExecutor
     lines = [l.split() for l in Path(path).read_text().splitlines() if l.strip()]
+    if only:
+        lines = [t for t in lines if t[0] in only]
+    if reverse:
+        lines = lines[::-1]
     if part:
         # --part K/N: this srun takes every N-th task starting at the K-th, so
         # N sruns started with 1/N .. N/N share the list without overlapping.
@@ -1068,6 +1084,10 @@ def main():
     ap.add_argument('--run-tasks', metavar='PATH',
                     help='run every task listed in PATH')
     ap.add_argument('--jobs', type=int, default=4)
+    ap.add_argument('--only', nargs='+', metavar='DATASET',
+                    help='with --run-tasks: only these datasets')
+    ap.add_argument('--reverse', action='store_true',
+                    help='with --run-tasks: take the list from the end')
     ap.add_argument('--part', metavar='K/N',
                     help='with --run-tasks: run only part K of N, so N sruns '
                          'can share one task list')
@@ -1077,7 +1097,7 @@ def main():
         ds = all_noise_datasets() if a.datasets == ['all'] else a.datasets
         return list_tasks(ds, a.models, a.list_tasks, DRAWS[:a.draws])
     if a.run_tasks:
-        return run_tasks(a.run_tasks, a.jobs, a.out, a.part)
+        return run_tasks(a.run_tasks, a.jobs, a.out, a.part, a.only, a.reverse)
     if a.task:
         ds, cond, fi, d, m = a.task
         return run_task(ds, cond, int(fi), int(d), m, a.out)
