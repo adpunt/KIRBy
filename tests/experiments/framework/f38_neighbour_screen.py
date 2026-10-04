@@ -95,6 +95,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parents[2] / 'src'))
 sys.path.insert(0, str(_HERE.parents[1]))
 sys.path.insert(0, str(_HERE.parent))
+sys.path.insert(0, str(_HERE))   # f18_distance_metric_sweep, f34_loss_functions
 
 from experiments._shared import (  # noqa: E402
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS_NOISE)
