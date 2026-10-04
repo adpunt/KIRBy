@@ -993,7 +993,7 @@ def list_tasks(datasets, models, path, draws=DRAWS):
 F34_DATASETS = ('herg', 'herg_ki', 'caco2', 'adme_mdr1')
 
 
-def run_tasks(path, jobs, out_dir):
+def run_tasks(path, jobs, out_dir, part=None):
     """Run every task in `path` (one per line, as --list-tasks writes them),
     `jobs` at a time, each in its own process with its own log under
     <out>/logs/. A finished task is skipped by run_task itself, so rerunning
@@ -1001,6 +1001,11 @@ def run_tasks(path, jobs, out_dir):
     import subprocess
     from concurrent.futures import ThreadPoolExecutor
     lines = [l.split() for l in Path(path).read_text().splitlines() if l.strip()]
+    if part:
+        # --part K/N: this srun takes every N-th task starting at the K-th, so
+        # N sruns started with 1/N .. N/N share the list without overlapping.
+        k, n = (int(x) for x in part.split('/'))
+        lines = lines[k - 1::n]
     logs = Path(out_dir) / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)   # the thread limits set at the top are inherited
@@ -1063,13 +1068,16 @@ def main():
     ap.add_argument('--run-tasks', metavar='PATH',
                     help='run every task listed in PATH')
     ap.add_argument('--jobs', type=int, default=4)
+    ap.add_argument('--part', metavar='K/N',
+                    help='with --run-tasks: run only part K of N, so N sruns '
+                         'can share one task list')
     a = ap.parse_args()
     from experiments import dataset_policy  # noqa: F401  (fills the registry)
     if a.list_tasks:
         ds = all_noise_datasets() if a.datasets == ['all'] else a.datasets
         return list_tasks(ds, a.models, a.list_tasks, DRAWS[:a.draws])
     if a.run_tasks:
-        return run_tasks(a.run_tasks, a.jobs, a.out)
+        return run_tasks(a.run_tasks, a.jobs, a.out, a.part)
     if a.task:
         ds, cond, fi, d, m = a.task
         return run_task(ds, cond, int(fi), int(d), m, a.out)
