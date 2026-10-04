@@ -394,7 +394,7 @@ def stored_recipes(dataset, model, labels, rep_names):
         cand.sort(key=lambda r: r[4], reverse=not lower)
         # Only recipes whose representations are all loaded can be rebuilt; a
         # stored row from an older representation list is passed over.
-        seen, picked, n_other_pool = [], None, 0
+        seen, picked, n_other_pool, n_unbuildable = [], None, 0, 0
         for r in cand:
             if r[6] in seen:
                 continue
@@ -402,14 +402,26 @@ def stored_recipes(dataset, model, labels, rep_names):
             if any(x not in rep_names for x in (getattr(bp_r, 'reps', None) or [])):
                 n_other_pool += 1
                 continue
+            # A recipe searched over a subset of the pool (rep_count below the
+            # pool size) can only be rebuilt if it carries the per-rep scores
+            # that say WHICH subset; build_fold_hybrid refuses otherwise
+            # (_shared.py:5339-5352). The first server task hit this on
+            # herg_ki's dnn similarity recipe (rep_count=5 of 10).
+            rc = getattr(bp_r, 'rep_count', None)
+            n_pool = len(getattr(bp_r, 'reps', None) or rep_names)
+            if (rc is not None and int(rc) < n_pool
+                    and not getattr(bp_r, 'rep_scores', None)):
+                n_unbuildable += 1
+                continue
             seen.append(r[6])
             if len(seen) - 1 == rank:
                 picked, bp = r, bp_r
                 break
         if picked is None:
-            why[sp] = (f'fewer than {rank + 1} distinct stored recipes built '
-                       f'only from loaded representations ({n_other_pool} '
-                       f'use representations not loaded)')
+            why[sp] = (f'fewer than {rank + 1} distinct stored recipes that can '
+                       f'be rebuilt ({n_other_pool} use representations not '
+                       f'loaded; {n_unbuildable} used a subset of the pool '
+                       f'without recording which)')
             continue
         aug = picked[2] or 'none'
         try:
@@ -417,6 +429,11 @@ def stored_recipes(dataset, model, labels, rep_names):
         except Exception:
             pass
         recipes[sp] = (bp, aug)
+        if n_other_pool or n_unbuildable:
+            why[f'{sp}__passed_over'] = (
+                f'{n_other_pool} better-ranked stored recipes use representations '
+                f'not loaded; {n_unbuildable} used a subset of the pool without '
+                f'recording which')
     return recipes, why
 
 
