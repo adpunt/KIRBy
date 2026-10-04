@@ -792,8 +792,20 @@ def all_noise_datasets():
     return sorted(set(DATASET_REPS) - set(EXCLUDED))
 
 
-def list_tasks(datasets, models, path):
-    """Every task, cheapest first: by training molecules, then condition."""
+# The two downstream models the owner decided per dataset on 2026-10-03
+# (scratchpad/precompute_cuts/DECISIONS.md, step 1). Used when --models is not
+# given.
+DECIDED_MODELS = {
+    'adme_mdr1': ('svm', 'dnn'),
+    'caco2': ('dnn', 'svm'),
+    'herg': ('lightgbm', 'xgboost'),
+    'herg_ki': ('svm', 'dnn'),
+}
+
+
+def list_tasks(datasets, models, path, draws=DRAWS):
+    """Every task, cheapest first: by training molecules, then condition.
+    models None means each dataset's two decided models (DECIDED_MODELS)."""
     tasks = []
     for ds in datasets:
         try:
@@ -806,9 +818,10 @@ def list_tasks(datasets, models, path):
                  if is_clf or c in DETECTION_IS_DEFINED]
         n = len(data['labels'])
         for c in conds:
+            ms = models or DECIDED_MODELS.get(ds) or DOWNSTREAM_MODELS_NOISE
             for fi in range(5):
-                for d in DRAWS:
-                    for m in models:
+                for d in draws:
+                    for m in ms:
                         tasks.append((n, f'{ds} {c} {fi} {d} {m}'))
     tasks.sort()
     Path(path).write_text('\n'.join(t for _, t in tasks) + '\n')
@@ -879,7 +892,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--datasets', nargs='+', default=list(F34_DATASETS),
                     help="default: f34's four; 'all' for every noise dataset")
-    ap.add_argument('--models', nargs='+', default=list(DOWNSTREAM_MODELS_NOISE))
+    ap.add_argument('--models', nargs='+', default=None,
+                    help="default: each dataset's two decided models "
+                         "(DECIDED_MODELS)")
+    ap.add_argument('--draws', type=int, default=len(DRAWS),
+                    help='how many noise draws per condition, from draw 0')
     ap.add_argument('--out', default=str(OUT_DEFAULT))
     ap.add_argument('--list-tasks', metavar='PATH')
     ap.add_argument('--task', nargs=5,
@@ -891,7 +908,7 @@ def main():
     from experiments import dataset_policy  # noqa: F401  (fills the registry)
     if a.list_tasks:
         ds = all_noise_datasets() if a.datasets == ['all'] else a.datasets
-        return list_tasks(ds, a.models, a.list_tasks)
+        return list_tasks(ds, a.models, a.list_tasks, DRAWS[:a.draws])
     if a.run_tasks:
         return run_tasks(a.run_tasks, a.jobs, a.out)
     if a.task:
