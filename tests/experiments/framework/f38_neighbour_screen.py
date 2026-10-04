@@ -95,7 +95,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parents[2] / 'src'))
 sys.path.insert(0, str(_HERE.parents[1]))
 sys.path.insert(0, str(_HERE.parent))
-sys.path.insert(0, str(_HERE))   # f18_distance_metric_sweep, f34_loss_functions
+sys.path.insert(0, str(_HERE))   # f18_distance_metric_sweep
 
 from experiments._shared import (  # noqa: E402
     cv_split, get_domain_metric, get_model_factories, DOWNSTREAM_MODELS_NOISE)
@@ -348,7 +348,7 @@ def overlap_pairs(descs):
 #                      full search
 #   hybrid_similarity  the best stored row under tier 'general__obj-similarity'
 #   base_1, base_2     the model's top two single representations by its cached
-#                      5-fold baseline (f34_loss_functions.top_base_reps); where
+#                      5-fold baseline (cached_baseline_top2); where
 #                      those files are missing, ranked once on this run's folds
 #                      and kept in <out>/<dataset>/base_reps.json
 
@@ -420,16 +420,39 @@ def stored_recipes(dataset, model, labels, rep_names):
     return recipes, why
 
 
+def cached_baseline_top2(dataset, reps, model, metric, lower, n_samples,
+                         labels_hash):
+    """Top two representations for one model from the cached 5-fold baselines,
+    reading only files fitted on the whole dataset (same molecule count and
+    labels). Copied from f34_loss_functions.top_base_reps, which is not in git."""
+    import pickle
+    from kirby.paths import cache_root
+    scored = []
+    for rep in reps:
+        f = (cache_root() / 'baselines'
+             / f'{dataset}__{rep}__{model}__{metric}__5f_42.pkl')
+        try:
+            d = pickle.load(open(f, 'rb'))
+            meta, payload = d['_cache_meta'], d['payload']
+        except Exception:
+            continue
+        if (meta.get('n_samples') != n_samples
+                or str(meta.get('labels_hash')) != str(labels_hash)):
+            continue
+        scored.append((float(payload['score']), rep))
+    scored.sort(reverse=not lower)
+    return [r for _s, r in scored[:2]]
+
+
 def base_reps_for(dataset, model, data, labels, groups, task_type, out_dir):
     """The model's top two single representations (see the block comment)."""
-    import f34_loss_functions as f34l
     from kirby.find_best_hybrid import BUILTIN_METRICS, get_model
     metric_name = get_domain_metric(data)[0]
     metric_fn, lower = BUILTIN_METRICS[metric_name]
     reps = data['reps']
     for h in _labels_hash(labels):
-        base, info = f34l.top_base_reps(dataset, list(reps), model, metric_name,
-                                        lower, len(labels), h)
+        base = cached_baseline_top2(dataset, list(reps), model, metric_name,
+                                    lower, len(labels), h)
         if len(base) == 2:
             return base, 'cached 5-fold baselines'
     store = Path(out_dir) / dataset / 'base_reps.json'
