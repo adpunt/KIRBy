@@ -150,6 +150,12 @@ else
     _install_if_missing xgboost 'xgboost<3'
 fi
 _install_if_missing catboost catboost
+# quantile_forest: the quantile regression forest (QuantileForestEstimator,
+# n07 quantile_clip, f36). gpytorch: hetero_gp (HeteroscedasticGPEstimator).
+# Both were missing on htc on 2026-10-04 and every call failed with
+# ModuleNotFoundError. Versions from requirements-working.txt.
+_install_if_missing quantile_forest 'quantile-forest==1.4.1'
+_install_if_missing gpytorch 'gpytorch==1.14.3'
 
 # --- Feature importance / interpretability ---
 _install_if_missing shap 'shap<0.50'
