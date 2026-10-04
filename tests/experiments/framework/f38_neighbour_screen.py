@@ -73,6 +73,17 @@ if 'KIRBY_CACHE_DIR' not in os.environ:
     else:
         sys.exit('KIRBY_CACHE_DIR is not set. Run `. setup.sh` first.')
 os.environ.setdefault('KIRBY_NO_COLD_SEARCH', '1.0')
+# ONE THREAD PER TASK. Parallelism comes from running many tasks at once
+# (--jobs). Measured 2026-10-04 on the laptop: with these unset, deeplift after
+# a lightgbm fit segfaults (two OpenMP runtimes, torch's and LightGBM's); on the
+# server 16 tasks each starting threads for every core on the node made no
+# progress in 25 minutes. With them at 1, lightgbm_gain, treeshap and deeplift
+# on herg_ki's pdv and ecfp4 take 0.3 to 7.4 s each. Set before numpy, torch
+# and sklearn are imported.
+for _v in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS',
+           'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'LOKY_MAX_CPU_COUNT',
+           'KIRBY_LGBM_THREADS'):
+    os.environ[_v] = '1'
 # f38 never runs a hybrid search itself, not even the small top-up the guard
 # otherwise allows (find_best_hybrid._refuse_cold_search). The first server run,
 # herg_ki censoring 0 0 dnn on 2026-10-04, found 7824 of 8160 configurations
@@ -530,7 +541,24 @@ def _append(path, row):
         os.fsync(fh.fileno())
 
 
+_STAGES = {}
+
+
+def _stage(name, t_prev):
+    """Print and record how long the step that just ended took."""
+    now = time.time()
+    _STAGES[name] = round(now - t_prev, 1)
+    print(f'  [stage] {name}: {now - t_prev:.1f}s', flush=True)
+    return now
+
+
 def run_task(dataset, condition, fold_i, draw, model, out_dir):
+    try:
+        import torch
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
     if importance_exponent_override() is not None:
         raise SystemExit('KIRBY_IMPORTANCE_EXPONENT is set; f38 sweeps the power '
                          'itself, so unset it.')
@@ -544,6 +572,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
         return 0
 
     data, _rep_names = load_noise_data(dataset)
+    t_s = _stage('load data', t0)
     task_type = data['task_type']
     is_clf = task_type == 'classification'
     reps = data['reps']
@@ -572,8 +601,10 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                                     n_samples=len(labels))
     recipes_m, recipes_unavail = stored_recipes(dataset, model, labels,
                                                 set(reps))
+    t_s = _stage('read stored recipes', t_s)
     base_names, base_source = base_reps_for(dataset, model, data, labels,
                                             groups, task_type, out_dir)
+    t_s = _stage('base representations', t_s)
     base.update(base_reps=list(base_names), base_reps_source=base_source,
                 recipes={sp: {'aug': aug, 'reps': list(getattr(bp, 'reps', []) or []),
                               'budget': getattr(bp, 'budget', None)}
@@ -610,6 +641,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
         recipes=recipes_m, augmentations=data.get('augmentations'),
         model_name=model, model_factory=factories.get(model), metric=metric,
         task_type=task_type)
+    t_s = _stage('build feature spaces (hybrids on noisy labels)', t_s)
     unavailable = dict(sp_unavail)
     for sp, why in recipes_unavail.items():
         unavailable.setdefault(sp, why)
@@ -658,6 +690,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
             if grouped == 'plain':
                 plain_lists.append((desc, idx))
 
+    t_s = _stage('1. noise-suite settings', t_s)
     # 2. f38's additions on the same matrices.
     for desc in feature_space_settings(sp_tr):
         if is_noise_suite_setting(desc['weighting'], desc['distance'],
@@ -682,6 +715,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
             if grouped == 'plain':
                 plain_lists.append((desc, idx))
 
+    t_s = _stage('2. extra distances and powers', t_s)
     # 3. model_input and forest_proximity, once per model input.
     for mi in MODEL_INPUTS:
         if mi not in sp_tr:
@@ -725,6 +759,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                     if grouped == 'plain':
                         plain_lists.append((desc, idx))
 
+    t_s = _stage('3. model_input and forest_proximity', t_s)
     # 4. The raw representations behind base_1 and base_2, under every
     # coefficient f18 defines for what the array holds (binary or count;
     # f18.classify_representation). The noise suite only ever z-scores them,
@@ -766,6 +801,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                 if grouped == 'plain':
                     plain_lists.append((desc, idx))
 
+    t_s = _stage('4. raw fingerprints', t_s)
     # 5. Neighbour-list overlap, plain lists only.
     descs = [d for d, _ in plain_lists]
     idxs = [i for _, i in plain_lists]
@@ -782,8 +818,9 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
         fh.write(json.dumps(dict(base, a='_unavailable', b=None,
                                  unavailable=unavailable)) + '\n')
     os.replace(tmp, out_ov)
+    t_s = _stage('5. overlap', t_s)
     _append(out, dict(base, setting='_done', model_input=None, grouped=None,
-                      seconds=round(time.time() - t0, 1)))
+                      seconds=round(time.time() - t0, 1), stages=dict(_STAGES)))
     print(f'  {len(descs)} settings scored, {len(pairs)} overlap pairs, '
           f'{time.time() - t0:.0f}s -> {out}')
     return 0
@@ -851,9 +888,7 @@ def run_tasks(path, jobs, out_dir):
     lines = [l.split() for l in Path(path).read_text().splitlines() if l.strip()]
     logs = Path(out_dir) / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    env.setdefault('KIRBY_LGBM_THREADS', '1')
-    env.setdefault('OMP_NUM_THREADS', '1')
+    env = dict(os.environ)   # the thread limits set at the top are inherited
 
     import threading
     state = {'done': 0, 'running': set()}
