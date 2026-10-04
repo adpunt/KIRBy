@@ -73,6 +73,13 @@ if 'KIRBY_CACHE_DIR' not in os.environ:
     else:
         sys.exit('KIRBY_CACHE_DIR is not set. Run `. setup.sh` first.')
 os.environ.setdefault('KIRBY_NO_COLD_SEARCH', '1.0')
+# f38 never runs a hybrid search itself, not even the small top-up the guard
+# otherwise allows (find_best_hybrid._refuse_cold_search). The first server run,
+# herg_ki censoring 0 0 dnn on 2026-10-04, found 7824 of 8160 configurations
+# stored, started on the 336 left and ran out of memory. A missing search now
+# fails the task within seconds, and the log names the precompute command that
+# fills it.
+os.environ['KIRBY_COLD_SEARCH_MAX_CONFIGS'] = '0'
 
 import json
 import time
@@ -693,6 +700,9 @@ def run_tasks(path, jobs, out_dir):
             state['done'] += 1
         print(f"{'ok  ' if rc == 0 else 'FAIL'} {' '.join(t)}  "
               f"{time.time() - t0:.0f}s  log {log}", flush=True)
+        if rc != 0:
+            tail = log.read_text().strip().splitlines()[-25:]
+            print('    ' + '\n    '.join(tail), flush=True)
         return rc
     with ThreadPoolExecutor(max_workers=jobs) as ex:
         rcs = list(ex.map(one, lines))
