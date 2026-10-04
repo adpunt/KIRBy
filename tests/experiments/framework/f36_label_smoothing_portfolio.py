@@ -957,6 +957,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     from experiments.noise import similarity_space as ss
 
     t_start = time.time()
+    # A line every 60 s, so an interactive srun terminal never goes silent
+    # (the owner's connection drops when it does, 2026-10-04).
+    import threading
+    _beat = {'now': 'loading the stored searches'}
+
+    def _heartbeat():
+        while True:
+            time.sleep(60)
+            print(f"  [f36 {time.strftime('%H:%M:%S')}] still running: "
+                  f"{_beat['now']}", flush=True)
+    threading.Thread(target=_heartbeat, daemon=True).start()
     task_type = data['task_type']
     is_clf = task_type == 'classification'
     reps = data['reps']
@@ -1028,6 +1039,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     units_resumed += 1
                     continue
                 t0 = time.time()
+                _beat['now'] = (f'{cond} passes={passes} fold {fold} level '
+                                f'{level:g} draw {draw} {m}:{mi}')
                 tr, va = folds[fold]
                 y_clean = labels[tr]
                 y_val = labels[va]
