@@ -82,7 +82,7 @@ os.environ.setdefault('KIRBY_NO_COLD_SEARCH', '1.0')
 # and sklearn are imported.
 for _v in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS',
            'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'LOKY_MAX_CPU_COUNT',
-           'KIRBY_LGBM_THREADS'):
+           'KIRBY_LGBM_THREADS', 'KIRBY_RF_JOBS'):
     os.environ[_v] = '1'
 # f38 never runs a hybrid search itself, not even the small top-up the guard
 # otherwise allows (find_best_hybrid._refuse_cold_search). The first server run,
@@ -232,6 +232,30 @@ def _minkowski_square(Z, p, chunk_elements=50_000_000):
         D[s0:e] = ((T[s0:e, None, :] - T[None, :, :])
                    .abs_().pow_(p).sum(-1).pow_(1.0 / p)).numpy()
     return D
+
+
+def minkowski_squares(Z, p, columns):
+    """{key: D} for several weightings of one fractional Minkowski in one pass.
+
+    Folding v**a into the features gives |v**a x - v**a y|**p = v**(a p) |x - y|**p,
+    so every weighting is the same per-feature term |x - y|**p summed against a
+    different column. `columns` is {key: per-feature multiplier of that term}
+    (ones for no weighting). The pass over pairs is done once, in torch row
+    blocks, instead of once per weighting. The caller passes as many columns as
+    fit in memory at once."""
+    import torch
+    T = torch.from_numpy(np.ascontiguousarray(Z, dtype=np.float64))
+    n, d = T.shape
+    keys = list(columns)
+    W = torch.from_numpy(np.stack([np.asarray(columns[k], dtype=np.float64)
+                                   for k in keys], axis=1))
+    out = np.empty((len(keys), n, n), dtype=np.float64)
+    ch = max(1, int(50_000_000 // max(1, n * d)))
+    for s0 in range(0, n, ch):
+        e = min(s0 + ch, n)
+        E = (T[s0:e, None, :] - T[None, :, :]).abs_().pow_(p)
+        out[:, s0:e, :] = (E @ W).pow_(1.0 / p).permute(2, 0, 1).numpy()
+    return {k: out[i] for i, k in enumerate(keys)}
 
 
 def square_distance(Z_tr, distance, w, power):
@@ -737,6 +761,7 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
     # list for list in tests/test_f38_neighbour_screen.py. Importance is
     # computed once per (space, method); each distance matrix once per setting.
     weights_by = {}
+    mink = {}            # desc name -> D, filled one space at a time
     for desc in feature_space_settings(sp_tr):
         todo = [g for g in groupings
                 if (desc['name'], None, g[0]) not in done or g[0] == 'plain']
@@ -748,7 +773,36 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                 weights_by[key] = ss._importance_weights(Z, y0,
                                                          desc['weighting'])
             w = weights_by[key]
-        D, n_bad = square_distance(Z, desc['distance'], w, desc['power'])
+        if desc['distance'] == 'minkowski_p0.5':
+            if desc['name'] not in mink:
+                # Every weighting of this space's minkowski in one pass.
+                from kirby.similarity.preprocessing import normalise_weights
+                mink.clear()
+                cols = {}
+                for d2 in feature_space_settings({desc['space']: Z}):
+                    if d2['distance'] != 'minkowski_p0.5':
+                        continue
+                    if d2['weighting'] == 'none':
+                        cols[d2['name']] = np.ones(Z.shape[1])
+                        continue
+                    k2 = (desc['space'], d2['weighting'])
+                    if k2 not in weights_by:
+                        weights_by[k2] = ss._importance_weights(
+                            Z, y0, d2['weighting'])
+                    v = normalise_weights(weights_by[k2], 'mean1')
+                    cols[d2['name']] = v ** (d2['power'] * 0.5)
+                # Only as many matrices as fit in 1 GB at once, starting
+                # from this setting (so a large dataset takes a few passes).
+                names = list(cols)
+                start = names.index(desc['name'])
+                g = max(1, int(1e9 // (len(Z) ** 2 * 8)))
+                cols = {k: cols[k] for k in names[start:start + g]}
+                mink.update(minkowski_squares(np.asarray(Z, np.float64), 0.5,
+                                              cols))
+            D = mink.pop(desc['name'])
+            n_bad = 0
+        else:
+            D, n_bad = square_distance(Z, desc['distance'], w, desc['power'])
         for grouped, eg in todo:
             idx, dist = lists_from_square(D, eg)
             score_and_write(desc, None, grouped, idx, dist,
@@ -767,6 +821,25 @@ def run_task(dataset, condition, fold_i, draw, model, out_dir):
                   ss.SimilaritySetting(ss.FOREST_SPACE, 'none', 'forest')):
             desc = describe(s.space, 'none', s.metric, None)
             desc = dict(desc, name=f"{desc['name']}@{mi}")
+            if s.space == ss.FOREST_SPACE:
+                # One forest per model input, both list kinds read off one
+                # distance matrix. Same forest, distance and tie order as
+                # similarity_space.neighbour_lists (forest leaves, the share of
+                # trees not shared, sorter='numpy'); that path refits the
+                # forest for each list kind, about 60 s each on herg_ki.
+                L_tr, _ = ss._forest_leaves(np.asarray(sp_tr[mi]), y0, is_clf)
+                Df = ss._forest_distance(L_tr, L_tr)
+                for grouped, eg in groupings:
+                    k_eff = ss._k_eff(len(Df), K_MAX, eg)
+                    idx, dist = ss._lists_from_distance(
+                        lambda a, b: Df[a:b].copy(), len(Df), len(Df), k_eff,
+                        self_rows=True, exclude_groups=eg, itemsize=4,
+                        sorter='numpy')
+                    score_and_write(desc, mi, grouped, idx, dist)
+                    if grouped == 'plain':
+                        plain_lists.append((desc, idx))
+                del Df
+                continue
             for grouped, eg in groupings:
                 got = n07.fold_neighbours(dataset, [s], spaces, None, y0,
                                           exclude_groups=eg, is_clf=is_clf
