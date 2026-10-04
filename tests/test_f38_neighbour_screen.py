@@ -7,6 +7,7 @@ import numpy as np
 
 os.environ.setdefault('KIRBY_CACHE_DIR', '/tmp')
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'experiments' / 'framework'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import f38_neighbour_screen as f38  # noqa: E402
 
 
@@ -81,3 +82,51 @@ def test_scores_at_every_scheme():
         assert row[f'recovery_{sc}_k2'] == 0.0
     assert row['recovery_before_cleaning'] == 5.0 and row['auroc_median_k2'] == 1.0
     assert set(f38.empty_at(2)) == {k for k in row if k.endswith('_k2')}
+
+
+def test_noise_suite_lists_are_reproduced_exactly():
+    # f38 computes the noise suite's manhattan/euclidean settings itself; they
+    # must be the lists similarity_space.neighbour_lists gives, list for list.
+    from experiments.noise import similarity_space as ss
+    rng = np.random.RandomState(0)
+    Z = rng.randn(60, 12)
+    y = rng.randn(60)
+    groups = np.repeat(np.arange(20), 3)
+    w = np.abs(rng.randn(12)) + 0.1
+    for metric in ('manhattan', 'euclidean'):
+        for weighted in (False, True):
+            for eg in (None, groups):
+                setting = ss.SimilaritySetting(
+                    'base_1', 'lightgbm_gain' if weighted else 'none', metric)
+                orig = ss._importance_weights
+                ss._importance_weights = lambda *_a, **_k: w
+                try:
+                    ref = ss.neighbour_lists(setting, spaces_train={'base_1': Z},
+                                             spaces_val=None, y_train=y,
+                                             exclude_groups=eg)
+                finally:
+                    ss._importance_weights = orig
+                power = f38.implied_power(metric) if weighted else None
+                D, _ = f38.square_distance(Z, metric, w if weighted else None,
+                                           power)
+                idx, dist = f38.lists_from_square(D, eg)
+                assert np.array_equal(idx, ref['idx_train'])
+                assert np.allclose(dist, ref['dist_train'])
+
+
+def test_fast_correlation_matches_scipy():
+    from scipy.spatial.distance import cdist
+    rng = np.random.RandomState(1)
+    Z = rng.randn(25, 9)
+    w = np.abs(rng.randn(9)) + 0.1
+    assert np.allclose(f38._correlation_square(Z), cdist(Z, Z, 'correlation'),
+                       atol=1e-10)
+    assert np.allclose(f38._correlation_square(Z, w),
+                       cdist(Z, Z, 'correlation', w=w), atol=1e-10)
+
+
+def test_fast_minkowski_matches_scipy():
+    from scipy.spatial.distance import cdist
+    Z = np.random.RandomState(2).randn(20, 7)
+    assert np.allclose(f38._minkowski_square(Z, 0.5),
+                       cdist(Z, Z, 'minkowski', p=0.5), atol=1e-8)
