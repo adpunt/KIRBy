@@ -252,6 +252,19 @@ def read_stage2_list(output_dir, ds):
         return json.load(fh)['combinations']
 
 
+# Repeated passes (fixed, anneal) only for the values that are an average over
+# neighbours found once on D: re-averaging the moved labels costs nothing.
+# Owner's decision 2026-10-04. Every other value refits a model on every pass
+# of every combination: measured on logd fold 0, 290 s a LightGBM refit and
+# 370 s a quantile forest, about 775 hours per unit for the five that could
+# be timed. Those values run passes=once only.
+REPEATED_PASS_VALUES = ('knn9_mean', 'forest10_mean', 'pair_mean')
+REPEATED_PASS_NOT_RUN = (
+    'passes fixed and anneal are run only for knn9_mean, forest10_mean and '
+    'pair_mean: every other value refits a model on every pass of every '
+    'combination, about 775 hours per logd unit (owner, 2026-10-04)')
+
+
 def combinations(is_clf):
     """Every (v, rule, preserve, scale, passes) this task type runs, and the
     ones skipped with their reason."""
@@ -261,6 +274,8 @@ def combinations(is_clf):
     run, skipped = [], {}
     for p in PASSES:
         for v in VALUES:
+            if p != 'once' and v not in REPEATED_PASS_VALUES:
+                continue
             for r in RULES:
                 for pr in PRESERVES:
                     for sc in SCALES:
@@ -1085,6 +1100,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'n_combinations_not_run_identical': len(skipped),
         'why_not_run': sorted(set(skipped.values())),
         'values_not_run': VALUES_NOT_RUN,
+        'repeated_passes_not_run': REPEATED_PASS_NOT_RUN,
         'base_reps_by_model': base_by_model, 'base_reps_missing': base_missing,
         'recipe_spaces_by_model': {m: sorted(v) for m, v in recipes.items()},
         'units': index, 'units_computed_this_run': units_done,

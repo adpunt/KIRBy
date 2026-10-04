@@ -57,10 +57,11 @@ reg, skipped = f36.combinations(False)
 clf, _ = f36.combinations(True)
 check(len(f36.VALUES) == 12 and len(f36.RULES) == 31,
       f'12 values and 31 rules ({len(f36.VALUES)}, {len(f36.RULES)})')
-check(len(reg) == 12 * 31 * 10 * 3,
-      f'regression runs {len(reg)} combinations = 12 x 31 x 10 x 3')
-check(len(skipped) == 12 * 31 * 2 * 3,
-      f'{len(skipped)} combinations not run as identical = 12 x 31 x 2 x 3')
+check(len(reg) == 12 * 31 * 10 + 3 * 31 * 10 * 2,
+      f'regression runs {len(reg)} combinations = 12 x 31 x 10 single pass '
+      f'+ 3 x 31 x 10 x 2 repeated')
+check(len(skipped) == 12 * 31 * 2 + 3 * 31 * 2 * 2,
+      f'{len(skipped)} combinations not run as identical')
 check(len(clf) == 12, f'classification runs {len(clf)} combinations')
 n1 = sum(len(f36.stage_units('logd', c, False, 1))
          for c in f36.REGRESSION_CONDITIONS)
@@ -194,7 +195,7 @@ finally:
 
 # 5 -----------------------------------------------------------------------
 keep_values = f36.VALUES
-f36.VALUES = ('knn9_mean', 'lgbm_oof')
+f36.VALUES = ('knn9_mean', 'pair_mean')
 try:
     for p in ('fixed', 'anneal'):
         t0 = time.time()
