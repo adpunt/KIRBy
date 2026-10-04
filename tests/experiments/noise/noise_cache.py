@@ -384,13 +384,21 @@ def cached_fit_predict(dataset, model_name, make_model, X_tr, y_tr, X_va,
     # The instance the factory builds is in the key, not only its name
     # (model_signature). Building one is cheap; fitting is what is cached.
     probe = make_model()
+    use_kernel = svm_kernel_applies(probe, X_tr)
     key = {'model': str(model_name), 'model_signature': model_signature(probe),
            'X_tr': array_hash(X_tr),
            'y_tr': array_hash(y_tr), 'X_va': array_hash(X_va),
            'sample_weight': array_hash(sample_weight),
            'predict_mode': str(predict_mode)}
+    if use_kernel:
+        # A different computation from the usual fit (see
+        # svm_kernel_fit_predict), so it never shares an entry with one.
+        key['svm_kernel'] = 'precomputed_rbf_scale'
 
     def _compute():
+        if use_kernel:
+            return svm_kernel_fit_predict(probe, X_tr, y_tr, X_va,
+                                          sample_weight=sample_weight)
         m = probe
         if sample_weight is None:
             m.fit(X_tr, y_tr)
@@ -398,6 +406,62 @@ def cached_fit_predict(dataset, model_name, make_model, X_tr, y_tr, X_va,
             m.fit(X_tr, y_tr, sample_weight=np.asarray(sample_weight))
         return np.asarray(_predict(m, X_va, predict_mode))
     return cached(dataset, 'fit_predict', key, _compute)
+
+
+# ── The SVM's kernel, computed once per feature matrix ────────────────────
+# Added 2026-10-04. Within one fold an experiment fits the regression SVM many
+# times on the SAME features with DIFFERENT labels (one fit per cleanup,
+# setting and control). The RBF kernel depends on the features only, so it is
+# computed once per (training features, held-out features) and every fit is
+# handed kernel='precomputed'.
+#
+# MEASURED on logd fold 0, mhg_gnn, 4,022 training molecules x 1,024 features:
+# 9.5 s a fit the usual way, 0.6 s for the kernel once, then 0.5 s a fit.
+# Predictions within 0.00099 logD units of the usual fit, the size of the
+# solver's own stopping tolerance (tol=1e-3); on a toy set the scores agree to
+# 2e-16. The same model: the repo's SVRScaledTarget (labels standardised), the
+# gamma that gamma='scale' would pick, every other parameter unchanged.
+#
+# Only a regression SVM with kernel='rbf' and gamma='scale'; a classifier (SVC)
+# keeps the usual fit. Above SVM_KERNEL_MAX_ROWS training molecules the usual
+# fit is used: the kernel is n x n floats (1.15 GB at 12,000).
+SVM_KERNEL_MAX_ROWS = 12000
+_KERNELS = {}            # (hash X_tr, hash X_va, gamma) -> (K_tr, K_va)
+_KERNELS_KEEP = 2
+
+
+def svm_kernel_applies(model, X_tr):
+    from sklearn.svm import SVR
+    if not isinstance(model, SVR):
+        return False
+    p = model.get_params()
+    return (p.get('kernel') == 'rbf' and p.get('gamma') == 'scale'
+            and np.asarray(X_tr).shape[0] <= SVM_KERNEL_MAX_ROWS)
+
+
+def svm_kernel_fit_predict(model, X_tr, y_tr, X_va, sample_weight=None):
+    """The model's own fit and predict, on a kernel computed once per
+    (X_tr, X_va) in this process. Returns the predictions on X_va."""
+    from sklearn.metrics.pairwise import rbf_kernel
+    A = np.asarray(X_tr, dtype=np.float64)
+    B = np.asarray(X_va, dtype=np.float64)
+    var = float(A.var())
+    gamma = 1.0 / (A.shape[1] * var) if var > 0 else 1.0
+    k = (array_hash(A), array_hash(B), gamma)
+    if k not in _KERNELS:
+        while len(_KERNELS) >= _KERNELS_KEEP:
+            _KERNELS.pop(next(iter(_KERNELS)))
+        _KERNELS[k] = (rbf_kernel(A, A, gamma=gamma),
+                       rbf_kernel(B, A, gamma=gamma))
+    K_tr, K_va = _KERNELS[k]
+    params = {p: v for p, v in model.get_params().items()
+              if p not in ('kernel', 'gamma', 'degree', 'coef0')}
+    m = type(model)(kernel='precomputed', **params)
+    if sample_weight is None:
+        m.fit(K_tr, y_tr)
+    else:
+        m.fit(K_tr, y_tr, sample_weight=np.asarray(sample_weight))
+    return np.asarray(m.predict(K_va))
 
 
 def cached_oof_predict(dataset, X, y, groups, n_splits=5, seed=0,
