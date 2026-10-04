@@ -62,6 +62,12 @@ check(len(reg) == 12 * 31 * 10 * 3,
 check(len(skipped) == 12 * 31 * 2 * 3,
       f'{len(skipped)} combinations not run as identical = 12 x 31 x 2 x 3')
 check(len(clf) == 12, f'classification runs {len(clf)} combinations')
+n1 = sum(len(f36.stage_units('logd', c, False, 1))
+         for c in f36.REGRESSION_CONDITIONS)
+n1h = len(f36.stage_units('herg', 'uniform', True, 1))
+check(n1 == 108 and n1h == 36,
+      f'stage 1 units: logd {n1} (3 conditions x 2 levels x 3 folds x 6), '
+      f'herg {n1h}')
 
 # 2 -----------------------------------------------------------------------
 X, y, g = toy()

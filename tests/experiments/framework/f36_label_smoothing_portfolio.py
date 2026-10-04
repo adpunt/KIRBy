@@ -191,6 +191,67 @@ PAIR_PERCENTILE = 1.0            # n35 CLOSE_PERCENTILE
 HUBER_C = 1.0                    # n33 TEACHER_HUBER_C
 
 
+# ---------------------------------------------------------------------------
+# Two stages. Owner's decision 2026-10-04, after the full grid finished 10 of
+# logd's 1,620 single-pass units in about a day.
+#
+# Stage 1: every combination, on folds 0-2 of the same 5-fold split, noise
+# draw 0, and two levels per condition: 0 and the middle one below.
+# Stage 2: only the combinations within STAGE2_TOLERANCE of the best in at
+# least one of that dataset's stage-1 tasks (f36_analyse.py --write-stage2),
+# on folds 0-2, every level of the condition's grid and draws 0, 1, 2.
+# Folds 0-2 are the first three of the 5-fold split, so a unit finished before
+# the change is the same unit and its rows are kept.
+# ---------------------------------------------------------------------------
+STAGE_FOLDS = (0, 1, 2)
+STAGE1_DRAWS = (0,)
+STAGE1_MID_LEVEL = {'outlier_p10': 0.5, 'outlier_only_p10': 0.5,
+                    'censoring': 0.25, 'uniform': 0.1}
+STAGE2_TOLERANCE = 0.02
+
+
+def stage_units(ds, cond, is_clf, stage):
+    """The (fold, level, draw, model, model input) units of one stage."""
+    from experiments.noise import n23_uncertainty_cleaning as n23
+    if stage == 1:
+        ld = [(0.0, 0), (float(STAGE1_MID_LEVEL[cond]), 0)]
+    elif stage == 2:
+        ld = n23._levels_and_draws(ds, cond, is_clf, draws=NOISE_DRAWS)
+    else:
+        raise ValueError(f'f36: stage must be 1 or 2, got {stage!r}')
+    return [(f, float(lv), int(dr), m, mi) for f in STAGE_FOLDS
+            for lv, dr in ld for m in MODELS for mi in MODEL_INPUTS]
+
+
+def in_stage(row, stage):
+    """Whether a row on disk belongs to a stage's design. Rows from the full
+    grid run before 2026-10-04 (folds 3-4, other levels at draw 0) are kept on
+    disk and left out of each stage's report by this."""
+    if int(row['fold']) not in STAGE_FOLDS:
+        return False
+    if stage == 1:
+        lv = float(row['level'])
+        return (int(row['draw']) in STAGE1_DRAWS
+                and lv in (0.0, float(STAGE1_MID_LEVEL[row['noise_condition']])))
+    return True
+
+
+def stage2_list_path(output_dir, ds):
+    return os.path.join(str(output_dir), EXP_ID,
+                        f'{ds}__stage2_combinations.json')
+
+
+def read_stage2_list(output_dir, ds):
+    path = stage2_list_path(output_dir, ds)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f'f36 stage 2 for {ds} needs {path}. Finish stage 1 for {ds}, then '
+            f'run: python tests/experiments/framework/f36_analyse.py '
+            f'{os.path.join(str(output_dir), EXP_ID)} --write-stage2')
+    with open(path) as fh:
+        return json.load(fh)['combinations']
+
+
 def combinations(is_clf):
     """Every (v, rule, preserve, scale, passes) this task type runs, and the
     ones skipped with their reason."""
@@ -646,9 +707,10 @@ def unit_rows_path(output_dir, ds, cond, unit):
 
 def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
              metric, task_type, factory, output_dir, errors, unavailable,
-             flush_every=200, flush_seconds=60.0):
+             flush_every=200, flush_seconds=60.0, keep=None):
     """Every combination of one passes schedule on one unit. Rows already on
-    disk are skipped. Returns the number of rows written.
+    disk are skipped. Returns the number of rows written. keep: the
+    method_setting labels to run (stage 2's list), or None for all.
 
     Rows go to disk every flush_every combinations or every flush_seconds,
     whichever comes first, so a job killed at its wall clock loses at most a
@@ -668,6 +730,8 @@ def run_unit(*, ds, cond, unit, passes, X_tr, X_va, y0, y_clean, y_val, g_tr,
 
     combos, _skipped = combinations(is_clf)
     combos = [c for c in combos if c[-1] == passes]
+    if keep is not None:
+        combos = [c for c in combos if setting_label(*c) in keep]
 
     def ident(setting, sim):
         return {'dataset': ds, 'experiment': EXP_ID, 'method': 'f36/smooth',
@@ -855,7 +919,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     from experiments.noise.noise_helpers import (
         noise_spec_for, inject_train_labels, pool_recipe_per_downstream_model)
     from experiments.noise import n07_remediation as n07
-    from experiments.noise import n23_uncertainty_cleaning as n23
     from experiments.noise import similarity_space as ss
 
     t_start = time.time()
@@ -896,6 +959,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                    for sp in MODEL_INPUTS]
 
     combos, skipped = combinations(is_clf)
+    stage = int(kwargs.get('stage') or 1)
+    keep = None
+    if stage == 2:
+        keep = set(read_stage2_list(output_dir, dataset_name))
     errors = _Errors()
     unavailable = {}
     written_total = 0
@@ -904,20 +971,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for passes in passes_list:
         for cond in conditions:
+            these = [c for c in combos if c[-1] == passes]
+            if keep is not None:
+                these = [c for c in these if setting_label(*c) in keep]
             ckpt = n07.FoldCheckpoint(
                 output_dir, EXP_ID, dataset_name, cond,
-                tag=f'units_{passes}_slice{k_slice}of{n_slice}',
-                fingerprint={'combos': len([c for c in combos
-                                            if c[-1] == passes]),
-                             'models': models})
-            level_draws = n23._levels_and_draws(dataset_name, cond, is_clf,
-                                                draws=NOISE_DRAWS)
-            units = [(f, float(lv), int(dr), m, mi)
-                     for f in range(len(folds)) for lv, dr in level_draws
-                     for m in models for mi in MODEL_INPUTS]
+                tag=f'units_{passes}_stage{stage}_slice{k_slice}of{n_slice}',
+                fingerprint={'combos': len(these), 'models': models,
+                             'stage': stage})
+            units = stage_units(dataset_name, cond, is_clf, stage)
             mine = units[k_slice::n_slice]
-            print(f"\n  f36 {dataset_name} {cond} passes={passes}: "
+            print(f"\n  f36 stage {stage} {dataset_name} {cond} "
+                  f"passes={passes}: {len(these)} combinations, "
                   f"{len(units)} units, this slice {len(mine)}")
+            if not these:
+                continue
             built = {}
             for unit in mine:
                 fold, level, draw, m, mi = unit
@@ -971,7 +1039,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         y_val=y_val, g_tr=g_tr, metric=metric,
                         task_type=task_type, factory=factories[m],
                         output_dir=output_dir, errors=errors,
-                        unavailable=unavailable)
+                        unavailable=unavailable, keep=keep)
                 except Exception as exc:
                     errors.add(f'unit|{cond}|{m}:{mi}', exc)
                     continue
@@ -986,6 +1054,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                          'this_slice': len(mine)}
 
     summary = {
+        'stage': stage,
+        'n_combinations_this_stage': (len(combos) if keep is None
+                                      else len(keep)),
         'metric': metric[0], 'lower_is_better': bool(metric[2]),
         'task_type': task_type, 'n_folds': n_folds, 'models': models,
         'model_inputs': list(MODEL_INPUTS), 'conditions': list(conditions),
@@ -1002,7 +1073,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'seconds': round(time.time() - t_start, 1),
     }
     out = os.path.join(str(output_dir), EXP_ID,
-                       f'{dataset_name}__slice{k_slice}of{n_slice}.json')
+                       f'{dataset_name}__stage{stage}__slice{k_slice}of'
+                       f'{n_slice}.json')
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, 'w') as fh:
         json.dump(convert_numpy(summary), fh, indent=1, default=str)
@@ -1012,32 +1084,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     return summary
 
 
-def status(output_dir, datasets=('logd', 'flab_expression_koenig', 'herg')):
-    """Units finished against units asked, per dataset, condition and passes
-    schedule, read from the unit checkpoint files only. Opens no data."""
+def status(output_dir, stage=1,
+           datasets=('logd', 'flab_expression_koenig', 'herg')):
+    """Units finished against units asked in one stage, per dataset, condition
+    and passes schedule, read from the unit checkpoint files only. Opens no
+    data. A unit finished under the full grid before 2026-10-04 counts when it
+    is one of this stage's units (same fold, level and draw)."""
     import glob
     from experiments.dataset_policy import DATASET_REGISTRY_DATA
-    from experiments.noise import n23_uncertainty_cleaning as n23
     root = os.path.join(str(output_dir), EXP_ID)
+    print(f'stage {stage}')
     print(f'{"dataset":<24} {"condition":<18} {"passes":<7} done / asked')
     for ds in datasets:
         is_clf = DATASET_REGISTRY_DATA[ds].task_type == 'classification'
         conds = CLASSIFICATION_CONDITIONS if is_clf else REGRESSION_CONDITIONS
+        if stage == 2 and not os.path.exists(stage2_list_path(output_dir, ds)):
+            print(f'{ds:<24} no stage-2 list yet: stage 1 is not analysed')
+            continue
         for p in (CLF_PASSES if is_clf else PASSES):
             for c in conds:
-                n_ld = len(n23._levels_and_draws(ds, c, is_clf,
-                                                 draws=NOISE_DRAWS))
-                asked = n_ld * 5 * len(MODELS) * len(MODEL_INPUTS)
+                wanted = {json.dumps(list(u))
+                          for u in stage_units(ds, c, is_clf, stage)}
+                pats = [f'{ds}__{c}.units_{p}_stage{stage}_slice*.jsonl']
+                if stage == 1:
+                    pats.append(f'{ds}__{c}.units_{p}_slice*.jsonl')
                 done = set()
-                for f in glob.glob(os.path.join(
-                        root, f'{ds}__{c}.units_{p}_slice*.jsonl')):
-                    with open(f) as fh:
-                        for line in fh:
-                            try:
-                                done.add(json.dumps(json.loads(line)['ckpt_key']))
-                            except (ValueError, KeyError):
-                                continue
-                print(f'{ds:<24} {c:<18} {p:<7} {len(done):>5} / {asked}')
+                for pat in pats:
+                    for f in glob.glob(os.path.join(root, pat)):
+                        with open(f) as fh:
+                            for line in fh:
+                                try:
+                                    k = json.dumps(json.loads(line)['ckpt_key'])
+                                except (ValueError, KeyError):
+                                    continue
+                                if k in wanted:
+                                    done.add(k)
+                print(f'{ds:<24} {c:<18} {p:<7} {len(done):>5} / '
+                      f'{len(wanted)}')
 
 
 def main():
@@ -1053,12 +1136,18 @@ def main():
     ap.add_argument('--passes', default=None,
                     help='comma list of once,fixed,anneal (default all)')
     ap.add_argument('--conditions', default=None)
+    ap.add_argument('--stage', type=int, choices=(1, 2), default=1,
+                    help='1: every combination on 3 folds, draw 0, levels 0 '
+                         'and the middle one. 2: the stage-2 list on every '
+                         'level and draw (needs f36_analyse --write-stage2)')
     args = ap.parse_args()
     if args.status:
-        status(args.output)
+        status(args.output, stage=args.stage)
         return
     if not args.dataset:
         ap.error('a dataset is needed unless --status')
+    if args.stage == 2:
+        read_stage2_list(args.output, args.dataset)  # fail before loading
     # NEVER A SEARCH. 1.0: a stored search counts only when every one of its
     # configurations is stored; COLD_SEARCH_MAX_CONFIGS 0: the 'small search
     # runs here' exception (find_best_hybrid._refuse_cold_search) is off. A
@@ -1078,7 +1167,8 @@ def main():
     from experiments.noise.noise_helpers import load_noise_data
     from kirby.find_best_hybrid import DEFAULT_N_FOLDS
     data, _reps = load_noise_data(args.dataset)
-    run(data, {'n_splits': DEFAULT_N_FOLDS}, args.output, args.dataset)
+    run(data, {'n_splits': DEFAULT_N_FOLDS}, args.output, args.dataset,
+        stage=args.stage)
 
 
 if __name__ == '__main__':

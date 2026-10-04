@@ -24,7 +24,9 @@ Printed:
       member the tasks only it covers.
 
 Usage:
-    python tests/experiments/framework/f36_analyse.py <output dir>/f36_label_smoothing_portfolio
+    python tests/experiments/framework/f36_analyse.py <output dir>/f36_label_smoothing_portfolio --stage 1
+    python tests/experiments/framework/f36_analyse.py <output dir>/f36_label_smoothing_portfolio --write-stage2
+    python tests/experiments/framework/f36_analyse.py <output dir>/f36_label_smoothing_portfolio --stage 2
 """
 import csv
 import json
@@ -53,11 +55,19 @@ def read_rows(root):
                         continue
 
 
-def collect(root):
+def collect(root, stage=None):
     """{task: {'lib': bool, 'metric': str,
-               'combos': {name: {fold: [scores over draws]}}}}"""
+               'combos': {name: {fold: [scores over draws]}}}}
+
+    stage 1 or 2 keeps only the rows in that stage's design
+    (f36.in_stage): folds 0-2, and for stage 1 draw 0 at level 0 and the
+    middle level. None keeps every row."""
     tasks = {}
+    if stage is not None:
+        from experiments.framework.f36_label_smoothing_portfolio import in_stage
     for r in read_rows(root):
+        if stage is not None and not in_stage(r, stage):
+            continue
         task = (r['dataset'], r['model_input'], r['model'],
                 r['noise_condition'], float(r['level']))
         t = tasks.setdefault(task, {'lib': bool(r['lower_is_better']),
@@ -123,12 +133,15 @@ def tname(task):
     return f'{ds} | {mi} | {m} | {cond} | level {lvl:g}'
 
 
-def analyse(root, tolerances=(0.0, 0.01, 0.02), out=sys.stdout, top=10):
-    tasks = collect(root)
+def analyse(root, tolerances=(0.0, 0.01, 0.02), out=sys.stdout, top=10,
+            stage=None):
+    tasks = collect(root, stage)
     P = lambda *a: print(*a, file=out)  # noqa: E731
-    P(f'{len(tasks)} tasks read from {root}')
+    P(f'{len(tasks)} tasks read from {root}'
+      + (f' (stage {stage} rows only)' if stage else ''))
     tables = {}
-    csv_path = os.path.join(root, 'f36_rankings.csv')
+    csv_path = os.path.join(
+        root, f'f36_rankings{"_stage" + str(stage) if stage else ""}.csv')
     with open(csv_path, 'w', newline='') as fh:
         w = csv.writer(fh)
         w.writerow(['dataset', 'model_input', 'model', 'condition', 'level',
@@ -200,7 +213,85 @@ def analyse(root, tolerances=(0.0, 0.01, 0.02), out=sys.stdout, top=10):
     return report
 
 
+def write_stage2(root, tol=None, out=sys.stdout):
+    """Per dataset, the combinations within `tol` of the best in at least one
+    stage-1 task, written to <root>/<dataset>__stage2_combinations.json.
+
+    Refuses a dataset whose stage 1 is not complete: every stage-1 task must
+    hold a row for every combination on every one of its folds (a combination
+    that declined still has a row, with no score). A list taken from part of
+    stage 1 would drop combinations nobody measured.
+    """
+    from experiments.framework import f36_label_smoothing_portfolio as f36
+    from experiments.dataset_policy import DATASET_REGISTRY_DATA
+    tol = f36.STAGE2_TOLERANCE if tol is None else float(tol)
+    P = lambda *a: print(*a, file=out)  # noqa: E731
+    tasks = collect(root, stage=1)
+    by_ds = defaultdict(dict)
+    for task, t in tasks.items():
+        by_ds[task[0]][task] = t
+    written = {}
+    for ds, ts in sorted(by_ds.items()):
+        is_clf = DATASET_REGISTRY_DATA[ds].task_type == 'classification'
+        n_combos = len(f36.combinations(is_clf)[0])
+        conds = (f36.CLASSIFICATION_CONDITIONS if is_clf
+                 else f36.REGRESSION_CONDITIONS)
+        n_tasks_asked = (len(conds) * 2 * len(f36.MODELS)
+                         * len(f36.MODEL_INPUTS))
+        short = []
+        for task, t in ts.items():
+            have = sum(1 for n, by_f in t['combos'].items()
+                       if n != NO_SMOOTHING
+                       and all(f in by_f for f in f36.STAGE_FOLDS))
+            if have < n_combos:
+                short.append((task, have))
+        if short or len(ts) < n_tasks_asked:
+            P(f'{ds}: stage 1 not complete, no list written. '
+              f'{len(ts)} of {n_tasks_asked} tasks have rows; '
+              f'{len(short)} tasks are missing combinations, e.g. '
+              + '; '.join(f'{tname(k)}: {h} of {n_combos}'
+                          for k, h in short[:3]))
+            continue
+        keep, per_task = set(), {}
+        for task, t in ts.items():
+            _folds, tab, _left = task_table(t)
+            if not tab:
+                continue
+            best = tab[0][2]
+            near = {n for n, _p, mu, _s in tab
+                    if n != NO_SMOOTHING and within(mu, best, tol, t['lib'])}
+            per_task[tname(task)] = len(near)
+            keep |= near
+        rec = {'dataset': ds, 'tolerance': tol,
+               'n_combinations_stage1': n_combos,
+               'n_kept': len(keep), 'n_stage1_tasks': len(ts),
+               'kept_per_task': per_task,
+               'combinations': sorted(keep)}
+        path = f36.stage2_list_path(os.path.dirname(root.rstrip('/')), ds)
+        with open(path, 'w') as fh:
+            json.dump(rec, fh, indent=1)
+        P(f'{ds}: {len(keep)} of {n_combos} combinations are within '
+          f'{tol:.0%} of the best in at least one of {len(ts)} stage-1 '
+          f'tasks -> {path}')
+        written[ds] = path
+    return written
+
+
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        raise SystemExit(__doc__)
-    analyse(sys.argv[1])
+    import argparse
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(
+        __file__)), '..', '..'))
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(
+        __file__)), '..', '..', '..', 'src'))
+    ap = argparse.ArgumentParser(description='f36 report')
+    ap.add_argument('root', help='<output>/f36_label_smoothing_portfolio')
+    ap.add_argument('--stage', type=int, choices=(1, 2), default=None,
+                    help='report only that stage\'s rows')
+    ap.add_argument('--write-stage2', action='store_true',
+                    help='write each dataset\'s stage-2 list from its '
+                         'complete stage 1, then exit')
+    a = ap.parse_args()
+    if a.write_stage2:
+        write_stage2(a.root)
+    else:
+        analyse(a.root, stage=a.stage)
