@@ -196,25 +196,20 @@ the refits it saves. The owner sets the cutoffs and decides.
 
 ## How to run the screen (srun only)
 
-Get a shell:
-`srun --clusters=htc --account=stat-cadd -p interactive --cpus-per-task=16 --mem=96G --time=03:00:00 --pty /bin/bash`
-
-Then type, one line at a time:
+In each srun (32 CPUs, 128G, 4 hours), type these three lines, with `--part 1/2` in one srun and
+`--part 2/2` in the other:
 ```
 cd /data/stat-ecr/scat9264/KIRBy
-git pull
 export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh
-python tests/experiments/framework/f38_neighbour_screen.py --list-tasks f38_tasks.txt
-head -1 f38_tasks.txt > f38_first.txt
-python tests/experiments/framework/f38_neighbour_screen.py --run-tasks f38_first.txt --jobs 1
-python tests/experiments/framework/f38_neighbour_screen.py --run-tasks f38_tasks.txt --jobs 8
+python tests/experiments/framework/f38_neighbour_screen.py --run-tasks f38_tasks.txt --jobs 32 --part 1/2
 ```
-
-- The fifth line runs the single cheapest task, to check that it works and to time it. It prints
-  `ok` or `FAIL`, the seconds taken, and where the log is.
-- The last line runs every task, 8 at a time.
-- Stopping and rerunning the same line skips every task already finished.
-- Results go to `tests/results/framework/f38_neighbour_screen/<dataset>/`, and logs to `logs/`
-  under that directory.
-- The default datasets are f34's four: herg, herg_ki, caco2 and adme_mdr1. `--datasets all`
-  gives every noise dataset.
+- When an srun hits its time limit, start a new one and type the same three lines. Finished tasks
+  are skipped; a half-finished task resumes from its rows.
+- Never delete `tests/results/framework/f38_neighbour_screen/`. On 2026-10-05 an `rm -rf` line in
+  an earlier version of these instructions was pasted again into a new srun, and it deleted 120
+  finished tasks.
+- `f38_tasks.txt` was written once with
+  `python tests/experiments/framework/f38_neighbour_screen.py --list-tasks f38_tasks.txt --draws 1`
+  (300 tasks: 4 datasets, each dataset's two decided models, 1 draw). Don't rewrite it while a run is going.
+- Measured 2026-10-04: about 60 minutes per round of 32 tasks on herg_ki, caco2 and adme_mdr1. herg
+  (7772 molecules) is much slower, and its tasks come last.
