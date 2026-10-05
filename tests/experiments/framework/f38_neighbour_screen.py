@@ -1001,6 +1001,47 @@ def list_tasks(datasets, models, path, draws=DRAWS):
     print(f'{len(tasks)} tasks written to {path}')
 
 
+def status(path, out_dir):
+    """One table: per dataset, how many tasks are finished, skipped, in
+    progress and not started, and how many setting rows the in-progress ones
+    hold. Reads files only."""
+    lines = [l.split() for l in Path(path).read_text().splitlines() if l.strip()]
+    by = {}
+    for t in lines:
+        ds, cond, fi, d, m = t
+        f = task_path(out_dir, ds, cond, int(fi), int(d), m)
+        st = by.setdefault(ds, {'tasks': 0, 'finished': 0, 'skipped': 0,
+                                'in progress': 0, 'not started': 0, 'rows': [],
+                                'seconds': []})
+        st['tasks'] += 1
+        if not f.exists():
+            st['not started'] += 1
+            continue
+        rows = [json.loads(x) for x in f.read_text().splitlines() if x.strip()]
+        kinds = {r.get('setting') for r in rows}
+        if '_done' in kinds:
+            st['finished'] += 1
+            st['seconds'] += [r['seconds'] for r in rows if r.get('setting') == '_done']
+        elif '_skipped' in kinds:
+            st['skipped'] += 1
+        else:
+            st['in progress'] += 1
+            st['rows'].append(len(rows))
+    print(f"{'dataset':10s} {'tasks':>5s} {'finished':>8s} {'skipped':>7s} "
+          f"{'running/stopped':>15s} {'not started':>11s}  rows in unfinished tasks "
+          f"(about 500 when done)   minutes per finished task")
+    for ds, st in by.items():
+        r = sorted(st['rows'])
+        rows = (f'{r[0]}-{r[-1]}, median {r[len(r) // 2]}' if r else '-')
+        mins = (f"{np.median(st['seconds']) / 60:.0f}" if st['seconds'] else '-')
+        print(f"{ds:10s} {st['tasks']:5d} {st['finished']:8d} {st['skipped']:7d} "
+              f"{st['in progress']:15d} {st['not started']:11d}  {rows:40s}  {mins}")
+    tot = {k: sum(v[k] for v in by.values())
+           for k in ('tasks', 'finished', 'skipped', 'in progress', 'not started')}
+    print(f"{'ALL':10s} {tot['tasks']:5d} {tot['finished']:8d} {tot['skipped']:7d} "
+          f"{tot['in progress']:15d} {tot['not started']:11d}")
+
+
 # f34's four datasets, so the screen's ranking can be set beside f34's.
 F34_DATASETS = ('herg', 'herg_ki', 'caco2', 'adme_mdr1')
 
@@ -1081,6 +1122,8 @@ def main():
     ap.add_argument('--list-tasks', metavar='PATH')
     ap.add_argument('--task', nargs=5,
                     metavar=('DATASET', 'CONDITION', 'FOLD', 'DRAW', 'MODEL'))
+    ap.add_argument('--status', metavar='PATH',
+                    help='print progress of the tasks listed in PATH and exit')
     ap.add_argument('--run-tasks', metavar='PATH',
                     help='run every task listed in PATH')
     ap.add_argument('--jobs', type=int, default=4)
@@ -1096,6 +1139,8 @@ def main():
     if a.list_tasks:
         ds = all_noise_datasets() if a.datasets == ['all'] else a.datasets
         return list_tasks(ds, a.models, a.list_tasks, DRAWS[:a.draws])
+    if a.status:
+        return status(a.status, a.out)
     if a.run_tasks:
         return run_tasks(a.run_tasks, a.jobs, a.out, a.part, a.only, a.reverse)
     if a.task:
