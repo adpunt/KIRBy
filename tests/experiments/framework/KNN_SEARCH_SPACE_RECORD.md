@@ -644,21 +644,85 @@ Not covered: nothing measured a count above 20 for cleaning, and prediction was 
 
 # Axis 5: how much each neighbour counts
 
-Numbers brought to Adelaide 2026-10-05; no decision yet. Summary of what was counted:
+The question: when the k neighbours' labels are averaged, does each count the same, or does a
+closer one count more? Five ways, defined in `src/kirby/similarity/neighbour_weighting.py`:
 
-Counting every neighbour equally wins no group in f34, where a group is one combination of
-representation, distance and neighbour count: 0 of 688 on herg_ki, 0 of 680 on caco2, 0 of 680 on
-adme_mdr1, 0 of 688 on herg.
+| name in the code | in words |
+|---|---|
+| uniform | all k count the same |
+| inverse | twice as far, half the say |
+| inverse_square | twice as far, a quarter of the say |
+| gaussian | the say falls off smoothly, scaled to how far this molecule's own neighbours sit |
+| rank | closest counts 1, second a half, third a third; only the order matters, not the distance |
 
-In f38, counting equally is best at finding corrupted labels on 1 of herg_ki's 7 damage kinds, 0
-of caco2's 7, 0 of adme_mdr1's 7, 0 of herg's 6. Best at fixing on 0 of 7, 1 of 7, 0 of 7 and 1
-of 6. Censoring excluded throughout.
+**Not swept today.** Equal counting in label_smooth and knn_smooth (`n07_remediation.py:995,
+1015`) and in three of the four neighbour scores in `noise_estimation.py`. One over distance in
+distance_weighted only (`noise_estimation.py:487-488`). s05 and s10 read an environment variable
+defaulting to equal; s04 passes nothing, so sklearn counts equally.
 
-gaussian is best at finding on all 6 of herg's damage kinds, by 0.0170 to 0.0185 AUROC against a
-median fold range of 0.0110 to 0.0145. On the three regression datasets the gaps between schemes
-are smaller than the fold range.
+## Evidence
 
-DECISION:
+f34: equal counting wins no group on any dataset, where a group is one (representation, distance,
+neighbour count): 0 of 688 on herg_ki, 0 of 680 on caco2, 0 of 680 on adme_mdr1, 0 of 688 on herg.
+
+f38, with axes 1 to 4 as decided. A cell is one (kept representation, damage kind, fold, model,
+neighbour count). No importance weighting, kept distances only, censoring left out.
+
+Finding corrupted labels, cells won:
+
+| dataset | cells | uniform | inverse | inverse_square | gaussian | rank |
+|---|---|---|---|---|---|---|
+| herg_ki | 1470 | 252 | 235 | 414 | 133 | 436 |
+| caco2 | 1470 | 233 | 159 | 365 | 209 | 504 |
+| adme_mdr1 | 1470 | 126 | 128 | 617 | 108 | 491 |
+| herg | 471 | 2 | 11 | 0 | 288 | 170 |
+
+Fixing corrupted labels, same cells:
+
+| dataset | uniform | inverse | inverse_square | gaussian | rank |
+|---|---|---|---|---|---|
+| herg_ki | 142 | 208 | 269 | 209 | 642 |
+| caco2 | 200 | 193 | 303 | 320 | 454 |
+| adme_mdr1 | 143 | 259 | 570 | 221 | 277 |
+| herg | 66 | 62 | 49 | 83 | 211 |
+
+Biggest single loss in detection AUROC if that scheme is dropped:
+
+| dataset | uniform | inverse | inverse_square | gaussian | rank |
+|---|---|---|---|---|---|
+| herg_ki | 0.0253 | 0.0109 | 0.0323 | 0.0137 | 0.0528 |
+| caco2 | 0.0365 | 0.0095 | 0.0424 | 0.0115 | 0.0309 |
+| adme_mdr1 | 0.0133 | 0.0046 | 0.0204 | 0.0048 | 0.0261 |
+| herg | 0.0012 | 0.0051 | none won | 0.0107 | 0.0146 |
+
+rank and inverse_square together win 850 of 1470 cells on herg_ki, 869 on caco2 and 1108 on
+adme_mdr1. On herg, inverse_square wins nothing and gaussian wins 288 of 471.
+
+## DECISION, axis 5 (Adelaide, 2026-10-05)
+
+**Keep two: rank and inverse_square. Both groups.**
+
+| group | settings before this axis | schemes | settings |
+|---|---|---|---|
+| full_knn | 69 | 2 | 138 |
+| fast_knn | 33 | 2 | 66 |
+
+Reasons:
+
+- uniform cut. Wins 0 of 688 groups on every f34 dataset, 2 of herg's 471 f38 cells, and is never
+  first on any dataset. This is what the code does today, so the control goes with it.
+- inverse cut. Smallest cost to lose of the five: biggest single loss 0.0109 AUROC on herg_ki,
+  0.0095 on caco2, 0.0046 on adme_mdr1.
+- gaussian cut. Biggest loss 0.0137 on the three regression datasets.
+
+Carried with an asterisk, and it is larger here than on the earlier axes: gaussian is the best of
+the five on herg, winning 288 of 471 cells, and cutting it costs 0.0107 AUROC there. herg is the
+only classification dataset and has 0 of 60 f38 tasks finished. Keeping gaussian as a third would
+be 207 and 99 settings. Revisit when herg lands.
+
+This axis is free on the experiments that only score molecules and never refit (n01, n14, n22,
+n32, n37, n40, n41): f38 computed all five schemes in one pass. It multiplies refits only for
+label_smooth, knn_smooth and the sample-weighting methods.
 
 ---
 
