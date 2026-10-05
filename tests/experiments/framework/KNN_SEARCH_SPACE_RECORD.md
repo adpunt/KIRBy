@@ -295,92 +295,160 @@ on herg alone or on compute.
 The noise suite refuses anything except manhattan and euclidean on a feature space.
 `_CDIST = {'manhattan': 'cityblock', 'euclidean': 'euclidean'}` (`similarity_space.py:146`) and
 `SimilaritySetting.__post_init__` raises on any other name (`similarity_space.py:184-185`).
+Adding a name costs two lines in `_CDIST` plus a rule in `preprocessing.weight_exponent`, which
+returns 1 for manhattan, 0.5 for euclidean and None for anything else
+(`preprocessing.py:342-361`).
 
 The similarity experiments split. s04, s05, s08's kNN arm and s10's prediction task pass no
 distance, so sklearn uses euclidean. s01, s02, s06, s08's distance matrices, s10's
 neighbour-feature task, s12's non-SMILES branch and s13's retrieval read
-`KIRBY_DISTANCE_METRIC`, which defaults to manhattan (`distance_config.py:68`).
+`KIRBY_DISTANCE_METRIC`, default manhattan (`distance_config.py:68`).
 
-`distance_config.py:66` defines four names: manhattan, euclidean, cosine, minkowski_p0.5.
-Adding a name to the noise suite needs two lines in `_CDIST` plus a rule in
-`preprocessing.weight_exponent`, which returns 1 for manhattan, 0.5 for euclidean and None for
-anything else (`preprocessing.py:342-361`).
-
-Numbers 8 and 9 are not affected: Tanimoto bits and forest leaves each carry their own fixed
-distance.
+Numbers 8 and 9 on axis 1 are unaffected: Tanimoto bits and forest leaves each carry their own
+fixed distance.
 
 ## Evidence
 
-f38 detection AUROC against manhattan. No importance weighting, 10 neighbours, every neighbour
-counted equally. A cell is one (damage kind, fold, model). Censoring left out. Each entry is
-cells won of cells compared.
+**f18_distance_metric_sweep.** Predicting a held-out molecule's activity from its 5 nearest
+neighbours, scored as Spearman against the true activity. herg_ki (1412 molecules) and logd
+(5028), 7 representations each, 5 folds. One block is one (dataset, representation); 14 in all.
 
-On number 1, the best single representation:
+| distance | blocks won, herg_ki | blocks won, logd |
+|---|---|---|
+| cosine | 2 of 7 | 2 of 7 |
+| manhattan | 2 of 7 | 1 of 7 |
+| dice | 0 of 7 | 2 of 7 |
+| tversky | 1 of 7 | 1 of 7 |
+| soergel | 1 of 7 | 1 of 7 |
+| minkowski p=0.5 | 1 of 7 | 0 of 7 |
+| euclidean | 0 of 7 | 0 of 7 |
 
-| distance | herg_ki | caco2 | adme_mdr1 | herg |
-|---|---|---|---|---|
-| euclidean | 30 of 70 | 35 of 70 | 32 of 70 | 10 of 60 |
-| cosine | 32 of 70 | 35 of 70 | 37 of 70 | 33 of 60 |
-| correlation | 38 of 70 | 31 of 70 | 33 of 70 | 32 of 60 |
-| minkowski_p0.5 | 44 of 70 | 42 of 70 | 29 of 70 | 33 of 60 |
+Euclidean ranked LAST among the coefficients defined on that representation in 11 of the 14
+blocks, and second-last in 2. It was never better than fourth.
 
-On number 5, the best predictive hybrid:
+**f34_neighbour_weighting_cross.** Same question, 3 datasets, 7 representations, 5 folds, rmse.
+A group is one (representation, neighbour-weighting scheme, neighbour count).
+
+| distance | herg_ki | caco2 | adme_mdr1 |
+|---|---|---|---|
+| manhattan | 48 of 210 | 21 of 210 | 7 of 210 |
+| cosine | 43 of 210 | 47 of 210 | 1 of 210 |
+| euclidean | 22 of 210 | 7 of 210 | 5 of 210 |
+| correlation | 0 of 30 | 1 of 30 | 0 of 30 |
+| chebyshev | 0 of 30 | 0 of 30 | 0 of 30 |
+| mahalanobis | 0 of 30 | 0 of 30 | 0 of 30 |
+
+**f34_full_sweep.** Winning distance on each hybrid space, in the dataset's own metric:
+
+| dataset | hybrid 1 | hybrid 2 |
+|---|---|---|
+| herg_ki | minkowski p=0.5 | manhattan |
+| caco2 | cosine | cosine |
+| adme_mdr1 | manhattan | cosine |
+| herg | minkowski p=0.3 | minkowski p=0.5 |
+
+Euclidean wins 0 of the 8. Neither currently allowed distance wins on 5 of the 8.
+
+**f38_neighbour_screen.** Finding corrupted labels. Cells won against manhattan on the best
+predictive hybrid. A cell is one (damage kind, fold, model). Censoring excluded because its score
+is inverted (section 6). No importance weighting, 10 neighbours, every neighbour counted equally.
 
 | distance | herg_ki | caco2 | adme_mdr1 | herg |
 |---|---|---|---|---|
 | euclidean | 30 of 70 | 44 of 70 | 32 of 70 | 9 of 23 |
 | cosine | 34 of 70 | 38 of 70 | 28 of 70 | 14 of 19 |
 | correlation | 27 of 70 | 34 of 70 | 21 of 70 | 13 of 19 |
-| minkowski_p0.5 | 30 of 70 | 30 of 70 | 32 of 70 | 8 of 15 |
+| minkowski p=0.5 | 30 of 70 | 30 of 70 | 32 of 70 | 8 of 15 |
 
-Largest single win over manhattan: +0.0684 AUROC (cosine, caco2, number 1).
+Largest single win over manhattan: 0.0684 AUROC. For cleaning the distance is close to
+indifferent; for predicting activity it is not.
 
-f34_full_sweep, predicting a held-out molecule's activity. Winning distance per
-(dataset, representation), over every distance f18 defines for that representation's kind:
+**Duplicates.** Share of a molecule's 10 nearest neighbours two distances agree on. Same
+representation, same importance weighting, only the distance differs. Kept representations only.
 
-| dataset | winner on the two hybrid spaces | winner on the single representations |
+| pair | herg_ki | caco2 | adme_mdr1 |
+|---|---|---|---|
+| correlation vs cosine | 0.983 | 0.970 | 0.928 |
+| manhattan vs minkowski p=0.5 | 0.934 | 0.894 | 0.861 |
+| every other pair | 0.81 to 0.90 | 0.74 to 0.83 | 0.55 to 0.79 |
+
+herg has no overlap rows; its tasks have not finished.
+
+## Other experiments that touch the distance, and why they are not used above
+
+- f34_importance_sweep has a distance axis but a reduced coefficient list with no euclidean on
+  continuous features, so its tally is not comparable.
+- f23_noise_cleaning_metric has one distance pair, 0.6370 against 0.6475 detection AUROC, but one
+  side is raw counts and the other z-scored (`f23_noise_cleaning_metric.py:129,137`). It differs
+  in two ways at once.
+- similarity_metrics/structural_rerank correlates a pairwise distance with activity difference,
+  not neighbour prediction. Whole dataset, no folds.
+- similarity_metrics/base_rep_comparison compares cosine against euclidean on one antibody
+  representation across 4 datasets; cosine ahead on 3.
+- f22 hardcodes euclidean (`f22_similarity_feature_sources.py:326,405,439,514`). c04 passes no
+  metric (`c04_importance_as_metric.py:116,122`). f17 and f20 have no distance axis. f19 has no
+  result files.
+
+## Settings cost
+
+| distances kept | full_knn | fast_knn |
 |---|---|---|
-| herg_ki | minkowski_p0.5, manhattan | cosine 1, tanimoto 2, soergel 1, euclidean 1, correlation 2, minkowski_p0.3 1, manhattan 1 |
-| caco2 | cosine, cosine | tanimoto 4, cosine 2, correlation 1, dice 1, minkowski_p0.3 1 |
-| adme_mdr1 | manhattan, cosine | dice 4, soergel 1, cosine 2, correlation 1, minkowski_p0.5 1 |
-| herg | minkowski_p0.3, minkowski_p0.5 | euclidean 2, manhattan 3, dice 1, cosine 3, correlation 1 |
+| 2 | 58 | 41 |
+| 3 | 86 | 61 |
+| 4 | 114 | 81 |
 
-So on the hybrid spaces, which are the ones the noise experiments mostly use, the winner was
-neither manhattan nor euclidean on 5 of the 8 (dataset, hybrid) pairs.
+The fractional Minkowskis and soergel are the dear ones per setting. f34 measured soergel on a
+count fingerprint at 80 minutes on one core, and `pdv` under the two fractional Minkowskis took
+two and a half hours of f34's 5 hour 40 minute total.
+`SIMILARITY_AUTORESEARCH_STATUS.md:1713-1715` times scipy's cdist at 39 seconds under manhattan
+against over 7 minutes under minkowski, on 1412 by 1412 molecules at 2048 features. NOT verified
+in this session.
 
-f34_neighbour_weighting_cross, same question on 7 representations and 3 datasets. Winner per
-(dataset, representation) by coefficient, over 21 pairs: dice 7, cosine 5, tanimoto 4,
-euclidean 1, tversky 1, soergel 1, minkowski_p0.3 1, minkowski_p0.5 1. chebyshev won 0 of 90
-groups it was defined in, mahalanobis 0 of 90, correlation 1 of 90.
+## DECISION, axis 2 (Adelaide, 2026-10-05)
 
-## What cannot travel as a plain sklearn argument
-
-Checked against `sklearn.neighbors.VALID_METRICS` on 2026-10-01 (f34 write-up result 7).
-sklearn accepts `dice` and `jaccard`. It has no name for `tanimoto`, `tversky` or `soergel`, and
-none of these names works on a count fingerprint. Those need a precomputed distance matrix, which
-is the path `simeval.py:161` already uses. On real MACCS bits scipy's `jaccard` equals simeval's
-tanimoto to 1.110e-16.
-
-## Cost
-
-A distance is one setting per feature space, so each name added or removed moves the count by the
-number of weighted feature spaces kept on axis 1: 7 on full_knn, 4 on fast_knn, times the 4
-importance weightings.
-
-| distances kept | full_knn settings | fast_knn settings |
+| group | kept | cut |
 |---|---|---|
-| 1 | 30 | 17 |
-| 2 (today) | 58 | 33 |
-| 3 | 86 | 49 |
-| 4 | 114 | 65 |
+| full_knn | manhattan, cosine, minkowski p=0.5 | euclidean, correlation |
+| fast_knn | manhattan, cosine | euclidean, correlation, minkowski p=0.5 |
 
-Counts include numbers 8 and 9 where they are kept, at 1 setting each.
+Settings: full_knn 86, fast_knn 41. fast_knn is unchanged from today's count.
 
-Note on cost per distance, not just per setting: the fractional Minkowskis and soergel are the
-dear ones. f34 measured soergel on a count fingerprint at 80 minutes on one core, and `pdv` under
-the two fractional Minkowskis took two and a half hours of its 5 hour 40 minute total.
+Reasons recorded:
 
-DECISION:
+- euclidean cut in both groups. It wins 0 of f18's 14 blocks and ranks last in 11 of them, wins 0
+  of f34_full_sweep's 8 hybrid spaces, and takes 5 to 22 of 210 groups in f34_cross.
+- correlation cut in both groups. Duplicate of cosine at 0.928 to 0.983 shared neighbours, and it
+  wins 0 of 30 groups on herg_ki and adme_mdr1 and 1 of 30 on caco2 in f34_cross.
+- minkowski p=0.5 cut on fast_knn, for compute. Near-duplicate of manhattan at 0.861 to 0.934
+  shared neighbours, and the dearest of the three per setting. This is a compute cut, not an
+  evidence cut: it wins 1 of f18's 14 blocks and is the winner on 3 of f34_full_sweep's 8 hybrid
+  spaces.
+
+Carried with an asterisk: herg has 0 of 60 f38 tasks finished and no overlap rows, so every
+fast_knn judgement rests on f18, f34 and compute rather than on herg's cleaning results. Revisit
+when herg lands.
+
+## Not reached by this decision
+
+The only distance gaps anywhere that exceed their own fold spread are on fingerprint
+representations, and they go to the set-overlap family against euclidean. From f34_full_sweep,
+fingerprint representations only:
+
+| dataset | representation | best | euclidean | gap | fold spread |
+|---|---|---|---|---|---|
+| adme_mdr1 | atom_pair | 0.5401 (dice) | 0.6324 | 0.0923 | 0.0200 |
+| adme_mdr1 | ecfp4 | 0.5823 (tanimoto) | 0.6685 | 0.0862 | 0.0170 |
+| adme_mdr1 | avalon | 0.5871 (dice) | 0.6167 | 0.0297 | 0.0164 |
+| herg_ki | avalon | 0.6367 (tanimoto) | 0.6555 | 0.0188 | 0.0179 |
+
+Four of 19 fingerprint blocks. Everywhere else the gaps sit inside the fold spread.
+
+The noise suite cannot reach these by adding dice or tanimoto to its feature-space distances,
+because it z-scores every matrix first (`n07_remediation.py:1629-1631`, and
+`similarity_space.py:662-667` requires it). A z-scored bit is a signed number, so there is no set
+to intersect. The only place set-overlap survives there is axis 1's fixed Tanimoto space, which is
+always ECFP4 rather than whichever fingerprint `base_1` happens to be — ecfp4 on caco2, and on
+herg_ki's svm. OPEN, not decided: whether a base representation should ever be passed raw.
 
 ---
 
