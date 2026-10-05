@@ -787,8 +787,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results['per_budget'][budget] = convert_numpy(budget_results)
 
-    # Summary: which strategy has the highest information per feature, one
-    # budget at a time. Every density here is measured on validation rows that
+    # Summary, one budget at a time. Every density here is measured on validation rows that
     # took no part in choosing the features, for all five strategies alike.
     #
     # There is deliberately no average across budgets. The MI estimate runs on
@@ -796,27 +795,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # stops growing with the budget while the denominator keeps growing. That
     # makes the number comparable between the five strategies at one budget and
     # meaningless between budgets, and averaging it mixes the two.
+    # 2026-10-05, owner delegated, 2026-10-05: the 'best_strategy_per_budget'
+    # label is removed. It picked the highest MI per feature, which favours
+    # whichever method built the fewest features (results audit C17a). The
+    # summary now reports, for every method at every budget, the MI with the
+    # labels on the held-out rows (nats, mean over folds) and the width
+    # actually built (features, mean over folds and per fold). MI per feature
+    # is kept beside them for reference only.
     per_budget_density = {}
-    best_per_budget = {}
+    per_budget_mi = {}
+    per_budget_width = {}
+    per_budget_width_per_fold = {}
     for budget in budgets:
-        cell = {}
+        cell, cell_mi, cell_w, cell_wf = {}, {}, {}, {}
         for strategy in strategies:
-            d = results['per_budget'].get(budget, {}).get(strategy, {}).get('mi_density')
+            _r = results['per_budget'].get(budget, {}).get(strategy, {})
+            d = _r.get('mi_density')
             cell[strategy] = (float(d) if d is not None and not np.isnan(d)
                               else float('nan'))
+            _mi = _r.get('mi')
+            cell_mi[strategy] = (float(_mi) if _mi is not None
+                                 and not np.isnan(_mi) else float('nan'))
+            _wf = _r.get('width_built_per_fold') or []
+            cell_wf[strategy] = [int(w) for w in _wf]
+            cell_w[strategy] = (float(np.mean(_wf)) if _wf else float('nan'))
         per_budget_density[budget] = cell
-        finite = {k: v for k, v in cell.items() if not np.isnan(v)}
-        best_per_budget[budget] = (max(finite, key=finite.get) if finite else None)
+        per_budget_mi[budget] = cell_mi
+        per_budget_width[budget] = cell_w
+        per_budget_width_per_fold[budget] = cell_wf
 
     results['summary'] = {
+        'mi_per_budget': per_budget_mi,
+        'mi_unit': 'nats, held-out rows, mean over folds',
+        'width_built_per_budget': per_budget_width,
+        'width_built_per_budget_per_fold': per_budget_width_per_fold,
         'mi_density_per_budget': per_budget_density,
-        'best_strategy_per_budget': best_per_budget,
         'mi_density_measured_on': 'held-out rows',
         'mi_density_comparable_across_budgets': False,
     }
     for budget in budgets:
-        print(f"\n  Budget={budget} MI density: {per_budget_density[budget]}")
-        print(f"  Budget={budget} best strategy: {best_per_budget[budget]}")
+        print(f"\n  Budget={budget}:")
+        for strategy in strategies:
+            print(f"    {strategy:<24} MI={per_budget_mi[budget][strategy]:.4f} "
+                  f"width built={per_budget_width[budget][strategy]:.1f} features")
 
     print(f"\n  [timing] c17 total: {time.time() - _t_run0:.1f}s")
     return results

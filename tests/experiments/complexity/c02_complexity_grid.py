@@ -661,6 +661,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X_concat[train_idx])
                 X_val_s = scaler.transform(X_concat[val_idx])
+                # 2026-10-05, owner delegated, 2026-10-05: each validation
+                # feature is capped at the range that feature takes on the
+                # scaled training rows, before the PCA projection. On adme_hlm
+                # one validation molecule sat 83 million training standard
+                # deviations out and the dnn's rmse ran to thousands.
+                X_val_s = np.clip(X_val_s, X_train_s.min(0), X_train_s.max(0))
                 X_train_p = pca.fit_transform(X_train_s)
                 X_val_p = pca.transform(X_val_s)
                 m = model_factory()
@@ -1144,6 +1150,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'pca_baselines': pca_baselines,
         'pca_baseline_widths': pca_baseline_widths,
         'pca_baseline_fold_scores': pca_baseline_fold_scores,
+        # 2026-10-05, owner delegated, 2026-10-05: records that the PCA
+        # baselines cap each scaled validation feature at its training range.
+        'pca_validation_feature_cap': 'clip to training-row min/max after StandardScaler',
         'heatmap': heatmap,
         'importance_wins': importance_wins,
         'conditions': conditions,

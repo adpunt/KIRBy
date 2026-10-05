@@ -642,6 +642,20 @@ def _run_information_retention(data, budgets, dataset_name=None,
 
         print(f"    budget={budget}: MI(X,Y)={mi_xy_avg:.4f}, info_retained={mi_xx_avg:.4f}")
 
+    # 2026-10-05, owner delegated, 2026-10-05: the budget (features) where
+    # MI(X,Y) is highest, reported beside the inflection budget below. On
+    # some datasets the inflection budget came after this peak.
+    _mi_peak = np.array(results['mi_xy'], dtype=float)
+    if _mi_peak.size and np.any(np.isfinite(_mi_peak)):
+        _pk = int(np.nanargmax(_mi_peak))
+        results['peak_budget'] = results['budgets'][_pk]
+        results['peak_mi_xy'] = float(_mi_peak[_pk])
+        print(f"    Peak MI(X,Y): budget {results['peak_budget']} "
+              f"(MI={results['peak_mi_xy']:.4f})")
+    else:
+        results['peak_budget'] = None
+        results['peak_mi_xy'] = None
+
     # Find inflection: where MI(X,Y) gain drops below 10% of max gain
     if len(results['mi_xy']) >= 3:
         mi_arr = np.array(results['mi_xy'], dtype=float)
@@ -685,7 +699,8 @@ def _run_information_retention(data, budgets, dataset_name=None,
                 # budgets[i] (the last productive budget) — that is the
                 # inflection point, not budgets[i+1].
                 results['inflection_budget'] = results['budgets'][inflection_idx]
-                print(f"    Inflection point: budget ~{results['inflection_budget']}")
+                print(f"    Inflection point: budget ~{results['inflection_budget']} "
+                      f"(peak MI at budget {results.get('peak_budget')})")
             else:
                 print("    No inflection detected: no budget from which the "
                       "MI gain stays under 10% of the largest for the rest of "
@@ -702,6 +717,42 @@ def _run_information_retention(data, budgets, dataset_name=None,
 # =========================================================================
 # 9c: Effective rank analysis
 # =========================================================================
+
+def _effective_rank_centred_only(X):
+    """Effective rank, exp(entropy of normalised singular values), with
+    each feature centred but NOT re-scaled to unit variance.
+
+    2026-10-05, owner delegated, 2026-10-05: used for the PCA arm only.
+    compute_effective_rank (_shared.py) standardises every feature first. PCA
+    components are uncorrelated, so after that standardisation every
+    singular value is equal and the effective rank is the number of
+    components whatever the variance spread (results audit C09a). Centring
+    only keeps each component's variance, so this rank reflects how the
+    variance is spread across the components. The SVD path matches
+    compute_effective_rank otherwise (TruncatedSVD to 500 components above
+    2000 features).
+    """
+    X = np.asarray(X, dtype=float)
+    Xc = X - X.mean(axis=0, keepdims=True)
+    n, d = Xc.shape
+    if d > 2000:
+        from sklearn.decomposition import TruncatedSVD
+        svd = TruncatedSVD(n_components=min(500, n - 1), random_state=42)
+        svd.fit(Xc)
+        sv = svd.singular_values_
+    else:
+        try:
+            sv = np.linalg.svd(Xc, full_matrices=False, compute_uv=False)
+        except np.linalg.LinAlgError:
+            from scipy.linalg import svd as scipy_svd
+            sv = scipy_svd(Xc, full_matrices=False, compute_uv=False,
+                           lapack_driver='gesvd')
+    sv = sv[sv > 1e-10]
+    if len(sv) == 0:
+        return 0.0
+    p = sv / sv.sum()
+    return float(np.exp(-np.sum(p * np.log(p))))
+
 
 def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                                  n_folds=5):
@@ -722,7 +773,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
     groups = data.get('groups')
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
-    results = {'budgets': [], 'hybrid_rank': [], 'pca_rank': [], 'random_rank': [],
+    results = {'budgets': [], 'hybrid_rank': [], 'pca_rank_centred': [], 'random_rank': [],
                # Budgets whose recipe named internal evaluator 'match',
                # which this path resolves to lightgbm; see the note in
                # the loop below.
@@ -730,7 +781,20 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                'n_feat_per_fold': [], 'pca_failures': [], 'from_fallback': [],
                # Owner's set (2026-10-02): one hybrid-rank curve per rule
                # hybrid, keyed 'model|family|slot', and every slot not filled.
-               'rule_curves': {}, 'rule_missing': []}
+               'rule_curves': {}, 'rule_missing': [],
+               # 2026-10-05, owner delegated, 2026-10-05: how each arm's
+               # features are scaled before its effective rank is taken.
+               'effective_rank_scaling': {
+                   'hybrid': ('each feature standardised to unit variance '
+                              '(compute_effective_rank), as before'),
+                   'random': ('each feature standardised to unit variance '
+                              '(compute_effective_rank), as before'),
+                   'pca': ('components centred, not re-scaled to unit '
+                           'variance, so the rank reflects the variance '
+                           'spread across components; before 2026-10-05 '
+                           'they were standardised and the rank equalled the '
+                           'number of components'),
+               }}
 
     augs = data.get('augmentations')
     sample_X = next(iter(reps.values()))
@@ -883,7 +947,10 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
             try:
                 pca = PCA(n_components=n_feat_fold)
                 X_pca = pca.fit_transform(StandardScaler().fit_transform(X_concat[train_idx]))
-                pca_fold_ranks.append(compute_effective_rank(X_pca))
+                # 2026-10-05, owner delegated: components are NOT re-scaled
+                # to unit variance before the rank (see
+                # _effective_rank_centred_only).
+                pca_fold_ranks.append(_effective_rank_centred_only(X_pca))
             except Exception as exc:
                 # Recorded, not swallowed: a NaN pca_rank used to be
                 # indistinguishable from a PCA that never ran.
@@ -921,7 +988,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
             list(hybrid_fold_widths))
         results.setdefault('hybrid_width_mean', []).append(_hw)
         results.setdefault('pca_random_width_mean', []).append(_pw)
-        results['pca_rank'].append(float(pca_rank))
+        results['pca_rank_centred'].append(float(pca_rank))
         results['random_rank'].append(float(random_rank))
         # Per-fold effective ranks behind the three means (2026-10-05).
         results.setdefault('hybrid_rank_per_fold', []).append(hybrid_fold_ranks)

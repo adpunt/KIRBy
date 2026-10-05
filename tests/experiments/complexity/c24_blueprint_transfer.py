@@ -23,6 +23,9 @@ Dependencies: None (standalone). Uses find_best_hybrid or precomputed search.
     made; the code, the printed reading and delta_meaning now describe the same
     thing, which they did not before.
 
+In one line (2026-10-05, owner delegated): each off-diagonal cell is a fresh
+search with one more fold left out. Nothing is transferred from the source fold.
+
 Design (as run):
     For each CV fold k:
         1. Discover the optimal blueprint on fold k's training data.
@@ -38,7 +41,8 @@ Design (as run):
         - Cross-fold blueprints will degrade significantly.
         - Large delta = selection is training-data-specific.
 
-    Also reports Nogueira stability index across fold blueprints.
+    Also reports Nogueira stability index (phi) across fold blueprints; its
+    standard error is not reported (removed 2026-10-05, owner delegated).
 
 Usage:
     python c24_blueprint_transfer.py --dataset logd --mode full
@@ -727,8 +731,10 @@ def run(data, config, output_dir, dataset_name):
     print(f"\n  Step 4: Nogueira stability index")
 
     feature_set_list = [fold_feature_sets[k] for k in sorted(fold_feature_sets.keys())]
-    phi, se = nogueira_stability(feature_set_list, total_features)
-    print(f"    Nogueira phi: {phi:.4f} (SE={se:.4f})")
+    # 2026-10-05, owner delegated, 2026-10-05: the standard error is no
+    # longer stored or printed; phi and its per-fold inputs are kept.
+    phi, _se_not_reported = nogueira_stability(feature_set_list, total_features)
+    print(f"    Nogueira phi: {phi:.4f}")
     # 2026-10-05: the 95% interval and the HIGH/MODERATE/LOW label printed
     # from it are removed (no intervals at 3-5 folds). phi is reported with
     # the per-fold feature sets it is computed from.
@@ -749,6 +755,13 @@ def run(data, config, output_dir, dataset_name):
         # data. No cell has seen the rows it is scored on.
         'cell_recipe_provenance': cell_recipe_provenance,
         'diagonal_selection_saw': 'every fold except the target',
+        # 2026-10-05, owner delegated, 2026-10-05: what one off-diagonal cell
+        # is, in one line.
+        'off_diagonal_cell_description': (
+            'a fresh search with one more fold left out: the recipe and '
+            'features are searched on every fold except the target and the '
+            'source, then scored on the target fold; nothing is transferred '
+            'from the source fold'),
         # ⛔ What the search was allowed to choose from, stored beside the
         # numbers it produced. 'shipped' means no cut.
         'condition_cuts': {
@@ -776,7 +789,6 @@ def run(data, config, output_dir, dataset_name):
         },
         'stability': {
             'nogueira_phi': phi,
-            'nogueira_se': se,
             'n_feature_sets': len(feature_set_list),
             # phi's inputs, one per fold (2026-10-05): the folds in order, the
             # number of features each fold's hybrid selected, and the

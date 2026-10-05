@@ -206,6 +206,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Per-fold representation shares, and per-fold budget splits, so the
         # movement between folds is on the record instead of being averaged away.
         shap_by_rep_folds = []
+        # 2026-10-05, owner delegated: {model: [{'fold_idx', 'by_rep'}, ...]},
+        # every model explained on every fold it built on.
+        shap_by_rep_folds_by_model = {}
         allocation_by_fold = []
 
         for fold_idx, (train_idx, val_idx) in enumerate(
@@ -237,6 +240,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             best_X_val_s = None
             best_X_train_s = None
             fold_build_failures = {}
+            fold_fitted = {}
             for model_name, model_factory in models.items():
                 _bp_m = bp_by_model.get(model_name)
                 if _bp_m is None:
@@ -272,6 +276,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 score = float(metric_fn(y_val, pred))
                 fold_model_scores[model_name] = score
                 fold_widths[model_name] = int(X_train.shape[1])
+                # 2026-10-05, owner delegated: every model's fitted state is
+                # kept so SHAP can explain each model on this fold, not only
+                # the one that scored higher.
+                fold_fitted[model_name] = (m, feature_info, X_train_s, X_val_s)
 
                 is_better = (score > best_score) if not lower_is_better else (score < best_score)
                 if is_better:
@@ -292,63 +300,67 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_train_s, X_val_s = best_X_train_s, best_X_val_s
             all_feature_infos.append((fold_idx, feature_info, best_model_name))
 
-            # SHAP on the best model for this fold
+            # SHAP on every model fitted on this fold.
+            # 2026-10-05, owner delegated, 2026-10-05: rf and xgboost are now
+            # BOTH explained on every fold, and their per-representation shares
+            # are stored per model (shap_share_by_rep_by_model). Before, only
+            # the model that scored higher on the fold was explained, so a
+            # share averaged over folds mixed a forest's attributions with a
+            # boosted model's wherever the winner changed. TreeExplainer on
+            # these two tree models is cheap; this at most doubles c22's SHAP
+            # time. The old mixed fields (shap_share_by_rep etc., from the
+            # fold winner) are kept because tests/analysis/firstpass_notready.py
+            # reads them.
             shap_info = None
-            _lifted = {}
-            try:
-                import shap
-                # ⛔ LIFT transformers OUT OF sys.modules FOR THE SHAP CALL.
-                #
-                # caco2's shap_share_by_rep came back EMPTY on all five folds while
-                # flab_thermo_tresanco and herg_ki filled it, and it is not a caco2
-                # defect. caco2's pool holds molformer, grover and smited, whose
-                # builders import transformers, so sys.modules['transformers'] is a
-                # lazy module by the time this loop runs. shap's safe_isinstance
-                # SKIPS a class whose module is absent from sys.modules but calls
-                # getattr(module, class_name) when it is present, and shap asks for
-                # transformers.TFPreTrainedModel. The lazy module answers that by
-                # importing transformers.modeling_tf_utils, which imports
-                # TensorFlow, which dies here: this machine's protobuf has dropped
-                # FieldDescriptor.is_repeated and the installed TensorFlow still
-                # calls it. `import tensorflow` alone raises the same error in a
-                # bare process, so TensorFlow is unusable here whatever shap does.
-                #
-                # Removing the entries makes safe_isinstance take its skip path.
-                # They go back in the finally below, so nothing downstream sees a
-                # different sys.modules.
-                _lifted = {k: v for k, v in list(sys.modules.items())
-                           if k == 'transformers' or k.startswith('transformers.')}
-                for k in _lifted:
-                    del sys.modules[k]
-                # Use the same fitted instance the score was selected from
-                # (re-training a fresh factory would discard the scored model and
-                # introduce stochastic drift between scored model and explanation).
-                best_model = best_model_obj
+            for _sm_name, (_sm_obj, _sm_fi, _sm_Xtr, _sm_Xva) in fold_fitted.items():
+                _lifted = {}
+                try:
+                    import shap
+                    # ⛔ LIFT transformers OUT OF sys.modules FOR THE SHAP CALL.
+                    #
+                    # caco2's shap_share_by_rep came back EMPTY on all five folds while
+                    # flab_thermo_tresanco and herg_ki filled it, and it is not a caco2
+                    # defect. caco2's pool holds molformer, grover and smited, whose
+                    # builders import transformers, so sys.modules['transformers'] is a
+                    # lazy module by the time this loop runs. shap's safe_isinstance
+                    # SKIPS a class whose module is absent from sys.modules but calls
+                    # getattr(module, class_name) when it is present, and shap asks for
+                    # transformers.TFPreTrainedModel. The lazy module answers that by
+                    # importing transformers.modeling_tf_utils, which imports
+                    # TensorFlow, which dies here: this machine's protobuf has dropped
+                    # FieldDescriptor.is_repeated and the installed TensorFlow still
+                    # calls it. `import tensorflow` alone raises the same error in a
+                    # bare process, so TensorFlow is unusable here whatever shap does.
+                    #
+                    # Removing the entries makes safe_isinstance take its skip path.
+                    # They go back in the finally below, so nothing downstream sees a
+                    # different sys.modules.
+                    _lifted = {k: v for k, v in list(sys.modules.items())
+                               if k == 'transformers' or k.startswith('transformers.')}
+                    for k in _lifted:
+                        del sys.modules[k]
+                    # Use the same fitted instance the score was computed from
+                    # (re-training a fresh factory would discard the scored model and
+                    # introduce stochastic drift between scored model and explanation).
 
-                # Use TreeExplainer for tree models, KernelExplainer otherwise
-                if best_model_name in ('rf', 'xgboost', 'lightgbm', 'catboost'):
-                    explainer = shap.TreeExplainer(best_model)
-                    shap_vals = explainer.shap_values(X_val_s)
-                else:
-                    bg = shap.sample(X_train_s, min(100, len(X_train_s)))
-                    explainer = shap.KernelExplainer(best_model.predict, bg)
-                    shap_vals = explainer.shap_values(X_val_s)
+                    # Use TreeExplainer for tree models, KernelExplainer otherwise
+                    if _sm_name in ('rf', 'xgboost', 'lightgbm', 'catboost'):
+                        explainer = shap.TreeExplainer(_sm_obj)
+                        shap_vals = explainer.shap_values(_sm_Xva)
+                    else:
+                        bg = shap.sample(_sm_Xtr, min(100, len(_sm_Xtr)))
+                        explainer = shap.KernelExplainer(_sm_obj.predict, bg)
+                        shap_vals = explainer.shap_values(_sm_Xva)
 
-                # Reduce to a 1-D mean-abs importance per hybrid feature, handling
-                # regression (2-D), multiclass-list, and multiclass-3-D-ndarray
-                # (shap>=0.40) shapes uniformly (OTHER-29).
-                n_feat = X_val_s.shape[1]
-                mean_abs_shap = _reduce_shap_to_per_feature(shap_vals, n_feat)
-                if mean_abs_shap is None:
-                    print(f"    Fold {fold_idx}: SHAP shape could not be aligned "
-                          f"to {n_feat} features — skipping this fold's SHAP.")
-                else:
-                    shap_info = {
-                        'mean_abs_shap': mean_abs_shap,
-                        'model': best_model_name,
-                        'n_val_samples': len(X_val_s),
-                    }
-                    all_shap_values.append((fold_idx, mean_abs_shap))
+                    # Reduce to a 1-D mean-abs importance per hybrid feature, handling
+                    # regression (2-D), multiclass-list, and multiclass-3-D-ndarray
+                    # (shap>=0.40) shapes uniformly (OTHER-29).
+                    n_feat = _sm_Xva.shape[1]
+                    mean_abs_shap = _reduce_shap_to_per_feature(shap_vals, n_feat)
+                    if mean_abs_shap is None:
+                        print(f"    Fold {fold_idx}: {_sm_name} SHAP shape could not "
+                              f"be aligned to {n_feat} features — skipping it.")
+                        continue
                     # Aggregate to representations INSIDE the fold, while this
                     # fold's own feature map is in hand. Position 37 names a
                     # different feature in each fold, because create_hybrid splits
@@ -356,18 +368,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # the raw per-position scores first and then reading them
                     # against one fold's map adds up scores from different
                     # features. Per-fold shares are what gets averaged below.
-                    shap_by_rep_folds.append(
-                        aggregate_importance_by_rep(feature_info, mean_abs_shap))
-                    allocation_by_fold.append(
-                        {k: int(v) for k, v in
-                         (feature_info.get('allocation') or {}).items()})
-            except Exception as e:
-                # Recorded, not just printed: an empty shap_share_by_rep used to be
-                # indistinguishable from a run where SHAP was never asked for.
-                shap_failures.append(f'fold {fold_idx}: {type(e).__name__}: {e}')
-                print(f"    Fold {fold_idx}: SHAP failed — {e}")
-            finally:
-                sys.modules.update(_lifted)
+                    _by_rep = aggregate_importance_by_rep(_sm_fi, mean_abs_shap)
+                    shap_by_rep_folds_by_model.setdefault(_sm_name, []).append(
+                        {'fold_idx': int(fold_idx), 'by_rep': _by_rep})
+                    if _sm_name == best_model_name:
+                        shap_info = {
+                            'mean_abs_shap': mean_abs_shap,
+                            'model': best_model_name,
+                            'n_val_samples': len(_sm_Xva),
+                        }
+                        all_shap_values.append((fold_idx, mean_abs_shap))
+                        shap_by_rep_folds.append(_by_rep)
+                        allocation_by_fold.append(
+                            {k: int(v) for k, v in
+                             (feature_info.get('allocation') or {}).items()})
+                except Exception as e:
+                    # Recorded, not just printed: an empty shap_share_by_rep used to be
+                    # indistinguishable from a run where SHAP was never asked for.
+                    shap_failures.append(
+                        f'fold {fold_idx} {_sm_name}: {type(e).__name__}: {e}')
+                    print(f"    Fold {fold_idx}: {_sm_name} SHAP failed — {e}")
+                finally:
+                    sys.modules.update(_lifted)
 
             fold_results.append({
                 'fold_idx': fold_idx,
@@ -522,6 +544,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         shares.append(abs(d.get(r, 0.0)) / tot)
                 shap_share_by_rep[r] = float(np.mean(shares)) if shares else 0.0
 
+        # 2026-10-05, owner delegated, 2026-10-05: the same two averages, per
+        # model, each over the folds that model was explained on. No average
+        # here mixes two models.
+        shap_by_rep_by_model = {}
+        shap_by_rep_std_by_model = {}
+        shap_share_by_rep_by_model = {}
+        shap_folds_scored_by_model = {}
+        for _sm_name, _entries in shap_by_rep_folds_by_model.items():
+            _dicts = [e['by_rep'] for e in _entries]
+            _reps_m = sorted({r for d in _dicts for r in d})
+            shap_by_rep_by_model[_sm_name] = {
+                r: float(np.mean([d.get(r, 0.0) for d in _dicts])) for r in _reps_m}
+            shap_by_rep_std_by_model[_sm_name] = {
+                r: float(np.std([d.get(r, 0.0) for d in _dicts])) for r in _reps_m}
+            _shares_m = {}
+            for r in _reps_m:
+                _sh = []
+                for d in _dicts:
+                    tot = sum(abs(v) for v in d.values())
+                    if tot > 0:
+                        _sh.append(abs(d.get(r, 0.0)) / tot)
+                _shares_m[r] = float(np.mean(_sh)) if _sh else 0.0
+            shap_share_by_rep_by_model[_sm_name] = _shares_m
+            shap_folds_scored_by_model[_sm_name] = [
+                e['fold_idx'] for e in _entries]
+
         # Print summary
         print(f"\n{'=' * 70}")
         print("EXPLAINABILITY SUMMARY")
@@ -658,6 +706,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # this one for "which representation carries the weight" — it does not
             # let a fold with a larger total SHAP outvote the others.
             'shap_share_by_rep': shap_share_by_rep,
+            # 2026-10-05, owner delegated, 2026-10-05: per model, every fold
+            # explained for every model. Read these instead of the three
+            # fields above, which average whichever model won each fold.
+            'shap_share_by_rep_by_model': shap_share_by_rep_by_model,
+            'shap_by_rep_by_model': shap_by_rep_by_model,
+            'shap_by_rep_std_by_model': shap_by_rep_std_by_model,
+            'shap_by_rep_folds_by_model': shap_by_rep_folds_by_model,
+            'shap_folds_scored_by_model': shap_folds_scored_by_model,
             # How many folds SHAP actually scored. An empty shap_share_by_rep used
             # to be indistinguishable from a run where SHAP was never asked for; on
             # caco2 it was empty on all five folds because shap's safe_isinstance

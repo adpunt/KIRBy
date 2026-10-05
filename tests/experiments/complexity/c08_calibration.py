@@ -240,10 +240,30 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         mismatched_factory = lambda: Ridge(alpha=0.01)
         mismatched_desc = 'Ridge at full dim (low-capacity model, high-dim input)'
 
-    # Underfit budget scales with total_dim so tiny rep sets aren't compared
-    # to an "underfit" condition that happens to be essentially the same as
-    # "overfit" (e.g. total_dim=40 → budget=25 is not really an underfit).
-    underfit_budget = min(25, max(5, total_dim // 4))
+    # 2026-10-05, owner delegated, 2026-10-05: the underfit condition must ask
+    # for fewer features than the optimal condition. It was
+    # min(25, max(5, total_dim // 4)), which on cdr asked for more features
+    # than the optimal recipe's budget. Now: 25 features if 25 is below the
+    # optimal budget; otherwise the largest budget in this experiment's budget
+    # list (config['budgets']) below the optimal budget; if there is none, the
+    # underfit condition is not run and the reason is stored. Because optimal
+    # never asks for more than total_dim, underfit stays narrower than overfit
+    # too, which is what the total_dim // 4 scaling was for.
+    _c08_budget_list = sorted(int(b) for b in config.get('budgets', FULL_BUDGETS))
+
+    def _underfit_for(opt_budget):
+        """(underfit budget in features or None, reason when None)."""
+        _opt = total_dim if opt_budget is None else int(opt_budget)
+        if 25 < _opt:
+            return 25, None
+        _below = [b for b in _c08_budget_list if b < _opt]
+        if _below:
+            return _below[-1], None
+        return None, (f'no budget below the optimal budget of {_opt} features '
+                      f'in the budget list {_c08_budget_list}; underfit '
+                      f'condition not run')
+
+    underfit_budget, underfit_skip_reason = _underfit_for(optimal_budget)
     condition_specs = {
         'optimal': (optimal_model_factory, optimal_budget, optimal_alloc, optimal_imp,
                     optimal_desc),
@@ -265,6 +285,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         'mismatched': (mismatched_factory, total_dim, optimal_alloc,
                        optimal_imp, mismatched_desc),
     }
+    if underfit_budget is None:
+        # 2026-10-05, owner delegated: see _underfit_for above.
+        condition_specs.pop('underfit')
+        print(f"  underfit skipped: {underfit_skip_reason}")
 
     # Condition-distinctness diagnostic. The calibration comparison is only
     # meaningful if optimal / underfit / overfit use genuinely different budgets.
@@ -295,6 +319,12 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         # third of it is not the condition its name says.
         'condition_widths_built': _built_widths,
         'conditions_distinct': len(set(_cond_budgets.values())) == len(_cond_budgets),
+        # 2026-10-05, owner delegated, 2026-10-05: why the underfit condition
+        # was not run (None when it ran), and the rule that picks its budget.
+        'underfit_skip_reason': underfit_skip_reason,
+        'underfit_budget_rule': ('25 features if below the optimal budget, '
+                                 'else the largest budget in the budget list '
+                                 'below it, else not run'),
     }
     if not results['conditions_distinct']:
         print(f"  WARNING: calibration conditions collapse (budgets "
@@ -403,6 +433,12 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X_train)
                 X_val_s = scaler.transform(X_val)
+                # 2026-10-05, owner delegated, 2026-10-05: each validation
+                # feature is capped at the range it takes on the scaled
+                # training rows. On adme_hlm one validation molecule sat 83
+                # million training standard deviations out and the dnn's rmse
+                # ran to thousands.
+                X_val_s = np.clip(X_val_s, X_train_s.min(0), X_train_s.max(0))
 
                 # Train base model
                 model = model_factory()
@@ -749,12 +785,15 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                      f"[{_bp.importance_method}/{_bp.allocation_method}] "
                      f"({_h.get('tier')}/{_h.get('aug_condition')})")
             print(f"\n  === rule hybrid: {_desc} ===")
+            # 2026-10-05, owner delegated, 2026-10-05: underfit is set below
+            # THIS rule hybrid's budget by the same rule as above.
+            _uf_budget, _uf_reason = _underfit_for(_bp.budget)
             _specs = {
                 'optimal': (_fac, _bp.budget, _bp.allocation_method,
                             _bp.importance_method, _desc),
-                'underfit': (_fac, underfit_budget, _bp.allocation_method,
+                'underfit': (_fac, _uf_budget, _bp.allocation_method,
                              _bp.importance_method,
-                             f'Same model at budget={underfit_budget}'),
+                             f'Same model at budget={_uf_budget}'),
                 'overfit': (_fac, total_dim, _bp.allocation_method,
                             _bp.importance_method,
                             f'Same model at full dim={total_dim}'),
@@ -762,6 +801,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                                _bp.allocation_method, _bp.importance_method,
                                mismatched_desc),
             }
+            if _uf_budget is None:
+                _specs.pop('underfit')
             _out, _bw, _fe = {}, {}, {}
             _run_condition_set(
                 _specs, _bp.internal_evaluator,
@@ -779,6 +820,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 'conditions': _out,
                 'condition_widths_built': _bw,
                 'fold_errors': _fe,
+                # 2026-10-05, owner delegated: underfit budget asked for, in
+                # features, and why it was not run when it was not.
+                'underfit_budget': _uf_budget,
+                'underfit_skip_reason': _uf_reason,
             }
 
     # Summary table
