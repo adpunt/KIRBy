@@ -74,7 +74,7 @@ neighbourhood.
 | f34_importance_sweep | the same, with importance weighting added and neighbour counts to 200 | 2, 3, 4, 5, 6 | all four; 745 task files | done |
 | f35_scorer_path_check | whether the repo's three ways of computing a kNN score give the same number | none; it checks plumbing | herg_ki, caco2 scored; adme_mdr1 skipped 6 of its 7 representations | rerun 2026-10-05, see section 7 |
 | f36_label_smoothing_portfolio | which label smoothings the noise suite must carry | none directly | Adelaide analyses | open |
-| f37_label_damage_map | which kinds of label damage act alike, and at which levels | none; sets how many levels multiply every refit count | Adelaide analyses | open |
+| f37_label_damage_map | which kinds of label damage act alike, and at which levels | none; sets how many levels multiply every refit count | herg_ki, caco2, logd; 4 model-and-representation pairs, 3 folds, 3 levels, 2 draws | DECIDED 2026-10-05, see "The noise grid" below |
 | f38_neighbour_screen | finding and fixing corrupted labels, with no refits | 1, 2, 3, 4, 5, 6, 7 | herg_ki, caco2, adme_mdr1 complete (80 of 80 tasks each); herg 0 of 60 finished, each part-way at 192-402 rows of about 500 | pulled to /Volumes/seagate/f38_neighbour_screen |
 
 **The split that matters.** f34 and f35 measure predicting activity. f38 measures finding and
@@ -927,8 +927,28 @@ Against a fold-to-fold range of about 0.03 on this score. Counting name overlap 
 pessimistic picture — herg_ki shares 0 of the top 5 and 4 of the top 10 — but the settings that
 differ score almost the same, which is what matters.
 
+**Does the screen still work when the labels it ranks on are DAMAGED?** Inside a noise experiment
+the screen can only see damaged labels; everything above was measured on clean ones. Measured this
+session with `scratchpad/screen_damage.py` (kept at
+/private/tmp/.../scratchpad/screen_damage.py, not committed): a kNN fitted on the damaged training
+labels, predicting the held-out molecules, scored against their CLEAN labels. outlier_p05 at level
+1.0, draw 0, 4 single representations, 5 folds, 72 settings.
+
+| dataset | settings | top 3 names the same | top 5 names the same | score given up, top 3 and top 5 |
+|---|---|---|---|---|
+| herg_ki | 72 | 1 of 3 | 2 of 5 | 0.0037 rmse |
+
+Fold spread on herg_ki is about 0.03 to 0.047 rmse, so the loss is inside it.
+
+⛔ READ THE NAMES, NOT THE OVERLAP COUNT. The damaged screen picked atom_pair, rank weighting, 20
+neighbours. The clean screen picked atom_pair, rank weighting, 10 neighbours. Same representation,
+same counting scheme, same three distances; the damaged screen simply wants MORE neighbours, which
+is what averaging over damaged labels should want. The overlap count makes that look like
+disagreement when the settings score almost the same.
+
 **Not covered.** The augmented and similarity-hybrid spaces are not in the comparison, because f34
-never measured them. herg is not in it at all, so classification is unchecked.
+never measured them. herg is not in it at all, so classification is unchecked. caco2 was running
+when this was written. Only one damage kind at one level was tried.
 
 **What it would save.** Refitting 5 settings instead of 138 is 28 times fewer fits, on top of
 everything above.
