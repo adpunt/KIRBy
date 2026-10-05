@@ -203,11 +203,29 @@ def _analyse_hybrid(reps, labels, fi, rng):
                 rep_result['mi_density_selected'] = (
                     mi_sel / n_comp_sel if n_comp_sel > 0 else 0)
                 rep_result['mi_density_unit'] = 'nats_per_pca_component'
+                # The ratio stays (secondary since 2026-10-05). It is NaN, never
+                # inf or a huge number, when the full-set density is 0 or
+                # not finite (the estimator clamps MI at 0).
+                _d_full = rep_result['mi_density_full']
                 rep_result['mi_density_ratio'] = (
-                    rep_result['mi_density_selected'] / rep_result['mi_density_full']
-                    if rep_result['mi_density_full'] > 0 else float('nan')
+                    rep_result['mi_density_selected'] / _d_full
+                    if np.isfinite(_d_full) and _d_full > 0 else float('nan')
                 )
+                # HEADLINE (2026-10-05, owner delegated, 2026-10-05 — a
+                # delegated default): MI of the selected features minus MI of
+                # a random subset of the same number of features from the same
+                # representation, in nats. Both come from _mi_knn_capped on
+                # the same rows; no new estimate is made. Unlike the ratio it
+                # is defined when the full-set MI is 0.
+                rep_result['mi_selected_minus_random'] = (
+                    float(mi_sel - mi_rand)
+                    if np.isfinite(mi_sel) and np.isfinite(mi_rand)
+                    else float('nan'))
+                rep_result['mi_selected_minus_random_unit'] = 'nats'
 
+                print(f"    MI selected - random: "
+                      f"{rep_result['mi_selected_minus_random']:.4f} nats "
+                      f"(headline)")
                 print(f"    MI full={mi_full:.4f} ({n_features} features "
                       f"-> {n_comp_full} components), "
                       f"selected={mi_sel:.4f} ({n_selected} features "
@@ -251,6 +269,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # treating mi_density_ratio (or Gini) as a cross-validated hybrid "win" —
     # it is a concentration diagnostic, not an out-of-sample performance number.
     results['descriptive_only'] = True
+    # 2026-10-05, owner delegated, 2026-10-05 (delegated default): the headline
+    # per representation is mi_selected_minus_random (nats); mi_density_ratio
+    # is kept beside it as a secondary number.
+    results['headline'] = 'mi_selected_minus_random'
+    results['headline_unit'] = 'nats'
     results['_caveat'] = (
         "DESCRIPTIVE ONLY — no held-out fold. mi_full/mi_selected/mi_random/"
         "mi_pca/mi_density_ratio/effective_rank/Gini are all full-data statistics "
@@ -321,6 +344,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if _ck.done(**_ckey):
                     _saved = _ck.get(**_ckey)
                     results['per_rep'][_key] = _saved['cell']
+                    # A cell saved before 2026-10-05 has no headline field;
+                    # it is the difference of two numbers the cell already
+                    # holds (owner delegated, 2026-10-05).
+                    for _rr in (_saved['cell'] or {}).values():
+                        if (isinstance(_rr, dict) and 'mi_selected' in _rr
+                                and 'mi_selected_minus_random' not in _rr):
+                            _a, _b = _rr.get('mi_selected'), _rr.get('mi_random')
+                            _ok = (_a is not None and _b is not None
+                                   and np.isfinite(_a) and np.isfinite(_b))
+                            _rr['mi_selected_minus_random'] = (
+                                float(_a - _b) if _ok else float('nan'))
+                            _rr['mi_selected_minus_random_unit'] = 'nats'
                     results['hybrid_recipe'][_key] = _saved.get('recipe')
                     rng.set_state(_saved['rng_state'])
                     continue

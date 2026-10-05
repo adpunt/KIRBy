@@ -1203,8 +1203,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'clusterer_distance': 'squared_euclidean',
         'distance_coefficient': coefficient,
     }
+    # HEADLINE retrieval comparison (2026-10-05, owner delegated, 2026-10-05 —
+    # a delegated default): hybrids compete with their unweighted retrieval
+    # only, against single representations, which are only ever scored
+    # unweighted. In the block after this one a hybrid may also win with its
+    # importance-weighted retrieval, which no single representation gets, so
+    # that block differs between its two sides in the weighting as well as the
+    # features. It is kept as the secondary, mixed comparison. Same fold
+    # scores; nothing new is fitted.
+    ret_candidates_unweighted = [
+        c for c in ret_candidates
+        if c['name'].endswith(f'|unweighted_k{k_retrieval}')]
+    results['fold_reselection_retrieval_unweighted'] = {
+        'lower_is_better': True,
+        'recipe_selection': 'other_folds_of_pool_search',
+        'exclude_folds': _exclude,
+        'fold0_pruned': pool_fold0_pruned,
+        'pool_subset': POOL_SUBSET,
+        'candidates_by_model': ({'knn': ret_candidates_unweighted}
+                                if ret_candidates_unweighted else {}),
+        'baselines_by_model': ({'knn': ret_baselines}
+                               if ret_baselines else {}),
+        'controls_by_model': ({'knn': ret_controls}
+                              if ret_controls else {}),
+        'distance_coefficient': coefficient,
+        'hybrid_retrieval_conditions': ['unweighted'],
+    }
+    # Secondary since 2026-10-05: hybrids weighted or unweighted, singles
+    # unweighted.
     results['fold_reselection_retrieval'] = {
         'lower_is_better': True,
+        'hybrid_retrieval_conditions': ['unweighted', 'weighted'],
         'recipe_selection': 'other_folds_of_pool_search',
         'exclude_folds': _exclude,
         'fold0_pruned': pool_fold0_pruned,
@@ -1269,6 +1298,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Reuse the shared pure-arithmetic helper (no ML) to report the honest
     # hybrid-vs-best-single-rep delta inline for each axis.
     _axes = [('clustering', results['fold_reselection_clustering'], 'higher'),
+             ('retrieval_unweighted',
+              results['fold_reselection_retrieval_unweighted'], 'lower'),
              ('retrieval', results['fold_reselection_retrieval'], 'lower')]
     if 'fold_reselection_clustering_matched' in results:
         _axes.append(('clustering_matched',
@@ -1373,6 +1404,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                       f"{e['n_paired_folds']} paired folds)")
     if per_count:
         results['clustering_delta_by_cluster_count'] = per_count
+
+    # Which numbers are the headline (2026-10-05, owner delegated, 2026-10-05 —
+    # a delegated default). Clustering: the hybrid-minus-best-single coherence
+    # at each cluster count (3, 5, 10) separately, both sides read at the same
+    # count, from clustering_delta_by_cluster_count above. The block where each
+    # side picks its own cluster count per fold
+    # (fold_reselection_clustering_result) and the summary's maxima over counts
+    # stay as secondary numbers. Retrieval: hybrids unweighted against singles
+    # unweighted (fold_reselection_retrieval_unweighted_result); the mixed
+    # block (fold_reselection_retrieval_result) is secondary.
+    results['headline'] = {
+        'clustering': 'clustering_delta_by_cluster_count',
+        'retrieval': 'fold_reselection_retrieval_unweighted_result',
+        'secondary': ['fold_reselection_clustering_result',
+                      'fold_reselection_retrieval_result', 'summary'],
+        'set_by': 'owner delegated, 2026-10-05',
+    }
 
     return results
 

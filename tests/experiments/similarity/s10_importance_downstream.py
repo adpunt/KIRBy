@@ -990,14 +990,18 @@ _GP_FIT_BASIS = (
 def _gp_normalize_y():
     """Whether the GP centres and scales the labels before fitting.
 
-    False, which is what this file has always done, leaves the prior mean at 0.
-    A fit that finishes at the bottom of the length-scale bounds then predicts 0
-    for every held-out molecule. True centres the labels, so the same fit
-    predicts the training mean instead. Reads KIRBY_S10_GP_NORMALIZE_Y; unset
-    gives False.
+    False, which is what this file did until 2026-10-05, leaves the prior mean
+    at 0. A fit that finishes at the bottom of the length-scale bounds then
+    predicts 0 for every held-out molecule. True centres the labels, so the same
+    fit predicts the training mean instead. Reads KIRBY_S10_GP_NORMALIZE_Y.
+
+    2026-10-05, owner delegated, 2026-10-05 (a delegated default): unset now
+    gives True. Without it, 41-49 of 50 GP fits predicted a constant on three
+    datasets. KIRBY_S10_GP_NORMALIZE_Y=0 (or false/no/off) restores the old
+    behaviour.
     """
     raw = os.environ.get('KIRBY_S10_GP_NORMALIZE_Y', '').strip().lower()
-    return raw in ('1', 'true', 'yes', 'on')
+    return raw not in ('0', 'false', 'no', 'off')
 
 
 def _gp_lengthscale_starts():
@@ -1210,8 +1214,9 @@ def _run_weighted_gp(reps, labels, groups, config, fold_blueprints,
         # /Volumes/seagate/kirby_simrun_logs/gp_arms.log. s11 passes
         # normalize_y=True at three places, so the same collapse there predicts
         # the training mean and scores about 0.92. Same collapse, two different
-        # numbers, in one suite. The default here is unchanged so no number
-        # moves; KIRBY_S10_GP_NORMALIZE_Y=1 fits the other one.
+        # numbers, in one suite. Since 2026-10-05 (owner delegated,
+        # 2026-10-05) the default here is True, as in s11;
+        # KIRBY_S10_GP_NORMALIZE_Y=0 fits the old one.
         return GaussianProcessRegressor(
             kernel=kernel,
             n_restarts_optimizer=int(os.environ.get('KIRBY_S10_GP_RESTARTS', '').strip() or '0'),
@@ -2654,7 +2659,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      # 2026-10-05: auc is scored from predicted probabilities,
                      # so a classification block written before then holds
                      # auc from 0/1 predictions.
-                     auc_scoring='predict_proba_2026_10_05'))
+                     auc_scoring='predict_proba_2026_10_05',
+                     # 2026-10-05 (owner delegated): the GP's label
+                     # normalisation default changed from off to on, so a
+                     # block written before then was fitted with it off.
+                     gp_normalize_y=_gp_normalize_y()))
 
     def _had_build_failure(obj):
         if isinstance(obj, dict):
