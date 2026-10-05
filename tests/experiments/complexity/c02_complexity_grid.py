@@ -478,6 +478,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # hybrid_eval cache, keyed by (subset_hash, alloc, imp, eval, budget,
     # fold, model, aug) — re-runs hit cache.
     search_per_model_top_rep = {}  # model_name -> SearchResult
+    # (model, rank) -> (representation, SearchResult). Added 2026-10-05: the
+    # fold re-pick below used to merge every search in search_per_model_top_rep
+    # by model name, so the rank-2 search replaced the rank-1 one for the same
+    # model and only rank 2's held-out delta reached the file.
+    search_per_model_top_rep_ranked = {}
     # Budgets the main search already evaluated for every model, so a per-model
     # top-rep-dim pass at one of these would be redundant: the explicit full
     # grid, and nothing else.
@@ -574,6 +579,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 )
                 _search_by_width.setdefault(_top_dim, _s)
                 search_per_model_top_rep[f'{_model_name}__{_top_rep}'] = _s
+                search_per_model_top_rep_ranked[(_model_name, _rank)] = (
+                    _top_rep, _s)
                 if _rank == 1:
                     # Keep the old key so every existing reader still finds the
                     # best representation's pass where it always was.
@@ -619,11 +626,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat = np.nan_to_num(X_concat, nan=0.0, posinf=1e10, neginf=-1e10)
     print("\n  Computing PCA baselines...")
     pca_baselines = {}
+    # Added 2026-10-05, beside pca_baselines (whose {budget: {model: score}}
+    # shape the analysis scripts read, so it is left as it was):
+    #   pca_baseline_widths[budget][model] = PCA components fitted per fold.
+    #     n_comp is min(budget, total features, training rows - 1), so every
+    #     budget above the fold's training rows fits the same width and its
+    #     score repeats; this shows which budgets those are.
+    #   pca_baseline_fold_scores[budget][model] = the per-fold scores the mean
+    #     is taken over, in the dataset's metric.
+    pca_baseline_widths = {}
+    pca_baseline_fold_scores = {}
     for budget in budgets:
         pca_baselines[budget] = {}
+        pca_baseline_widths[budget] = {}
+        pca_baseline_fold_scores[budget] = {}
         for model_name, model_factory in models.items():
             pca_scores = []
-            for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels, mode=mode):
+            pca_widths = []
+            # task_type passed 2026-10-05 so these folds are built the way the
+            # hybrid search builds its folds (StratifiedGroupKFold on a
+            # classification dataset). Without it cv_split guessed the task
+            # from whether the labels look like integers.
+            for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels,
+                                               mode=mode,
+                                               task_type=data['task_type']):
                 # Cap n_components at per-fold train size, not the full dataset.
                 # With CV splits, train is a strict subset and PCA's
                 # n_components constraint is against the train slice.
@@ -645,8 +671,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 pca_scores.append(metric_fn(
                     labels[val_idx],
                     _predict_for_metric(m, X_val_p, metric_fn)))
+                pca_widths.append(int(n_comp))
             pca_baselines[budget][model_name] = (
                 float(np.mean(pca_scores)) if pca_scores else float('nan'))
+            pca_baseline_widths[budget][model_name] = pca_widths
+            pca_baseline_fold_scores[budget][model_name] = [
+                float(v) for v in pca_scores]
 
     # Heatmap: model x budget -> best score
     heatmap = {}
@@ -837,22 +867,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             fold_reselection_by_condition[_cond] = build_fold_reselection_input(_s)
         except Exception as e:
             print(f"  fold_reselection block for {_cond} unavailable: {e}")
-    if search_per_model_top_rep:
+    # One merged block per RANK, each keyed by model inside. Rank 1 keeps the
+    # old condition name 'per_model_top_rep_dim' so existing readers find it;
+    # rank 2 is 'per_model_top_rep_dim_rank2'. Before 2026-10-05 both ranks
+    # went into one block keyed by model alone, and the rank-2 search, merged
+    # last, overwrote rank 1 for every model that had two. Within a rank each
+    # model has exactly one search, so the merge by model no longer collides.
+    # 'representation_by_model' says which representation's width each model's
+    # search was run at.
+    for _rank_wanted, _cond_name in ((1, 'per_model_top_rep_dim'),
+                                     (2, 'per_model_top_rep_dim_rank2')):
         _merged = None
-        for _mname, _s in search_per_model_top_rep.items():
+        for (_mname, _rank), (_rep, _s) in search_per_model_top_rep_ranked.items():
+            if _rank != _rank_wanted:
+                continue
             try:
                 _blk = build_fold_reselection_input(_s)
             except Exception as e:
-                print(f"  fold_reselection block for per_model_top_rep_dim/"
+                print(f"  fold_reselection block for {_cond_name}/"
                       f"{_mname} unavailable: {e}")
                 continue
             if _merged is None:
                 _merged = _blk
+                _merged['representation_by_model'] = {_mname: _rep}
                 continue
             _merged['candidates_by_model'].update(
                 _blk.get('candidates_by_model', {}))
             _merged['baselines_by_model'].update(
                 _blk.get('baselines_by_model', {}))
+            _merged['representation_by_model'][_mname] = _rep
             # A fold excluded by any of these searches is excluded for all of
             # them: the blocks are merged into one, and fold_reselection drops
             # the listed folds from both arms together.
@@ -860,7 +903,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 set(_merged.get('exclude_folds') or [])
                 | set(_blk.get('exclude_folds') or []))
         if _merged is not None:
-            fold_reselection_by_condition['per_model_top_rep_dim'] = _merged
+            fold_reselection_by_condition[_cond_name] = _merged
 
     # Compute the delta here rather than leaving it to whoever reads the file.
     # best_by_model and baselines below are both maxima taken on the folds they
@@ -1099,6 +1142,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'baselines': baselines,
         'rep_dims': rep_dims,
         'pca_baselines': pca_baselines,
+        'pca_baseline_widths': pca_baseline_widths,
+        'pca_baseline_fold_scores': pca_baseline_fold_scores,
         'heatmap': heatmap,
         'importance_wins': importance_wins,
         'conditions': conditions,

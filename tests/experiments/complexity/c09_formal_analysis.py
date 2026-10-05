@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from scipy.stats import f as f_dist, spearmanr
+from scipy.stats import spearmanr
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import r2_score
@@ -311,8 +311,8 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
     # number of allocation and importance settings at different (model, budget)
     # — so the three sums of squares are not orthogonal and their total can
     # exceed ss_total. Clamping that to zero used to hide it and then fabricated
-    # a mean square out of the clamp. A negative residual now suppresses F and p
-    # instead.
+    # a mean square out of the clamp. A negative residual is now stored as it
+    # is, with decomposition_valid False.
     ss_residual = ss_total - ss_model - ss_budget - ss_interaction
     decomposition_valid = ss_residual >= 0
 
@@ -326,45 +326,17 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
     else:
         eta2 = {'model': 0, 'budget': 0, 'interaction': 0, 'residual': 0}
 
-    # Degrees of freedom and F-statistics. n_total counts configurations, so
-    # df_residual is the number of configurations minus the number of filled
-    # (model, budget) cells.
-    df_model = len(models_set) - 1
-    df_budget = len(budgets_set) - 1
-    df_interaction = df_model * df_budget
+    # Degrees of freedom. n_total counts configurations, so df_residual is the
+    # number of configurations minus the number of filled (model, budget)
+    # cells. F statistics and p-values were computed here and saved until
+    # 2026-10-05; they are removed under the owner's rule of no significance
+    # tests. The variance shares (eta2) above are what is kept.
     df_residual = n_total - len(models_set) * len(budgets_set)
-
-    # F and p are reported only when the residual sum of squares is not negative
-    # and there are configurations left over after the cell means are fitted.
-    reportable = decomposition_valid and df_residual > 0
-
-    ms_model = ss_model / df_model if df_model > 0 else 0
-    ms_budget = ss_budget / df_budget if df_budget > 0 else 0
-    ms_interaction = ss_interaction / df_interaction if df_interaction > 0 else 0
-    ms_residual = ss_residual / df_residual if reportable else None
-
-    if reportable and ms_residual > 0:
-        f_model = ms_model / ms_residual
-        f_budget = ms_budget / ms_residual
-        f_interaction = ms_interaction / ms_residual
-        p_model = float(1 - f_dist.cdf(f_model, df_model, df_residual))
-        p_budget = float(1 - f_dist.cdf(f_budget, df_budget, df_residual))
-        p_interaction = float(
-            1 - f_dist.cdf(f_interaction, df_interaction, df_residual))
-        f_model, f_budget, f_interaction = (
-            float(f_model), float(f_budget), float(f_interaction))
-    else:
-        f_model = f_budget = f_interaction = None
-        p_model = p_budget = p_interaction = None
-        if not decomposition_valid:
-            print(f"    ss_residual is negative ({ss_residual:.4g}): the "
-                  f"unbalanced design does not decompose orthogonally. "
-                  f"F and p are not reported.")
-        elif df_residual <= 0:
-            print(f"    {n_total} configurations over "
-                  f"{len(models_set) * len(budgets_set)} (model, budget) cells "
-                  f"leaves no residual degrees of freedom. F and p are not "
-                  f"reported.")
+    if not decomposition_valid:
+        print(f"    ss_residual is negative ({ss_residual:.4g}): the "
+              f"unbalanced design does not decompose orthogonally, so the "
+              f"residual share below is negative and the other three "
+              f"overlap.")
 
     result = {
         'n_observations': n_total,
@@ -381,26 +353,17 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
         # antibody) — naming the key "r2" was wrong for non-molecular runs.
         'grand_mean_score': float(grand_mean),
         'eta2': eta2,
-        'f_model': f_model, 'p_model': p_model,
-        'f_budget': f_budget, 'p_budget': p_budget,
-        'f_interaction': f_interaction, 'p_interaction': p_interaction,
         'ss_total': float(ss_total),
         'icc': icc_results,
     }
-
-    def _fp(f, p):
-        """F and p for printing, or a note that they were not reported."""
-        if f is None:
-            return "F and p not reported"
-        return f"F={f:.2f}, p={p:.4f}"
 
     # The grand mean is in whatever metric c02 ran under — RMSE on the molecular
     # sets, not R². Name it. Fixed 2026-09-10 (metric-direction audit).
     print(f"    Grand mean {metric_name or 'score'}: {grand_mean:.4f}")
     print(f"    {n_total} configurations, df_residual={df_residual}")
-    print(f"    eta2 model:       {eta2['model']:.1f}%  ({_fp(f_model, p_model)})")
-    print(f"    eta2 budget:      {eta2['budget']:.1f}%  ({_fp(f_budget, p_budget)})")
-    print(f"    eta2 interaction: {eta2['interaction']:.1f}%  ({_fp(f_interaction, p_interaction)})")
+    print(f"    eta2 model:       {eta2['model']:.1f}%")
+    print(f"    eta2 budget:      {eta2['budget']:.1f}%")
+    print(f"    eta2 interaction: {eta2['interaction']:.1f}%")
     print(f"    eta2 residual:    {eta2['residual']:.1f}%")
 
     return result
@@ -412,7 +375,10 @@ def _run_anova_decomposition(exp2_results, metric_name=None):
 
 def _run_information_retention(data, budgets, dataset_name=None,
                                n_folds=5):
-    """9b: MI(X_selected, Y) and MI(X_selected, X_full) vs budget.
+    """9b: MI(X_selected, Y) and variance of X_full retained, vs budget.
+
+    The second curve is stored as 'mi_xx_full' but is a variance share read
+    off a ridge regression, not a mutual information; see the loop.
 
     At each budget, uses find_best_hybrid to discover the best hybrid config,
     then profiles its information content.
@@ -459,6 +425,8 @@ def _run_information_retention(data, budgets, dataset_name=None,
         # then measured on the held-out rows of the same fold.
         fold_mi_xy = []
         fold_mi_xx = []
+        # Features the hybrid was built with, per fold (2026-10-05).
+        fold_widths_9b = []
         from experiments._shared import cv_split as _cv_split_9b
         from kirby.hybrid import apply_feature_selection as _afs_9b
         from kirby.hybrid import apply_augmentation_selection as _aas_9b
@@ -480,6 +448,7 @@ def _run_information_retention(data, budgets, dataset_name=None,
                     internal_evaluator=int_eval,
                     augmentations=train_augs,
                     augmentation_strategy=aug_strat)
+                fold_widths_9b.append(int(X_hybrid.shape[1]))
                 # Same features, applied to the rows that did not choose them.
                 X_hybrid_val = _afs_9b(val_reps, _finfo)
                 _aug_info = _finfo.get('augmentation_info')
@@ -494,10 +463,20 @@ def _run_information_retention(data, budgets, dataset_name=None,
                       f"{type(exc).__name__}: {exc}")
                 continue
 
-            # MI(X_selected, Y) on the held-out rows. The PCA and the scaler
-            # are fitted on the training rows only and applied to the held-out
-            # rows, so nothing about the held-out rows shapes the space the
-            # estimate is made in.
+            # MI(X_selected, Y) on the held-out rows. Corrected 2026-10-05:
+            # this said nothing about the held-out rows shaped the space the
+            # estimate is made in. The scaler and the PCA to at most 50
+            # components below are fitted on the training rows. But
+            # estimate_mutual_information_knn (_shared.py) then standardises
+            # its input again on the held-out rows themselves, and if there
+            # are more components than held-out rows // 5 it fits a second PCA
+            # on the held-out rows down to that many. It then scores each
+            # component against the label on its own (sklearn's per-feature
+            # Kraskov estimator), SUMS the per-component values, and subtracts
+            # the mean of that sum over 3 label permutations. So the value is a
+            # sum over components, not a joint MI of the selected features,
+            # and the number of components summed depends on the held-out
+            # fold's size.
             n_comp = min(50, X_hybrid.shape[1], X_hybrid.shape[0] - 1,
                          X_hybrid_val.shape[0] - 1)
             try:
@@ -515,9 +494,13 @@ def _run_information_retention(data, budgets, dataset_name=None,
                 print(f"      9b budget={budget} MI(X;Y) estimate failed: "
                       f"{type(exc).__name__}: {exc}")
 
-            # MI(X_selected, X_full) -- approximate via explained variance.
-            # Scalers, PCA and the ridge are all fitted on the training rows;
-            # the score is read on the held-out rows.
+            # Stored as 'mi_xx_full' but NOT a mutual information (corrected
+            # 2026-10-05): the share of the full concatenation's variance,
+            # over its top 20 principal components, that a ridge from the
+            # selected features predicts on the held-out rows. Each
+            # component's held-out R2 is floored at 0 and weighted by its
+            # explained-variance ratio. Scalers, PCA and the ridge are all
+            # fitted on the training rows.
             X_train_concat = np.hstack([v[train_idx] for v in reps.values()])
             X_val_concat = np.hstack([v[val_idx] for v in reps.values()])
             _sc_full = StandardScaler().fit(X_train_concat)
@@ -547,7 +530,12 @@ def _run_information_retention(data, budgets, dataset_name=None,
 
         mi_xy_avg = float(np.mean(fold_mi_xy)) if fold_mi_xy else float('nan')
         mi_xx_avg = float(np.mean(fold_mi_xx)) if fold_mi_xx else float('nan')
-        return mi_xy_avg, mi_xx_avg
+        # Per-fold values behind the two means, and the width built per fold
+        # (2026-10-05). A fold whose estimate raised is absent from its list,
+        # so the lists can be shorter than the fold count.
+        return mi_xy_avg, mi_xx_avg, {'mi_xy_per_fold': list(fold_mi_xy),
+                                      'mi_xx_full_per_fold': list(fold_mi_xx),
+                                      'hybrid_width_per_fold': list(fold_widths_9b)}
 
     # {budget: 'lightgbm'} for budgets whose recipe said internal
     # evaluator 'match', which this path cannot honour. See the note
@@ -617,8 +605,8 @@ def _run_information_retention(data, budgets, dataset_name=None,
             print(f"      9b budget={budget}: no search found, using engine "
                   f"defaults {alloc}/{imp}/{int_eval}")
 
-        mi_xy_avg, mi_xx_avg = _mi_for(alloc, imp, int_eval, aug_strat,
-                                       budget)
+        mi_xy_avg, mi_xx_avg, _per_fold_9b = _mi_for(
+            alloc, imp, int_eval, aug_strat, budget)
 
         # Owner's set (2026-10-02): the same two curves for every rule
         # hybrid, built at this budget with that hybrid's recipe.
@@ -629,15 +617,19 @@ def _run_information_retention(data, budgets, dataset_name=None,
             _ie = _bp.internal_evaluator
             if _ie == 'match':
                 _match_resolved.setdefault(budget, 'lightgbm')
-            _x, _xx = _mi_for(_bp.allocation_method, _bp.importance_method,
-                              _ie, _h.get('aug_condition') or 'none', budget)
+            _x, _xx, _pf = _mi_for(_bp.allocation_method, _bp.importance_method,
+                                   _ie, _h.get('aug_condition') or 'none', budget)
             _c = results['rule_curves'].setdefault(
                 _key, {**_rule_meta(_h), 'model': _rm, 'budgets': [],
                        'mi_xy': [], 'mi_xx_full': [],
+                       'mi_xy_per_fold': [], 'mi_xx_full_per_fold': [],
+                       'hybrid_width_per_fold': [],
                        'budget_relaxed_at': []})
             _c['budgets'].append(budget)
             _c['mi_xy'].append(_x)
             _c['mi_xx_full'].append(_xx)
+            for _k9, _v9 in _pf.items():
+                _c[_k9].append(_v9)
             _c['budget_relaxed_at'].append(bool(_h.get('budget_relaxed')))
             print(f"    [{_key}] budget={budget}: MI(X,Y)={_x:.4f}, "
                   f"info_retained={_xx:.4f}")
@@ -645,6 +637,8 @@ def _run_information_retention(data, budgets, dataset_name=None,
         results['budgets'].append(budget)
         results['mi_xy'].append(mi_xy_avg)
         results['mi_xx_full'].append(mi_xx_avg)
+        for _k9, _v9 in _per_fold_9b.items():
+            results.setdefault(_k9, []).append(_v9)
 
         print(f"    budget={budget}: MI(X,Y)={mi_xy_avg:.4f}, info_retained={mi_xx_avg:.4f}")
 
@@ -765,8 +759,10 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
                 hybrid_fold_widths.append(int(X_hybrid.shape[1]))
             except Exception:
                 pass
+        # fold_ranks returned as well (2026-10-05) so the per-fold effective
+        # ranks behind the mean are saved.
         return (float(np.mean(fold_ranks)) if fold_ranks else float('nan'),
-                hybrid_fold_widths)
+                hybrid_fold_widths, list(fold_ranks))
 
     # {budget: 'lightgbm'} for budgets whose recipe said internal
     # evaluator 'match', which this path cannot honour. See the note
@@ -849,7 +845,7 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         # width, so the comparison printed at the end mixes a width difference
         # into a rank difference. Only the PCA/random width was recorded; the
         # hybrid's is now recorded beside it so the two can be read together.
-        hybrid_rank, hybrid_fold_widths = _hyb_rank_for(
+        hybrid_rank, hybrid_fold_widths, hybrid_fold_ranks = _hyb_rank_for(
             alloc, imp, int_eval, aug_strat, budget)
 
         # Owner's set (2026-10-02): the hybrid's effective rank for every
@@ -861,15 +857,17 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
             _ie = _bp.internal_evaluator
             if _ie == 'match':
                 _match_resolved.setdefault(budget, 'lightgbm')
-            _rk, _wd = _hyb_rank_for(
+            _rk, _wd, _rkf = _hyb_rank_for(
                 _bp.allocation_method, _bp.importance_method, _ie,
                 _h.get('aug_condition') or 'none', budget)
             _c = results['rule_curves'].setdefault(
                 _key, {**_rule_meta(_h), 'model': _rm, 'budgets': [],
-                       'hybrid_rank': [], 'hybrid_width_per_fold': [],
+                       'hybrid_rank': [], 'hybrid_rank_per_fold': [],
+                       'hybrid_width_per_fold': [],
                        'budget_relaxed_at': []})
             _c['budgets'].append(budget)
             _c['hybrid_rank'].append(float(_rk))
+            _c['hybrid_rank_per_fold'].append(_rkf)
             _c['hybrid_width_per_fold'].append(list(_wd))
             _c['budget_relaxed_at'].append(bool(_h.get('budget_relaxed')))
             print(f"    [{_key}] budget={budget}: hybrid rank={_rk:.1f}")
@@ -925,6 +923,12 @@ def _run_effective_rank_analysis(data, budgets, dataset_name=None,
         results.setdefault('pca_random_width_mean', []).append(_pw)
         results['pca_rank'].append(float(pca_rank))
         results['random_rank'].append(float(random_rank))
+        # Per-fold effective ranks behind the three means (2026-10-05).
+        results.setdefault('hybrid_rank_per_fold', []).append(hybrid_fold_ranks)
+        results.setdefault('pca_rank_per_fold', []).append(
+            [float(v) for v in pca_fold_ranks])
+        results.setdefault('random_rank_per_fold', []).append(
+            [float(v) for v in random_fold_ranks])
         results['n_feat_per_fold'].append(fold_widths)
         results['pca_failures'].append(pca_failures)
 
@@ -957,7 +961,8 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
 
     # If Exp 6 results are available, extract train-val gaps from there
     # ⛔ THIS BRANCH HAS NEVER KEPT A SINGLE CELL. It requires 'train_r2' on
-    # each heatmap cell; c06 writes val_r2, val_std, n_features, importance,
+    # each heatmap cell; c06 writes val_score (val_r2 before 2026-10-05),
+    # val_std, n_features, importance,
     # allocation, evaluator, evaluator_label, fold_scores, n_folds_scored and
     # n_folds_asked, and NOTHING ELSE -- `grep -c train_r2` over c06 returns 0,
     # and c06's own docstring says train scores are not collected there. So
@@ -979,7 +984,10 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                         # NOTE: 'train_r2'/'val_r2' hold the domain metric (RMSE
                         # for molecular), so direction matters. gap>0 == overfit
                         # and bias_proxy high == underfit, for BOTH directions.
-                        tr, vl = metrics['train_r2'], metrics['val_r2']
+                        # c06 renamed 'val_r2' to 'val_score' 2026-10-05;
+                        # both read so an older c06 file still works.
+                        tr = metrics['train_r2']
+                        vl = metrics.get('val_score', metrics.get('val_r2'))
                         fam_bv[key] = {
                             'train_r2': tr, 'val_r2': vl,
                             'train_score': tr, 'val_score': vl,
@@ -1078,6 +1086,12 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 results['models'][model_name][budget] = {
                     'train_r2': train_r2, 'val_r2': val_r2,
                     'train_score': train_r2, 'val_score': val_r2,
+                    # Spread over folds and the mean width built, 2026-10-05;
+                    # evaluate_cv_with_train returned both and they were
+                    # dropped. It returns no per-fold scores or per-fold
+                    # widths, so those are not available here.
+                    'val_score_std': val_std, 'train_score_std': train_std,
+                    'n_features_mean': n_feat,
                     'gap': _gap,
                     'bias_proxy': _bias,
                     'budget': budget,
@@ -1125,6 +1139,8 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     **_rule_meta(_h), 'model': _rm, 'by_budget': {}}
                 )['by_budget'][budget] = {
                     'train_score': _t, 'val_score': _v, 'gap': _gap,
+                    'val_score_std': _vs, 'train_score_std': _ts,
+                    'n_features_mean': _nf,
                     'bias_proxy': _bias, 'budget': budget,
                     'budget_relaxed': bool(_h.get('budget_relaxed')),
                     'recipe_selected_on': 'all rows',
