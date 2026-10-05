@@ -124,8 +124,11 @@ def _load_silo(silo_name, ds_name, failures=None):
         # EXPLICITLY — leaving it None makes load_data auto-resolve to the full
         # 18-rep DATASET_REPS 'general' list (which includes the foundation
         # models). The rep-diversity condition (C6) self-skips when those
-        # foundation reps are absent. No-op ('all') on the server, where the
-        # foundation reps are the whole point of this study.
+        # foundation reps are absent. On the server rep_preset='all' with no
+        # rep_names loads the dataset's own pool, DATASET_REPS[ds]['general']
+        # (_shared._load_data_impl), not FRAMEWORK_TASKS. So on tresanco the
+        # sequence_lm group of C6 (ablang2, antiberty, prot_t5) is absent:
+        # those were cut from its pool on 2026-08-20 (checked 2026-10-05).
         from experiments.federated.federated_helpers import _smoke_active
         if _smoke_active():
             sd = load_data(
@@ -151,10 +154,33 @@ def _split_silo(sd, seed=42):
     return next(cv_split(groups, 1, np.zeros(n), sd['labels'], seed=seed))
 
 
+def _recipe_kwargs(bp):
+    """create_hybrid keyword arguments for every recipe setting beyond the
+    allocation method, importance method, internal evaluator and budget. {}
+    when there is no stored recipe. Same as fed01/fed02 (beec9c0); fed05 was
+    left out of that commit and rebuilt each recipe from three settings on the
+    engine's default budget of 100 features (2026-10-05)."""
+    if bp is None:
+        return {}
+    return {
+        'step_size': int(getattr(bp, 'step_size', 5) or 5),
+        'augmentation_margin': float(
+            getattr(bp, 'augmentation_margin', 0.0) or 0.0),
+        'augmentation_fraction': getattr(bp, 'augmentation_fraction', None),
+        'candidate_ranking': getattr(bp, 'candidate_ranking',
+                                     'residual_correlation'),
+        'augmentation_threshold': getattr(bp, 'augmentation_threshold', None),
+        'augmentation_budget': int(
+            getattr(bp, 'augmentation_budget', 20) or 20),
+        'aug_max_candidates': int(getattr(bp, 'aug_max_candidates', 50) or 50),
+        'aug_per_source_budget': getattr(bp, 'aug_per_source_budget', None),
+    }
+
+
 def _silo_baseline(sd, shared_reps, seed=42,
                    alloc='performance_weighted', imp='treeshap',
                    int_eval='match', fed_model='rf', fed_seed=0,
-                   split=None):
+                   split=None, budget=100, recipe_kw=None):
     """Train create_hybrid on one silo and evaluate. Returns metrics + fi.
 
     Routes the downstream model + metric on the silo's task_type — P1-4
@@ -179,10 +205,13 @@ def _silo_baseline(sd, shared_reps, seed=42,
     rep_te = {r: arr[te] for r, arr in reps_s.items()}
     y_tr, y_te = sd['labels'][tr], sd['labels'][te]
 
-    s_augs = sd.get('augmentations')
-    s_aug_cond = 'uncapped' if s_augs else 'none'
-    tr_augs = ({k: v[tr] for k, v in s_augs.items()} if s_augs else None)
-    te_augs = ({k: v[te] for k, v in s_augs.items()} if s_augs else None)
+    # The recipes are searched with augmentation_strategy='none' (_run_one).
+    # Until 2026-10-05 this rebuilt them 'uncapped' whenever the silo carried
+    # augmentation representations, so the hybrid scored here was not the one
+    # searched. Built now under the condition it was searched in.
+    s_augs = None
+    s_aug_cond = 'none'
+    tr_augs = te_augs = None
 
     # ⛔ THE SILO'S SEQUENCE-IDENTITY GROUPS, WHICH THIS CALL DID NOT PASS.
     # Split audit kind B, fed04_cluster_aware_importance.py:89. create_hybrid
@@ -201,8 +230,10 @@ def _silo_baseline(sd, shared_reps, seed=42,
         allocation_method=alloc,
         importance_method=imp,
         internal_evaluator=int_eval,
+        budget=int(budget),
         augmentations=tr_augs,
-        augmentation_strategy=s_aug_cond)
+        augmentation_strategy=s_aug_cond,
+        **(recipe_kw or {}))
     X_h_te = apply_feature_selection(rep_te, fi)
     _aug_info_b = fi.get('augmentation_info') if isinstance(fi, dict) else None
     if _aug_info_b and te_augs:
@@ -221,6 +252,7 @@ def _silo_baseline(sd, shared_reps, seed=42,
         y_pred = reg.predict(X_h_te)
         metrics = compute_reg_metrics(y_te, y_pred)
     metrics['n_features'] = int(X_h.shape[1])
+    metrics['budget'] = int(budget)
     return metrics, fi, (tr, te)
 
 
@@ -379,6 +411,15 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             return (sbp.allocation_method, sbp.importance_method,
                     _resolve_match(sbp.internal_evaluator, 'rf'))
 
+        def _silo_build_kw(sname):
+            """(budget, recipe_kw) of the silo's searched recipe, or the
+            cross-silo recipe's when the silo has none. 100 features when there
+            is no recipe at all (create_hybrid's default, used before)."""
+            sbp = silo_blueprints.get(sname) or _default_bp
+            if sbp is None:
+                return 100, {}
+            return int(sbp.budget), _recipe_kwargs(sbp)
+
         # Find shared reps
         all_rep_sets = [set(sd['reps'].keys()) for sd in silo_data.values()]
         shared_reps = sorted(set.intersection(*all_rep_sets))
@@ -400,11 +441,13 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
             print(f"  {sname}...", end=' ')
             try:
                 s_alloc, s_imp, s_int_eval = _silo_recipe(sname)
+                s_budget, s_rkw = _silo_build_kw(sname)
                 metrics, fi, split = _silo_baseline(
                     sd, shared_reps, seed=fed_seed,
                     alloc=s_alloc, imp=s_imp, int_eval=s_int_eval,
                     fed_model=fed_model, fed_seed=fed_seed,
-                    split=silo_splits[sname])
+                    split=silo_splits[sname],
+                    budget=s_budget, recipe_kw=s_rkw)
                 independent[sname] = metrics
                 silo_fis[sname] = fi
                 if 'rmse' in metrics:
@@ -440,9 +483,33 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
         print(f"  budgets swept: {TRANSFER_BUDGETS}, "
               f"headline {HEADLINE_BUDGET} features")
 
+        # importance_profile_transfer only trims the source's own selection to
+        # the budget; it never adds features. Until 2026-10-05 the source was
+        # C1's hybrid, built at 100 features, so every budget above 100 was a
+        # copy of 100 (trial: 6 source->target pairs, same RMSE at all five
+        # budgets). The source is now rebuilt on its own training rows at each
+        # transfer budget, with its own recipe otherwise unchanged.
+        _source_fi_at = {}
+
+        def _source_fi(source_name, b):
+            if (source_name, b) not in _source_fi_at:
+                s_alloc, s_imp, s_int_eval = _silo_recipe(source_name)
+                _, s_rkw = _silo_build_kw(source_name)
+                try:
+                    _, fi_b, _ = _silo_baseline(
+                        silo_data[source_name], shared_reps, seed=fed_seed,
+                        alloc=s_alloc, imp=s_imp, int_eval=s_int_eval,
+                        fed_model=fed_model, fed_seed=fed_seed,
+                        split=silo_splits[source_name],
+                        budget=b, recipe_kw=s_rkw)
+                except Exception as e:
+                    print(f"  source {source_name} at {b} features failed: {e}")
+                    fi_b = None
+                _source_fi_at[(source_name, b)] = fi_b
+            return _source_fi_at[(source_name, b)]
+
         for source_name in silo_names:
-            source_fi = silo_fis.get(source_name)
-            if source_fi is None:
+            if silo_fis.get(source_name) is None:
                 continue
             for target_name in silo_names:
                 if source_name == target_name:
@@ -450,6 +517,13 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 for transfer_budget in TRANSFER_BUDGETS:
                     key = f"{source_name}→{target_name}@b{transfer_budget}"
                     print(f"  {key}...", end=' ')
+                    source_fi = _source_fi(source_name, transfer_budget)
+                    if source_fi is None:
+                        transfer_results[key] = {
+                            'error': f'source hybrid at {transfer_budget} '
+                                     f'features could not be built'}
+                        print("no source")
+                        continue
                     try:
                         target_sd = silo_data[target_name]
                         target_reps = {r: target_sd['reps'][r]
@@ -519,7 +593,10 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                 rep_tr = {r: arr[tr] for r, arr in silo_reps.items()}
                 rep_te = {r: arr[te] for r, arr in silo_reps.items()}
                 s_augs = sd.get('augmentations')
-                s_aug_cond = 'uncapped' if s_augs else 'none'
+                # 'none', as the recipes were searched and as DECISIONS.md Step 8
+                # sets for these three datasets. Was 'uncapped' whenever the silo
+                # carried augmentation representations (changed 2026-10-05).
+                s_aug_cond = 'none'
                 aug_tr = ({k: v[tr] for k, v in s_augs.items()} if s_augs else None)
 
                 # Cluster on TRAIN data only (no test leakage into clusters)
@@ -823,7 +900,11 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         allocation_method=_alloc,
                         importance_method=_imp,
                         internal_evaluator=_int_eval,
-                        augmentation_strategy='none')
+                        # The cross-silo recipe in full, not on the engine's
+                        # default 100 features (2026-10-05).
+                        budget=_silo_build_kw(None)[0],
+                        augmentation_strategy='none',
+                        **_silo_build_kw(None)[1])
                     X_h_te = apply_feature_selection(rep_te, fi)
 
                     reg = fit_fed_regressor(
@@ -925,7 +1006,10 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                         all_div_reps_tr[r] = sd_lead['reps'][r][tr]
                         all_div_reps_te[r] = sd_lead['reps'][r][te]
                 lead_augs = sd_lead.get('augmentations')
-                lead_aug_cond = 'uncapped' if lead_augs else 'none'
+                # 'none', as the recipes were searched and as DECISIONS.md Step 8
+                # sets for these three datasets. Was 'uncapped' whenever the silo
+                # carried augmentation representations (changed 2026-10-05).
+                lead_aug_cond = 'none'
                 lead_tr_augs = ({k: v[tr] for k, v in lead_augs.items()}
                                 if lead_augs else None)
                 lead_te_augs = ({k: v[te] for k, v in lead_augs.items()}
@@ -949,8 +1033,11 @@ def _run_one(data, config, output_dir, dataset_name, **kwargs):
                     allocation_method=_alloc,
                     importance_method=_imp,
                     internal_evaluator=_int_eval,
+                    # The cross-silo recipe in full (2026-10-05).
+                    budget=_silo_build_kw(None)[0],
                     augmentations=lead_tr_augs,
-                    augmentation_strategy=lead_aug_cond)
+                    augmentation_strategy=lead_aug_cond,
+                    **_silo_build_kw(None)[1])
                 X_h_te = apply_feature_selection(all_div_reps_te, fi_h)
                 _aug_info_h = fi_h.get('augmentation_info') if isinstance(fi_h, dict) else None
                 if _aug_info_h and lead_te_augs:

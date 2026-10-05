@@ -2955,6 +2955,11 @@ def _experiment_full_name(exp_id: str) -> str:
     return name_map.get(exp_id, exp_id)
 
 
+# The one federated job that computes fed05 (see run_all). The first of
+# FEDERATED_DATASETS in tests/slurm_scripts/submit_all_datasets.sh.
+FED05_HOST_DATASET = 'lhasa_herg'
+
+
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
             rep_names: list = None,
@@ -3175,6 +3180,23 @@ def run_all(dataset_name: str, output_dir: str,
     # ── Run experiments ──
     results = {}
     for exp_id in experiments:
+        # fed05 loads its own three antibody silos and ignores the dataset it
+        # is handed, so before 2026-10-05 every federated job (one per
+        # dataset in submit_all_datasets.sh FEDERATED_DATASETS) computed it
+        # again, and each copy was stamped with the handed dataset's metric
+        # (herg: auc, higher is better) although fed05 reports rmse. It now
+        # runs in the FED05_HOST_DATASET job only; the others record a skip.
+        if exp_id == 'fed05' and dataset_name != FED05_HOST_DATASET:
+            print(f"  SKIP fed05: it runs once, in the {FED05_HOST_DATASET} "
+                  f"job (it does not read {dataset_name})")
+            save_experiment_results(
+                {'skipped': True,
+                 'reason': f'fed05 loads its own antibody silos; computed once '
+                           f'in the {FED05_HOST_DATASET} job, see '
+                           f'fed05_antibody_federated/{FED05_HOST_DATASET}.json'},
+                output_dir, _experiment_full_name(exp_id), dataset_name)
+            results[exp_id] = {'skipped': True}
+            continue
         # Resume, the same rule as noise_helpers.run_all and
         # similarity_helpers.run_all: skip an experiment whose output exists,
         # holds a measurement, and was computed from the same data
@@ -3252,9 +3274,13 @@ def run_all(dataset_name: str, output_dir: str,
             results[exp_id] = exp_result
 
             exp_full_name = _experiment_full_name(exp_id)
+            # fed05's silos are regression and it reports rmse; stamp that,
+            # not the handed dataset's metric (2026-10-05).
+            _stamp = (dict(metric_name='rmse', lower_is_better=True)
+                      if exp_id == 'fed05' else {})
             save_experiment_results(
                 exp_result, output_dir, exp_full_name, dataset_name,
-                fingerprint=_fingerprint)
+                fingerprint=_fingerprint, **_stamp)
             print(f"  {exp_id} done in {time.time() - t_exp:.1f}s "
                   f"({len(_fed_models)}x{len(_fed_seeds)} runs)")
 
