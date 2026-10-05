@@ -2845,6 +2845,11 @@ def evaluate_single_rep_cv(
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X[train_idx])
         X_val = scaler.transform(X[val_idx])
+        # A held-out value beyond anything seen in training is cut to the
+        # training range before predicting (owner, 2026-10-05). On adme_hlm
+        # pdv fold 0 one held-out molecule sat 83 million training standard
+        # deviations out on one feature and the dnn's rmse ran to thousands.
+        X_val = np.clip(X_val, X_train.min(axis=0), X_train.max(axis=0))
 
         # PCA-reduce if features exceed training samples
         if cap:
