@@ -531,6 +531,13 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                             'conformal_q': float('nan'), 'n_val': len(y_val),
                             'ue_corr': float('nan'),
                         }
+                    # The fold and the features its hybrid was built with,
+                    # on the fold's own record (2026-10-05).
+                    # condition_widths_built lists widths of the folds that
+                    # built, so after a failed fold its positions no longer
+                    # match fold numbers.
+                    fold_result['fold'] = int(fold_i)
+                    fold_result['n_features_built'] = _built_width
                     fold_metrics.append(fold_result)
                     # Read from fold_result (defined in both branches) — the locals
                     # picp/avg_set_size/cal_error are only assigned inside the
@@ -614,14 +621,23 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                         ue_corr, _ = spearmanr(per_sample_unc, errors)
                         ue_corr = float(ue_corr)
 
+                    # 'val_score' was 'val_r2' until 2026-10-05: it holds the
+                    # dataset's metric, which is rmse or spearman, not R2.
                     fold_result = {
-                        'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
+                        'val_score': val_r2, 'picp': picp, 'mpiw': mpiw,
                         'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
                         'conformal_q': float(q), 'n_val': len(y_val),
                         'n_cal': int(_n_cal_used),
                         'conformal_level_clamped': _level_clamped,
                         'ue_corr': ue_corr,
                     }
+                    # The fold and the features its hybrid was built with,
+                    # on the fold's own record (2026-10-05).
+                    # condition_widths_built lists widths of the folds that
+                    # built, so after a failed fold its positions no longer
+                    # match fold numbers.
+                    fold_result['fold'] = int(fold_i)
+                    fold_result['n_features_built'] = _built_width
                     fold_metrics.append(fold_result)
                     print(f"    fold {fold_i}: {metric_name}={val_r2:.4f}, PICP={picp:.3f}, "
                           f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
@@ -658,6 +674,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 # and one over 5 of 5 were written identically and compared to each
                 # other as if they were the same measurement.
                 n_avg = {}
+                # 'fold' is the fold number, not a measurement.
+                all_keys.discard('fold')
                 for key in all_keys:
                     vals = [fm[key] for fm in fold_metrics
                             if key in fm and not np.isnan(fm[key])]
@@ -676,7 +694,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     'n_folds_requested': int(n_folds),
                     'folds': fold_metrics,
                 }
-                score_key = 'val_score' if is_classification else 'val_r2'
+                score_key = 'val_score'
                 picp_val = avg.get('picp', float('nan'))
                 if is_classification:
                     set_key = avg.get('avg_set_size', float('nan'))
@@ -779,7 +797,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         print("  " + "-" * 56)
         for cond_name, cond_data in results['conditions'].items():
             a = cond_data['avg']
-            print(f"  {cond_name:<14} {a.get('val_r2', float('nan')):.4f}  "
+            print(f"  {cond_name:<14} {a.get('val_score', float('nan')):.4f}  "
                   f"{a.get('picp', float('nan')):.3f}  "
                   f"{a.get('mpiw', float('nan')):.3f}  "
                   f"{a.get('cal_error', float('nan')):.4f}    {cond_data['budget']}")

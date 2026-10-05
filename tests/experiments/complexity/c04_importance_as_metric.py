@@ -341,7 +341,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print(f"  Concatenated features: {X_concat.shape}")
 
-    results = {'methods': {}, 'cross_test': {}, 'low_dim': {},
+    # metric_name / lower_is_better set here, in the result itself, 2026-10-05.
+    # The R-squared stamp in __main__ below only covers a direct run of this
+    # file: complexity_helpers.run_all saves through save_experiment_results
+    # with the DATASET's metric (rmse on herg_ki, spearman on tresanco), and
+    # save_experiment_results only fills those keys when the result does not
+    # already carry them. Every score below is an R-squared (higher is better)
+    # or an MAE in label units, whatever the dataset is reported in.
+    results = {'metric_name': 'r2', 'lower_is_better': False,
+               'methods': {}, 'cross_test': {}, 'low_dim': {},
                'single_rep_comparator': {}}
 
     # One fold list and one importance computation per (fold, method), shared by

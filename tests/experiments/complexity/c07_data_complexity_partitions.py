@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
+from kirby.hybrid import _graded_scores_for_clf
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
@@ -102,7 +103,11 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     # target_variance block carries partition_uses_labels=True saying so.
     all_partitions = partitions or ['scaffold_frequency', 'molecular_complexity',
                                     'target_variance', 'feature_variance']
-    results = {'partitions': {}}
+    results = {'partitions': {},
+               # Why a partition is absent from 'partitions', added 2026-10-05.
+               # {partition name: sentence}. 'partitions' came back {} on some
+               # datasets with nothing saying which split failed which minimum.
+               'partition_skips': {}}
 
     # Second-pass scaffolding (per user 2026-05-23): in addition to per-partition
     # find_best_hybrid (the experiment's main signal), record what a blueprint
@@ -210,6 +215,8 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # Heavy atom count: <= median vs > median
             if smiles is None:
                 print("    No SMILES available (antibody dataset?), skipping molecular_complexity")
+                results['partition_skips'][partition_name] = (
+                    'no SMILES on this dataset, so no heavy-atom count')
                 continue
             try:
                 from rdkit import Chem
@@ -225,12 +232,16 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                         valid_mask[i] = True
                 if not valid_mask.any():
                     print("    No valid SMILES, skipping molecular_complexity")
+                    results['partition_skips'][partition_name] = (
+                        'no SMILES parsed with RDKit')
                     continue
                 median_hac = np.median(hac[valid_mask])
                 mask_easy = valid_mask & (hac <= median_hac)
                 mask_hard = valid_mask & (hac > median_hac)
             except ImportError:
                 print("    RDKit not available, skipping molecular_complexity")
+                results['partition_skips'][partition_name] = (
+                    'RDKit not importable')
                 continue
 
         elif partition_name == 'target_variance':
@@ -248,6 +259,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     scaffold_var[s] = np.var(s_labels)
             if not scaffold_var:
                 print("    Not enough scaffolds with 2+ members, skipping")
+                results['partition_skips'][partition_name] = (
+                    'no scaffold group has 2 or more molecules, so no group '
+                    'has a label variance')
                 continue
             median_var = np.median(list(scaffold_var.values()))
             mask_easy = np.array([scaffold_var.get(g, 0) <= median_var for g in groups])
@@ -273,6 +287,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     scaffold_spread[s] = float(np.mean(np.var(rows, axis=0)))
             if not scaffold_spread:
                 print("    Not enough scaffolds with 2+ members, skipping")
+                results['partition_skips'][partition_name] = (
+                    'no scaffold group has 2 or more molecules, so no group '
+                    'has a feature spread')
                 continue
             median_spread = np.median(list(scaffold_spread.values()))
             mask_easy = np.array(
@@ -280,6 +297,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             mask_hard = ~mask_easy
         else:
             print(f"    Unknown partition: {partition_name}, skipping")
+            results['partition_skips'][partition_name] = 'unknown partition name'
             continue
 
         n_easy = mask_easy.sum()
@@ -288,6 +306,9 @@ def run(data, config, output_dir, dataset_name, partitions=None):
 
         if n_easy < 50 or n_hard < 50:
             print("    Subpopulation too small, skipping")
+            results['partition_skips'][partition_name] = (
+                f'easy half {int(n_easy)} rows, hard half {int(n_hard)} rows; '
+                f'each half needs at least 50')
             continue
 
         part_result = {'easy': {}, 'hard': {}, 'n_easy': int(n_easy), 'n_hard': int(n_hard),
@@ -305,6 +326,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
 
             if n_unique_groups < 2:
                 print(f"    {subpop_name}: not enough groups for CV, skipping")
+                # Recorded 2026-10-05; this half was left out with no entry.
+                part_result[subpop_name] = {
+                    'skipped': (f'{int(n_unique_groups)} scaffold group in '
+                                f'{int(mask.sum())} rows; group-aware folds '
+                                f'need at least 2'),
+                }
                 continue
 
             # Complexity metrics
@@ -345,6 +372,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # KIRBY_NO_COLD_SEARCH -- crashed c07 with "UnboundLocalError:
             # ... 'sel'" (server check, 2026-09-29).
             sel = None
+            search_error = None
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
@@ -423,6 +451,8 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 print(f"    {subpop_name}: find_best_hybrid failed - {e}")
                 best_config = None
                 best_by_model = {}
+                # Saved 2026-10-05, the way distance_search_error below is.
+                search_error = f'{type(e).__name__}: {e}'
 
             # Owner's set (2026-10-02): top 2 general + top 1 distance hybrids
             # per model. The distance counterpart of the search above, on the
@@ -502,15 +532,37 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             _flat_slots = [(cm, sl, bp) for cm, lst in (
                 all_rows_rule_bps.items() if all_rows_bp_skipped is None else [])
                 for sl, bp, _t, _a in lst]
+            # Features this half offers: every base representation's width
+            # plus every augmentation block's. Used by the guard below.
+            _n_feat_offered = (sum(int(v.shape[1]) for v in sub_reps.values())
+                               + (sum(int(v.shape[1]) for v in sub_augs.values())
+                                  if sub_augs else 0))
+            # Why a slot has no all-rows score here. {model: {slot: sentence}}.
+            all_rows_bp_slot_errors = {}
+            # Features the rebuilt hybrid has per fold, beside its budget.
+            all_rows_bp_widths_rule = {}
             for cand_model, _slot, bp_fd in _flat_slots:
-                if bp_fd.budget is not None and bp_fd.budget > len(sub_labels):
+                # Before 2026-10-05 this compared the budget, a feature count,
+                # with len(sub_labels), a row count, and skipped silently. It
+                # guards a budget the half cannot supply, so it now compares
+                # features with features, and says so when it skips.
+                # find_best_hybrid builds budgets above the row count since
+                # 2026-09-10, so rows are not a limit here.
+                if bp_fd.budget is not None and bp_fd.budget > _n_feat_offered:
+                    all_rows_bp_slot_errors.setdefault(cand_model, {})[_slot] = (
+                        f'budget {int(bp_fd.budget)} features is more than the '
+                        f'{_n_feat_offered} features this half offers')
                     continue
                 try:
                     factory = _gmf([cand_model], task_type=data['task_type'],
                                    n_samples=len(sub_labels)).get(cand_model)
                     if factory is None:
+                        all_rows_bp_slot_errors.setdefault(cand_model, {})[
+                            _slot] = ('get_model_factories returned no factory '
+                                      f'at {len(sub_labels)} rows')
                         continue
                     fold_scores = []
+                    fold_widths = []
                     try:
                         _sp7_splits = list(_cv_sp7(sub_groups, sub_folds,
                                                    sub_sample_X, sub_labels))
@@ -549,23 +601,36 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                                 metric_fn=metric_fn_part,
                                 lower_is_better=_lib_part),
                         )
+                        fold_widths.append(int(X_tr.shape[1]))
                         sc = _SS()
                         X_tr_s = sc.fit_transform(X_tr)
                         X_va_s = sc.transform(X_va)
                         mdl = factory()
                         mdl.fit(X_tr_s, sub_labels[tr_i])
-                        fold_scores.append(metric_fn_part(sub_labels[va_i], mdl.predict(X_va_s)))
+                        # Graded scores for ranking metrics on classification,
+                        # as c05's second pass does; an AUROC from 0/1 labels is
+                        # balanced accuracy (fixed 2026-10-05).
+                        _hard = mdl.predict(X_va_s)
+                        _y = (_graded_scores_for_clf(mdl, X_va_s, _hard)
+                              if data.get('task_type') == 'classification'
+                              else _hard)
+                        fold_scores.append(metric_fn_part(sub_labels[va_i], _y))
                     if fold_scores:
                         all_rows_bp_scores_rule.setdefault(cand_model, {})[
                             _slot] = float(np.mean(fold_scores))
                         all_rows_bp_fold_scores_rule.setdefault(cand_model, {})[
                             _slot] = [float(s) for s in fold_scores]
+                        all_rows_bp_widths_rule.setdefault(cand_model, {})[
+                            _slot] = {'budget': bp_fd.budget,
+                                      'n_features_per_fold': fold_widths}
                         if _slot == 'general1':
                             all_rows_bp_scores[cand_model] = float(np.mean(fold_scores))
                             all_rows_bp_fold_scores[cand_model] = [
                                 float(s) for s in fold_scores]
-                except Exception:
-                    pass
+                except Exception as _e:
+                    # Recorded 2026-10-05; this was `pass`.
+                    all_rows_bp_slot_errors.setdefault(cand_model, {})[_slot] = (
+                        f'{type(_e).__name__}: {_e}')
 
             # Honest per-model rescore block (CONTRACT json_convention). Carries
             # per-fold scores for BOTH arms — hybrid candidate recipes AND
@@ -599,8 +664,13 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 # slot, tier and cross-validated score.
                 'all_rows_bp_scores_rule': all_rows_bp_scores_rule,
                 'all_rows_bp_fold_scores_rule': all_rows_bp_fold_scores_rule,
+                # 2026-10-05: the width each slot's rebuild had per fold, and
+                # why a slot has no score.
+                'all_rows_bp_widths_rule': all_rows_bp_widths_rule,
+                'all_rows_bp_slot_errors': all_rows_bp_slot_errors,
                 'rule_hybrids': rule_hybrids,
                 'fold_reselection_distance': reselection_block_distance,
+                'search_error': search_error,
                 'distance_search_error': dist_error,
                 # Per-model per-fold reselection inputs (per-fold, both arms). Exact
                 # CONTRACT keys inside: lower_is_better / candidates_by_model /

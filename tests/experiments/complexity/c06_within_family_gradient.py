@@ -36,7 +36,8 @@ from experiments._shared import (
     find_best_hybrid, get_domain_metric,
     INTERNAL_EVALUATORS,
 )
-from kirby.find_best_hybrid import _resolve_models, FAST_INTERNAL_EVALUATORS
+from kirby.find_best_hybrid import (
+    _resolve_models, FAST_INTERNAL_EVALUATORS, KNN_TUNED_K_ATTR)
 
 
 # Map c06 family labels to canonical names in DEFAULT_MODELS. List-form
@@ -169,6 +170,68 @@ def _apply_model_njobs(est, fam_name, var_name):
     return est
 
 
+def _hold_variant_setting(est, fam_name, var_name):
+    """Make the search fit the setting this variant is named after.
+
+    Added 2026-10-05. Two families did not keep the setting they vary:
+
+    kNN: find_best_hybrid._set_knn_k resets n_neighbors to min(5, sqrt of the
+    training rows) before every fit unless the estimator carries the attribute
+    named by KNN_TUNED_K_ATTR, so k=20, k=10, k=5 and k=1 were all fitted at
+    k=5. Stamping it keeps the variant's own k (clamped to the training rows
+    minus 1 by _set_knn_k).
+
+    GP: the four variants differed only in the RBF length scale they started
+    from, and sklearn re-fits the length scale by maximising the marginal
+    likelihood, so all four could end at the same length scale. Setting
+    length_scale_bounds='fixed' on the RBF keeps it at the variant's value. The
+    WhiteKernel noise level is still fitted.
+
+    The variant definitions themselves live in _shared.get_model_family_variants
+    and are not changed; this is applied to the estimator c06 hands the search.
+    """
+    if fam_name == 'kNN' and hasattr(est, 'n_neighbors'):
+        setattr(est, KNN_TUNED_K_ATTR, True)
+    if fam_name == 'GP' and hasattr(est, 'kernel') and est.kernel is not None:
+        from sklearn.gaussian_process.kernels import RBF as _RBF
+
+        def _fix(k):
+            if isinstance(k, _RBF):
+                return _RBF(length_scale=k.length_scale,
+                            length_scale_bounds='fixed')
+            if hasattr(k, 'k1') and hasattr(k, 'k2'):
+                # Sum / Product of two kernels, e.g. RBF + WhiteKernel.
+                return type(k)(_fix(k.k1), _fix(k.k2))
+            return k
+        est.set_params(kernel=_fix(est.kernel))
+    return est
+
+
+def _no_score_reason(search, model_key):
+    """Why a variant has no scored budget, from the search's own rows.
+
+    Added 2026-10-05. find_best_hybrid leaves a model out of
+    best_by_model_budget when none of its configurations has a finite score,
+    and c06 saved budget None with nothing saying why (the Lasso alpha=100,
+    10 and 1 variants on the server run). This counts the configurations the
+    search scored for this model and how many have a finite score. A Lasso
+    whose coefficients are all zero predicts one constant, and a rank
+    correlation of a constant is undefined; that is the likely cause for the
+    large alphas but is NOT checked here.
+    """
+    rows = [r for r in (getattr(search, 'all_results', None) or [])
+            if r.get('model') == model_key]
+    finite = [r for r in rows if r.get('score_mean') is not None
+              and np.isfinite(r['score_mean'])]
+    if not rows:
+        reason = 'the search returned no configuration for this variant'
+    else:
+        reason = (f'{len(rows)} configurations scored, {len(finite)} with a '
+                  f'finite score')
+    return {'reason': reason, 'n_configurations': len(rows),
+            'n_configurations_finite': len(finite)}
+
+
 def _evaluator_label(fam_name, evaluator):
     """DECIDED 2026-09-12: file the matched evaluator under its resolved name.
 
@@ -190,9 +253,18 @@ def run(data, config, output_dir, dataset_name, families=None):
 
     task_type = data.get('task_type')
     if task_type != 'regression':
-        # get_model_family_variants() hardcodes regressor variants.
-        print(f"  Skipping: c06 is regression-only (task_type={task_type}).")
-        return {'skipped': True, 'reason': 'regression_only',
+        # Reason text corrected 2026-10-05. get_model_family_variants has had
+        # classifier variants since the CXA-6 fix, but this file still runs
+        # regression only: it calls get_model_family_variants() with no
+        # task_type, hands 'regression' to _resolve_models, the precompute
+        # lookup and every find_best_hybrid call, and has no entry for the
+        # classification-only 'Logit' family in _FAMILY_TO_CANONICAL.
+        print(f"  Skipping: c06 is not wired for classification "
+              f"(task_type={task_type}).")
+        return {'skipped': True,
+                'reason': ('c06 passes task_type=regression to every search '
+                           'and has no entry for the Logit family; the '
+                           'classifier variants exist but are not wired here'),
                 'task_type': task_type}
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -458,8 +530,9 @@ def run(data, config, output_dir, dataset_name, families=None):
                     base_reps=reps,
                     labels=labels,
                     groups=groups,
-                    models={model_key: _apply_model_njobs(
-                        var_factory(), fam_name, var_name)},
+                    models={model_key: _hold_variant_setting(
+                        _apply_model_njobs(var_factory(), fam_name, var_name),
+                        fam_name, var_name)},
                     budgets=eff_budgets,
                     task_type='regression',
                     metric=metric_name,
@@ -499,7 +572,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                 import traceback
                 traceback.print_exc()
                 fam_result['optimal_budget'][var_name] = {
-                    'budget': None, 'r2': float('nan'),
+                    'budget': None, 'score': float('nan'),
                     'capacity_index': capacity_idx,
                     'error': f'SystemExit({e.code})',
                     'error_kind': 'SystemExit',
@@ -511,8 +584,11 @@ def run(data, config, output_dir, dataset_name, families=None):
             except Exception as e:
                 print(f"      search failed: {e}")
                 fam_result['optimal_budget'][var_name] = {
-                    'budget': None, 'r2': float('nan'),
+                    'budget': None, 'score': float('nan'),
                     'capacity_index': capacity_idx,
+                    # The exception text, 2026-10-05; it was printed only.
+                    'error': f'{type(e).__name__}: {e}',
+                    'error_kind': type(e).__name__,
                     # Same keys as a scored variant, 2026-09-12, so a reader
                     # never has to tell an absent key from an absent number.
                     'evaluator': None, 'evaluator_label': None,
@@ -545,8 +621,12 @@ def run(data, config, output_dir, dataset_name, families=None):
                 # a mean with no folds behind it; that stores as None here
                 # rather than as an empty list of folds.
                 fold_scores = best.get('fold_scores')
+                # 'val_score' was 'val_r2' until 2026-10-05. It holds the
+                # dataset's metric (spearman, rmse, ...), never R-squared. No
+                # reader of c06 output reads the old name (c09's c06 branch,
+                # the only one, is updated to the new one).
                 cell = {
-                    'val_r2': val_score,
+                    'val_score': val_score,
                     'val_std': val_std,
                     'n_features': n_feat,
                     'importance': bp.importance_method,
@@ -573,7 +653,8 @@ def run(data, config, output_dir, dataset_name, families=None):
                     per_budget_val.items(), key=lambda kv: kv[1][0])
                 fam_result['optimal_budget'][var_name] = {
                     'budget': opt_budget,
-                    'r2': opt_val,
+                    # 'score' was 'r2' until 2026-10-05; the dataset's metric.
+                    'score': opt_val,
                     'capacity_index': capacity_idx,
                     'importance': opt_bp.importance_method,
                     'allocation': opt_bp.allocation_method,
@@ -591,14 +672,20 @@ def run(data, config, output_dir, dataset_name, families=None):
                       f"[{opt_bp.importance_method}/{opt_bp.allocation_method}/"
                       f"{opt_cell['evaluator_label']}]")
             else:
+                _why = _no_score_reason(search, model_key)
+                print(f"      no budget scored: {_why['reason']}")
                 fam_result['optimal_budget'][var_name] = {
-                    'budget': None, 'r2': float('nan'),
+                    'budget': None, 'score': float('nan'),
                     'capacity_index': capacity_idx,
                     # Same keys as a scored variant, 2026-09-12, so a reader
                     # never has to tell an absent key from an absent number.
                     'evaluator': None, 'evaluator_label': None,
                     'fold_scores': None,
                     'n_folds_scored': None, 'n_folds_asked': None,
+                    # Why no budget has a score, 2026-10-05.
+                    'error': _why['reason'],
+                    'n_configurations': _why['n_configurations'],
+                    'n_configurations_finite': _why['n_configurations_finite'],
                 }
 
         # Correlation: capacity_index vs optimal_budget within family.
@@ -614,20 +701,23 @@ def run(data, config, output_dir, dataset_name, families=None):
         # -> NaN. Distinguish that genuine "no budget variance" case from a real
         # measured correlation so the result is interpretable (not a bare NaN).
         n_distinct_budgets = len(set(opt_budgets))
+        # rho only; the p-value spearmanr also returns is not stored or
+        # printed (removed 2026-10-05, owner's rule: no significance tests).
         if len(capacities) >= 3 and n_distinct_budgets >= 2:
-            rho, pval = spearmanr(capacities, opt_budgets)
+            rho = spearmanr(capacities, opt_budgets)[0]
             fam_result['capacity_budget_correlation'] = {
-                'rho': float(rho), 'p': float(pval),
+                'rho': float(rho),
                 'n_distinct_budgets': n_distinct_budgets,
+                'n_variants': len(capacities),
                 'status': 'measured',
             }
             print(f"\n  >> {fam_name}: capacity vs optimal_budget: "
-                  f"rho={rho:.3f}, p={pval:.3f}")
+                  f"rho={rho:.3f} over {len(capacities)} variants")
         else:
             status = ('insufficient_variants' if len(capacities) < 3
                       else 'no_budget_variance')
             fam_result['capacity_budget_correlation'] = {
-                'rho': float('nan'), 'p': float('nan'),
+                'rho': float('nan'),
                 'n_distinct_budgets': n_distinct_budgets,
                 'n_variants': len(capacities),
                 'status': status,
@@ -643,7 +733,7 @@ def run(data, config, output_dir, dataset_name, families=None):
     for fam_name, fam_result in results['families'].items():
         for var_name, info in fam_result['optimal_budget'].items():
             b = info.get('budget', '?')
-            r2 = info.get('r2', float('nan'))
+            r2 = info.get('score', float('nan'))
             imp = info.get('importance', '?')
             ev = info.get('evaluator_label') or '?'
             n_f = len(info.get('fold_scores') or [])
