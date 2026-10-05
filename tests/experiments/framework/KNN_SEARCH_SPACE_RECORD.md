@@ -901,7 +901,16 @@ rmse spread was measured.
 
 # Screening the kNN settings per dataset instead of refitting all of them
 
-Raised by Adelaide 2026-10-05. NOT yet a decision; the numbers are here so it can become one.
+## DECISION (Adelaide, 2026-10-05): screen per dataset, refit the top 3
+
+For each dataset and fold, score every setting in that dataset's group on how well its neighbours
+predict a held-out molecule's activity. No model fits. Refit only the best 3.
+
+46 times fewer fits than refitting all 138, on top of every cut above. n25 goes from 138 x 186
+cleanup recipes to 3 x 186 per level, draw, fold and model.
+
+The evidence is below. It was measured on single representations only, on herg_ki and caco2, under
+one kind of damage at one level. Not on the hybrid spaces, not on herg, so not on classification.
 
 **The idea.** Inside each experiment, for each dataset and fold, score all 138 settings with no
 model fits, keep the best few, and refit only those.
@@ -934,11 +943,12 @@ session with `scratchpad/screen_damage.py` (kept at
 labels, predicting the held-out molecules, scored against their CLEAN labels. outlier_p05 at level
 1.0, draw 0, 4 single representations, 5 folds, 72 settings.
 
-| dataset | settings | top 3 names the same | top 5 names the same | score given up, top 3 and top 5 |
-|---|---|---|---|---|
-| herg_ki | 72 | 1 of 3 | 2 of 5 | 0.0037 rmse |
+| dataset | settings | top 3 names the same | top 5 names the same | score given up, top 3 and top 5 | fold spread |
+|---|---|---|---|---|---|
+| herg_ki | 72 | 1 of 3 | 2 of 5 | 0.0037 rmse | about 0.03 to 0.047 |
+| caco2 | 72 | 2 of 3 | 3 of 5 | 0.0004 rmse | about 0.02 |
 
-Fold spread on herg_ki is about 0.03 to 0.047 rmse, so the loss is inside it.
+Both losses are inside the fold spread.
 
 ⛔ READ THE NAMES, NOT THE OVERLAP COUNT. The damaged screen picked atom_pair, rank weighting, 20
 neighbours. The clean screen picked atom_pair, rank weighting, 10 neighbours. Same representation,
@@ -947,8 +957,8 @@ is what averaging over damaged labels should want. The overlap count makes that 
 disagreement when the settings score almost the same.
 
 **Not covered.** The augmented and similarity-hybrid spaces are not in the comparison, because f34
-never measured them. herg is not in it at all, so classification is unchecked. caco2 was running
-when this was written. Only one damage kind at one level was tried.
+never measured them. herg is not in it at all, so classification is unchecked. Only one damage
+kind (outlier_p05) at one level (1.0) was tried.
 
 **What it would save.** Refitting 5 settings instead of 138 is 28 times fewer fits, on top of
 everything above.
